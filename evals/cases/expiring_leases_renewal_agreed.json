@@ -1,0 +1,42 @@
+{
+  "id": "expiring_leases_renewal_agreed",
+  "automation": "expiring_leases",
+  "description": "Tenant agrees to renew; task closes after confirming new lease terms.",
+  "task": {
+    "title": "Lease expiring 2024-04-30: Jamie Chen – Unit 3C",
+    "category": "leasing",
+    "urgency": "medium",
+    "body": "Lease for Jamie Chen at Unit 3C, 789 Pine Blvd expires on 2024-04-30 (28 days). Reach out about renewal or move-out logistics."
+  },
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "Jamie Chen's lease at Unit 3C expires in 28 days (April 30). I can draft a renewal offer or a move-out notice — which would you prefer I send?"
+    },
+    {
+      "role": "user",
+      "content": "Jamie already told me they want to stay. We agreed on $1,950/month, up from $1,800."
+    },
+    {
+      "role": "agent",
+      "content": "Got it — renewal at $1,950/month. I'll prepare a 12-month lease renewal document starting May 1. Want me to send it to Jamie for e-signature, or would you prefer to handle that manually?"
+    },
+    {
+      "role": "user",
+      "content": "Please send it to them directly."
+    },
+    {
+      "role": "agent",
+      "content": "Sent. I'll mark this task resolved once Jamie signs. I'll follow up in 48 hours if it's still pending."
+    }
+  ],
+  "expected": {
+    "resolution": "active",
+    "criteria": [
+      "Agent acknowledges the agreed rent increase without questioning it",
+      "Agent proposes a specific next step (drafting/sending the lease document)",
+      "Agent sets a follow-up timeline for unsigned documents",
+      "Agent does not resolve the task before the lease is actually signed"
+    ]
+  }
+}

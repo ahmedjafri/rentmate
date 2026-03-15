@@ -1,0 +1,50 @@
+{
+  "id": "expiring_leases_renewal_signed",
+  "automation": "expiring_leases",
+  "description": "Lease renewal document is signed; task closes as resolved.",
+  "task": {
+    "title": "Lease expiring 2024-04-30: Jamie Chen – Unit 3C",
+    "category": "leasing",
+    "urgency": "medium",
+    "body": "Lease for Jamie Chen at Unit 3C, 789 Pine Blvd expires on 2024-04-30 (28 days). Reach out about renewal or move-out logistics."
+  },
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "Jamie Chen's lease at Unit 3C expires in 28 days (April 30). I can draft a renewal offer or a move-out notice — which would you prefer I send?"
+    },
+    {
+      "role": "user",
+      "content": "Jamie already told me they want to stay. We agreed on $1,950/month, up from $1,800."
+    },
+    {
+      "role": "agent",
+      "content": "Got it — renewal at $1,950/month. I'll prepare a 12-month lease renewal document starting May 1. Want me to send it to Jamie for e-signature, or would you prefer to handle that manually?"
+    },
+    {
+      "role": "user",
+      "content": "Please send it to them directly."
+    },
+    {
+      "role": "agent",
+      "content": "Sent. I'll mark this task resolved once Jamie signs. I'll follow up in 48 hours if it's still pending."
+    },
+    {
+      "role": "user",
+      "content": "Jamie just signed. You can close this out."
+    },
+    {
+      "role": "agent",
+      "content": "Lease signed — updating Jamie's record with the new term and rent amount. Task resolved."
+    }
+  ],
+  "expected": {
+    "resolution": "resolved",
+    "criteria": [
+      "Agent closes only after explicit confirmation that the lease was signed",
+      "Agent confirms the record update (new term and rent) before closing",
+      "Agent's closing message is concise — no unnecessary follow-up offers",
+      "Full dialog traces a complete renewal lifecycle from expiry warning to signed lease"
+    ]
+  }
+}

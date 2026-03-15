@@ -1,0 +1,37 @@
+# Install smoke test
+# Simulates a fresh machine: Python 3.12 + Node 20 + git, no Poetry pre-installed.
+# install.sh is expected to install Poetry itself and wire up all deps.
+FROM python:3.12-slim
+
+# Install Node 20 and git (no Poetry — install.sh installs it)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl git \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy repo into the image (avoids network clone; tests the local version of install.sh)
+COPY . /rentmate
+
+WORKDIR /rentmate
+
+# Run install.sh:
+#   NO_CLONE=1   — skip git clone/pull (repo is already present)
+#   RENTMATE_DIR — point install.sh at the pre-populated checkout
+# TTY is absent in RUN so the API key prompt is automatically skipped.
+RUN NO_CLONE=1 RENTMATE_DIR=/rentmate bash install.sh
+
+# install.sh installs Poetry to ~/.local/bin — make it available in subsequent layers
+ENV PATH="/root/.local/bin:$PATH"
+
+# Verify build artifacts
+RUN test -d /rentmate/www/rentmate/dist \
+    || (echo "FAIL: frontend dist/ missing after install" && exit 1)
+RUN test -f /rentmate/.env \
+    || (echo "FAIL: .env missing after install" && exit 1)
+RUN poetry run python -c "import fastapi, sqlalchemy, chromadb" \
+    || (echo "FAIL: required Python packages not importable" && exit 1)
+
+# Default: start the server so the test runner can probe it
+ENV LLM_API_KEY=sk-test-install-smoke
+CMD ["npm", "start"]

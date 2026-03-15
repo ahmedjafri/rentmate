@@ -1,0 +1,228 @@
+# handlers/dev.py
+"""Developer / test-lab endpoints.
+
+POST /dev/simulate-inbound  — simulate an inbound tenant message (SMS or email)
+  without sending any real SMS or email.  Writes a real task + messages to the DB
+  (source='dev_sim') so the DevTools page can restore them.  These tasks are
+  excluded from the normal Action Desk view.
+
+GET  /dev/history/{tenant_id} — returns the most recent dev_sim task messages
+  for a tenant, used by the DevTools chat panel to restore history on reload.
+"""
+
+import asyncio
+import uuid
+from datetime import datetime
+from typing import List
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from db.lib import route_inbound_to_task, get_conversation_with_messages
+from db.models import Conversation, ConversationParticipant, Message, ParticipantType, Tenant
+from handlers.deps import get_db, require_user
+from llm.context import build_task_context
+from llm.registry import agent_registry
+
+router = APIRouter()
+
+DEV_SIM_SOURCE = "dev_sim"
+
+
+class SimulateInboundRequest(BaseModel):
+    tenant_id: str
+    channel_type: str   # 'sms' | 'email'
+    message: str
+    force_new: bool = False  # if True, always create a new task
+
+
+class SimulateInboundResponse(BaseModel):
+    task_id: str
+    reply: str
+    task_created: bool
+
+
+class DevChatMessage(BaseModel):
+    role: str        # 'tenant' | 'agent'
+    text: str
+    task_id: str
+
+
+class DevHistoryResponse(BaseModel):
+    task_id: str | None
+    messages: List[DevChatMessage]
+
+
+@router.post("/simulate-inbound", response_model=SimulateInboundResponse)
+async def simulate_inbound(
+    body: SimulateInboundRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    await require_user(request)
+
+    tenant = db.query(Tenant).filter_by(id=body.tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    sender_meta = {"source": DEV_SIM_SOURCE, "simulated": True}
+
+    if body.force_new:
+        now = datetime.utcnow()
+        conv = Conversation(
+            id=str(uuid.uuid4()),
+            subject=f"Message from {tenant.first_name} {tenant.last_name}",
+            is_group=False,
+            is_archived=False,
+            is_task=True,
+            task_status="active",
+            task_mode="autonomous",
+            source=DEV_SIM_SOURCE,
+            channel_type=body.channel_type,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(conv)
+        db.flush()
+
+        db.add(ConversationParticipant(
+            id=str(uuid.uuid4()),
+            conversation_id=conv.id,
+            participant_type=ParticipantType.TENANT,
+            tenant_id=tenant.id,
+            is_active=True,
+            joined_at=now,
+        ))
+        db.flush()
+        db.refresh(conv)
+
+        from db.lib import add_message
+        add_message(
+            db=db,
+            conversation=conv,
+            sender_type=ParticipantType.TENANT,
+            body=body.message,
+            meta=sender_meta,
+            sender_tenant=tenant,
+        )
+        task_created = True
+    else:
+        # Count existing dev_sim tasks for this tenant to detect new creation
+        existing_count = (
+            db.query(Conversation)
+            .join(ConversationParticipant)
+            .filter(
+                Conversation.is_task.is_(True),
+                Conversation.source == DEV_SIM_SOURCE,
+                Conversation.task_status == "active",
+                ConversationParticipant.tenant_id == tenant.id,
+                ConversationParticipant.is_active.is_(True),
+            )
+            .count()
+        )
+
+        conv, _ = await asyncio.to_thread(
+            route_inbound_to_task,
+            db,
+            tenant=tenant,
+            body=body.message,
+            channel_type=body.channel_type,
+            sender_meta=sender_meta,
+        )
+        # Stamp the conversation as dev_sim (route_inbound_to_task sets source=channel_type)
+        conv.source = DEV_SIM_SOURCE
+        db.flush()
+
+        after_count = (
+            db.query(Conversation)
+            .join(ConversationParticipant)
+            .filter(
+                Conversation.is_task.is_(True),
+                Conversation.source == DEV_SIM_SOURCE,
+                Conversation.task_status == "active",
+                ConversationParticipant.tenant_id == tenant.id,
+                ConversationParticipant.is_active.is_(True),
+            )
+            .count()
+        )
+        task_created = after_count > existing_count
+
+    db.commit()
+
+    # Run agent
+    context = build_task_context(db, conv.id)
+    full_conv = get_conversation_with_messages(db=db, conversation_id=conv.id)
+    sorted_msgs = sorted(full_conv.messages, key=lambda m: m.sent_at)
+    history_msgs = sorted_msgs[:-1][-20:]
+    messages = [{"role": "system", "content": context}]
+    for m in history_msgs:
+        messages.append({"role": "assistant" if m.is_ai else "user", "content": m.body or ""})
+    messages.append({"role": "user", "content": body.message})
+
+    from backends.local_auth import DEFAULT_USER_ID
+    from handlers.chat import chat_with_agent
+    agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
+
+    try:
+        reply = await chat_with_agent(agent_id, f"sim:{conv.id}", messages)
+    except Exception as e:
+        print(f"[dev/simulate-inbound] Agent failed: {e}")
+        reply = "[Agent unavailable]"
+
+    db.add(Message(
+        id=str(uuid.uuid4()),
+        conversation_id=conv.id,
+        sender_type=ParticipantType.ACCOUNT_USER,
+        body=reply,
+        message_type="message",
+        sender_name="RentMate",
+        is_ai=True,
+        sent_at=datetime.utcnow(),
+    ))
+    db.commit()
+
+    return SimulateInboundResponse(task_id=conv.id, reply=reply, task_created=task_created)
+
+
+@router.get("/history/{tenant_id}", response_model=DevHistoryResponse)
+async def get_dev_history(
+    tenant_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    await require_user(request)
+
+    # Most recent active dev_sim task for this tenant
+    conv = (
+        db.query(Conversation)
+        .join(ConversationParticipant)
+        .filter(
+            Conversation.is_task.is_(True),
+            Conversation.source == DEV_SIM_SOURCE,
+            Conversation.task_status == "active",
+            ConversationParticipant.tenant_id == tenant_id,
+            ConversationParticipant.is_active.is_(True),
+        )
+        .order_by(Conversation.updated_at.desc())
+        .first()
+    )
+
+    if not conv:
+        return DevHistoryResponse(task_id=None, messages=[])
+
+    full = get_conversation_with_messages(db, conv.id)
+    sorted_msgs = sorted(full.messages, key=lambda m: m.sent_at)
+
+    return DevHistoryResponse(
+        task_id=conv.id,
+        messages=[
+            DevChatMessage(
+                role="agent" if m.is_ai else "tenant",
+                text=m.body or "",
+                task_id=conv.id,
+            )
+            for m in sorted_msgs
+            if m.body  # skip empty/system messages
+        ],
+    )

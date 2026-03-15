@@ -1,0 +1,81 @@
+name: Sync Core to Hosted
+# Maintainer-only workflow: syncs this public repo to a private hosted fork.
+# Requires HOSTED_REPO_NAME and HOSTED_SYNC_TOKEN secrets — safely no-ops if absent.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secrets presence
+        id: check_secrets
+        env:
+          HOSTED_REPO_NAME: ${{ secrets.HOSTED_REPO_NAME }}
+          HOSTED_SYNC_TOKEN: ${{ secrets.HOSTED_SYNC_TOKEN }}
+        run: |
+          if [ -z "$HOSTED_REPO_NAME" ] || [ -z "$HOSTED_SYNC_TOKEN" ]; then
+            echo "Secrets HOSTED_REPO_NAME or HOSTED_SYNC_TOKEN are missing. Skipping sync."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout Hosted Repository
+        if: steps.check_secrets.outputs.skip == 'false'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.HOSTED_REPO_NAME }}
+          token: ${{ secrets.HOSTED_SYNC_TOKEN }}
+          path: hosted-repo
+          fetch-depth: 0
+
+      - name: Sync Logic
+        if: steps.check_secrets.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.HOSTED_SYNC_TOKEN }}
+        run: |
+          cd hosted-repo
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add the public core repository as a remote
+          git remote add core https://github.com/${{ github.repository }}.git
+          git fetch core main
+
+          echo "Attempting to merge core/main into hosted main..."
+
+          # Try a clean merge first
+          if git merge core/main --no-edit; then
+            # Check if there are actual changes to push
+            if git diff --quiet origin/main; then
+              echo "No new changes to sync."
+            else
+              echo "Clean merge successful. Pushing directly to main."
+              git push origin main
+            fi
+          else
+            echo "Conflict detected. Aborting direct merge and creating a PR branch."
+            git merge --abort
+
+            BRANCH_NAME="sync/conflicts-$(date +%Y%m%d%H%M%S)"
+            git checkout -b "$BRANCH_NAME"
+
+            # Force the merge again to capture conflict markers
+            git merge core/main || true
+            git add .
+            git commit -m "chore: automated sync with conflicts"
+            git push origin "$BRANCH_NAME"
+            
+            gh pr create \
+              --repo "${{ secrets.HOSTED_REPO_NAME }}" \
+              --title "Action Required: Sync Conflicts from Core" \
+              --body "Automated sync from core encountered conflicts. Please resolve them and merge this PR to keep 'hosted' up to date." \
+              --base main \
+              --head "$BRANCH_NAME"
+          fi

@@ -1,0 +1,61 @@
+# Environment
+.env
+.env.*
+!.env.example
+.claude/*
+www/rentmate-ui/.claude/*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+*.so
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+eval/*.pdf
+
+# Node / Frontend
+node_modules/
+www/rentmate/dist/
+
+# Database / Data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets & Keys
+*.key
+*.pem
+*.crt
+*.cert
+secrets/*.json
+!secrets/*.example.json
+
+# Logs
+logs/
+*.log
+
+# Agents runtime
+/agents/data/
+/agents/agents/
+/agents/openclaw.json
+
+# Editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo

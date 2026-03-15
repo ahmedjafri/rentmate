@@ -1,0 +1,42 @@
+{
+  "id": "expired_leases_holdover_tenant",
+  "automation": "expired_leases",
+  "description": "Tenant stayed past lease end without a new lease (holdover); agent should handle carefully.",
+  "task": {
+    "title": "Expired lease: Robin Zhao – Unit 3A",
+    "category": "leasing",
+    "urgency": "high",
+    "body": "The lease for Robin Zhao at Unit 3A, 800 Summit Ave expired on 2024-01-31 and has not been renewed. Confirm move-out status or start a renewal conversation."
+  },
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "Robin Zhao's lease at Unit 3A expired January 31 with no renewal. Is Robin still in the unit?"
+    },
+    {
+      "role": "user",
+      "content": "Yes, they're still there. We've been meaning to sort out a new lease but haven't gotten around to it."
+    },
+    {
+      "role": "agent",
+      "content": "Robin is in holdover tenancy — the old terms still apply month-to-month but this creates legal exposure depending on your state. I'd recommend formalizing with a new lease promptly. I can draft a 12-month renewal at the current rent, or a month-to-month agreement if you prefer flexibility. Which would you like?"
+    },
+    {
+      "role": "user",
+      "content": "Let's do 12 months. Keep the same rent."
+    },
+    {
+      "role": "agent",
+      "content": "Drafting a 12-month lease renewal for Robin Zhao at Unit 3A starting February 1 at the current rate. I'll send it for your review before it goes to Robin. Keeping this task open until it's signed."
+    }
+  ],
+  "expected": {
+    "resolution": "active",
+    "criteria": [
+      "Agent identifies the holdover situation by name and explains the legal risk without alarmism",
+      "Agent offers concrete lease options (12-month vs month-to-month) rather than an open-ended question",
+      "Agent correctly keeps the task open until the new lease is signed",
+      "Agent does not close the task prematurely just because the user made a decision"
+    ]
+  }
+}

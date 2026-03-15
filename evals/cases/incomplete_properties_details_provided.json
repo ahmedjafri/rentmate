@@ -1,0 +1,34 @@
+{
+  "id": "incomplete_properties_details_provided",
+  "automation": "incomplete_properties",
+  "description": "User provides missing address fields; task closes after update confirmed.",
+  "task": {
+    "title": "Incomplete address: 900 River Rd",
+    "category": "compliance",
+    "urgency": "low",
+    "body": "Property \"900 River Rd\" is missing one or more address fields (city, state, postal code). Complete the address so leases and documents are accurate."
+  },
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "The property at 900 River Rd is missing city, state, and postal code. This affects lease accuracy and document generation. Can you provide the missing details?"
+    },
+    {
+      "role": "user",
+      "content": "It's Portland, OR 97201."
+    },
+    {
+      "role": "agent",
+      "content": "Updated — 900 River Rd, Portland, OR 97201. The property record is now complete. Closing this task."
+    }
+  ],
+  "expected": {
+    "resolution": "resolved",
+    "criteria": [
+      "Agent specifies which fields are missing rather than a vague request",
+      "Agent applies all three fields from a single user response without asking for each separately",
+      "Agent confirms the full updated address back to the user before closing",
+      "Dialog is concise — resolves in minimal turns"
+    ]
+  }
+}

@@ -1,0 +1,509 @@
+# db/dsl_runner.py
+"""
+Property-Flow DSL interpreter.
+
+Parses a YAML script, queries the declared scope resource, evaluates filters
+and conditions per record, renders templates, and creates tasks.
+
+Does NOT commit — callers are responsible for committing or rolling back.
+"""
+
+import logging
+import re
+import uuid
+from datetime import date, datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
+
+import yaml
+from sqlalchemy.orm import Session
+
+from .models import (
+    Conversation,
+    Lease,
+    Message,
+    ParticipantType,
+    Property,
+    Tenant,
+    Unit,
+)
+
+logger = logging.getLogger("rentmate.dsl")
+
+_OPEN_STATUSES = {"suggested", "active", "paused"}
+
+# ─── computed fields ──────────────────────────────────────────────────────────
+
+def _active_leases(unit: Unit) -> List[Lease]:
+    today = date.today()
+    return [l for l in unit.leases if l.end_date >= today]
+
+
+def _computed(obj: Any, name: str) -> Any:
+    """Return computed / virtual field values for DSL field references."""
+    today = date.today()
+    if name == "active_lease_count" and isinstance(obj, Unit):
+        return len(_active_leases(obj))
+    if name == "days_vacant" and isinstance(obj, Unit):
+        if _active_leases(obj):
+            return 0
+        past = sorted(obj.leases, key=lambda l: l.end_date, reverse=True)
+        return (today - past[0].end_date).days if past else 0
+    if name == "days_until_end" and isinstance(obj, Lease):
+        return (obj.end_date - today).days if obj.end_date else 0
+    if name == "unit_count" and isinstance(obj, Property):
+        return len(obj.units)
+    if name == "last_lease" and isinstance(obj, Unit):
+        past = sorted(obj.leases, key=lambda l: l.end_date, reverse=True)
+        return past[0] if past else None
+    return None
+
+
+# ─── field resolution ─────────────────────────────────────────────────────────
+
+def _get_field(obj: Any, path: str) -> Any:
+    """
+    Resolve a dot-path field from an ORM object, handling computed fields.
+    e.g. "tenant.first_name", "unit.property.address_line1", "active_lease_count"
+    """
+    if obj is None or not path:
+        return None
+
+    dot = path.find(".")
+    if dot == -1:
+        name, rest = path, None
+    else:
+        name, rest = path[:dot], path[dot + 1:]
+
+    # Try computed fields first
+    computed = _computed(obj, name)
+    if computed is not None or (name in ("active_lease_count", "days_vacant",
+                                          "days_until_end", "unit_count", "last_lease")
+                                 and isinstance(obj, (Unit, Lease, Property))):
+        val = computed
+    else:
+        val = getattr(obj, name, None)
+
+    return _get_field(val, rest) if rest else val
+
+
+# ─── context ──────────────────────────────────────────────────────────────────
+
+def _build_ctx(resource: str, record: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build the template/condition evaluation context for a single record.
+
+    Top-level keys:
+      - resource name (e.g. "unit")  → the ORM object, for dot-path templates
+      - computed field shortcuts      → e.g. days_vacant, days_until_end
+      - direct column values          → e.g. address_line1, label, payment_status
+      - today                         → ISO date string
+      - params                        → per-check param dict
+    """
+    today = date.today()
+    ctx: Dict[str, Any] = {"today": today, "params": params}
+
+    # Resource object (for {{unit.label}}, {{lease.tenant.first_name}}, etc.)
+    ctx[resource] = record
+
+    # Expose direct column values at top level (for shorthand like {{address_line1}})
+    for k, v in record.__dict__.items():
+        if not k.startswith("_"):
+            ctx.setdefault(k, v)
+
+    # Computed shortcuts
+    if isinstance(record, Unit):
+        active = _active_leases(record)
+        past = sorted(record.leases, key=lambda l: l.end_date, reverse=True)
+        ctx["active_lease_count"] = len(active)
+        ctx["days_vacant"] = 0 if active else ((today - past[0].end_date).days if past else 0)
+        ctx["last_lease"] = past[0] if past else None
+    elif isinstance(record, Lease):
+        ctx["days_until_end"] = (record.end_date - today).days if record.end_date else 0
+    elif isinstance(record, Property):
+        ctx["unit_count"] = len(record.units)
+
+    return ctx
+
+
+# ─── template rendering ───────────────────────────────────────────────────────
+
+def _resolve_expr(ctx: Dict[str, Any], expr: str) -> Any:
+    """Resolve a dot-path expression like 'unit.label' or 'params.warn_days'."""
+    parts = expr.split(".")
+    obj: Any = ctx
+    for part in parts:
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            obj = obj.get(part)
+        else:
+            obj = _get_field(obj, part)
+    return obj
+
+
+def _render(template: str, ctx: Dict[str, Any]) -> str:
+    """Substitute {{expr}} placeholders in a template string."""
+    def replace(m: re.Match) -> str:
+        expr = m.group(1).strip()
+        # today + N arithmetic: {{today + params.warn_days}} or {{today + 30}}
+        add_m = re.match(r"today\s*\+\s*(.+)", expr)
+        if add_m:
+            raw = _resolve_expr(ctx, add_m.group(1).strip())
+            try:
+                result = ctx["today"] + timedelta(days=int(raw))
+                return str(result)
+            except (TypeError, ValueError):
+                return ""
+        val = _resolve_expr(ctx, expr)
+        return str(val) if val is not None else ""
+
+    return re.sub(r"\{\{(.+?)\}\}", replace, str(template))
+
+
+# ─── operators ────────────────────────────────────────────────────────────────
+
+def _apply_op(left: Any, operator: str, right: Any) -> bool:
+    try:
+        if operator == "equals":     return left == right
+        if operator == "not_equals": return left != right
+        if operator == "gt":         return left is not None and left > right
+        if operator == "lt":         return left is not None and left < right
+        if operator == "gte":        return left is not None and left >= right
+        if operator == "lte":        return left is not None and left <= right
+        if operator == "in":
+            haystack = right if isinstance(right, list) else [right]
+            return left in haystack
+        if operator == "exists":
+            if isinstance(left, list): return len(left) > 0
+            return left is not None and left != ""
+        if operator == "not_exists":
+            if isinstance(left, list): return len(left) == 0
+            return left is None or left == ""
+        if operator == "contains":
+            if isinstance(left, str):  return str(right) in left
+            if isinstance(left, list): return right in left
+    except TypeError:
+        pass
+    return False
+
+
+# ─── value coercion ───────────────────────────────────────────────────────────
+
+def _coerce(value: Any, ctx: Dict[str, Any]) -> Any:
+    """Render template strings and coerce to int/float/date where possible."""
+    if isinstance(value, list):
+        return [_coerce(v, ctx) for v in value]
+    if not isinstance(value, str):
+        return value
+    rendered = _render(value, ctx)
+    try:
+        return int(rendered)
+    except (ValueError, TypeError):
+        pass
+    try:
+        return datetime.strptime(rendered, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        pass
+    return rendered
+
+
+# ─── condition evaluation ─────────────────────────────────────────────────────
+
+def _eval_cond(cond: Dict[str, Any], record: Any, ctx: Dict[str, Any]) -> bool:
+    if "any_of" in cond:
+        return any(_eval_cond(c, record, ctx) for c in cond["any_of"])
+
+    field   = cond.get("field", "")
+    op      = cond.get("operator", "exists")
+    raw_val = cond.get("value")
+
+    left  = _get_field(record, field) if field else None
+    # also check ctx for computed shortcuts (active_lease_count, days_vacant, etc.)
+    if left is None and field in ctx:
+        left = ctx[field]
+
+    right = _coerce(raw_val, ctx) if raw_val is not None else None
+    return _apply_op(left, op, right)
+
+
+def _eval_conditions(conditions: List[Any], record: Any, ctx: Dict[str, Any]) -> bool:
+    return all(_eval_cond(c, record, ctx) for c in conditions)
+
+
+# ─── scope filter ─────────────────────────────────────────────────────────────
+
+def _eval_filter(record: Any, f: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
+    """
+    Evaluate one scope filter.  Supports both standard and shorthand formats:
+
+    Standard:   {field: end_date, operator: gte, value: "{{today}}"}
+    Shorthand:  {exists: units}          — relation is non-empty
+                {not_exists: units}      — relation is empty
+    """
+    # Shorthand: {exists: <attr>}
+    for shorthand_op in ("exists", "not_exists"):
+        if shorthand_op in f and "field" not in f:
+            attr = f[shorthand_op]
+            # Try exact name, then plural/singular variant
+            val = getattr(record, attr, None)
+            if val is None:
+                val = getattr(record, attr + "s", None)      # unit → units
+            if val is None:
+                val = getattr(record, attr.rstrip("s"), None) # units → unit
+            return _apply_op(val, shorthand_op, None)
+
+    return _eval_cond(f, record, ctx)
+
+
+# ─── urgency expression ───────────────────────────────────────────────────────
+
+_COND_RE  = re.compile(r"(\w[\w.]*)\s*(<=|>=|<|>|==|!=)\s*(.+)")
+_OP_MAP   = {"<=": "lte", ">=": "gte", "<": "lt", ">": "gt", "==": "equals", "!=": "not_equals"}
+_LEVELS   = {"low", "medium", "high", "critical"}
+
+
+def _eval_urgency(urgency: Any, ctx: Dict[str, Any]) -> str:
+    """
+    Evaluate an urgency expression.  Handles both:
+      - Static value:         "high"
+      - Conditional (literal block |):
+            high   if days_until_end <= 30
+            medium otherwise
+      - Conditional (folded block > - newlines collapsed to spaces):
+            "high if days_until_end <= 30 medium otherwise"
+    """
+    if not isinstance(urgency, str):
+        return str(urgency)
+    urgency = urgency.strip()
+    if " if " not in urgency:
+        return urgency  # static
+
+    # Tokenise — works whether separated by newlines or spaces
+    tokens = re.split(r"\s+", urgency)
+
+    clauses: List[tuple] = []
+    i = 0
+    while i < len(tokens):
+        word = tokens[i].lower()
+        if word in _LEVELS:
+            if i + 1 < len(tokens) and tokens[i + 1].lower() == "if":
+                # Collect condition tokens until the next level keyword
+                j = i + 2
+                while j < len(tokens) and tokens[j].lower() not in _LEVELS:
+                    j += 1
+                condition = " ".join(tokens[i + 2 : j])
+                clauses.append(("if", tokens[i], condition))
+                i = j
+            else:
+                # Default clause: "low otherwise" or bare "low"
+                clauses.append(("default", tokens[i], ""))
+                i += 1
+                if i < len(tokens) and tokens[i].lower() == "otherwise":
+                    i += 1
+        elif word == "otherwise":
+            i += 1  # orphan keyword, skip
+        else:
+            i += 1
+
+    for kind, level, condition in clauses:
+        if kind == "default":
+            return level
+        cm = _COND_RE.match(condition.strip())
+        if cm:
+            field_expr, sym, val_str = cm.groups()
+            left  = _resolve_expr(ctx, field_expr.strip())
+            right = _coerce(val_str.strip(), ctx)
+            if _apply_op(left, _OP_MAP[sym], right):
+                return level
+
+    return "medium"
+
+
+# ─── task helpers ─────────────────────────────────────────────────────────────
+
+def _task_exists(db: Session, subject: str,
+                 property_id: Optional[str], unit_id: Optional[str]) -> bool:
+    q = (
+        db.query(Conversation)
+        .filter(
+            Conversation.is_task == True,           # noqa: E712
+            Conversation.source == "ai_suggestion",
+            Conversation.task_status.in_(_OPEN_STATUSES),
+            Conversation.subject == subject,
+        )
+    )
+    if property_id:
+        q = q.filter(Conversation.property_id == property_id)
+    if unit_id:
+        q = q.filter(Conversation.unit_id == unit_id)
+    return q.first() is not None
+
+
+def _do_create_task(db: Session, subject: str, body: str, category: str,
+                    urgency: str, property_id: Optional[str],
+                    unit_id: Optional[str]) -> None:
+    task = Conversation(
+        id=str(uuid.uuid4()),
+        subject=subject,
+        is_task=True,
+        task_status="suggested",
+        task_mode="waiting_approval",
+        source="ai_suggestion",
+        category=category,
+        urgency=urgency,
+        priority="routine",
+        confidential=False,
+        property_id=property_id,
+        unit_id=unit_id,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(task)
+    db.flush()
+    db.add(Message(
+        id=str(uuid.uuid4()),
+        conversation_id=task.id,
+        sender_type=ParticipantType.ACCOUNT_USER,
+        body=body,
+        message_type="context",
+        sender_name="RentMate",
+        is_ai=True,
+        sent_at=datetime.utcnow(),
+    ))
+    db.flush()
+
+
+def _extract_ids(resource: str, record: Any) -> Tuple[Optional[str], Optional[str]]:
+    if resource == "property":
+        return record.id, None
+    if resource == "unit":
+        return getattr(record, "property_id", None), record.id
+    if resource == "lease":
+        return getattr(record, "property_id", None), getattr(record, "unit_id", None)
+    if resource == "tenant":
+        leases = getattr(record, "leases", [])
+        prop_id = leases[0].property_id if leases else None
+        return prop_id, None
+    return None, None
+
+
+# ─── resource query ───────────────────────────────────────────────────────────
+
+_RESOURCE_MAP = {
+    "property": Property,
+    "unit":     Unit,
+    "lease":    Lease,
+    "tenant":   Tenant,
+}
+
+
+def _query_resource(db: Session, resource: str) -> List[Any]:
+    model = _RESOURCE_MAP.get(resource)
+    if not model:
+        raise ValueError(f"Unknown scope resource: {resource!r}. "
+                         f"Valid values: {list(_RESOURCE_MAP)}")
+    return db.query(model).all()
+
+
+# ─── public entry point ───────────────────────────────────────────────────────
+
+def run_script(
+    db: Session,
+    script_yaml: str,
+    params: Optional[Dict[str, Any]] = None,
+    dry_run: bool = False,
+) -> int:
+    """
+    Execute a Property-Flow YAML script against the database.
+
+    Iterates over the declared scope resource, applies filters and conditions,
+    renders templates, and calls _do_create_task for each matching record that
+    doesn't already have an open task with the same subject.
+
+    When dry_run=True, skips the deduplication check so simulation always
+    shows the full set of tasks the script would generate.
+
+    Returns the number of new tasks created.
+    Does NOT commit — caller is responsible.
+    """
+    try:
+        script = yaml.safe_load(script_yaml)
+    except Exception as exc:
+        logger.error("DSL parse error: %s", exc)
+        return 0
+
+    if not isinstance(script, dict):
+        logger.error("DSL script must be a YAML mapping, got %s", type(script).__name__)
+        return 0
+
+    scope        = script.get("scope", {})
+    resource     = scope.get("resource", "")
+    scope_filters = scope.get("filters", []) or []
+    conditions   = script.get("conditions", []) or []
+    actions      = script.get("actions", []) or []
+    params       = params or {}
+
+    if not resource:
+        logger.error("DSL script is missing scope.resource")
+        return 0
+
+    try:
+        records = _query_resource(db, resource)
+    except ValueError as exc:
+        logger.error("DSL: %s", exc)
+        return 0
+
+    logger.info("DSL: resource=%r  records=%d  filters=%d  conditions=%d",
+                resource, len(records), len(scope_filters), len(conditions))
+
+    count = 0
+    filtered_out = 0
+    condition_out = 0
+    deduped = 0
+
+    for record in records:
+        ctx = _build_ctx(resource, record, params)
+
+        # Scope filters (all must pass)
+        filter_results = []
+        for f in scope_filters:
+            result = _eval_filter(record, f, ctx)
+            filter_results.append(result)
+            if not result:
+                break
+        if not all(filter_results):
+            filtered_out += 1
+            logger.debug("DSL: record %r failed filter %r", getattr(record, "id", record), f)
+            continue
+
+        # Per-record conditions (all must pass)
+        if not _eval_conditions(conditions, record, ctx):
+            condition_out += 1
+            continue
+
+        # Execute actions
+        for action in actions:
+            if action.get("type") != "create_task":
+                continue
+
+            subject  = _render(action.get("subject", "Untitled task"), ctx)
+            body     = _render(action.get("body", ""), ctx)
+            category = action.get("category", "compliance")
+            urgency  = _eval_urgency(action.get("urgency", "medium"), ctx)
+
+            property_id, unit_id = _extract_ids(resource, record)
+
+            if not dry_run and _task_exists(db, subject, property_id, unit_id):
+                deduped += 1
+                logger.debug("DSL: task already exists, skipping: %r", subject)
+                continue
+
+            _do_create_task(db, subject, body, category, urgency, property_id, unit_id)
+            count += 1
+            logger.debug("DSL created task: %r (urgency=%s)", subject, urgency)
+
+    logger.info("DSL: created=%d  filtered_out=%d  condition_out=%d  deduped=%d",
+                count, filtered_out, condition_out, deduped)
+    if count:
+        logger.info("DSL script created %d new task(s).", count)
+    return count

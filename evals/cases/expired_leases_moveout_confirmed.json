@@ -1,0 +1,34 @@
+{
+  "id": "expired_leases_moveout_confirmed",
+  "automation": "expired_leases",
+  "description": "Lease expired with no renewal; agent confirms move-out and closes cleanly.",
+  "task": {
+    "title": "Expired lease: Jordan Kim – Unit 5F",
+    "category": "leasing",
+    "urgency": "high",
+    "body": "The lease for Jordan Kim at Unit 5F, 22 Harbor View expired on 2024-02-28 and has not been renewed. Confirm move-out status or start a renewal conversation."
+  },
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "Jordan Kim's lease at Unit 5F expired on Feb 28 with no renewal. Is Jordan still in the unit, or has move-out been completed?"
+    },
+    {
+      "role": "user",
+      "content": "They moved out on March 1st. Deposit was returned already."
+    },
+    {
+      "role": "agent",
+      "content": "Got it — Jordan's tenancy is fully closed. I'll mark the unit as vacant, log the move-out date as March 1, and create a vacancy task for Unit 5F. Closing this expired lease task."
+    }
+  ],
+  "expected": {
+    "resolution": "resolved",
+    "criteria": [
+      "Agent's first message is a direct binary question (still in unit or moved out) — no preamble",
+      "Agent records move-out date from user's response",
+      "Agent proactively creates a vacancy task rather than requiring a separate prompt",
+      "Agent confirms all downstream actions in a single closing message"
+    ]
+  }
+}

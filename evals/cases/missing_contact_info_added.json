@@ -1,0 +1,34 @@
+{
+  "id": "missing_contact_info_added",
+  "automation": "missing_contact",
+  "description": "User provides contact details for tenant; task closes after confirmation.",
+  "task": {
+    "title": "Missing contact info: Sam Okafor",
+    "category": "compliance",
+    "urgency": "low",
+    "body": "Tenant \"Sam Okafor\" has no phone number or email on file. Add contact details so they can be reached."
+  },
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "Sam Okafor has no phone or email on record. Without this, we can't send lease renewals, payment reminders, or emergency notices. Do you have their contact details?"
+    },
+    {
+      "role": "user",
+      "content": "Yes — phone is 206-555-0192, email is sam.okafor@email.com."
+    },
+    {
+      "role": "agent",
+      "content": "Updated Sam's record with phone 206-555-0192 and email sam.okafor@email.com. Task resolved."
+    }
+  ],
+  "expected": {
+    "resolution": "resolved",
+    "criteria": [
+      "Agent explains why missing contact info is consequential (not just compliance theater)",
+      "Agent captures both fields from a single response without redundant confirmation steps",
+      "Agent confirms both fields were saved before closing",
+      "Dialog resolves in three turns or fewer"
+    ]
+  }
+}

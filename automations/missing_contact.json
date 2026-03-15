@@ -1,0 +1,13 @@
+{
+  "key": "missing_contact",
+  "label": "Missing Contact Info",
+  "description": "Flags tenants with neither phone nor email on file.",
+  "hint": "No configurable parameters — toggle on/off only.",
+  "has_params": false,
+  "params": [],
+  "default_config": {
+    "enabled": true,
+    "interval_hours": 1
+  },
+  "script": "name: \"Missing Contact Info\"\ndescription: >\n  Creates a compliance task for every tenant with neither a phone\n  number nor an email address on file.\n\ntrigger:\n  type: schedule\n  interval_hours: \"{{params.interval_hours}}\"\n\nscope:\n  resource: tenant\n\nconditions:\n  - field: phone\n    operator: not_exists\n  - field: email\n    operator: not_exists\n\nactions:\n  - type: create_task\n    subject: \"Missing contact info: {{tenant.first_name}} {{tenant.last_name}}\"\n    category: compliance\n    urgency: low\n    body: >\n      Tenant \\\"{{tenant.first_name}} {{tenant.last_name}}\\\" has no phone number\n      or email on file. Add contact details so they can be reached.\n"
+}

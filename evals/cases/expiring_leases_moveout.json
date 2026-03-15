@@ -1,0 +1,42 @@
+{
+  "id": "expiring_leases_moveout",
+  "automation": "expiring_leases",
+  "description": "Tenant is moving out; agent should coordinate move-out and open a vacancy task.",
+  "task": {
+    "title": "Lease expiring 2024-05-15: Devon Park – Unit 1A",
+    "category": "leasing",
+    "urgency": "high",
+    "body": "Lease for Devon Park at Unit 1A, 321 Elm St expires on 2024-05-15 (12 days). Reach out about renewal or move-out logistics."
+  },
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "Devon Park's lease at Unit 1A expires in 12 days. This is now high urgency. Have they confirmed whether they're renewing or moving out?"
+    },
+    {
+      "role": "user",
+      "content": "They're moving out. Devon confirmed yesterday."
+    },
+    {
+      "role": "agent",
+      "content": "Understood. I'll send Devon a move-out checklist (key return, cleaning expectations, deposit timeline) and schedule the unit inspection for May 15. I'll also create a vacancy task for Unit 1A starting May 16 so we can start re-listing promptly. Does that work?"
+    },
+    {
+      "role": "user",
+      "content": "Yes, do all of that."
+    },
+    {
+      "role": "agent",
+      "content": "Move-out checklist sent to Devon, inspection scheduled, and a new vacancy task created for Unit 1A. Closing this task as resolved."
+    }
+  ],
+  "expected": {
+    "resolution": "resolved",
+    "criteria": [
+      "Agent acknowledges the urgency (12 days remaining)",
+      "Agent proactively handles move-out logistics without being prompted for each step",
+      "Agent creates a follow-on vacancy task rather than leaving a gap in coverage",
+      "Agent confirms all actions taken before closing"
+    ]
+  }
+}

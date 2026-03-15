@@ -1,0 +1,42 @@
+{
+  "id": "vacant_units_no_prospects",
+  "automation": "vacant_units",
+  "description": "No tenant in sight; agent should suggest actionable steps and keep task open.",
+  "task": {
+    "title": "Vacant unit: Unit 1B at 456 Oak Ave",
+    "category": "leasing",
+    "urgency": "medium",
+    "body": "Unit 1B at 456 Oak Ave has been vacant for 22 days. Previous tenant: Marcus Rivera, ended 2024-02-15. Previous rent: $1,850/month."
+  },
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "Unit 1B at 456 Oak Ave has been vacant for 22 days. At $1,850/month that's roughly $1,400 in lost revenue so far. Want me to draft a listing or check comparable rents in the area?"
+    },
+    {
+      "role": "user",
+      "content": "We've had showings but nothing concrete yet. Not sure what to do."
+    },
+    {
+      "role": "agent",
+      "content": "A few options: I can lower the listing price by 5% to match current comps, draft a follow-up message to recent showings, or flag this for a price review in 7 days. Which would be most useful?"
+    },
+    {
+      "role": "user",
+      "content": "Send follow-ups to the showings."
+    },
+    {
+      "role": "agent",
+      "content": "I'll draft follow-up messages for all recent showings and send them for your approval. Keeping this task open until we have a signed lease."
+    }
+  ],
+  "expected": {
+    "resolution": "active",
+    "criteria": [
+      "Agent quantifies the financial impact of vacancy",
+      "Agent presents at least two concrete actionable options",
+      "Agent correctly keeps the task open (no premature resolution)",
+      "Agent takes ownership of the next action rather than leaving it ambiguous"
+    ]
+  }
+}

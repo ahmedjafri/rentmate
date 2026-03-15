@@ -1,0 +1,43 @@
+{
+  "id": "overdue_rent_nonresponsive_tenant",
+  "automation": "overdue_rent",
+  "description": "Tenant is not responding; agent should escalate and document steps taken.",
+  "task": {
+    "title": "Overdue rent: Priya Nair – Unit 2B",
+    "category": "rent",
+    "urgency": "high",
+    "body": "Priya Nair at Unit 2B, 101 Cedar Ct has payment status \"overdue\" ($1,750/month). Follow up on outstanding rent."
+  },
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "Priya Nair at Unit 2B is overdue on rent ($1,750/month). I can send a payment reminder via email and SMS. Want me to proceed?"
+    },
+    {
+      "role": "user",
+      "content": "I've already sent two reminders this week. No response."
+    },
+    {
+      "role": "agent",
+      "content": "Two unanswered reminders escalates this. Next steps typically are: (1) formal pay-or-quit notice, (2) logging contact attempts for the record. I can draft the notice for your review — this would be the required step before any legal action if it comes to that. Should I draft it?"
+    },
+    {
+      "role": "user",
+      "content": "Draft it but don't send yet. I want to review first."
+    },
+    {
+      "role": "agent",
+      "content": "Draft pay-or-quit notice prepared and attached for your review. I've logged both prior contact attempts. Keeping this task open — let me know once you're ready to send or if the situation resolves."
+    }
+  ],
+  "expected": {
+    "resolution": "active",
+    "criteria": [
+      "Agent recognizes two unanswered reminders as an escalation signal",
+      "Agent suggests legally appropriate next steps (pay-or-quit notice)",
+      "Agent respects user's request to review before sending",
+      "Agent correctly keeps the task open rather than closing prematurely",
+      "Agent documents prior contact attempts"
+    ]
+  }
+}
