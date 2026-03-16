@@ -1,6 +1,7 @@
 import os
 import pytest
 from pathlib import Path
+from unittest.mock import patch
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -15,6 +16,17 @@ if _ENV_FILE.exists():
         if _line and not _line.startswith("#") and "=" in _line:
             _k, _, _v = _line.partition("=")
             os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
+
+
+@pytest.fixture(autouse=True)
+def _no_llm_suggestion(request):
+    """Suppress generate_task_suggestion for all non-eval tests to prevent
+    real LLM calls during unit/integration tests and keep task message counts predictable."""
+    if request.node.get_closest_marker("eval"):
+        yield
+        return
+    with patch("llm.suggest.generate_task_suggestion", return_value=None):
+        yield
 
 
 def pytest_addoption(parser):

@@ -23,6 +23,7 @@ def pytest_generate_tests(metafunc):
         metafunc.parametrize("eval_case", cases, ids=[c.id for c in cases])
 
 
+@pytest.mark.eval
 @pytest.mark.skipif(not _has_api_key, reason="LLM_API_KEY not set — skipping evals")
 def test_eval(eval_case):
     meta = load_automation_meta(eval_case.automation)

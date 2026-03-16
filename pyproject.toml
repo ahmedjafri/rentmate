@@ -29,6 +29,12 @@ nanobot-ai = "^0.1"
 pytest = "^9.0.0"
 alembic = "^1.17.1"
 
+[tool.pytest.ini_options]
+addopts = "-m 'not eval'"
+markers = [
+  "eval: LLM-judge eval cases (run with -m eval)",
+]
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
