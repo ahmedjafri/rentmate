@@ -1,5 +1,5 @@
 import { useRef, useEffect, useMemo, useState } from 'react';
-import { X, Bot, Sparkles, Users, Zap, ShieldCheck, Hand, Lock, MessageSquare, RotateCcw, Loader2 } from 'lucide-react';
+import { X, Bot, Sparkles, Users, Zap, ShieldCheck, Hand, Lock, MessageSquare, RotateCcw, Loader2, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -11,7 +11,7 @@ import { getToken } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { AgentTaskProposal, AgentProposedTask } from './AgentTaskProposal';
-import { graphqlQuery, TASK_QUERY, ADD_TASK_MESSAGE_MUTATION } from '@/data/api';
+import { graphqlQuery, TASK_QUERY, ADD_TASK_MESSAGE_MUTATION, DELETE_TASK_MUTATION } from '@/data/api';
 import { apiMessagesToChatThread } from '@/hooks/useApiData';
 
 function authHeaders() {
@@ -38,8 +38,10 @@ function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }
 }
 
 export function ChatPanel() {
-  const { chatPanel, closeChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, globalChatThread } = useApp();
+  const { chatPanel, closeChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, globalChatThread } = useApp();
   const [dismissing, setDismissing] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const handleDismiss = async () => {
     if (!chatPanel.taskId) return;
@@ -56,6 +58,31 @@ export function ChatPanel() {
       setDismissing(false);
     }
   };
+  const handleDelete = async () => {
+    if (!chatPanel.taskId) return;
+    if (!deleteConfirm) {
+      setDeleteConfirm(true);
+      return;
+    }
+    const taskId = chatPanel.taskId;
+    setDeleting(true);
+    try {
+      await graphqlQuery(DELETE_TASK_MUTATION, { uid: taskId });
+      removeTask(taskId);
+      closeChat();
+    } catch {
+      toast.error('Failed to delete task');
+    } finally {
+      setDeleting(false);
+      setDeleteConfirm(false);
+    }
+  };
+
+  // Reset delete confirm state when task changes
+  useEffect(() => {
+    setDeleteConfirm(false);
+  }, [chatPanel.taskId]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChatInputHandle>(null);
   const [isTyping, setIsTyping] = useState(false);
@@ -382,9 +409,33 @@ export function ChatPanel() {
             )}
           </div>
         </div>
-        <Button variant="ghost" size="icon" onClick={closeChat} className="h-7 w-7 rounded-lg shrink-0 hover:bg-muted hover:text-muted-foreground">
-          <X className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-0.5 shrink-0">
+          {activeTask && (
+            <>
+              <Button size="sm" variant="ghost" className="h-7 rounded-lg text-[11px] px-2 text-muted-foreground/60 hover:text-muted-foreground" disabled={dismissing} onClick={handleDismiss}>
+                {dismissing ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Dismiss'}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className={cn(
+                  'h-7 rounded-lg text-[11px] px-2 gap-1',
+                  deleteConfirm
+                    ? 'text-destructive hover:text-destructive hover:bg-destructive/10'
+                    : 'text-muted-foreground/60 hover:text-destructive'
+                )}
+                disabled={deleting}
+                onClick={handleDelete}
+              >
+                {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                {deleteConfirm ? 'Confirm' : null}
+              </Button>
+            </>
+          )}
+          <Button variant="ghost" size="icon" onClick={closeChat} className="h-7 w-7 rounded-lg shrink-0 hover:bg-muted hover:text-muted-foreground">
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       {/* Task Context */}
@@ -410,9 +461,6 @@ export function ChatPanel() {
                   </Badge>
                 );
               })()}
-              <Button size="sm" variant="ghost" className="h-6 rounded-lg text-[11px] px-2 text-muted-foreground/60 hover:text-muted-foreground" disabled={dismissing} onClick={handleDismiss}>
-                {dismissing ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Dismiss'}
-              </Button>
             </div>
             {activeTask.mode === 'autonomous' && chatPanel.taskId && (
               <Button

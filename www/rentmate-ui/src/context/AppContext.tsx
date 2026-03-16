@@ -35,6 +35,7 @@ interface AppContextType {
   updateTaskMessage: (taskId: string, messageId: string, updates: Partial<ChatMessage>) => void;
   setTaskMessages: (taskId: string, messages: ChatMessage[]) => void;
   updateTask: (taskId: string, updates: Partial<ActionDeskTask>) => void;
+  removeTask: (taskId: string) => void;
   addTask: (task: ActionDeskTask) => void;
   addProperty: (prop: Property) => void;
   updateProperty: (id: string, updates: Partial<Property>) => void;
@@ -201,6 +202,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActionDeskTasks(prev => [task, ...prev]);
   }, []);
 
+  const removeTask = useCallback((taskId: string) => {
+    setActionDeskTasks(prev => prev.filter(t => t.id !== taskId));
+  }, []);
+
   const updateTask = useCallback((taskId: string, updates: Partial<ActionDeskTask>) => {
     // Persist mode/status changes to backend (fire-and-forget)
     if (updates.mode !== undefined || updates.status !== undefined) {
@@ -232,7 +237,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       properties, tenants, suggestions, tickets, actionDeskTasks, isLoading: apiLoading, documents, autonomySettings,
       chatPanel, globalChatThread, entityContext, getEntityContext, setEntityContext,
       updateSuggestionStatus, updateSuggestion, addChatMessage, updateTaskMessage, setTaskMessages, updateTask,
-      addTask,
+      addTask, removeTask,
       addProperty, updateProperty, removeProperty, addTenant, addDocument, updateDocument, replaceDocument, removeDocument, openChat, closeChat, setAutonomySettings,
     }}>
       {children}

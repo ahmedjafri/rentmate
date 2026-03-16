@@ -190,6 +190,12 @@ export const UPDATE_TASK_MUTATION = `
   }
 `;
 
+export const DELETE_TASK_MUTATION = `
+  mutation DeleteTask($uid: String!) {
+    deleteTask(uid: $uid)
+  }
+`;
+
 export const ADD_DOCUMENT_TAG_MUTATION = `
   mutation AddDocumentTag($input: AddDocumentTagInput!) {
     addDocumentTag(input: $input) {

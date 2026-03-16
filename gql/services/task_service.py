@@ -54,6 +54,17 @@ class TaskService:
         return task
 
     @staticmethod
+    def delete_task(sess: Session, uid: str) -> bool:
+        task = sess.execute(
+            select(Conversation).where(Conversation.id == uid, Conversation.is_task == True)  # noqa: E712
+        ).scalar_one_or_none()
+        if not task:
+            raise ValueError(f"Task {uid} not found")
+        sess.delete(task)
+        sess.commit()
+        return True
+
+    @staticmethod
     def add_task_message(sess: Session, input: AddTaskMessageInput) -> Message:
         task = sess.execute(
             select(Conversation).where(Conversation.id == input.task_id, Conversation.is_task == True)  # noqa: E712

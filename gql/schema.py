@@ -125,6 +125,11 @@ class Mutation(AuthMutation):
         _current_user(info)
         return TaskChatMessageType.from_sql(TaskService.add_task_message(_session(info), input))
 
+    @strawberry.mutation(description="Permanently delete a task and all its messages")
+    def delete_task(self, info, uid: str) -> bool:
+        _current_user(info)
+        return TaskService.delete_task(_session(info), uid)
+
     @strawberry.mutation(description="Update task mode and/or status")
     def update_task(self, info, input: UpdateTaskInput) -> TaskType:
         _current_user(info)
