@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { getToken } from "@/lib/auth";
-import { Loader2, ChevronRight, ChevronDown, ChevronUp, Plus, Wand2, Trash2, CheckCircle2, XCircle } from "lucide-react";
+import { Loader2, ChevronRight, ChevronDown, ChevronUp, Plus, Wand2, CheckCircle2, XCircle } from "lucide-react";
 
 // ─── types ───────────────────────────────────────────────────────────────────
 
@@ -140,17 +140,6 @@ async function validateScript(script: string): Promise<{ valid: boolean; errors:
   return res.json();
 }
 
-async function deleteAutomation(key: string): Promise<Automation[]> {
-  const res = await fetch(`/automations/${key}`, {
-    method: "DELETE",
-    headers: authHeaders(),
-  });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.detail ?? "Failed to delete automation");
-  }
-  return (await res.json()).automations as Automation[];
-}
 
 async function streamGenerateScript(
   label: string,
@@ -209,7 +198,6 @@ export default function Automation() {
   const [validating, setValidating] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [deleting, setDeleting] = useState<string | null>(null);
 
   const loadHistory = () => fetchHistory().then(setHistory).catch(() => {});
 
@@ -267,21 +255,6 @@ export default function Automation() {
       toast.error("Validation request failed");
     } finally {
       setValidating(false);
-    }
-  };
-
-  const handleDelete = async (key: string, label: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!confirm(`Delete "${label}"? This cannot be undone.`)) return;
-    setDeleting(key);
-    try {
-      const updated = await deleteAutomation(key);
-      setAutomations(updated);
-      toast.success(`Deleted "${label}"`);
-    } catch (err) {
-      toast.error((err as Error).message);
-    } finally {
-      setDeleting(null);
     }
   };
 
@@ -410,22 +383,6 @@ export default function Automation() {
                 onCheckedChange={v => toggleCheck(automation.key, v)}
               />
             </div>
-
-            {automation.custom && (
-              <div onClick={e => e.stopPropagation()}>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                  disabled={deleting === automation.key}
-                  onClick={e => handleDelete(automation.key, automation.label, e)}
-                >
-                  {deleting === automation.key
-                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    : <Trash2 className="h-3.5 w-3.5" />}
-                </Button>
-              </div>
-            )}
 
             <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
           </div>
