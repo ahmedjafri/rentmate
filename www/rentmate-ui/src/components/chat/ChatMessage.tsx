@@ -265,7 +265,7 @@ export function ChatMessageBubble({ message, onApprove, onReject, onEdit }: Prop
               <ReactMarkdown>{message.content}</ReactMarkdown>
             </div>
           ) : (
-            <p className="break-words">{message.content}</p>
+            <p className="break-words overflow-hidden">{message.content}</p>
           )}
         </div>
       </div>
