@@ -85,8 +85,11 @@ def _create_task(
     property_id: Optional[str] = None,
     unit_id: Optional[str] = None,
     autonomy_level: Optional[str] = None,
+    tenant_name: Optional[str] = None,
+    property_address: Optional[str] = None,
 ) -> None:
-    """Insert a suggested ai_suggestion task with a context message."""
+    """Insert a suggested ai_suggestion task with a context message and, when in
+    waiting_approval mode, an approval message containing a draft suggested action."""
     task_mode, task_status = _AUTONOMY_MODE.get(autonomy_level or "suggest", _DEFAULT_MODE)
     task = Conversation(
         id=str(uuid.uuid4()),
@@ -107,7 +110,7 @@ def _create_task(
     db.add(task)
     db.flush()  # get task.id without committing
 
-    msg = Message(
+    db.add(Message(
         id=str(uuid.uuid4()),
         conversation_id=task.id,
         sender_type=ParticipantType.ACCOUNT_USER,
@@ -116,9 +119,33 @@ def _create_task(
         sender_name="RentMate",
         is_ai=True,
         sent_at=datetime.utcnow(),
-    )
-    db.add(msg)
+    ))
     db.flush()
+
+    # For suggest/waiting_approval tasks, generate a draft action the manager can send
+    if task_mode == "waiting_approval":
+        from llm.suggest import generate_task_suggestion
+        draft = generate_task_suggestion(
+            subject=subject,
+            context_body=context_body,
+            category=category,
+            tenant_name=tenant_name,
+            property_address=property_address,
+        )
+        if draft:
+            db.add(Message(
+                id=str(uuid.uuid4()),
+                conversation_id=task.id,
+                sender_type=ParticipantType.ACCOUNT_USER,
+                body="Here's a suggested message you can send:",
+                message_type="approval",
+                sender_name="RentMate",
+                is_ai=True,
+                draft_reply=draft,
+                sent_at=datetime.utcnow(),
+            ))
+            db.flush()
+
     logger.debug("Created audit task: %r (category=%s, urgency=%s)", subject, category, urgency)
 
 
@@ -308,6 +335,8 @@ def _check_expiring_leases(db: Session, warn_days: int = EXPIRY_WARN_DAYS, dry_r
             property_id=lease.property_id,
             unit_id=lease.unit_id,
             autonomy_level=autonomy_level,
+            tenant_name=tenant_name,
+            property_address=prop_label,
         )
         created += 1
     return created
@@ -346,6 +375,8 @@ def _check_overdue_rent(db: Session, dry_run: bool = False, autonomy_level: Opti
             property_id=lease.property_id,
             unit_id=lease.unit_id,
             autonomy_level=autonomy_level,
+            tenant_name=tenant_name,
+            property_address=prop_label,
         )
         created += 1
     return created
@@ -394,6 +425,8 @@ def _check_expired_leases(db: Session, dry_run: bool = False, autonomy_level: Op
             property_id=lease.property_id,
             unit_id=lease.unit_id,
             autonomy_level=autonomy_level,
+            tenant_name=tenant_name,
+            property_address=prop_label,
         )
         created += 1
     return created

@@ -341,7 +341,9 @@ def _task_exists(db: Session, subject: str,
 
 def _do_create_task(db: Session, subject: str, body: str, category: str,
                     urgency: str, property_id: Optional[str],
-                    unit_id: Optional[str]) -> None:
+                    unit_id: Optional[str],
+                    tenant_name: Optional[str] = None,
+                    property_address: Optional[str] = None) -> None:
     task = Conversation(
         id=str(uuid.uuid4()),
         subject=subject,
@@ -371,6 +373,29 @@ def _do_create_task(db: Session, subject: str, body: str, category: str,
         sent_at=datetime.utcnow(),
     ))
     db.flush()
+
+    # Generate a draft suggested action for waiting_approval tasks
+    from llm.suggest import generate_task_suggestion
+    draft = generate_task_suggestion(
+        subject=subject,
+        context_body=body,
+        category=category,
+        tenant_name=tenant_name,
+        property_address=property_address,
+    )
+    if draft:
+        db.add(Message(
+            id=str(uuid.uuid4()),
+            conversation_id=task.id,
+            sender_type=ParticipantType.ACCOUNT_USER,
+            body="Here's a suggested message you can send:",
+            message_type="approval",
+            sender_name="RentMate",
+            is_ai=True,
+            draft_reply=draft,
+            sent_at=datetime.utcnow(),
+        ))
+        db.flush()
 
 
 def _extract_ids(resource: str, record: Any) -> Tuple[Optional[str], Optional[str]]:
@@ -498,7 +523,24 @@ def run_script(
                 logger.debug("DSL: task already exists, skipping: %r", subject)
                 continue
 
-            _do_create_task(db, subject, body, category, urgency, property_id, unit_id)
+            # Extract tenant name and property address from ORM record for suggestion generation
+            t_name: Optional[str] = None
+            p_addr: Optional[str] = None
+            if resource == "lease":
+                if getattr(record, "tenant", None):
+                    t_name = f"{record.tenant.first_name} {record.tenant.last_name}".strip()
+                if getattr(record, "property", None):
+                    p_addr = record.property.address_line1
+            elif resource == "unit":
+                if getattr(record, "property", None):
+                    p_addr = record.property.address_line1
+            elif resource == "property":
+                p_addr = getattr(record, "address_line1", None)
+            elif resource == "tenant":
+                t_name = f"{record.first_name} {record.last_name}".strip()
+
+            _do_create_task(db, subject, body, category, urgency, property_id, unit_id,
+                            tenant_name=t_name, property_address=p_addr)
             count += 1
             logger.debug("DSL created task: %r (urgency=%s)", subject, urgency)
 
