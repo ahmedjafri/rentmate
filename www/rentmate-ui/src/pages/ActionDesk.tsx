@@ -268,8 +268,12 @@ const ActionDesk = () => {
     if (propertyChips.length > 0 && !propertyChips.some(c => c.value === t.propertyId)) return false;
 
     if (tenantChips.length > 0) {
-      const names = t.participants.filter(p => p.type === 'tenant' || p.type === 'vendor').map(p => p.name);
-      if (!tenantChips.some(c => names.includes(c.value))) return false;
+      const participantNames = t.participants.filter(p => p.type === 'tenant' || p.type === 'vendor').map(p => p.name);
+      const propertyTenantNames = t.propertyId
+        ? tenants.filter(tn => tn.propertyId === t.propertyId && tn.isActive).map(tn => tn.name)
+        : [];
+      const allNames = [...participantNames, ...propertyTenantNames];
+      if (!tenantChips.some(c => allNames.includes(c.value))) return false;
     }
 
     if (textChips.length > 0) {
