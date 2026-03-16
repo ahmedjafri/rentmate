@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
-import { Property, ActionDeskTask } from '@/data/mockData';
+import { Property, Tenant, ActionDeskTask } from '@/data/mockData';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -92,9 +92,10 @@ interface SmartSearchProps {
   onChipsChange: (chips: SearchChip[]) => void;
   tasks: ActionDeskTask[];
   properties: Property[];
+  tenants: Tenant[];
 }
 
-function SmartSearch({ chips, onChipsChange, tasks, properties }: SmartSearchProps) {
+function SmartSearch({ chips, onChipsChange, tasks, properties, tenants }: SmartSearchProps) {
   const [input, setInput] = useState('');
   const [open, setOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -113,6 +114,8 @@ function SmartSearch({ chips, onChipsChange, tasks, properties }: SmartSearchPro
     .map(p => ({ type: 'property' as const, label: p.name || p.address, value: p.id, sublabel: p.name ? p.address : undefined }));
 
   const tenantNameMap = new Map<string, string>();
+  // Include all tenants from context, not just task participants
+  tenants.forEach(t => { if (!tenantNameMap.has(t.name)) tenantNameMap.set(t.name, t.name); });
   tasks.forEach(t => {
     t.participants
       .filter(p => p.type === 'tenant' || p.type === 'vendor')
@@ -230,7 +233,7 @@ function SmartSearch({ chips, onChipsChange, tasks, properties }: SmartSearchPro
 // ─── ActionDesk ───────────────────────────────────────────────────────────────
 
 const ActionDesk = () => {
-  const { actionDeskTasks, properties, openChat, chatPanel, isLoading } = useApp();
+  const { actionDeskTasks, properties, tenants, openChat, chatPanel, isLoading } = useApp();
   const [statusFilters, setStatusFilters] = useState<StatusFilter[]>([]);
   const [categoryFilters, setCategoryFilters] = useState<SuggestionCategory[]>([]);
   const [chips, setChips] = useState<SearchChip[]>([]);
@@ -382,6 +385,7 @@ const ActionDesk = () => {
         onChipsChange={setChips}
         tasks={actionDeskTasks}
         properties={properties}
+        tenants={tenants}
       />
 
       {/* Needs Attention */}
