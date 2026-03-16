@@ -191,13 +191,28 @@ def _mark_simulated(key: str) -> None:
 
 
 def _update_custom_script(key: str, script: str) -> None:
-    """Update the Property-Flow script for a custom automation (versioned save)."""
+    """Update the Property-Flow script for a custom automation (versioned save).
+
+    If the script contains a top-level `schedule.interval_hours` field, that
+    value is also synced to checks[key].interval_hours so the scheduler picks
+    it up without requiring a separate save.
+    """
+    import yaml as _yaml
     cfg = _load_automation_config()
     custom_meta = dict(cfg.get("custom_meta", {}))
     if key not in custom_meta:
         raise ValueError(f"Custom automation '{key}' not found")
     custom_meta[key] = {**custom_meta[key], "script": script}
-    new_cfg = {**cfg, "custom_meta": custom_meta}
+    checks = dict(cfg.get("checks", {}))
+    # Sync interval from DSL if present
+    try:
+        parsed = _yaml.safe_load(script) or {}
+        interval = parsed.get("schedule", {}).get("interval_hours")
+        if interval and isinstance(interval, (int, float)) and interval > 0:
+            checks[key] = {**checks.get(key, {}), "interval_hours": int(interval)}
+    except Exception:
+        pass
+    new_cfg = {**cfg, "checks": checks, "custom_meta": custom_meta}
     _save_automation_config(new_cfg, f"Update script for {custom_meta[key].get('label', key)}")
 
 
@@ -508,6 +523,9 @@ Return ONLY valid YAML — no markdown fences, no explanation, no extra text.
 FULL YAML SCHEMA
 ═══════════════════════════════════════════════
 
+schedule:                   # required — how often this automation runs
+  interval_hours: <number>  # e.g. 24 = daily, 168 = weekly, 720 = monthly
+
 scope:
   resource: <property|unit|lease|tenant>   # required — what to iterate over
   filters:                                 # optional — pre-filter records
@@ -581,6 +599,9 @@ Urgency conditional operators (inline): <=, >=, <, >, ==, !=
 COMPLETE EXAMPLE — vacant units alert
 ═══════════════════════════════════════════════
 
+schedule:
+  interval_hours: 24
+
 scope:
   resource: unit
   filters:
@@ -609,6 +630,9 @@ actions:
 COMPLETE EXAMPLE — overdue rent
 ═══════════════════════════════════════════════
 
+schedule:
+  interval_hours: 24
+
 scope:
   resource: lease
   filters:
@@ -629,6 +653,9 @@ actions:
 ═══════════════════════════════════════════════
 COMPLETE EXAMPLE — tenants missing contact info
 ═══════════════════════════════════════════════
+
+schedule:
+  interval_hours: 168
 
 scope:
   resource: tenant
