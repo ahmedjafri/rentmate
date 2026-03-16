@@ -149,7 +149,7 @@ function SmartSearch({ chips, onChipsChange, tasks, properties, tenants }: Smart
             className={cn(
               'inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md text-xs font-medium shrink-0',
               chip.type === 'property' && 'bg-primary/10 text-primary',
-              chip.type === 'tenant' && 'bg-accent/15 text-accent-foreground',
+              chip.type === 'tenant' && 'bg-green-800 text-green-100',
               chip.type === 'text' && 'bg-muted text-muted-foreground',
             )}
           >
