@@ -4,9 +4,11 @@
   "description": "Creates a task for every unit with no active lease.",
   "hint": "e.g. \"only flag if vacant for more than 30 days\"",
   "has_params": true,
-  "params": ["min_vacancy_days"],
+  "params": [
+    "min_vacancy_days"
+  ],
   "default_config": {
-    "enabled": true,
+    "enabled": false,
     "interval_hours": 1,
     "min_vacancy_days": 0
   },

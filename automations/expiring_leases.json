@@ -4,9 +4,11 @@
   "description": "Warns when a lease is approaching its end date.",
   "hint": "e.g. \"warn me 45 days before expiry\"",
   "has_params": true,
-  "params": ["warn_days"],
+  "params": [
+    "warn_days"
+  ],
   "default_config": {
-    "enabled": true,
+    "enabled": false,
     "interval_hours": 1,
     "warn_days": 60
   },
