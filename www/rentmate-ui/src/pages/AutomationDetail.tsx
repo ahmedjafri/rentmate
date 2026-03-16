@@ -269,8 +269,11 @@ useEffect(() => {
     }
   };
 
+  const taskKey = (t: SimulatedTask) =>
+    `${t.subject}::${t.property_id ?? ''}::${t.unit_id ?? ''}`;
+
   const handleCreateTask = async (t: SimulatedTask) => {
-    const key = t.subject;
+    const key = taskKey(t);
     setCreatingTask(key);
     try {
       const res = await fetch("/automations/simulate/create-task", {
@@ -512,9 +515,9 @@ useEffect(() => {
               {simOpen && simResults.length > 0 && (
                 <div className="space-y-2 pt-1">
                   {simResults.map((t, i) => {
-                    const taskKey = t.subject;
-                    const done = createdTasks.has(taskKey);
-                    const loading = creatingTask === taskKey;
+                    const key = taskKey(t);
+                    const done = createdTasks.has(key);
+                    const loading = creatingTask === key;
                     return (
                       <div key={i} className={`rounded border bg-background p-3 space-y-1.5 ${done ? "opacity-60" : ""}`}>
                         <div className="flex items-start justify-between gap-2">
