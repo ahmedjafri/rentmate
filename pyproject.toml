@@ -8,11 +8,7 @@ packages = [{ include = "llm" }]
 
 [tool.poetry.dependencies]
 python = "^3.12"
-langchain = "^0.3.27"
-langgraph = "^0.5.4"
-langchain-community = "^0.3.27"
 litellm = "^1.74.8"
-langchain-litellm = "^0.2.2"
 fastapi = "^0.116.1"
 uvicorn = "^0.35.0"
 strawberry-graphql = "^0.282.0"
