@@ -237,6 +237,8 @@ const ActionDesk = () => {
   const [statusFilters, setStatusFilters] = useState<StatusFilter[]>([]);
   const [categoryFilters, setCategoryFilters] = useState<SuggestionCategory[]>([]);
   const [chips, setChips] = useState<SearchChip[]>([]);
+  const [showAllCompleted, setShowAllCompleted] = useState(false);
+  const COMPLETED_PREVIEW = 3;
   const [searchParams, setSearchParams] = useSearchParams();
   const hasRestoredRef = useRef(false);
 
@@ -421,7 +423,7 @@ const ActionDesk = () => {
             <CheckCircle2 className="h-3.5 w-3.5 text-muted-foreground" />
             Completed · {completed.length}
           </h2>
-          {completed.map(task => {
+          {(showAllCompleted ? completed : completed.slice(0, COMPLETED_PREVIEW)).map(task => {
             const completedMode = getModeBadge(task);
             const CompletedModeIcon = completedMode.icon;
             const StatusIcon = task.status === 'resolved' ? CheckCircle2 : task.status === 'cancelled' ? XCircle : PauseCircle;
@@ -441,6 +443,16 @@ const ActionDesk = () => {
               </Card>
             );
           })}
+          {completed.length > COMPLETED_PREVIEW && (
+            <button
+              className="w-full text-xs text-muted-foreground hover:text-foreground py-1.5 transition-colors"
+              onClick={() => setShowAllCompleted(s => !s)}
+            >
+              {showAllCompleted
+                ? 'Show less'
+                : `Show ${completed.length - COMPLETED_PREVIEW} more completed`}
+            </button>
+          )}
         </div>
       )}
     </div>
