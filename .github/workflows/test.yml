@@ -37,4 +37,8 @@ jobs:
         run: poetry install --no-interaction
 
       - name: Run tests
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
         run: poetry run pytest --tb=short -q
