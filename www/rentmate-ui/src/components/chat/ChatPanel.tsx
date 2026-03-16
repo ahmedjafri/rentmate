@@ -1,5 +1,5 @@
 import { useRef, useEffect, useMemo, useState } from 'react';
-import { X, Bot, Sparkles, Users, Zap, ShieldCheck, Hand, Lock, MessageSquare } from 'lucide-react';
+import { X, Bot, Sparkles, Users, Zap, ShieldCheck, Hand, Lock, MessageSquare, RotateCcw, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -11,7 +11,7 @@ import { getToken } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { AgentTaskProposal, AgentProposedTask } from './AgentTaskProposal';
-import { graphqlQuery, TASK_QUERY } from '@/data/api';
+import { graphqlQuery, TASK_QUERY, ADD_TASK_MESSAGE_MUTATION } from '@/data/api';
 import { apiMessagesToChatThread } from '@/hooks/useApiData';
 
 function authHeaders() {
@@ -39,6 +39,23 @@ function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }
 
 export function ChatPanel() {
   const { chatPanel, closeChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, globalChatThread } = useApp();
+  const [dismissing, setDismissing] = useState(false);
+
+  const handleDismiss = async () => {
+    if (!chatPanel.taskId) return;
+    const taskId = chatPanel.taskId;
+    setDismissing(true);
+    try {
+      await graphqlQuery<unknown>(`mutation { updateTaskStatus(uid: "${taskId}", status: "dismissed") { uid } }`);
+      await graphqlQuery(ADD_TASK_MESSAGE_MUTATION, {
+        input: { taskId, body: 'Task dismissed — this item will not be re-created by automations.', messageType: 'internal', senderName: 'RentMate', isAi: true },
+      });
+      addChatMessage({ taskId }, { id: `dismiss-${Date.now()}`, role: 'assistant', content: 'Task dismissed — this item will not be re-created by automations.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' });
+      updateTask(taskId, { status: 'cancelled' });
+    } finally {
+      setDismissing(false);
+    }
+  };
   const scrollRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChatInputHandle>(null);
   const [isTyping, setIsTyping] = useState(false);
@@ -393,9 +410,9 @@ export function ChatPanel() {
                   </Badge>
                 );
               })()}
-              <span className="text-[11px] text-muted-foreground">
-                {activeTask.participants.map(p => p.name).join(' · ')}
-              </span>
+              <Button size="sm" variant="ghost" className="h-6 rounded-lg text-[11px] px-2 text-muted-foreground/60 hover:text-muted-foreground" disabled={dismissing} onClick={handleDismiss}>
+                {dismissing ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Dismiss'}
+              </Button>
             </div>
             {activeTask.mode === 'autonomous' && chatPanel.taskId && (
               <Button
@@ -453,8 +470,8 @@ export function ChatPanel() {
       )}
 
       {/* Messages */}
-      <ScrollArea className="flex-1" ref={scrollRef}>
-        <div className="p-4 space-y-4 w-full overflow-hidden">
+      <ScrollArea className="flex-1 overflow-x-hidden" ref={scrollRef}>
+        <div className="p-4 space-y-4 w-full overflow-x-hidden">
           {messages.length === 0 && !isTyping && (
             <div className="text-center py-8 text-muted-foreground">
               <Bot className="h-8 w-8 mx-auto mb-2 opacity-40" />
@@ -558,8 +575,31 @@ export function ChatPanel() {
       )}
 
       {/* Input */}
-      {isAutonomous && chatPanel.taskId ? (
-        <div className="flex items-center gap-3 px-4 py-3 border-t bg-muted/30 shrink-0">
+      {activeTask && (activeTask.status === 'cancelled' || activeTask.status === 'resolved') ? (
+        <div className="flex items-center gap-2 px-4 py-3 border-t bg-muted/30 shrink-0">
+          <p className="flex-1 text-xs text-muted-foreground">
+            This task is {activeTask.status === 'resolved' ? 'resolved' : 'closed'}.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 rounded-lg text-[11px] px-2.5 gap-1.5 shrink-0"
+            onClick={async () => {
+              const taskId = chatPanel.taskId!;
+              await graphqlQuery<unknown>(`mutation { updateTaskStatus(uid: "${taskId}", status: "active") { uid } }`);
+              await graphqlQuery(ADD_TASK_MESSAGE_MUTATION, {
+                input: { taskId, body: 'Task re-opened.', messageType: 'internal', senderName: 'RentMate', isAi: true },
+              });
+              updateTask(taskId, { status: 'active' });
+              addChatMessage({ taskId }, { id: `msg-${Date.now()}`, role: 'assistant', content: 'Task re-opened.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' });
+            }}
+          >
+            <RotateCcw className="h-3 w-3" />
+            Re-open
+          </Button>
+        </div>
+      ) : isAutonomous && chatPanel.taskId ? (
+        <div className="flex items-center gap-2 px-4 py-3 border-t bg-muted/30 shrink-0">
           <Zap className="h-4 w-4 text-accent shrink-0" />
           <p className="flex-1 text-xs text-muted-foreground">RentMate is handling this conversation autonomously.</p>
           <Button
@@ -568,14 +608,15 @@ export function ChatPanel() {
             className="h-7 rounded-lg text-[11px] px-2.5 shrink-0"
             onClick={() => {
               updateTask(chatPanel.taskId!, { mode: 'manual' });
-              addChatMessage(
-                { taskId: chatPanel.taskId },
-                { id: `msg-${Date.now()}`, role: 'assistant', content: 'Switched to manual — you\'re in control now.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' }
-              );
+              addChatMessage({ taskId: chatPanel.taskId }, { id: `msg-${Date.now()}`, role: 'assistant', content: 'Switched to manual — you\'re in control now.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' });
             }}
           >
             Take control
           </Button>
+        </div>
+      ) : chatPanel.taskId ? (
+        <div className="border-t shrink-0">
+          <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} />
         </div>
       ) : (
         <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} />

@@ -21,6 +21,7 @@ interface AppContextType {
   suggestions: Suggestion[];
   tickets: MaintenanceTicket[];
   actionDeskTasks: ActionDeskTask[];
+  isLoading: boolean;
   documents: ManagedDocument[];
   autonomySettings: AutonomySettings;
   chatPanel: ChatPanelState;
@@ -223,7 +224,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   return (
     <AppContext.Provider value={{
-      properties, tenants, suggestions, tickets, actionDeskTasks, documents, autonomySettings,
+      properties, tenants, suggestions, tickets, actionDeskTasks, isLoading: apiLoading, documents, autonomySettings,
       chatPanel, globalChatThread, entityContext, getEntityContext, setEntityContext,
       updateSuggestionStatus, updateSuggestion, addChatMessage, updateTaskMessage, setTaskMessages, updateTask,
       addTask,

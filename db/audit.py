@@ -43,8 +43,9 @@ _AUTONOMY_MODE: dict[str, tuple[str, str]] = {
 }
 _DEFAULT_MODE = _AUTONOMY_MODE["suggest"]
 
-# Statuses that count as "still open" — if one exists we skip creating a dup
-_OPEN_STATUSES = {"suggested", "active", "paused"}
+# Statuses that count as "still open" — if one exists we skip creating a dup.
+# 'dismissed' is included so dismissed tasks are never re-created by the audit.
+_OPEN_STATUSES = {"suggested", "active", "paused", "dismissed"}
 
 
 # ---------------------------------------------------------------------------

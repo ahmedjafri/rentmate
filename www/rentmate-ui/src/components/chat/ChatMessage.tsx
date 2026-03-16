@@ -37,6 +37,18 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useApp } from '@/context/AppContext';
 
+export function formatMessageTime(date: Date): string {
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+  const time = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (isToday) return time;
+  if (isYesterday) return `Yesterday ${time}`;
+  return `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+}
+
 function RelatedTaskLink({ taskId, label }: { taskId: string; label: string }) {
   const { openChat } = useApp();
   return (
@@ -74,9 +86,12 @@ export function ChatMessageBubble({ message, onApprove, onReject, onEdit }: Prop
   if (msgType === 'context') {
     return (
       <div className="rounded-xl border border-primary/15 bg-primary/5 p-3 space-y-1.5">
-        <div className="flex items-center gap-1.5">
-          <BookOpen className="h-3.5 w-3.5 text-primary" />
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-primary">Context</span>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5">
+            <BookOpen className="h-3.5 w-3.5 text-primary" />
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-primary">Context</span>
+          </div>
+          <span className="text-[10px] text-muted-foreground">{formatMessageTime(message.timestamp)}</span>
         </div>
         <p className="text-xs text-foreground leading-relaxed">{message.content}</p>
         {message.relatedTasks && message.relatedTasks.length > 0 && (
@@ -218,40 +233,45 @@ export function ChatMessageBubble({ message, onApprove, onReject, onEdit }: Prop
   };
 
   return (
-    <div className={cn('flex gap-2.5 min-w-0', isRightAligned ? 'flex-row-reverse' : 'flex-row')}>
-      <div className={cn(
-        'flex h-7 w-7 shrink-0 items-center justify-center rounded-full',
-        isManager && 'bg-primary text-primary-foreground',
-        isAI && 'bg-primary/15 text-primary border border-primary/25',
-        isOther && 'bg-muted text-muted-foreground',
-      )}>
-        {getSenderIcon()}
+    <div className={cn('flex flex-col gap-0.5', isRightAligned ? 'items-end' : 'items-start')}>
+      <div className={cn('flex gap-2.5 min-w-0 w-full', isRightAligned ? 'flex-row-reverse' : 'flex-row')}>
+        <div className={cn(
+          'flex h-7 w-7 shrink-0 items-center justify-center rounded-full',
+          isManager && 'bg-primary text-primary-foreground',
+          isAI && 'bg-primary/15 text-primary border border-primary/25',
+          isOther && 'bg-muted text-muted-foreground',
+        )}>
+          {getSenderIcon()}
+        </div>
+        <div className={cn(
+          'max-w-[85%] min-w-0 overflow-hidden rounded-2xl px-4 py-2.5 text-sm break-words',
+          isManager && 'bg-primary text-primary-foreground rounded-tr-md',
+          isAI && 'bg-primary/10 text-foreground rounded-tl-md border border-primary/15',
+          isOther && 'bg-muted/70 text-foreground rounded-tl-md',
+        )}>
+          {message.senderName && (
+            <p className={cn(
+              'text-[10px] font-semibold mb-1',
+              isManager && 'text-primary-foreground/70',
+              isAI && 'text-primary',
+              isOther && 'text-muted-foreground',
+            )}>
+              {message.senderName}
+              {isAI && <span className="ml-1 font-normal opacity-70">· auto</span>}
+            </p>
+          )}
+          {isAI ? (
+            <div className="prose prose-sm max-w-none break-words dark:prose-invert [&>p]:mb-1.5 [&>p:last-child]:mb-0">
+              <ReactMarkdown>{message.content}</ReactMarkdown>
+            </div>
+          ) : (
+            <p className="break-words">{message.content}</p>
+          )}
+        </div>
       </div>
-      <div className={cn(
-        'max-w-[85%] min-w-0 overflow-hidden rounded-2xl px-4 py-2.5 text-sm break-words',
-        isManager && 'bg-primary text-primary-foreground rounded-tr-md',
-        isAI && 'bg-primary/10 text-foreground rounded-tl-md border border-primary/15',
-        isOther && 'bg-muted/70 text-foreground rounded-tl-md',
-      )}>
-        {message.senderName && (
-          <p className={cn(
-            'text-[10px] font-semibold mb-1',
-            isManager && 'text-primary-foreground/70',
-            isAI && 'text-primary',
-            isOther && 'text-muted-foreground',
-          )}>
-            {message.senderName}
-            {isAI && <span className="ml-1 font-normal opacity-70">· auto</span>}
-          </p>
-        )}
-        {isAI ? (
-          <div className="prose prose-sm max-w-none break-words dark:prose-invert [&>p]:mb-1.5 [&>p:last-child]:mb-0">
-            <ReactMarkdown>{message.content}</ReactMarkdown>
-          </div>
-        ) : (
-          <p>{message.content}</p>
-        )}
-      </div>
+      <span className={cn('text-[10px] text-muted-foreground px-9', isRightAligned && 'pr-9 pl-0')}>
+        {formatMessageTime(message.timestamp)}
+      </span>
     </div>
   );
 }

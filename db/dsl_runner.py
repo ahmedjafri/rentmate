@@ -29,7 +29,7 @@ from .models import (
 
 logger = logging.getLogger("rentmate.dsl")
 
-_OPEN_STATUSES = {"suggested", "active", "paused"}
+_OPEN_STATUSES = {"suggested", "active", "paused", "dismissed"}
 
 # ─── computed fields ──────────────────────────────────────────────────────────
 

@@ -3,6 +3,8 @@ import hashlib
 import json
 import logging
 import os
+from collections import deque
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -14,6 +16,22 @@ from handlers.default_automations import _DEFAULT_AUTOMATION_CONFIG, _CHECK_META
 
 router = APIRouter()
 _logger = logging.getLogger("rentmate.audit")
+
+# ─── in-memory run log (last 10 runs per check, reset on restart) ─────────────
+
+_MAX_RUNS = 10
+_run_log: Dict[str, deque] = {}
+
+
+def _record_run(key: str, tasks_created: int, error: str | None = None) -> None:
+    if key not in _run_log:
+        _run_log[key] = deque(maxlen=_MAX_RUNS)
+    _run_log[key].appendleft({
+        "ran_at": datetime.utcnow().isoformat(),
+        "tasks_created": tasks_created,
+        "outcome": "error" if error else "ok",
+        "error": error,
+    })
 
 # ─── config helpers ───────────────────────────────────────────────────────────
 
@@ -239,9 +257,11 @@ async def audit_loop():
                 if n:
                     db.commit()
                 _logger.info("Check %s complete — %d new task(s).", check_key, n)
+                _record_run(check_key, n)
             except Exception as exc:
                 db.rollback()
                 _logger.exception("Error in check %s: %s", check_key, exc)
+                _record_run(check_key, 0, error=str(exc))
             finally:
                 db.close()
 
@@ -322,6 +342,12 @@ async def save_automations(body: AutomationConfigBody, request: Request):
 async def get_automation_history(request: Request):
     await require_user(request)
     return {"history": _get_automation_history()}
+
+
+@router.get("/automations/runs")
+async def get_automation_runs(request: Request):
+    await require_user(request)
+    return {"runs": {k: list(v) for k, v in _run_log.items()}}
 
 
 @router.post("/automations/revert")

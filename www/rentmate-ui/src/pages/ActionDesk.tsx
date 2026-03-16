@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
@@ -7,10 +7,11 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import {
-  Bot, User, Wrench, MessageCircle, CheckCircle2,
+  Bot, CheckCircle2,
   PauseCircle, Zap, ShieldCheck, Hand, Lock, XCircle, ChevronDown,
 } from 'lucide-react';
-import { TaskMode, TaskParticipantType, SuggestionCategory, categoryColors, categoryLabels, urgencyColors } from '@/data/mockData';
+import { formatMessageTime } from '@/components/chat/ChatMessage';
+import { TaskMode, SuggestionCategory, categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
 
 const modeConfig: Record<TaskMode, { label: string; icon: React.ElementType; className: string }> = {
@@ -27,12 +28,6 @@ function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }
   return modeConfig[task.mode];
 }
 
-const participantIcon: Record<TaskParticipantType, React.ElementType> = {
-  agent: Bot,
-  tenant: User,
-  vendor: Wrench,
-  manager: User,
-};
 
 type StatusFilter = 'needs_attention' | 'autonomous' | 'completed';
 
@@ -84,19 +79,23 @@ function MultiSelect<T extends string>({ options, selected, onChange, placeholde
 }
 
 const ActionDesk = () => {
-  const { actionDeskTasks, properties, openChat, closeChat, chatPanel } = useApp();
+  const { actionDeskTasks, properties, openChat, chatPanel, isLoading } = useApp();
   const [statusFilters, setStatusFilters] = useState<StatusFilter[]>([]);
   const [categoryFilters, setCategoryFilters] = useState<SuggestionCategory[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
+  const hasRestoredRef = useRef(false);
 
-  // Restore open chat from URL on mount
+  // Restore open chat from URL once data has loaded
   useEffect(() => {
+    if (isLoading) return;
     const taskId = searchParams.get('task');
     if (taskId) openChat({ taskId });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    hasRestoredRef.current = true;
+  }, [isLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sync URL when chat panel opens/closes
+  // Sync URL when chat panel opens/closes (skip until initial restore has run)
   useEffect(() => {
+    if (!hasRestoredRef.current) return;
     if (chatPanel.isOpen && chatPanel.taskId) {
       setSearchParams({ task: chatPanel.taskId }, { replace: true });
     } else {
@@ -138,63 +137,35 @@ const ActionDesk = () => {
     const property = task.propertyId ? properties.find(p => p.id === task.propertyId) : null;
 
     return (
-      <Card key={task.id} className="p-4 rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={() => openChat({ taskId: task.id })}>
-        <div className="flex items-start justify-between gap-3 mb-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Badge variant="secondary" className={cn('text-[10px] rounded-lg gap-1', mode.className)}>
+      <Card key={task.id} className="px-3 py-2.5 rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={() => openChat({ taskId: task.id })}>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+            <Badge variant="secondary" className={cn('text-[10px] rounded-lg gap-1 shrink-0', mode.className)}>
               <ModeIcon className="h-3 w-3" />
               {mode.label}
             </Badge>
-            <Badge variant="secondary" className={cn('text-[10px] rounded-lg', categoryColors[task.category])}>
+            <Badge variant="secondary" className={cn('text-[10px] rounded-lg shrink-0', categoryColors[task.category])}>
               {categoryLabels[task.category]}
             </Badge>
             {task.unreadCount > 0 && (
-              <Badge className="h-4 px-1.5 text-[10px] bg-primary text-primary-foreground">
+              <Badge className="h-4 px-1.5 text-[10px] bg-primary text-primary-foreground shrink-0">
                 {task.unreadCount} new
               </Badge>
             )}
             {task.confidential && (
-              <Badge variant="secondary" className="text-[10px] rounded-lg gap-1 bg-destructive/10 text-destructive">
+              <Badge variant="secondary" className="text-[10px] rounded-lg gap-1 bg-destructive/10 text-destructive shrink-0">
                 <Lock className="h-3 w-3" />
                 Confidential
               </Badge>
             )}
           </div>
+          <span className="text-[10px] text-muted-foreground shrink-0">{formatMessageTime(task.lastMessageAt)}</span>
         </div>
 
-        <h3 className="font-semibold text-sm mb-1">{task.title}</h3>
-
-        <div className="flex items-start gap-2 mt-2 bg-muted/40 rounded-lg p-2.5">
-          <MessageCircle className="h-3 w-3 text-muted-foreground mt-0.5 shrink-0" />
-          <div className="min-w-0">
-            <span className="text-[11px] font-medium text-muted-foreground">{task.lastMessageBy}</span>
-            <p className="text-xs text-foreground line-clamp-2">{task.lastMessage}</p>
-          </div>
-        </div>
-
-        <div className="mt-2.5 flex items-center justify-between">
-          <div className="flex items-center gap-1">
-            {task.participants.map((p, i) => {
-              const Icon = participantIcon[p.type];
-              return (
-                <div
-                  key={i}
-                  className={cn(
-                    'flex h-5 w-5 items-center justify-center rounded-full text-[10px]',
-                    p.type === 'agent' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'
-                  )}
-                  title={`${p.name} (${p.type})`}
-                >
-                  <Icon className="h-3 w-3" />
-                </div>
-              );
-            })}
-            <span className="text-[10px] text-muted-foreground ml-1">
-              {task.participants.map(p => p.name.split(' ')[0]).join(', ')}
-            </span>
-          </div>
+        <div className="flex items-center justify-between gap-2 mt-1.5">
+          <h3 className="font-medium text-sm truncate">{task.title}</h3>
           {property && (
-            <span className="text-[10px] text-muted-foreground">{property.name}</span>
+            <span className="text-[10px] text-muted-foreground shrink-0">{property.name}</span>
           )}
         </div>
       </Card>

@@ -65,9 +65,9 @@ export function useApiData(): ApiState {
 
       const allTasks = tasksResult.status === 'fulfilled' ? (tasksResult.value.tasks || []) : [];
 
-      // Action Desk: all non-suggested tasks (active, paused, resolved, cancelled)
+      // Action Desk: all tasks except dismissed (suggested → active with waiting_approval mode)
       const actionDeskTasks: ActionDeskTask[] = allTasks
-        .filter(t => t.taskStatus !== 'suggested')
+        .filter(t => t.taskStatus !== 'dismissed')
         .map(apiTaskToActionDesk);
 
       // Maintenance tickets: category=maintenance tasks
@@ -96,12 +96,19 @@ export function useApiData(): ApiState {
 
 // --- API → local type mappers ---
 
+// Backend returns UTC timestamps without 'Z'. JS parses tz-naive date-time strings
+// as local time, so we append 'Z' to force correct UTC interpretation.
+function parseUtc(iso: string): Date {
+  if (!iso) return new Date();
+  return new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z');
+}
+
 export function apiMessagesToChatThread(messages: ApiTaskMessage[]): ChatMessage[] {
   return messages.map(m => ({
     id: m.uid,
     role: m.isAi || m.isSystem ? 'assistant' as const : 'user' as const,
     content: m.body ?? '',
-    timestamp: new Date(m.sentAt),
+    timestamp: parseUtc(m.sentAt),
     senderName: m.senderName ?? undefined,
     messageType: (m.messageType as ChatMessage['messageType']) ?? 'message',
     draftReply: m.draftReply ?? undefined,
@@ -139,11 +146,11 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
     id: t.uid,
     title: t.title ?? '(untitled)',
     mode: (t.taskMode as ActionDeskTask['mode']) ?? 'manual',
-    status: (t.taskStatus as ActionDeskTask['status']) ?? 'active',
+    status: (t.taskStatus === 'suggested' ? 'active' : (t.taskStatus as ActionDeskTask['status'])) ?? 'active',
     participants: apiTaskParticipants(t),
     lastMessage: last?.content ?? '',
     lastMessageBy: last?.senderName ?? '',
-    lastMessageAt: last ? new Date(last.timestamp) : new Date(t.createdAt),
+    lastMessageAt: last ? new Date(last.timestamp) : parseUtc(t.createdAt),
     unreadCount: 0,
     propertyId: t.propertyId ?? undefined,
     category: (t.category as ActionDeskTask['category']) ?? 'maintenance',
