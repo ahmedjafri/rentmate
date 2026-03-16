@@ -13,9 +13,6 @@ from sqlalchemy.orm import Session
 
 from db.models import Document
 
-LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
-LLM_API_KEY = os.getenv("LLM_API_KEY")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL") or None
 
 
 def _get_session_factory():
@@ -109,7 +106,7 @@ async def process_document(document_id: str) -> None:
         doc.raw_text = raw_text
         doc.extraction_meta = {
             "text_extractor": "pypdf",
-            "llm_model": LLM_MODEL,
+            "llm_model": os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
             "page_count": n_pages,
             "raw_text_chars": len(raw_text),
             "form_fields_found": _form_fields_found,
@@ -135,9 +132,9 @@ async def process_document(document_id: str) -> None:
                 doc.extraction_meta = {**doc.extraction_meta, "input_chars_sent_to_llm": len(truncated)}
             user_content = EXTRACTION_PROMPT + truncated
             response = litellm.completion(
-                model=LLM_MODEL,
-                api_key=LLM_API_KEY,
-                base_url=LLM_BASE_URL,
+                model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
+                api_key=os.getenv("LLM_API_KEY"),
+                base_url=os.getenv("LLM_BASE_URL") or None,
                 messages=[
                     {"role": "user", "content": user_content},
                 ],

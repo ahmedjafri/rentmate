@@ -7,9 +7,6 @@ import os
 
 logger = logging.getLogger("rentmate.suggest")
 
-_LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
-_LLM_API_KEY = os.getenv("LLM_API_KEY")
-_LLM_BASE_URL = os.getenv("LLM_BASE_URL") or None
 
 _SYSTEM = (
     "You are RentMate, a property management AI assistant. "
@@ -37,7 +34,8 @@ def generate_task_suggestion(
 ) -> str | None:
     """Call the LLM to generate a suggested draft message for the task.
     Returns None on any error so task creation always succeeds."""
-    if not _LLM_API_KEY:
+    api_key = os.getenv("LLM_API_KEY")
+    if not api_key:
         return None
     try:
         import litellm
@@ -52,9 +50,9 @@ def generate_task_suggestion(
             parts.append(category_hint)
 
         response = litellm.completion(
-            model=_LLM_MODEL,
-            api_key=_LLM_API_KEY,
-            api_base=_LLM_BASE_URL,
+            model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
+            api_key=api_key,
+            api_base=os.getenv("LLM_BASE_URL") or None,
             messages=[
                 {"role": "system", "content": _SYSTEM},
                 {"role": "user", "content": "\n".join(parts)},
