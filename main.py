@@ -287,7 +287,8 @@ def _run_agent_for_task(db, conv, latest_body: str) -> str:
 @app.on_event("startup")
 async def on_startup():
     for key, value in read_env_file().items():
-        os.environ.setdefault(key, value)
+        if not os.environ.get(key):  # set if missing or empty
+            os.environ[key] = value
     from llm import llm as llm_module
     llm_module.reconfigure()
 
