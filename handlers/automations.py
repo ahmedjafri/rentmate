@@ -190,12 +190,34 @@ def _mark_simulated(key: str) -> None:
     _save_automation_config(new_cfg, versioned=False)
 
 
+_NAMED_INTERVALS: Dict[str, int] = {
+    "hourly":     1,
+    "daily":      24,
+    "weekly":     168,
+    "bi-weekly":  336,
+    "biweekly":   336,
+    "monthly":    720,
+}
+
+
+def _resolve_interval_hours(schedule: dict) -> Optional[int]:
+    """Return interval_hours from a DSL schedule block, accepting names or numbers."""
+    named = schedule.get("interval")
+    if named:
+        resolved = _NAMED_INTERVALS.get(str(named).lower().strip())
+        if resolved:
+            return resolved
+    raw = schedule.get("interval_hours")
+    if raw and isinstance(raw, (int, float)) and raw > 0:
+        return int(raw)
+    return None
+
+
 def _update_custom_script(key: str, script: str) -> None:
     """Update the Property-Flow script for a custom automation (versioned save).
 
-    If the script contains a top-level `schedule.interval_hours` field, that
-    value is also synced to checks[key].interval_hours so the scheduler picks
-    it up without requiring a separate save.
+    Syncs schedule.interval / schedule.interval_hours to checks[key].interval_hours
+    so the scheduler picks it up without a separate save.
     """
     import yaml as _yaml
     cfg = _load_automation_config()
@@ -204,12 +226,11 @@ def _update_custom_script(key: str, script: str) -> None:
         raise ValueError(f"Custom automation '{key}' not found")
     custom_meta[key] = {**custom_meta[key], "script": script}
     checks = dict(cfg.get("checks", {}))
-    # Sync interval from DSL if present
     try:
         parsed = _yaml.safe_load(script) or {}
-        interval = parsed.get("schedule", {}).get("interval_hours")
-        if interval and isinstance(interval, (int, float)) and interval > 0:
-            checks[key] = {**checks.get(key, {}), "interval_hours": int(interval)}
+        interval = _resolve_interval_hours(parsed.get("schedule", {}))
+        if interval:
+            checks[key] = {**checks.get(key, {}), "interval_hours": interval}
     except Exception:
         pass
     new_cfg = {**cfg, "checks": checks, "custom_meta": custom_meta}
@@ -523,8 +544,10 @@ Return ONLY valid YAML — no markdown fences, no explanation, no extra text.
 FULL YAML SCHEMA
 ═══════════════════════════════════════════════
 
-schedule:                   # required — how often this automation runs
-  interval_hours: <number>  # e.g. 24 = daily, 168 = weekly, 720 = monthly
+schedule:                        # required — how often this automation runs
+  interval: <named>              # preferred: daily | weekly | bi-weekly | monthly | hourly
+  # OR use a raw number instead:
+  interval_hours: <number>       # e.g. 24 = daily, 168 = weekly, 720 = monthly
 
 scope:
   resource: <property|unit|lease|tenant>   # required — what to iterate over
@@ -600,7 +623,7 @@ COMPLETE EXAMPLE — vacant units alert
 ═══════════════════════════════════════════════
 
 schedule:
-  interval_hours: 24
+  interval: daily
 
 scope:
   resource: unit
@@ -631,7 +654,7 @@ COMPLETE EXAMPLE — overdue rent
 ═══════════════════════════════════════════════
 
 schedule:
-  interval_hours: 24
+  interval: daily
 
 scope:
   resource: lease
@@ -655,7 +678,7 @@ COMPLETE EXAMPLE — tenants missing contact info
 ═══════════════════════════════════════════════
 
 schedule:
-  interval_hours: 168
+  interval: weekly
 
 scope:
   resource: tenant
