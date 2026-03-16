@@ -406,34 +406,6 @@ useEffect(() => {
         </div>
       </div>
 
-      {/* schedule */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Schedule</CardTitle>
-          <CardDescription>How often this check runs automatically.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-3">
-            <span className="text-sm">Every</span>
-            <Input
-              type="number"
-              min={1}
-              max={168}
-              value={automation.interval_hours ?? 1}
-              onChange={e => {
-                const h = Math.max(1, parseInt(e.target.value) || 1);
-                patch({ interval_hours: h }, `Set ${automation.label} schedule to every ${h} hour${h !== 1 ? "s" : ""}`);
-              }}
-              className="w-20"
-            />
-            <span className="text-sm text-muted-foreground">
-              hour{(automation.interval_hours ?? 1) !== 1 ? "s" : ""}
-              {saving && <span className="ml-2 text-xs">(saving…)</span>}
-            </span>
-          </div>
-        </CardContent>
-      </Card>
-
       {/* editable params — only for checks that have configurable parameters */}
       {automation.has_params && (
         <Card>

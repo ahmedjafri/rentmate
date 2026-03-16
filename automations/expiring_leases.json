@@ -9,8 +9,8 @@
   ],
   "default_config": {
     "enabled": false,
-    "interval_hours": 1,
+    "interval_hours": 24,
     "warn_days": 60
   },
-  "script": "name: \"Expiring Leases\"\ndescription: >\n  Creates a leasing task for every active lease whose end date falls\n  within the next warn_days days.\n\ntrigger:\n  type: schedule\n  interval_hours: \"{{params.interval_hours}}\"\n\nscope:\n  resource: lease\n  filters:\n    - field: end_date\n      operator: gte\n      value: \"{{today}}\"\n    - field: end_date\n      operator: lte\n      value: \"{{today + params.warn_days}}\"\n\nactions:\n  - type: create_task\n    subject: \"Lease expiring {{lease.end_date}}: {{lease.tenant.first_name}} {{lease.tenant.last_name}} \\u2013 {{lease.unit.label}}\"\n    category: leasing\n    urgency: >\n      high   if days_until_end <= 30\n      medium otherwise\n    body: >\n      Lease for {{lease.tenant.first_name}} {{lease.tenant.last_name}} at\n      {{lease.unit.label}}, {{lease.property.address_line1}} expires on\n      {{lease.end_date}} ({{days_until_end}} days).\n      Reach out about renewal or move-out logistics.\n"
+  "script": "name: \"Expiring Leases\"\ndescription: >\n  Creates a leasing task for every active lease whose end date falls\n  within the next warn_days days.\n\nschedule:\n  interval: daily\n\nscope:\n  resource: lease\n  filters:\n    - field: end_date\n      operator: gte\n      value: \"{{today}}\"\n    - field: end_date\n      operator: lte\n      value: \"{{today + params.warn_days}}\"\n\nactions:\n  - type: create_task\n    subject: \"Lease expiring {{lease.end_date}}: {{lease.tenant.first_name}} {{lease.tenant.last_name}} \u2013 {{lease.unit.label}}\"\n    category: leasing\n    urgency: >\n      high   if days_until_end <= 30\n      medium otherwise\n    body: >\n      Lease for {{lease.tenant.first_name}} {{lease.tenant.last_name}} at\n      {{lease.unit.label}}, {{lease.property.address_line1}} expires on\n      {{lease.end_date}} ({{days_until_end}} days).\n      Reach out about renewal or move-out logistics.\n"
 }

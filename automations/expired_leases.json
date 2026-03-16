@@ -7,7 +7,7 @@
   "params": [],
   "default_config": {
     "enabled": false,
-    "interval_hours": 1
+    "interval_hours": 24
   },
-  "script": "name: \"Expired Leases\"\ndescription: >\n  Creates a leasing task for every lease that ended before today\n  and whose unit has no newer active lease to replace it.\n\ntrigger:\n  type: schedule\n  interval_hours: \"{{params.interval_hours}}\"\n\nscope:\n  resource: lease\n  filters:\n    - field: end_date\n      operator: lt\n      value: \"{{today}}\"\n\nconditions:\n  - field: unit.active_lease_count\n    operator: equals\n    value: 0\n\nactions:\n  - type: create_task\n    subject: \"Expired lease: {{lease.tenant.first_name}} {{lease.tenant.last_name}} \\u2013 {{lease.unit.label}}\"\n    category: leasing\n    urgency: high\n    body: >\n      The lease for {{lease.tenant.first_name}} {{lease.tenant.last_name}} at\n      {{lease.unit.label}}, {{lease.property.address_line1}} expired on\n      {{lease.end_date}} and has not been renewed.\n      Confirm move-out status or start a renewal conversation.\n"
+  "script": "name: \"Expired Leases\"\ndescription: >\n  Creates a leasing task for every lease that ended before today\n  and whose unit has no newer active lease to replace it.\n\nschedule:\n  interval: daily\n\nscope:\n  resource: lease\n  filters:\n    - field: end_date\n      operator: lt\n      value: \"{{today}}\"\n\nconditions:\n  - field: unit.active_lease_count\n    operator: equals\n    value: 0\n\nactions:\n  - type: create_task\n    subject: \"Expired lease: {{lease.tenant.first_name}} {{lease.tenant.last_name}} \u2013 {{lease.unit.label}}\"\n    category: leasing\n    urgency: high\n    body: >\n      The lease for {{lease.tenant.first_name}} {{lease.tenant.last_name}} at\n      {{lease.unit.label}}, {{lease.property.address_line1}} expired on\n      {{lease.end_date}} and has not been renewed.\n      Confirm move-out status or start a renewal conversation.\n"
 }

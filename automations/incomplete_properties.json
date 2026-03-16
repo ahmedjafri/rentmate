@@ -7,7 +7,7 @@
   "params": [],
   "default_config": {
     "enabled": false,
-    "interval_hours": 1
+    "interval_hours": 168
   },
-  "script": "name: \"Incomplete Properties\"\ndescription: >\n  Creates a compliance task for every property missing city,\n  state, or postal code.\n\ntrigger:\n  type: schedule\n  interval_hours: \"{{params.interval_hours}}\"\n\nscope:\n  resource: property\n\nconditions:\n  - any_of:\n    - field: city\n      operator: not_exists\n    - field: state\n      operator: not_exists\n    - field: postal_code\n      operator: not_exists\n\nactions:\n  - type: create_task\n    subject: \"Incomplete address: {{property.address_line1}}\"\n    category: compliance\n    urgency: low\n    body: >\n      Property \\\"{{property.address_line1}}\\\" is missing one or more address\n      fields (city, state, postal code). Complete the address so leases and\n      documents are accurate.\n"
+  "script": "name: \"Incomplete Properties\"\ndescription: >\n  Creates a compliance task for every property missing city,\n  state, or postal code.\n\nschedule:\n  interval: weekly\n\nscope:\n  resource: property\n\nconditions:\n  - any_of:\n    - field: city\n      operator: not_exists\n    - field: state\n      operator: not_exists\n    - field: postal_code\n      operator: not_exists\n\nactions:\n  - type: create_task\n    subject: \"Incomplete address: {{property.address_line1}}\"\n    category: compliance\n    urgency: low\n    body: >\n      Property \"{{property.address_line1}}\" is missing one or more address\n      fields (city, state, postal code). Complete the address so leases and\n      documents are accurate.\n"
 }
