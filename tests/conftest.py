@@ -1,9 +1,20 @@
 import os
 import pytest
+from pathlib import Path
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from db.models import Base
+
+# Load .env into os.environ so LLM-dependent tests (evals, document extraction)
+# pick up credentials without needing the env vars set externally.
+_ENV_FILE = Path(__file__).parent.parent / ".env"
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
 
 
 def pytest_addoption(parser):
