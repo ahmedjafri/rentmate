@@ -53,6 +53,14 @@ jobs:
           # --allow-unrelated-histories handles the first-time sync when the
           # hosted repo was bootstrapped independently (no shared commit base).
           if git merge core/main --allow-unrelated-histories --no-edit; then
+            # Keep the hosted repo's own .github/ — the sync workflow must not
+            # be pushed there (PAT lacks 'workflow' scope and it's not needed).
+            git checkout origin/main -- .github/ 2>/dev/null || true
+            if ! git diff --quiet || ! git diff --cached --quiet; then
+              git add .github/
+              git commit -m "chore: restore hosted .github after sync merge"
+            fi
+
             # Check if there are actual changes to push
             if git diff --quiet origin/main; then
               echo "No new changes to sync."
@@ -70,6 +78,10 @@ jobs:
 
             # Force the merge again to capture conflict markers
             git merge core/main --allow-unrelated-histories || true
+
+            # Keep the hosted repo's own .github/ — avoid workflow scope requirement
+            git checkout origin/main -- .github/ 2>/dev/null || true
+
             git add .
             git commit -m "chore: automated sync with conflicts"
             git push origin "$BRANCH_NAME"
