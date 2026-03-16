@@ -101,7 +101,7 @@ async def update_settings(body: SettingsBody, request: Request):
 
     # LLM config — persisted to .env
     env_updates = {}
-    if body.api_key is not None:
+    if body.api_key:
         os.environ["LLM_API_KEY"] = body.api_key
         env_updates["LLM_API_KEY"] = body.api_key
     if body.model is not None:

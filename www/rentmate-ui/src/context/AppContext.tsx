@@ -98,7 +98,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [documents, setDocuments] = useState<ManagedDocument[]>([]);
   const [autonomySettings, setAutonomySettings] = useState<AutonomySettings>(() => loadFromStorage('rm_autonomy', defaultAutonomySettings));
   const [chatPanel, setChatPanel] = useState<ChatPanelState>({ isOpen: false, suggestionId: null, taskId: null });
-  const [globalChatThread, setGlobalChatThread] = useState<ChatMessage[]>(() => loadFromStorage('rm_global_chat', []));
+  const [globalChatThread, setGlobalChatThread] = useState<ChatMessage[]>(() =>
+    (loadFromStorage('rm_global_chat', []) as ChatMessage[]).map(m => ({
+      ...m,
+      timestamp: m.timestamp instanceof Date ? m.timestamp : new Date(m.timestamp as unknown as string),
+    }))
+  );
   const [entityContext, setEntityContextState] = useState<Record<string, string>>(() => loadFromStorage('rm_entity_context', {}));
 
   // Persist non-API state to localStorage (settings, chat, documents, entity context).

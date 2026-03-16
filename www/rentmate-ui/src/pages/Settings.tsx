@@ -71,7 +71,7 @@ const SettingsPage = () => {
           Authorization: `Bearer ${getToken()}`,
         },
         body: JSON.stringify({
-          api_key: llmConfig.apiKey,
+          api_key: llmConfig.apiKey || null,
           model: llmConfig.model,
           base_url: llmConfig.baseUrl,
         }),
@@ -130,7 +130,7 @@ const SettingsPage = () => {
             <Input
               id="llm-api-key"
               type="password"
-              placeholder="sk-..."
+              placeholder="Leave blank to keep existing key"
               value={llmConfig.apiKey}
               onChange={(e) => setLlmConfig(prev => ({ ...prev, apiKey: e.target.value }))}
             />
