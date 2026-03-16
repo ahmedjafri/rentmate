@@ -50,8 +50,9 @@ jobs:
 
           echo "Attempting to merge core/main into hosted main..."
 
-          # Try a clean merge first
-          if git merge core/main --no-edit; then
+          # --allow-unrelated-histories handles the first-time sync when the
+          # hosted repo was bootstrapped independently (no shared commit base).
+          if git merge core/main --allow-unrelated-histories --no-edit; then
             # Check if there are actual changes to push
             if git diff --quiet origin/main; then
               echo "No new changes to sync."
@@ -61,17 +62,18 @@ jobs:
             fi
           else
             echo "Conflict detected. Aborting direct merge and creating a PR branch."
-            git merge --abort
+            # merge --abort only works when a merge is in progress; ignore errors
+            git merge --abort 2>/dev/null || true
 
             BRANCH_NAME="sync/conflicts-$(date +%Y%m%d%H%M%S)"
             git checkout -b "$BRANCH_NAME"
 
             # Force the merge again to capture conflict markers
-            git merge core/main || true
+            git merge core/main --allow-unrelated-histories || true
             git add .
             git commit -m "chore: automated sync with conflicts"
             git push origin "$BRANCH_NAME"
-            
+
             gh pr create \
               --repo "${{ secrets.HOSTED_REPO_NAME }}" \
               --title "Action Required: Sync Conflicts from Core" \
