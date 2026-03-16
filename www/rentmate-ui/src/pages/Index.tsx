@@ -153,7 +153,7 @@ const Index = () => {
                       </span>
                     </div>
                     {property && (
-                      <span className="text-[10px] text-muted-foreground">{property.name}</span>
+                      <span className="text-[10px] text-muted-foreground">{property.name || property.address}</span>
                     )}
                   </div>
                 </Card>

@@ -165,7 +165,7 @@ const ActionDesk = () => {
         <div className="flex items-center justify-between gap-2 mt-1.5">
           <h3 className="font-medium text-sm truncate">{task.title}</h3>
           {property && (
-            <span className="text-[10px] text-muted-foreground shrink-0">{property.name}</span>
+            <span className="text-[10px] text-muted-foreground shrink-0">{property.name || property.address}</span>
           )}
         </div>
       </Card>

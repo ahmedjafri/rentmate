@@ -199,7 +199,7 @@ const PropertyDetail = () => {
   });
 
   const autoContext = [
-    { label: 'Property', value: property.name },
+    { label: 'Property', value: property.name || property.address },
     { label: 'Address', value: property.address },
     { label: 'Type', value: isSingleFamily ? 'Single Family' : 'Multi-Family' },
     ...(!isSingleFamily ? [{ label: 'Units', value: `${property.occupiedUnits}/${property.units} occupied (${occupancyRate}%)${vacantUnits > 0 ? ` · ${vacantUnits} vacant` : ''}` }] : []),
@@ -297,7 +297,7 @@ const PropertyDetail = () => {
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3">
-        <EntityContextCard entityId={property.id} entityName={property.name} expectedTopics={propertyTopics} autoContext={autoContext} />
+        <EntityContextCard entityId={property.id} entityName={property.name || property.address} expectedTopics={propertyTopics} autoContext={autoContext} />
         <Card className="p-4 rounded-xl">
           <div className="flex items-center gap-2 mb-1">
             <Users className="h-4 w-4 text-muted-foreground" />

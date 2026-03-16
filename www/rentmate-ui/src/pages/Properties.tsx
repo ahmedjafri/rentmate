@@ -55,7 +55,7 @@ const Properties = () => {
       const p = (data as Record<string, unknown>).createProperty as Record<string, unknown>;
       addProperty({
         id: p.uid as string,
-        name: p.name as string,
+        name: (p.name || p.address) as string,
         address: p.address as string,
         propertyType: p.propertyType as 'single_family' | 'multi_family',
         source: p.source as 'manual' | 'document',
