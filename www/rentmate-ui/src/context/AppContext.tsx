@@ -37,6 +37,7 @@ interface AppContextType {
   updateTask: (taskId: string, updates: Partial<ActionDeskTask>) => void;
   addTask: (task: ActionDeskTask) => void;
   addProperty: (prop: Property) => void;
+  updateProperty: (id: string, updates: Partial<Property>) => void;
   removeProperty: (id: string) => void;
   addTenant: (tenant: Tenant) => void;
   addDocument: (doc: ManagedDocument) => void;
@@ -164,6 +165,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setProperties(prev => [prop, ...prev]);
   }, []);
 
+  const updateProperty = useCallback((id: string, updates: Partial<Property>) => {
+    setProperties(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+  }, []);
+
   const removeProperty = useCallback((id: string) => {
     setProperties(prev => prev.filter(p => p.id !== id));
   }, []);
@@ -228,7 +233,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       chatPanel, globalChatThread, entityContext, getEntityContext, setEntityContext,
       updateSuggestionStatus, updateSuggestion, addChatMessage, updateTaskMessage, setTaskMessages, updateTask,
       addTask,
-      addProperty, removeProperty, addTenant, addDocument, updateDocument, replaceDocument, removeDocument, openChat, closeChat, setAutonomySettings,
+      addProperty, updateProperty, removeProperty, addTenant, addDocument, updateDocument, replaceDocument, removeDocument, openChat, closeChat, setAutonomySettings,
     }}>
       {children}
     </AppContext.Provider>

@@ -16,7 +16,7 @@ from .types import (
     UserType, HouseType, TenantType, LeaseType, TaskType,
     TaskChatMessageType, DocumentTagType,
     CreateTaskInput, AddDocumentTagInput, AddTaskMessageInput, UpdateTaskInput,
-    CreatePropertyInput, CreateTenantWithLeaseInput, AddLeaseForTenantInput,
+    CreatePropertyInput, UpdatePropertyInput, CreateTenantWithLeaseInput, AddLeaseForTenantInput,
 )
 from .services.task_service import TaskService
 from .services.property_service import PropertyService
@@ -138,6 +138,13 @@ class Mutation(AuthMutation):
             input.city, input.state, input.postal_code, input.unit_labels,
         )
         return HouseType.from_new(prop, units)
+
+    @strawberry.mutation(description="Update a property's name, address, or type")
+    def update_property(self, info, input: UpdatePropertyInput) -> HouseType:
+        _current_user(info)
+        today = date.today()
+        prop = PropertyService.update_property(_session(info), input)
+        return HouseType.from_sql(prop, today)
 
     @strawberry.mutation(description="Delete a property and all its units/leases (cascade)")
     def delete_property(self, info, uid: str) -> bool:

@@ -51,6 +51,20 @@ class PropertyService:
         return prop, units
 
     @staticmethod
+    def update_property(sess: Session, input) -> SqlProperty:
+        prop = sess.execute(select(SqlProperty).where(SqlProperty.id == input.uid)).scalar_one_or_none()
+        if not prop:
+            raise ValueError(f"Property {input.uid} not found")
+        if input.name is not None:
+            prop.name = input.name
+        if input.address is not None:
+            prop.address_line1 = input.address
+        if input.property_type is not None:
+            prop.property_type = input.property_type
+        sess.commit()
+        return prop
+
+    @staticmethod
     def delete_property(sess: Session, uid: str) -> bool:
         prop = sess.execute(select(SqlProperty).where(SqlProperty.id == uid)).scalar_one_or_none()
         if not prop:

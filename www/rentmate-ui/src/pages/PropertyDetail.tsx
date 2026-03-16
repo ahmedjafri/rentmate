@@ -5,8 +5,8 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EntityContextCard, propertyTopics } from '@/components/context/EntityContextCard';
-import { Users, ArrowLeft, MapPin, Bot, Wrench, User, Clock, MessageCircle, Zap, ShieldCheck, Hand, Lock, ChevronRight, Building2, Home, FileText, Trash2, Plus, X, Loader2 } from 'lucide-react';
-import { graphqlQuery, DELETE_PROPERTY_MUTATION, CREATE_TENANT_WITH_LEASE_MUTATION, ADD_LEASE_FOR_TENANT_MUTATION } from '@/data/api';
+import { Users, ArrowLeft, MapPin, Bot, Wrench, User, Clock, MessageCircle, Zap, ShieldCheck, Hand, Lock, ChevronRight, Building2, Home, FileText, Trash2, Plus, X, Loader2, Pencil } from 'lucide-react';
+import { graphqlQuery, DELETE_PROPERTY_MUTATION, UPDATE_PROPERTY_MUTATION, CREATE_TENANT_WITH_LEASE_MUTATION, ADD_LEASE_FOR_TENANT_MUTATION } from '@/data/api';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -32,9 +32,12 @@ const participantIcon: Record<TaskParticipantType, React.ElementType> = {
 const PropertyDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { properties, tenants, actionDeskTasks, openChat, removeProperty, addTenant } = useApp();
+  const { properties, tenants, actionDeskTasks, openChat, removeProperty, updateProperty, addTenant } = useApp();
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editForm, setEditForm] = useState({ name: '', address: '', propertyType: '' });
   const [linkedDocs, setLinkedDocs] = useState<{ id: string; filename: string; status: string; created_at: string | null }[]>([]);
   const [showAddTenant, setShowAddTenant] = useState(false);
   const [addingTenant, setAddingTenant] = useState(false);
@@ -66,6 +69,39 @@ const PropertyDetail = () => {
       toast.error(err instanceof Error ? err.message : 'Failed to delete property');
       setDeleting(false);
       setConfirmDelete(false);
+    }
+  };
+
+  const handleEditOpen = () => {
+    if (!property) return;
+    setEditForm({ name: property.name || '', address: property.address || '', propertyType: property.propertyType || 'multi_family' });
+    setShowEdit(true);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id) return;
+    setSaving(true);
+    try {
+      await graphqlQuery(UPDATE_PROPERTY_MUTATION, {
+        input: {
+          uid: id,
+          name: editForm.name || null,
+          address: editForm.address || null,
+          propertyType: editForm.propertyType || null,
+        },
+      });
+      updateProperty(id, {
+        name: editForm.name,
+        address: editForm.address,
+        propertyType: editForm.propertyType as 'single_family' | 'multi_family',
+      });
+      toast.success('Property updated');
+      setShowEdit(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update property');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -181,6 +217,15 @@ const PropertyDetail = () => {
         </Link>
         <div className="flex items-center gap-3">
         <Button
+          variant="ghost"
+          size="sm"
+          className="gap-1.5 text-xs"
+          onClick={handleEditOpen}
+        >
+          <Pencil className="h-3.5 w-3.5" />
+          Edit
+        </Button>
+        <Button
           variant={confirmDelete ? 'destructive' : 'ghost'}
           size="sm"
           className="gap-1.5 text-xs"
@@ -214,6 +259,41 @@ const PropertyDetail = () => {
         </div>
         </div>
       </div>
+
+      {/* Edit form */}
+      {showEdit && (
+        <Card className="p-4 rounded-xl">
+          <form onSubmit={handleSaveEdit} className="space-y-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Property Name</Label>
+              <Input className="h-8 text-sm rounded-lg" value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Sunset Apartments" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Address</Label>
+              <Input className="h-8 text-sm rounded-lg" value={editForm.address} onChange={e => setEditForm(f => ({ ...f, address: e.target.value }))} placeholder="123 Main St" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Property Type</Label>
+              <Select value={editForm.propertyType} onValueChange={v => setEditForm(f => ({ ...f, propertyType: v }))}>
+                <SelectTrigger className="h-8 text-sm rounded-lg">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="multi_family">Multi-Family</SelectItem>
+                  <SelectItem value="single_family">Single Family</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" size="sm" className="text-xs rounded-lg" onClick={() => setShowEdit(false)}>Cancel</Button>
+              <Button type="submit" size="sm" className="text-xs rounded-lg gap-1.5" disabled={saving}>
+                {saving && <Loader2 className="h-3 w-3 animate-spin" />}
+                Save
+              </Button>
+            </div>
+          </form>
+        </Card>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3">

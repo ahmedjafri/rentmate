@@ -43,8 +43,10 @@ class LeaseInput:
 
 @strawberry.input
 class UpdatePropertyInput:
-    key: str
-    value: str
+    uid: str
+    name: typing.Optional[str] = None
+    address: typing.Optional[str] = None
+    property_type: typing.Optional[str] = None
 
 @strawberry.input
 class CreateTaskInput:
