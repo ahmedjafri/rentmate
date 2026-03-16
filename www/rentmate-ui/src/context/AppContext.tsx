@@ -1,5 +1,6 @@
 // Entity context management for properties, tenants, and other entities
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Suggestion, Property, Tenant, MaintenanceTicket, AutonomySettings, ChatMessage, ActionDeskTask, ManagedDocument,
   defaultAutonomySettings,
@@ -48,6 +49,7 @@ interface AppContextType {
   openChat: (opts?: { suggestionId?: string | null; taskId?: string | null }) => void;
   closeChat: () => void;
   setAutonomySettings: (settings: AutonomySettings) => void;
+  refreshData: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -68,7 +70,15 @@ const loadFromStorage = <T,>(key: string, fallback: T): T => {
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { properties: apiProperties, tenants: apiTenants, actionDeskTasks: apiActionDeskTasks, tickets: apiTickets, suggestions: apiSuggestions, isLoading: apiLoading, error: apiError } = useApiData();
+  const { properties: apiProperties, tenants: apiTenants, actionDeskTasks: apiActionDeskTasks, tickets: apiTickets, suggestions: apiSuggestions, isLoading: apiLoading, error: apiError, refresh: refreshData } = useApiData();
+
+  // Re-fetch on route navigation
+  const location = useLocation();
+  const isFirstRender = useRef(true);
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return; }
+    refreshData();
+  }, [location.pathname]);
 
   // Start empty — API data replaces these once the first successful fetch completes.
   // We do NOT seed from localStorage/mock here because that causes stale mock data to
@@ -243,7 +253,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       chatPanel, globalChatThread, entityContext, getEntityContext, setEntityContext,
       updateSuggestionStatus, updateSuggestion, addChatMessage, updateTaskMessage, setTaskMessages, updateTask,
       addTask, removeTask,
-      addProperty, updateProperty, removeProperty, addTenant, addDocument, updateDocument, replaceDocument, removeDocument, openChat, closeChat, setAutonomySettings,
+      addProperty, updateProperty, removeProperty, addTenant, addDocument, updateDocument, replaceDocument, removeDocument, openChat, closeChat, setAutonomySettings, refreshData,
     }}>
       {children}
     </AppContext.Provider>

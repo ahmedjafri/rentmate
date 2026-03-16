@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { graphqlQuery, HOUSES_QUERY, TENANTS_QUERY, TASKS_QUERY } from '@/data/api';
 import { Property, Tenant, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, TaskParticipant } from '@/data/mockData';
 
@@ -10,10 +10,14 @@ interface ApiState {
   suggestions: Suggestion[];
   isLoading: boolean;
   error: string | null;
+  refresh: () => void;
 }
 
 export function useApiData(): ApiState {
-  const [state, setState] = useState<ApiState>({
+  const [refreshKey, setRefreshKey] = useState(0);
+  const refresh = useCallback(() => setRefreshKey(k => k + 1), []);
+
+  const [state, setState] = useState<Omit<ApiState, 'refresh'>>({
     properties: [],
     tenants: [],
     actionDeskTasks: [],
@@ -22,6 +26,16 @@ export function useApiData(): ApiState {
     isLoading: true,
     error: null,
   });
+
+  // Re-fetch when window regains focus or tab becomes visible
+  useEffect(() => {
+    const handleFocus = () => setRefreshKey(k => k + 1);
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') setRefreshKey(k => k + 1);
+    });
+    return () => window.removeEventListener('focus', handleFocus);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,9 +103,9 @@ export function useApiData(): ApiState {
 
     fetchAll();
     return () => { cancelled = true; };
-  }, []);
+  }, [refreshKey]);
 
-  return state;
+  return { ...state, refresh };
 }
 
 // --- API → local type mappers ---

@@ -43,8 +43,8 @@ const App = () => (
       <Toaster />
       <Sonner />
       <AuthGate>
-        <AppProvider>
-          <BrowserRouter>
+        <BrowserRouter>
+          <AppProvider>
             <AppLayout>
               <Routes>
                 <Route path="/" element={<Index />} />
@@ -62,8 +62,8 @@ const App = () => (
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </AppLayout>
-          </BrowserRouter>
-        </AppProvider>
+          </AppProvider>
+        </BrowserRouter>
       </AuthGate>
     </TooltipProvider>
   </QueryClientProvider>
