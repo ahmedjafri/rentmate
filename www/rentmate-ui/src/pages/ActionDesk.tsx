@@ -8,8 +8,9 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import {
   Bot, CheckCircle2,
-  PauseCircle, Zap, ShieldCheck, Hand, Lock, XCircle, ChevronDown,
+  PauseCircle, Zap, ShieldCheck, Hand, Lock, XCircle, ChevronDown, Search,
 } from 'lucide-react';
+import { Input } from '@/components/ui/input';
 import { formatMessageTime } from '@/components/chat/ChatMessage';
 import { TaskMode, SuggestionCategory, categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
@@ -82,6 +83,8 @@ const ActionDesk = () => {
   const { actionDeskTasks, properties, openChat, chatPanel, isLoading } = useApp();
   const [statusFilters, setStatusFilters] = useState<StatusFilter[]>([]);
   const [categoryFilters, setCategoryFilters] = useState<SuggestionCategory[]>([]);
+  const [propertyFilters, setPropertyFilters] = useState<string[]>([]);
+  const [search, setSearch] = useState('');
   const [searchParams, setSearchParams] = useSearchParams();
   const hasRestoredRef = useRef(false);
 
@@ -103,17 +106,31 @@ const ActionDesk = () => {
     }
   }, [chatPanel.isOpen, chatPanel.taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const categoryMatch = (t: typeof actionDeskTasks[0]) =>
-    categoryFilters.length === 0 || categoryFilters.includes(t.category);
+  const q = search.trim().toLowerCase();
+
+  const taskMatch = (t: typeof actionDeskTasks[0]) => {
+    if (categoryFilters.length > 0 && !categoryFilters.includes(t.category)) return false;
+    if (propertyFilters.length > 0 && !propertyFilters.includes(t.propertyId ?? '')) return false;
+    if (q) {
+      const property = t.propertyId ? properties.find(p => p.id === t.propertyId) : null;
+      const propertyLabel = property ? (property.name || property.address).toLowerCase() : '';
+      const tenantNames = t.participants
+        .filter(p => p.type === 'tenant' || p.type === 'vendor')
+        .map(p => p.name.toLowerCase())
+        .join(' ');
+      if (!t.title.toLowerCase().includes(q) && !propertyLabel.includes(q) && !tenantNames.includes(q)) return false;
+    }
+    return true;
+  };
 
   const allNeedsAttention = actionDeskTasks.filter(t => t.status === 'active' && (t.mode === 'waiting_approval' || t.mode === 'manual'));
   const allAutonomous = actionDeskTasks.filter(t => t.status === 'active' && t.mode === 'autonomous');
   const allCompleted = actionDeskTasks.filter(t => t.status !== 'active');
 
   const showAll = statusFilters.length === 0;
-  const needsAttention = (showAll || statusFilters.includes('needs_attention') ? allNeedsAttention : []).filter(categoryMatch);
-  const autonomous = (showAll || statusFilters.includes('autonomous') ? allAutonomous : []).filter(categoryMatch);
-  const completed = (showAll || statusFilters.includes('completed') ? allCompleted : []).filter(categoryMatch);
+  const needsAttention = (showAll || statusFilters.includes('needs_attention') ? allNeedsAttention : []).filter(taskMatch);
+  const autonomous = (showAll || statusFilters.includes('autonomous') ? allAutonomous : []).filter(taskMatch);
+  const completed = (showAll || statusFilters.includes('completed') ? allCompleted : []).filter(taskMatch);
 
   const needsAttentionCount = allNeedsAttention.length;
   const activeCount = actionDeskTasks.filter(t => t.status === 'active').length;
@@ -130,6 +147,12 @@ const ActionDesk = () => {
     { value: 'leasing', label: 'Leasing' },
     { value: 'compliance', label: 'Compliance' },
   ];
+
+  // Only show properties that have at least one task
+  const taskPropertyIds = new Set(actionDeskTasks.map(t => t.propertyId).filter(Boolean));
+  const propertyOptions = properties
+    .filter(p => taskPropertyIds.has(p.id))
+    .map(p => ({ value: p.id, label: p.name || p.address }));
 
   const renderTaskCard = (task: typeof actionDeskTasks[0]) => {
     const mode = getModeBadge(task);
@@ -181,7 +204,7 @@ const ActionDesk = () => {
             {activeCount} active · {needsAttentionCount} need attention
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <MultiSelect
             options={statusOptions}
             selected={statusFilters}
@@ -196,7 +219,26 @@ const ActionDesk = () => {
             placeholder="All Categories"
             width="w-44"
           />
+          {propertyOptions.length > 0 && (
+            <MultiSelect
+              options={propertyOptions}
+              selected={propertyFilters}
+              onChange={setPropertyFilters}
+              placeholder="All Properties"
+              width="w-44"
+            />
+          )}
         </div>
+      </div>
+
+      <div className="relative">
+        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+        <Input
+          className="h-8 pl-8 text-sm rounded-lg"
+          placeholder="Search by task, tenant, or property…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
       </div>
 
       {/* Needs Attention */}
