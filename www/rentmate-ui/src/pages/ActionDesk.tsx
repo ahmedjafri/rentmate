@@ -1,19 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
+import { Property, ActionDeskTask } from '@/data/mockData';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import {
-  Bot, CheckCircle2,
-  PauseCircle, Zap, ShieldCheck, Hand, Lock, XCircle, ChevronDown, Search,
+  Bot, CheckCircle2, PauseCircle, Zap, ShieldCheck, Hand, Lock, XCircle,
+  ChevronDown, X, Building2, User,
 } from 'lucide-react';
-import { Input } from '@/components/ui/input';
 import { formatMessageTime } from '@/components/chat/ChatMessage';
 import { TaskMode, SuggestionCategory, categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
+
+// ─── Mode badge ───────────────────────────────────────────────────────────────
 
 const modeConfig: Record<TaskMode, { label: string; icon: React.ElementType; className: string }> = {
   autonomous: { label: 'Autonomous', icon: Zap, className: 'bg-accent/15 text-accent' },
@@ -29,6 +31,7 @@ function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }
   return modeConfig[task.mode];
 }
 
+// ─── MultiSelect ──────────────────────────────────────────────────────────────
 
 type StatusFilter = 'needs_attention' | 'autonomous' | 'completed';
 
@@ -66,11 +69,7 @@ function MultiSelect<T extends string>({ options, selected, onChange, placeholde
             className="flex items-center gap-2 px-2 py-1.5 rounded-sm hover:bg-muted cursor-pointer"
             onClick={() => toggle(value)}
           >
-            <Checkbox
-              checked={selected.includes(value)}
-              onCheckedChange={() => toggle(value)}
-              className="h-3.5 w-3.5"
-            />
+            <Checkbox checked={selected.includes(value)} onCheckedChange={() => toggle(value)} className="h-3.5 w-3.5" />
             <span className="text-xs">{optLabel}</span>
           </div>
         ))}
@@ -79,12 +78,162 @@ function MultiSelect<T extends string>({ options, selected, onChange, placeholde
   );
 }
 
+// ─── SmartSearch ──────────────────────────────────────────────────────────────
+
+interface SearchChip {
+  id: string;
+  type: 'property' | 'tenant' | 'text';
+  label: string;
+  value: string;
+}
+
+interface SmartSearchProps {
+  chips: SearchChip[];
+  onChipsChange: (chips: SearchChip[]) => void;
+  tasks: ActionDeskTask[];
+  properties: Property[];
+}
+
+function SmartSearch({ chips, onChipsChange, tasks, properties }: SmartSearchProps) {
+  const [input, setInput] = useState('');
+  const [open, setOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const q = input.trim().toLowerCase();
+
+  // Build suggestions
+  const existingPropertyIds = new Set(chips.filter(c => c.type === 'property').map(c => c.value));
+  const existingTenantNames = new Set(chips.filter(c => c.type === 'tenant').map(c => c.value));
+  const taskPropertyIds = new Set(tasks.map(t => t.propertyId).filter(Boolean) as string[]);
+
+  const propertySuggestions = properties
+    .filter(p => taskPropertyIds.has(p.id) && !existingPropertyIds.has(p.id))
+    .filter(p => !q || (p.name || p.address).toLowerCase().includes(q))
+    .slice(0, 5)
+    .map(p => ({ type: 'property' as const, label: p.name || p.address, value: p.id, sublabel: p.name ? p.address : undefined }));
+
+  const tenantNameMap = new Map<string, string>();
+  tasks.forEach(t => {
+    t.participants
+      .filter(p => p.type === 'tenant' || p.type === 'vendor')
+      .forEach(p => { if (!tenantNameMap.has(p.name)) tenantNameMap.set(p.name, p.name); });
+  });
+  const tenantSuggestions = [...tenantNameMap.keys()]
+    .filter(name => !existingTenantNames.has(name) && (!q || name.toLowerCase().includes(q)))
+    .slice(0, 5)
+    .map(name => ({ type: 'tenant' as const, label: name, value: name, sublabel: undefined }));
+
+  const hasSuggestions = propertySuggestions.length > 0 || tenantSuggestions.length > 0;
+
+  const addChip = (type: SearchChip['type'], label: string, value: string) => {
+    onChipsChange([...chips, { id: `${type}-${value}-${Date.now()}`, type, label, value }]);
+    setInput('');
+    setOpen(false);
+    inputRef.current?.focus();
+  };
+
+  const removeChip = (id: string) => onChipsChange(chips.filter(c => c.id !== id));
+
+  return (
+    <div className="relative">
+      <div
+        className="flex flex-wrap items-center gap-1.5 min-h-9 px-2.5 py-1.5 rounded-lg border bg-background cursor-text focus-within:ring-1 focus-within:ring-ring"
+        onClick={() => inputRef.current?.focus()}
+      >
+        {chips.map(chip => (
+          <span
+            key={chip.id}
+            className={cn(
+              'inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md text-xs font-medium shrink-0',
+              chip.type === 'property' && 'bg-primary/10 text-primary',
+              chip.type === 'tenant' && 'bg-accent/15 text-accent-foreground',
+              chip.type === 'text' && 'bg-muted text-muted-foreground',
+            )}
+          >
+            {chip.type === 'property' && <Building2 className="h-3 w-3 shrink-0" />}
+            {chip.type === 'tenant' && <User className="h-3 w-3 shrink-0" />}
+            {chip.label}
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); removeChip(chip.id); }}
+              className="ml-0.5 rounded hover:opacity-70"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+        <input
+          ref={inputRef}
+          className="flex-1 min-w-32 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          placeholder={chips.length === 0 ? 'Search by task, tenant, or property…' : 'Add filter…'}
+          value={input}
+          onChange={e => { setInput(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && input.trim()) {
+              e.preventDefault();
+              addChip('text', input.trim(), input.trim());
+            }
+            if (e.key === 'Backspace' && !input && chips.length > 0) {
+              removeChip(chips[chips.length - 1].id);
+            }
+            if (e.key === 'Escape') setOpen(false);
+          }}
+        />
+      </div>
+
+      {open && hasSuggestions && (
+        <div className="absolute z-50 top-full mt-1 w-full rounded-lg border bg-card shadow-md overflow-hidden">
+          {propertySuggestions.length > 0 && (
+            <div>
+              <p className="px-3 pt-2 pb-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Properties</p>
+              {propertySuggestions.map(s => (
+                <button
+                  key={s.value}
+                  type="button"
+                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted flex items-center gap-2"
+                  onMouseDown={e => { e.preventDefault(); addChip('property', s.label, s.value); }}
+                >
+                  <Building2 className="h-3.5 w-3.5 text-primary shrink-0" />
+                  <span className="flex-1 truncate">{s.label}</span>
+                  {s.sublabel && <span className="text-xs text-muted-foreground truncate max-w-32">{s.sublabel}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+          {tenantSuggestions.length > 0 && (
+            <div className={cn(propertySuggestions.length > 0 && 'border-t')}>
+              <p className="px-3 pt-2 pb-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">People</p>
+              {tenantSuggestions.map(s => (
+                <button
+                  key={s.value}
+                  type="button"
+                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted flex items-center gap-2"
+                  onMouseDown={e => { e.preventDefault(); addChip('tenant', s.label, s.value); }}
+                >
+                  <User className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <span>{s.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="border-t px-3 py-1.5">
+            <p className="text-[11px] text-muted-foreground">Press Enter to search for "{input || '…'}"</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ActionDesk ───────────────────────────────────────────────────────────────
+
 const ActionDesk = () => {
   const { actionDeskTasks, properties, openChat, chatPanel, isLoading } = useApp();
   const [statusFilters, setStatusFilters] = useState<StatusFilter[]>([]);
   const [categoryFilters, setCategoryFilters] = useState<SuggestionCategory[]>([]);
-  const [propertyFilters, setPropertyFilters] = useState<string[]>([]);
-  const [search, setSearch] = useState('');
+  const [chips, setChips] = useState<SearchChip[]>([]);
   const [searchParams, setSearchParams] = useSearchParams();
   const hasRestoredRef = useRef(false);
 
@@ -106,20 +255,32 @@ const ActionDesk = () => {
     }
   }, [chatPanel.isOpen, chatPanel.taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const q = search.trim().toLowerCase();
-
-  const taskMatch = (t: typeof actionDeskTasks[0]) => {
+  const taskMatch = (t: ActionDeskTask) => {
     if (categoryFilters.length > 0 && !categoryFilters.includes(t.category)) return false;
-    if (propertyFilters.length > 0 && !propertyFilters.includes(t.propertyId ?? '')) return false;
-    if (q) {
+
+    const propertyChips = chips.filter(c => c.type === 'property');
+    const tenantChips = chips.filter(c => c.type === 'tenant');
+    const textChips = chips.filter(c => c.type === 'text');
+
+    if (propertyChips.length > 0 && !propertyChips.some(c => c.value === t.propertyId)) return false;
+
+    if (tenantChips.length > 0) {
+      const names = t.participants.filter(p => p.type === 'tenant' || p.type === 'vendor').map(p => p.name);
+      if (!tenantChips.some(c => names.includes(c.value))) return false;
+    }
+
+    if (textChips.length > 0) {
       const property = t.propertyId ? properties.find(p => p.id === t.propertyId) : null;
       const propertyLabel = property ? (property.name || property.address).toLowerCase() : '';
       const tenantNames = t.participants
         .filter(p => p.type === 'tenant' || p.type === 'vendor')
-        .map(p => p.name.toLowerCase())
-        .join(' ');
-      if (!t.title.toLowerCase().includes(q) && !propertyLabel.includes(q) && !tenantNames.includes(q)) return false;
+        .map(p => p.name.toLowerCase()).join(' ');
+      for (const chip of textChips) {
+        const q = chip.value.toLowerCase();
+        if (!t.title.toLowerCase().includes(q) && !propertyLabel.includes(q) && !tenantNames.includes(q)) return false;
+      }
     }
+
     return true;
   };
 
@@ -148,13 +309,7 @@ const ActionDesk = () => {
     { value: 'compliance', label: 'Compliance' },
   ];
 
-  // Only show properties that have at least one task
-  const taskPropertyIds = new Set(actionDeskTasks.map(t => t.propertyId).filter(Boolean));
-  const propertyOptions = properties
-    .filter(p => taskPropertyIds.has(p.id))
-    .map(p => ({ value: p.id, label: p.name || p.address }));
-
-  const renderTaskCard = (task: typeof actionDeskTasks[0]) => {
+  const renderTaskCard = (task: ActionDeskTask) => {
     const mode = getModeBadge(task);
     const ModeIcon = mode.icon;
     const property = task.propertyId ? properties.find(p => p.id === task.propertyId) : null;
@@ -219,27 +374,15 @@ const ActionDesk = () => {
             placeholder="All Categories"
             width="w-44"
           />
-          {propertyOptions.length > 0 && (
-            <MultiSelect
-              options={propertyOptions}
-              selected={propertyFilters}
-              onChange={setPropertyFilters}
-              placeholder="All Properties"
-              width="w-44"
-            />
-          )}
         </div>
       </div>
 
-      <div className="relative">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-        <Input
-          className="h-8 pl-8 text-sm rounded-lg"
-          placeholder="Search by task, tenant, or property…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
-      </div>
+      <SmartSearch
+        chips={chips}
+        onChipsChange={setChips}
+        tasks={actionDeskTasks}
+        properties={properties}
+      />
 
       {/* Needs Attention */}
       {needsAttention.length > 0 && (
