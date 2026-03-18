@@ -3,11 +3,13 @@ import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { AutonomySlider } from '@/components/suggestions/AutonomySlider';
 import { SuggestionCategory, AutonomyLevel } from '@/data/mockData';
-import { Shield, Bot, Terminal } from 'lucide-react';
+import { Shield, Bot, Terminal, MessageSquare } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 
@@ -19,12 +21,34 @@ interface LlmConfig {
   baseUrl: string;
 }
 
+interface ChannelConfig {
+  enabled: boolean;
+  token: string;
+  botToken: string;
+  appToken: string;
+  allowFrom: string; // newline-separated
+}
+
+const emptyChannel = (): ChannelConfig => ({
+  enabled: false, token: '', botToken: '', appToken: '', allowFrom: '',
+});
+
+interface IntegrationsState {
+  telegram: ChannelConfig;
+  whatsapp: ChannelConfig;
+}
+
 const SettingsPage = () => {
   const { autonomySettings, setAutonomySettings } = useApp();
   const [llmConfig, setLlmConfig] = useState<LlmConfig>({ apiKey: '', model: '', baseUrl: '' });
+  const [integrations, setIntegrations] = useState<IntegrationsState>({
+    telegram: emptyChannel(),
+    whatsapp: emptyChannel(),
+  });
 
   useEffect(() => {
-    fetch('/settings', { headers: { Authorization: `Bearer ${getToken()}` } })
+    const headers = { Authorization: `Bearer ${getToken()}` };
+    fetch('/settings', { headers })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data) {
@@ -36,6 +60,29 @@ const SettingsPage = () => {
           if (data.autonomy) {
             setAutonomySettings(data.autonomy);
           }
+        }
+      })
+      .catch(() => {});
+    fetch('/settings/integrations', { headers })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data) {
+          setIntegrations({
+            telegram: {
+              enabled: data.telegram?.enabled ?? false,
+              token: '',
+              botToken: '',
+              appToken: '',
+              allowFrom: (data.telegram?.allow_from ?? []).join('\n'),
+            },
+            whatsapp: {
+              enabled: data.whatsapp?.enabled ?? false,
+              token: data.whatsapp?.bridge_url ?? 'ws://localhost:3001',
+              botToken: '',
+              appToken: '',
+              allowFrom: (data.whatsapp?.allow_from ?? []).join('\n'),
+            },
+          });
         }
       })
       .catch(() => {});
@@ -57,6 +104,39 @@ const SettingsPage = () => {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       toast.success('Autonomy settings saved');
+    } catch (err) {
+      toast.error(`Failed to save: ${(err as Error).message}`);
+    }
+  };
+
+  const setChannel = (ch: keyof IntegrationsState, patch: Partial<ChannelConfig>) => {
+    setIntegrations(prev => ({ ...prev, [ch]: { ...prev[ch], ...patch } }));
+  };
+
+  const parseAllowFrom = (text: string) =>
+    text.split('\n').map(s => s.trim()).filter(Boolean);
+
+  const handleSaveIntegrations = async () => {
+    try {
+      const res = await fetch('/settings/integrations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+        body: JSON.stringify({
+          telegram: {
+            enabled: integrations.telegram.enabled,
+            token: integrations.telegram.token || null,
+            allow_from: parseAllowFrom(integrations.telegram.allowFrom),
+          },
+          whatsapp: {
+            enabled: integrations.whatsapp.enabled,
+            bridge_url: integrations.whatsapp.token || null,
+            bridge_token: integrations.whatsapp.botToken || null,
+            allow_from: parseAllowFrom(integrations.whatsapp.allowFrom),
+          },
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      toast.success('Chat integrations saved');
     } catch (err) {
       toast.error(`Failed to save: ${(err as Error).message}`);
     }
@@ -158,6 +238,111 @@ const SettingsPage = () => {
           </div>
           <Button onClick={handleSaveLlmConfig} className="w-full">Save LLM Configuration</Button>
         </div>
+      </Card>
+
+      {/* Chat Integrations */}
+      <Card className="p-6 rounded-xl">
+        <div className="flex items-center gap-2 mb-1">
+          <MessageSquare className="h-5 w-5 text-primary" />
+          <h2 className="text-lg font-bold">Chat Integrations</h2>
+        </div>
+        <p className="text-sm text-muted-foreground mb-6">
+          Connect RentMate to chat apps so tenants and managers can message the AI directly.
+        </p>
+
+        <div className="space-y-6">
+          {/* Telegram */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="tg-enabled"
+                checked={integrations.telegram.enabled}
+                onCheckedChange={v => setChannel('telegram', { enabled: !!v })}
+              />
+              <Label htmlFor="tg-enabled" className="font-semibold cursor-pointer">Telegram</Label>
+            </div>
+            {integrations.telegram.enabled && (
+              <div className="pl-6 space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="tg-token">Bot Token</Label>
+                  <Input
+                    id="tg-token"
+                    type="password"
+                    placeholder="Leave blank to keep existing token"
+                    value={integrations.telegram.token}
+                    onChange={e => setChannel('telegram', { token: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">Get this from @BotFather on Telegram.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="tg-allow">Allowed Users <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                  <Textarea
+                    id="tg-allow"
+                    placeholder="One Telegram user ID or username per line"
+                    value={integrations.telegram.allowFrom}
+                    onChange={e => setChannel('telegram', { allowFrom: e.target.value })}
+                    rows={3}
+                  />
+                  <p className="text-xs text-muted-foreground">Leave empty to allow anyone who messages the bot.</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="border-t" />
+
+          {/* WhatsApp */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="wa-enabled"
+                checked={integrations.whatsapp.enabled}
+                onCheckedChange={v => setChannel('whatsapp', { enabled: !!v })}
+              />
+              <Label htmlFor="wa-enabled" className="font-semibold cursor-pointer">WhatsApp</Label>
+            </div>
+            {integrations.whatsapp.enabled && (
+              <div className="pl-6 space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="wa-bridge-url">Bridge URL</Label>
+                  <Input
+                    id="wa-bridge-url"
+                    placeholder="ws://localhost:3001"
+                    value={integrations.whatsapp.token}
+                    onChange={e => setChannel('whatsapp', { token: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    WebSocket URL of your WhatsApp bridge server (<code>@whiskeysockets/baileys</code>).
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="wa-bridge-token">Bridge Token <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                  <Input
+                    id="wa-bridge-token"
+                    type="password"
+                    placeholder="Leave blank to keep existing token"
+                    value={integrations.whatsapp.botToken}
+                    onChange={e => setChannel('whatsapp', { botToken: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">Shared secret for bridge authentication.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="wa-allow">Allowed Numbers <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                  <Textarea
+                    id="wa-allow"
+                    placeholder="One phone number per line"
+                    value={integrations.whatsapp.allowFrom}
+                    onChange={e => setChannel('whatsapp', { allowFrom: e.target.value })}
+                    rows={3}
+                  />
+                  <p className="text-xs text-muted-foreground">Leave empty to allow any number.</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <Button onClick={handleSaveIntegrations} className="w-full mt-6">Save Chat Integrations</Button>
       </Card>
 
       {/* Developer Tools link */}

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import shutil
@@ -30,6 +31,8 @@ class AgentRegistry:
     def __init__(self):
         self._lock = threading.Lock()
         self._loop = None
+        self._bus = None
+        self._channel_task: asyncio.Task | None = None
         DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     # ─── Public lifecycle ─────────────────────────────────────────────────────
@@ -85,14 +88,64 @@ class AgentRegistry:
         workspace = DATA_DIR / DEFAULT_USER_ID
         workspace.mkdir(parents=True, exist_ok=True)
 
+        self._bus = MessageBus()
         return AgentLoop(
-            bus=MessageBus(),
+            bus=self._bus,
             provider=provider,
             workspace=workspace,
             model=model,
             max_iterations=40,
             restrict_to_workspace=False,
         )
+
+    @staticmethod
+    def _build_nanobot_config(integrations: dict):
+        from nanobot.config.schema import (
+            Config, ChannelsConfig, TelegramConfig, WhatsAppConfig,
+        )
+        tg = integrations.get("telegram", {})
+        wa = integrations.get("whatsapp", {})
+        channels = ChannelsConfig(
+            telegram=TelegramConfig(
+                enabled=tg.get("enabled", False),
+                token=tg.get("token", ""),
+                allow_from=tg.get("allow_from", []),
+            ),
+            whatsapp=WhatsAppConfig(
+                enabled=wa.get("enabled", False),
+                bridge_url=wa.get("bridge_url", "ws://localhost:3001"),
+                bridge_token=wa.get("bridge_token", ""),
+                allow_from=wa.get("allow_from", []),
+            ),
+        )
+        return Config(channels=channels)
+
+    async def restart_channels_async(self, integrations: dict):
+        """(Re)start the nanobot ChannelManager from updated integration config."""
+        if self._bus is None:
+            return
+
+        if self._channel_task and not self._channel_task.done():
+            self._channel_task.cancel()
+            try:
+                await self._channel_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._channel_task = None
+
+        config = self._build_nanobot_config(integrations)
+        any_enabled = (
+            config.channels.telegram.enabled
+            or config.channels.whatsapp.enabled
+        )
+        if not any_enabled:
+            print("[nanobot] No chat channels configured — skipping channel manager")
+            return
+
+        from nanobot.channels.manager import ChannelManager
+        cm = ChannelManager(config, self._bus)
+        self._channel_task = asyncio.create_task(cm.start_all())
+        print(f"[nanobot] Chat channels starting: {cm.enabled_channels}")
 
     def _write_workspace(self, agent_dir: Path, db: Session):
         agent_dir.mkdir(parents=True, exist_ok=True)

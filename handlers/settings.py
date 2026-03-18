@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
@@ -76,6 +76,55 @@ def get_autonomy_settings() -> dict:
     return load_app_settings().get("autonomy", _DEFAULT_AUTONOMY)
 
 
+_INTEGRATIONS_FILE = _DATA_DIR / "integrations.json"
+
+_SECRET_FIELDS = {"token", "bridge_token"}
+
+
+def load_integrations() -> dict:
+    if _INTEGRATIONS_FILE.exists():
+        try:
+            return json.loads(_INTEGRATIONS_FILE.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def _save_integrations(data: dict):
+    _INTEGRATIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _INTEGRATIONS_FILE.write_text(json.dumps(data, indent=2))
+
+
+def _mask_integrations(stored: dict) -> dict:
+    """Return integration config with secrets replaced by empty string."""
+    result = {}
+    for ch in ("telegram", "whatsapp"):
+        ch_cfg = dict(stored.get(ch, {}))
+        for f in _SECRET_FIELDS:
+            if f in ch_cfg:
+                ch_cfg[f] = ""
+        result[ch] = ch_cfg
+    return result
+
+
+class TelegramIntegration(BaseModel):
+    enabled: bool = False
+    token: Optional[str] = None
+    allow_from: Optional[List[str]] = None
+
+
+class WhatsAppIntegration(BaseModel):
+    enabled: bool = False
+    bridge_url: Optional[str] = None
+    bridge_token: Optional[str] = None
+    allow_from: Optional[List[str]] = None
+
+
+class IntegrationsBody(BaseModel):
+    telegram: Optional[TelegramIntegration] = None
+    whatsapp: Optional[WhatsAppIntegration] = None
+
+
 class SettingsBody(BaseModel):
     api_key: Optional[str] = None
     model: Optional[str] = None
@@ -120,5 +169,41 @@ async def update_settings(body: SettingsBody, request: Request):
         stored = load_app_settings()
         stored["autonomy"] = body.autonomy
         _save_app_settings(stored)
+
+    return {"ok": True}
+
+
+@router.get("/settings/integrations")
+async def get_integrations(request: Request):
+    await require_user(request)
+    stored = load_integrations()
+    return _mask_integrations(stored)
+
+
+@router.post("/settings/integrations")
+async def update_integrations(body: IntegrationsBody, request: Request):
+    await require_user(request)
+    stored = load_integrations()
+
+    channel_map = [
+        ("telegram", body.telegram, ["token", "allow_from", "enabled"]),
+        ("whatsapp", body.whatsapp, ["bridge_url", "bridge_token", "allow_from", "enabled"]),
+    ]
+    for ch_name, ch_body, _ in channel_map:
+        if ch_body is None:
+            continue
+        ch_data = stored.get(ch_name, {})
+        for field, value in ch_body.model_dump(exclude_none=True).items():
+            if field in _SECRET_FIELDS:
+                if value:  # only overwrite if non-empty
+                    ch_data[field] = value
+            else:
+                ch_data[field] = value
+        stored[ch_name] = ch_data
+
+    _save_integrations(stored)
+
+    from llm.registry import agent_registry
+    await agent_registry.restart_channels_async(stored)
 
     return {"ok": True}

@@ -18,7 +18,7 @@ from strawberry.fastapi import GraphQLRouter
 from db.models import Base
 from gql.schema import schema
 from handlers.deps import SessionLocal, engine, require_user
-from handlers.settings import read_env_file
+from handlers.settings import read_env_file, load_integrations
 from handlers import auth, automations, chat, documents, dev, settings
 from llm.registry import agent_registry
 
@@ -314,6 +314,7 @@ async def on_startup():
         db.close()
 
     agent_registry.start_gateway()
+    await agent_registry.restart_channels_async(load_integrations())
 
     if os.getenv("RENTMATE_ENV") == "development":
         automations.seed_automations()
