@@ -156,12 +156,6 @@ class TaskChatRequest(BaseModel):
     message: str
 
 
-class SuggestReplyRequest(BaseModel):
-    conversationHistory: List[Dict[str, Any]] = Field(default_factory=list)
-    headerTitle: str
-    headerDescription: str
-
-
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 @router.post("/dialpad-webhook")
@@ -259,31 +253,6 @@ async def handle_message(
 
     return {"status": "ok"}
 
-
-@router.post("/suggest-reply")
-async def suggest_reply(
-    request: SuggestReplyRequest,
-    db: Session = Depends(get_db),
-):
-    from backends.local_auth import DEFAULT_USER_ID
-    context = (
-        f"You are the property manager in these conversations.\n"
-        f"Maintenance Request Context: {request.headerTitle}, {request.headerDescription}"
-    )
-    # Legacy format: [{sender, text}] → convert to [{role, content}]
-    history = [
-        {"role": "user", "content": f"{m.get('sender', '')}: {m.get('text', '')}"}
-        for m in request.conversationHistory
-    ]
-    messages = [{"role": "system", "content": context}] + history
-    agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
-    session_key = f"suggest:{str(_uuid.uuid4())}"
-    try:
-        response = await chat_with_agent(agent_id, session_key, messages)
-        return {"suggestion": response}
-    except Exception as e:
-        print(f"Error processing suggestion request: {e}")
-        return {"error": "Failed to generate suggestion"}, 500
 
 
 @router.post("/chat")

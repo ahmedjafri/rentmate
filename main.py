@@ -103,8 +103,7 @@ app.add_middleware(
     allow_origins=[
         "https://app.tenantcloud.com",
         "https://rentmate.io",
-        "chrome-extension://ajbgljlemggebmaodifgkmhleddepmlm",
-        "http://localhost:5173",
+"http://localhost:5173",
         "http://localhost:8080",
     ],
     allow_credentials=True,
