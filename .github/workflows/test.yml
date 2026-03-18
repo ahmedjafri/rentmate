@@ -40,7 +40,7 @@ jobs:
         run: poetry run pytest --tb=short -q
 
       - name: Run evals
-        if: ${{ secrets.LLM_API_KEY != '' }}
+        if: ${{ vars.RUN_EVALS == 'true' }}
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
