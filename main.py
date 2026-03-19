@@ -351,9 +351,13 @@ async def health_check():
 
 # ─── static files + SPA catch-all (must be last) ─────────────────────────────
 
-app.mount("/assets", StaticFiles(directory=str(_DIST / "assets")), name="assets")
+if (_DIST / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(_DIST / "assets")), name="assets")
 
 
 @app.get("/{full_path:path}")
 async def serve_react_app(full_path: str):
-    return FileResponse(str(_DIST / "index.html"))
+    index = _DIST / "index.html"
+    if not index.exists():
+        return {"status": "frontend not built"}
+    return FileResponse(str(index))
