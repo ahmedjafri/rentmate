@@ -9,7 +9,7 @@ from db.models import Base
 
 # Load .env into os.environ so LLM-dependent tests (evals, document extraction)
 # pick up credentials without needing the env vars set externally.
-_ENV_FILE = Path(__file__).parent.parent / ".env"
+_ENV_FILE = Path(__file__).parent / ".env"
 if _ENV_FILE.exists():
     for _line in _ENV_FILE.read_text().splitlines():
         _line = _line.strip()
