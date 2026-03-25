@@ -39,12 +39,17 @@ function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }
 
 export function ChatPanel() {
   const { chatPanel, closeChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, globalChatThread } = useApp();
+  const [dismissConfirm, setDismissConfirm] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   const handleDismiss = async () => {
     if (!chatPanel.taskId) return;
+    if (!dismissConfirm) {
+      setDismissConfirm(true);
+      return;
+    }
     const taskId = chatPanel.taskId;
     setDismissing(true);
     try {
@@ -56,6 +61,7 @@ export function ChatPanel() {
       updateTask(taskId, { status: 'cancelled' });
     } finally {
       setDismissing(false);
+      setDismissConfirm(false);
     }
   };
   const handleDelete = async () => {
@@ -78,8 +84,9 @@ export function ChatPanel() {
     }
   };
 
-  // Reset delete confirm state when task changes
+  // Reset confirm states when task changes
   useEffect(() => {
+    setDismissConfirm(false);
     setDeleteConfirm(false);
   }, [chatPanel.taskId]);
 
@@ -412,24 +419,39 @@ export function ChatPanel() {
         <div className="flex items-center gap-0.5 shrink-0">
           {activeTask && (
             <>
-              <Button size="sm" variant="ghost" className="h-7 rounded-lg text-[11px] px-2 text-muted-foreground/60 hover:text-muted-foreground" disabled={dismissing} onClick={handleDismiss}>
-                {dismissing ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Dismiss'}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className={cn(
-                  'h-7 rounded-lg text-[11px] px-2 gap-1',
-                  deleteConfirm
-                    ? 'text-destructive hover:text-destructive hover:bg-destructive/10'
-                    : 'text-muted-foreground/60 hover:text-destructive'
-                )}
-                disabled={deleting}
-                onClick={handleDelete}
-              >
-                {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                {deleteConfirm ? 'Confirm' : null}
-              </Button>
+              {activeTask.status === 'active' && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className={cn(
+                    'h-7 rounded-lg text-[11px] px-2',
+                    dismissConfirm
+                      ? 'text-destructive hover:text-destructive hover:bg-destructive/10'
+                      : 'text-destructive/60 hover:text-destructive hover:bg-destructive/10'
+                  )}
+                  disabled={dismissing}
+                  onClick={handleDismiss}
+                >
+                  {dismissing ? <Loader2 className="h-3 w-3 animate-spin" /> : dismissConfirm ? 'Confirm?' : 'Dismiss'}
+                </Button>
+              )}
+              {activeTask.status === 'cancelled' && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className={cn(
+                    'h-7 rounded-lg text-[11px] px-2 gap-1',
+                    deleteConfirm
+                      ? 'text-destructive hover:text-destructive hover:bg-destructive/10'
+                      : 'text-muted-foreground/60 hover:text-destructive'
+                  )}
+                  disabled={deleting}
+                  onClick={handleDelete}
+                >
+                  {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                  {deleteConfirm ? 'Confirm' : null}
+                </Button>
+              )}
             </>
           )}
           <Button variant="ghost" size="icon" onClick={closeChat} className="h-7 w-7 rounded-lg shrink-0 hover:bg-muted hover:text-muted-foreground">
