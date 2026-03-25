@@ -170,14 +170,16 @@ class AgentRegistry:
         admin_email = os.environ.get("RENTMATE_ADMIN_EMAIL", "admin@localhost")
         account_name = os.environ.get("RENTMATE_ACCOUNT_NAME", "RentMate")
 
-        (agent_dir / "USER.md").write_text(
-            f"# USER.md - About Your Manager\n\n"
-            f"- **Name:** {admin_email}\n"
-            f"- **Pronouns:** Unknown — use neutral language (they/them) until told otherwise\n"
-            f"- **Account:** {account_name}\n"
-            f"- **Role:** admin\n\n"
-            f"_(Update this as you learn more about how they prefer to work.)_\n"
-        )
+        user_md = agent_dir / "USER.md"
+        if not user_md.exists():
+            user_md.write_text(
+                f"# USER.md - About Your Manager\n\n"
+                f"- **Name:** {admin_email}\n"
+                f"- **Pronouns:** Unknown — use neutral language (they/them) until told otherwise\n"
+                f"- **Account:** {account_name}\n"
+                f"- **Role:** admin\n\n"
+                f"_(Update this as you learn more about how they prefer to work.)_\n"
+            )
 
         data_script = Path(__file__).parent / "agent_data.py"
         action_script = Path(__file__).parent / "agent_action.py"

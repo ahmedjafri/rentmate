@@ -212,12 +212,12 @@ async def update_integrations(body: IntegrationsBody, request: Request):
 # ─── Agent workspace files ────────────────────────────────────────────────────
 
 _AGENT_FILES = [
-    {"filename": "SOUL.md",           "readonly": False},
+    {"filename": "SOUL.md",           "readonly": True},
     {"filename": "AGENTS.md",         "readonly": False},
-    {"filename": "IDENTITY.md",       "readonly": False},
+    {"filename": "IDENTITY.md",       "readonly": True},
     {"filename": "HEARTBEAT.md",      "readonly": False},
     {"filename": "memory/MEMORY.md",  "readonly": False},
-    {"filename": "USER.md",           "readonly": True},
+    {"filename": "USER.md",           "readonly": False},
     {"filename": "TOOLS.md",          "readonly": True},
 ]
 
