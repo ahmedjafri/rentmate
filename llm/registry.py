@@ -155,13 +155,16 @@ class AgentRegistry:
             if not src.exists():
                 continue
             dest = agent_dir / filename
-            if filename == "SOUL.md" and dest.exists():
-                old_v = _soul_version(dest.read_text())
-                new_v = _soul_version(src.read_text())
-                if new_v == old_v:
-                    continue  # no change, skip overwrite
-                direction = "upgraded" if new_v > old_v else "reverted"
-                print(f"[nanobot] SOUL.md {direction}: v{old_v} → v{new_v}")
+            if dest.exists():
+                if filename == "SOUL.md":
+                    old_v = _soul_version(dest.read_text())
+                    new_v = _soul_version(src.read_text())
+                    if new_v == old_v:
+                        continue  # no change, skip overwrite
+                    direction = "upgraded" if new_v > old_v else "reverted"
+                    print(f"[nanobot] SOUL.md {direction}: v{old_v} → v{new_v}")
+                else:
+                    continue  # preserve user edits to other static files
             shutil.copy2(src, dest)
 
         admin_email = os.environ.get("RENTMATE_ADMIN_EMAIL", "admin@localhost")

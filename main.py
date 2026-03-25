@@ -35,7 +35,7 @@ _gql_logger = logging.getLogger("rentmate.gql")
 # ─── database ────────────────────────────────────────────────────────────────
 
 def _migrate_schema():
-    """Add columns that may be missing from older schema versions (SQLite ALTER TABLE)."""
+    """Add columns that may be missing from older schema versions."""
     new_cols = [
         ("documents",      "sha256_checksum",   "TEXT"),
         ("documents",      "suggestion_states",  "TEXT"),
@@ -61,13 +61,32 @@ def _migrate_schema():
         ("properties",     "property_type",      "VARCHAR(20) DEFAULT 'multi_family'"),
         ("properties",     "source",             "VARCHAR(20)"),
     ]
+    tables = {t for t, _, _ in new_cols}
     with engine.connect() as conn:
+        # Detect DB dialect and query existing columns in one pass per table
+        dialect = engine.dialect.name
+        existing: set[tuple[str, str]] = set()
+        if dialect == "sqlite":
+            for table in tables:
+                try:
+                    rows = conn.execute(text(f"PRAGMA table_info({table})"))
+                    for row in rows:
+                        existing.add((table, row[1]))
+                except Exception:
+                    pass
+        else:
+            result = conn.execute(text("""
+                SELECT table_name, column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                AND table_name = ANY(:tables)
+            """), {"tables": list(tables)})
+            existing = {(row[0], row[1]) for row in result}
+
         for table, col, typ in new_cols:
-            try:
+            if (table, col) not in existing:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {typ}"))
                 conn.commit()
-            except Exception:
-                pass  # column already exists
 
 # ─── GraphQL ─────────────────────────────────────────────────────────────────
 
@@ -288,12 +307,17 @@ async def on_startup():
     for key, value in read_env_file().items():
         if not os.environ.get(key):  # set if missing or empty
             os.environ[key] = value
-    from llm import llm as llm_module
-    llm_module.reconfigure()
 
-    Base.metadata.create_all(engine)
-    _migrate_schema()
-    print("Database tables created/migrated")
+    # Run DB init and nanobot gateway startup in parallel (both are blocking I/O / imports)
+    async def _init_db():
+        await asyncio.to_thread(Base.metadata.create_all, engine)
+        await asyncio.to_thread(_migrate_schema)
+        print("Database tables created/migrated")
+
+    await asyncio.gather(
+        _init_db(),
+        asyncio.to_thread(agent_registry.start_gateway),
+    )
 
     db = SessionLocal()
     try:
@@ -312,7 +336,6 @@ async def on_startup():
     finally:
         db.close()
 
-    agent_registry.start_gateway()
     await agent_registry.restart_channels_async(load_integrations())
 
     if os.getenv("RENTMATE_ENV") == "development":

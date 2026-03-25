@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from handlers.deps import require_user
@@ -206,4 +206,54 @@ async def update_integrations(body: IntegrationsBody, request: Request):
     from llm.registry import agent_registry
     await agent_registry.restart_channels_async(stored)
 
+    return {"ok": True}
+
+
+# ─── Agent workspace files ────────────────────────────────────────────────────
+
+_AGENT_FILES = [
+    {"filename": "SOUL.md",           "readonly": False},
+    {"filename": "AGENTS.md",         "readonly": False},
+    {"filename": "IDENTITY.md",       "readonly": False},
+    {"filename": "HEARTBEAT.md",      "readonly": False},
+    {"filename": "memory/MEMORY.md",  "readonly": False},
+    {"filename": "USER.md",           "readonly": True},
+    {"filename": "TOOLS.md",          "readonly": True},
+]
+
+_AGENT_FILENAMES = {f["filename"] for f in _AGENT_FILES}
+
+
+def _agent_workspace() -> Path:
+    from llm.registry import DATA_DIR, DEFAULT_USER_ID
+    return DATA_DIR / DEFAULT_USER_ID
+
+
+@router.get("/settings/agent/files")
+async def get_agent_files(request: Request):
+    await require_user(request)
+    workspace = _agent_workspace()
+    result = []
+    for entry in _AGENT_FILES:
+        path = workspace / entry["filename"]
+        content = path.read_text() if path.exists() else ""
+        result.append({"filename": entry["filename"], "content": content, "readonly": entry["readonly"]})
+    return result
+
+
+class AgentFileBody(BaseModel):
+    content: str
+
+
+@router.put("/settings/agent/files/{filename:path}")
+async def update_agent_file(filename: str, body: AgentFileBody, request: Request):
+    await require_user(request)
+    if filename not in _AGENT_FILENAMES:
+        raise HTTPException(status_code=404, detail="Unknown file")
+    readonly = next(f["readonly"] for f in _AGENT_FILES if f["filename"] == filename)
+    if readonly:
+        raise HTTPException(status_code=403, detail="File is read-only")
+    path = _agent_workspace() / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body.content)
     return {"ok": True}

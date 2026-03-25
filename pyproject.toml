@@ -24,11 +24,13 @@ nanobot-ai = "^0.1"
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.0"
 alembic = "^1.17.1"
+testcontainers = {extras = ["postgres"], version = "^4.14.2"}
 
 [tool.pytest.ini_options]
 addopts = "-m 'not eval'"
 markers = [
   "eval: LLM-judge eval cases (run with -m eval)",
+  "postgres: integration tests that require Docker + a running Postgres container",
 ]
 
 [build-system]

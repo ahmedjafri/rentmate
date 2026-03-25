@@ -3,13 +3,14 @@ import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { AutonomySlider } from '@/components/suggestions/AutonomySlider';
 import { SuggestionCategory, AutonomyLevel } from '@/data/mockData';
-import { Shield, Bot, Terminal, MessageSquare } from 'lucide-react';
+import { Shield, Bot, Terminal, MessageSquare, Lock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { getToken } from '@/lib/auth';
 
@@ -38,6 +39,22 @@ interface IntegrationsState {
   whatsapp: ChannelConfig;
 }
 
+interface AgentFile {
+  filename: string;
+  content: string;
+  readonly: boolean;
+}
+
+const AGENT_FILE_LABELS: Record<string, string> = {
+  'SOUL.md': 'Soul',
+  'AGENTS.md': 'Agents',
+  'IDENTITY.md': 'Identity',
+  'HEARTBEAT.md': 'Heartbeat',
+  'memory/MEMORY.md': 'Memory',
+  'USER.md': 'User',
+  'TOOLS.md': 'Tools',
+};
+
 const SettingsPage = () => {
   const { autonomySettings, setAutonomySettings } = useApp();
   const [llmConfig, setLlmConfig] = useState<LlmConfig>({ apiKey: '', model: '', baseUrl: '' });
@@ -45,6 +62,9 @@ const SettingsPage = () => {
     telegram: emptyChannel(),
     whatsapp: emptyChannel(),
   });
+  const [agentFiles, setAgentFiles] = useState<AgentFile[]>([]);
+  const [agentFileContents, setAgentFileContents] = useState<Record<string, string>>({});
+  const [savingFile, setSavingFile] = useState<string | null>(null);
 
   useEffect(() => {
     const headers = { Authorization: `Bearer ${getToken()}` };
@@ -83,6 +103,17 @@ const SettingsPage = () => {
               allowFrom: (data.whatsapp?.allow_from ?? []).join('\n'),
             },
           });
+        }
+      })
+      .catch(() => {});
+    fetch('/settings/agent/files', { headers })
+      .then(r => r.ok ? r.json() : null)
+      .then((files: AgentFile[] | null) => {
+        if (files) {
+          setAgentFiles(files);
+          const contents: Record<string, string> = {};
+          for (const f of files) contents[f.filename] = f.content;
+          setAgentFileContents(contents);
         }
       })
       .catch(() => {});
@@ -160,6 +191,23 @@ const SettingsPage = () => {
       toast.success('LLM configuration saved');
     } catch (err) {
       toast.error(`Failed to save: ${(err as Error).message}`);
+    }
+  };
+
+  const handleSaveAgentFile = async (filename: string) => {
+    setSavingFile(filename);
+    try {
+      const res = await fetch(`/settings/agent/files/${filename}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+        body: JSON.stringify({ content: agentFileContents[filename] ?? '' }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      toast.success(`${AGENT_FILE_LABELS[filename] ?? filename} saved`);
+    } catch (err) {
+      toast.error(`Failed to save: ${(err as Error).message}`);
+    } finally {
+      setSavingFile(null);
     }
   };
 
@@ -344,6 +392,49 @@ const SettingsPage = () => {
 
         <Button onClick={handleSaveIntegrations} className="w-full mt-6">Save Chat Integrations</Button>
       </Card>
+
+      {/* AI Agent workspace */}
+      {agentFiles.length > 0 && (
+        <Card className="p-6 rounded-xl">
+          <div className="flex items-center gap-2 mb-1">
+            <Bot className="h-5 w-5 text-primary" />
+            <h2 className="text-lg font-bold">AI Agent</h2>
+          </div>
+          <p className="text-sm text-muted-foreground mb-6">
+            Edit the agent's identity, behaviour, and long-term memory.
+          </p>
+          <Tabs defaultValue={agentFiles[0]?.filename}>
+            <TabsList className="flex flex-wrap h-auto gap-1 mb-4">
+              {agentFiles.map(f => (
+                <TabsTrigger key={f.filename} value={f.filename} className="text-xs">
+                  {f.readonly && <Lock className="h-3 w-3 mr-1 opacity-50" />}
+                  {AGENT_FILE_LABELS[f.filename] ?? f.filename}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            {agentFiles.map(f => (
+              <TabsContent key={f.filename} value={f.filename} className="space-y-3">
+                {f.readonly && (
+                  <p className="text-xs text-muted-foreground">Auto-generated on startup — read only.</p>
+                )}
+                <Textarea
+                  className="font-mono text-xs min-h-96 resize-y"
+                  value={agentFileContents[f.filename] ?? ''}
+                  readOnly={f.readonly}
+                  onChange={e => !f.readonly && setAgentFileContents(prev => ({ ...prev, [f.filename]: e.target.value }))}
+                />
+                <Button
+                  onClick={() => handleSaveAgentFile(f.filename)}
+                  disabled={f.readonly || savingFile === f.filename}
+                  className="w-full"
+                >
+                  {savingFile === f.filename ? 'Saving…' : `Save ${AGENT_FILE_LABELS[f.filename] ?? f.filename}`}
+                </Button>
+              </TabsContent>
+            ))}
+          </Tabs>
+        </Card>
+      )}
 
       {/* Developer Tools link */}
       <div className="pt-2">
