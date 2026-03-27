@@ -10,10 +10,32 @@ import { useApiData } from '@/hooks/useApiData';
 import { graphqlQuery, ADD_TASK_MESSAGE_MUTATION, UPDATE_TASK_MUTATION } from '@/data/api';
 import { toast } from 'sonner';
 
+/** UUID v4 that works in both secure and non-secure contexts (HTTP on LAN IPs). */
+function generateSessionId(): string {
+  if (typeof crypto?.randomUUID === 'function') return crypto.randomUUID();
+  const buf = new Uint8Array(16);
+  crypto.getRandomValues(buf);
+  buf[6] = (buf[6] & 0x0f) | 0x40;
+  buf[8] = (buf[8] & 0x3f) | 0x80;
+  const hex = Array.from(buf, b => b.toString(16).padStart(2, '0'));
+  return `${hex.slice(0,4).join('')}-${hex.slice(4,6).join('')}-${hex.slice(6,8).join('')}-${hex.slice(8,10).join('')}-${hex.slice(10).join('')}`;
+}
+
+export interface ChatSession {
+  id: string;           // 'general' for the default session, uuid for context sessions
+  title: string;        // displayed name in the Chats list
+  contextKey: string | null;  // e.g. 'property:abc123' — used for deduplication
+  pageContext: string | null; // full context block sent to the AI
+  messages: ChatMessage[];
+  lastMessageAt: Date | null;
+}
+
 interface ChatPanelState {
   isOpen: boolean;
   suggestionId: string | null;
   taskId: string | null;
+  sessionId: string | null;
+  pageContext: string | null;
 }
 
 interface AppContextType {
@@ -26,13 +48,13 @@ interface AppContextType {
   documents: ManagedDocument[];
   autonomySettings: AutonomySettings;
   chatPanel: ChatPanelState;
-  globalChatThread: ChatMessage[];
+  chatSessions: ChatSession[];
   entityContext: Record<string, string>;
   getEntityContext: (entityId: string) => string;
   setEntityContext: (entityId: string, context: string) => void;
   updateSuggestionStatus: (id: string, status: SuggestionStatus) => void;
   updateSuggestion: (id: string, updates: Partial<Suggestion>) => void;
-  addChatMessage: (context: { suggestionId?: string | null; taskId?: string | null }, message: ChatMessage) => void;
+  addChatMessage: (context: { suggestionId?: string | null; taskId?: string | null; sessionId?: string | null }, message: ChatMessage) => void;
   updateTaskMessage: (taskId: string, messageId: string, updates: Partial<ChatMessage>) => void;
   setTaskMessages: (taskId: string, messages: ChatMessage[]) => void;
   updateTask: (taskId: string, updates: Partial<ActionDeskTask>) => void;
@@ -46,7 +68,7 @@ interface AppContextType {
   updateDocument: (id: string, updates: Partial<ManagedDocument>) => void;
   replaceDocument: (oldId: string, doc: ManagedDocument) => void;
   removeDocument: (id: string) => void;
-  openChat: (opts?: { suggestionId?: string | null; taskId?: string | null }) => void;
+  openChat: (opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; contextKey?: string | null; sessionTitle?: string | null }) => void;
   closeChat: () => void;
   setAutonomySettings: (settings: AutonomySettings) => void;
   refreshData: () => void;
@@ -54,9 +76,22 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-// One-time cleanup: remove localStorage keys that used to cache API-backed data.
-// The DB is now the source of truth; stale cached copies cause mock data to bleed through.
-['rm_properties', 'rm_tenants', 'rm_suggestions', 'rm_tickets', 'rm_action_desk', 'rm_documents'].forEach(k => localStorage.removeItem(k));
+// Helpers to coerce date fields that become strings after a localStorage round-trip.
+function coerceDates<T extends { timestamp?: unknown }>(messages: T[]): T[] {
+  return messages.map(m => ({ ...m, timestamp: m.timestamp instanceof Date ? m.timestamp : new Date(m.timestamp as string) }));
+}
+
+function coerceTask(t: ActionDeskTask): ActionDeskTask {
+  return {
+    ...t,
+    lastMessageAt: t.lastMessageAt instanceof Date ? t.lastMessageAt : new Date(t.lastMessageAt as unknown as string),
+    chatThread: coerceDates(t.chatThread),
+  };
+}
+
+function coerceTenant(t: Tenant): Tenant {
+  return { ...t, leaseEnd: t.leaseEnd instanceof Date ? t.leaseEnd : new Date(t.leaseEnd as unknown as string) };
+}
 
 const loadFromStorage = <T,>(key: string, fallback: T): T => {
   try {
@@ -80,14 +115,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     refreshData();
   }, [location.pathname]);
 
-  // Start empty — API data replaces these once the first successful fetch completes.
-  // We do NOT seed from localStorage/mock here because that causes stale mock data to
-  // persist whenever the DB has fewer records than the mock set.
-  const [properties, setProperties] = useState<Property[]>([]);
-  const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
-  const [tickets, setTickets] = useState<MaintenanceTicket[]>([]);
-  const [actionDeskTasks, setActionDeskTasks] = useState<ActionDeskTask[]>([]);
+  // Seed from localStorage so a page reload (e.g. iOS Safari evicting the tab from memory)
+  // shows cached data immediately instead of a blank loading state. Dates are coerced back
+  // from strings since JSON.parse can't reconstruct Date objects.
+  const [properties, setProperties] = useState<Property[]>(() => loadFromStorage('rm_properties', []));
+  const [tenants, setTenants] = useState<Tenant[]>(() => (loadFromStorage('rm_tenants', []) as Tenant[]).map(coerceTenant));
+  const [suggestions, setSuggestions] = useState<Suggestion[]>(() => loadFromStorage('rm_suggestions', []));
+  const [tickets, setTickets] = useState<MaintenanceTicket[]>(() => loadFromStorage('rm_tickets', []));
+  const [actionDeskTasks, setActionDeskTasks] = useState<ActionDeskTask[]>(() => (loadFromStorage('rm_action_desk', []) as ActionDeskTask[]).map(coerceTask));
 
   useEffect(() => {
     if (apiLoading) return;
@@ -103,24 +138,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setActionDeskTasks(apiActionDeskTasks);
       setTickets(apiTickets);
       setSuggestions(apiSuggestions);
+      // Persist so the next page reload (e.g. iOS tab eviction) can show cached data.
+      localStorage.setItem('rm_properties', JSON.stringify(apiProperties));
+      localStorage.setItem('rm_tenants', JSON.stringify(apiTenants));
+      localStorage.setItem('rm_action_desk', JSON.stringify(apiActionDeskTasks));
+      localStorage.setItem('rm_tickets', JSON.stringify(apiTickets));
+      localStorage.setItem('rm_suggestions', JSON.stringify(apiSuggestions));
     }
   }, [apiLoading, apiError, apiProperties, apiTenants, apiActionDeskTasks, apiTickets, apiSuggestions]);
+
   const [documents, setDocuments] = useState<ManagedDocument[]>([]);
   const [autonomySettings, setAutonomySettings] = useState<AutonomySettings>(() => loadFromStorage('rm_autonomy', defaultAutonomySettings));
-  const [chatPanel, setChatPanel] = useState<ChatPanelState>({ isOpen: false, suggestionId: null, taskId: null });
-  const [globalChatThread, setGlobalChatThread] = useState<ChatMessage[]>(() =>
-    (loadFromStorage('rm_global_chat', []) as ChatMessage[]).map(m => ({
-      ...m,
-      timestamp: m.timestamp instanceof Date ? m.timestamp : new Date(m.timestamp as unknown as string),
-    }))
-  );
+  const [chatPanel, setChatPanel] = useState<ChatPanelState>({ isOpen: false, suggestionId: null, taskId: null, sessionId: null, pageContext: null });
+
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>(() => {
+    const stored = loadFromStorage('rm_chat_sessions', null) as ChatSession[] | null;
+    if (stored && Array.isArray(stored) && stored.length > 0) {
+      return stored.map(s => ({
+        ...s,
+        messages: (s.messages ?? []).map(m => ({
+          ...m,
+          timestamp: m.timestamp instanceof Date ? m.timestamp : new Date(m.timestamp as unknown as string),
+        })),
+        lastMessageAt: s.lastMessageAt ? new Date(s.lastMessageAt as unknown as string) : null,
+      }));
+    }
+    // Migrate legacy single global thread to a 'general' session
+    const legacy = loadFromStorage('rm_global_chat', []) as ChatMessage[];
+    if (legacy.length > 0) {
+      const msgs = legacy.map(m => ({ ...m, timestamp: m.timestamp instanceof Date ? m.timestamp : new Date(m.timestamp as unknown as string) }));
+      return [{ id: 'general', title: 'Ask RentMate', contextKey: null, pageContext: null, messages: msgs, lastMessageAt: msgs[msgs.length - 1].timestamp }];
+    }
+    return [];
+  });
+  const chatSessionsRef = useRef(chatSessions);
+  useEffect(() => { chatSessionsRef.current = chatSessions; }, [chatSessions]);
+
   const [entityContext, setEntityContextState] = useState<Record<string, string>>(() => loadFromStorage('rm_entity_context', {}));
 
   // Persist non-API state to localStorage (settings, chat, documents, entity context).
   // API-backed state (properties/tenants/tasks/tickets/suggestions) is NOT persisted here —
   // the DB is the source of truth for those.
   useEffect(() => { localStorage.setItem('rm_autonomy', JSON.stringify(autonomySettings)); }, [autonomySettings]);
-  useEffect(() => { localStorage.setItem('rm_global_chat', JSON.stringify(globalChatThread)); }, [globalChatThread]);
+  useEffect(() => { localStorage.setItem('rm_chat_sessions', JSON.stringify(chatSessions)); }, [chatSessions]);
   useEffect(() => { localStorage.setItem('rm_entity_context', JSON.stringify(entityContext)); }, [entityContext]);
 
   const getEntityContext = useCallback((entityId: string) => entityContext[entityId] || '', [entityContext]);
@@ -136,7 +196,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSuggestions(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
   }, []);
 
-  const addChatMessage = useCallback((context: { suggestionId?: string | null; taskId?: string | null }, message: ChatMessage) => {
+  const addChatMessage = useCallback((context: { suggestionId?: string | null; taskId?: string | null; sessionId?: string | null }, message: ChatMessage) => {
     // Persist manager messages on tasks to backend (fire-and-forget)
     if (context.taskId && message.role === 'user') {
       graphqlQuery(ADD_TASK_MESSAGE_MUTATION, {
@@ -159,7 +219,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         s.id === context.suggestionId ? { ...s, chatThread: [...s.chatThread, message] } : s
       ));
     } else {
-      setGlobalChatThread(prev => [...prev, message]);
+      // Add to the named session (or 'general' if no sessionId)
+      const targetId = context.sessionId ?? 'general';
+      setChatSessions(prev => {
+        const exists = prev.find(s => s.id === targetId);
+        if (exists) {
+          return prev.map(s => s.id === targetId
+            ? { ...s, messages: [...s.messages, message], lastMessageAt: message.timestamp }
+            : s
+          );
+        }
+        // Shouldn't happen, but create a fallback general session
+        return [...prev, {
+          id: targetId,
+          title: 'Ask RentMate',
+          contextKey: null,
+          pageContext: null,
+          messages: [message],
+          lastMessageAt: message.timestamp,
+        }];
+      });
     }
   }, []);
 
@@ -235,22 +314,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActionDeskTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...updates } : t));
   }, []);
 
-  const openChat = useCallback((opts?: { suggestionId?: string | null; taskId?: string | null }) => {
-    setChatPanel({
-      isOpen: true,
-      suggestionId: opts?.suggestionId ?? null,
-      taskId: opts?.taskId ?? null,
-    });
+  const openChat = useCallback((opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; contextKey?: string | null; sessionTitle?: string | null }) => {
+    // Task/suggestion threads don't use the session system
+    if (opts?.taskId || opts?.suggestionId) {
+      setChatPanel({
+        isOpen: true,
+        taskId: opts?.taskId ?? null,
+        suggestionId: opts?.suggestionId ?? null,
+        sessionId: null,
+        pageContext: opts?.pageContext ?? null,
+      });
+      return;
+    }
+
+    const contextKey = opts?.contextKey ?? null;
+    const sessions = chatSessionsRef.current;
+
+    // Find existing session by contextKey (or 'general' for null contextKey)
+    const existing = contextKey !== null
+      ? sessions.find(s => s.contextKey === contextKey)
+      : sessions.find(s => s.id === 'general');
+
+    if (existing) {
+      setChatPanel({ isOpen: true, taskId: null, suggestionId: null, sessionId: existing.id, pageContext: existing.pageContext });
+      return;
+    }
+
+    // Create a new session
+    // crypto.randomUUID() requires a secure context (HTTPS / localhost).
+    // Fall back to getRandomValues-based generation so the app works over
+    // plain HTTP on a LAN IP address as well.
+    const newId = contextKey ?? 'general';
+    const newSession: ChatSession = {
+      id: newId === 'general' ? 'general' : generateSessionId(),
+      title: opts?.sessionTitle ?? 'Ask RentMate',
+      contextKey,
+      pageContext: opts?.pageContext ?? null,
+      messages: [],
+      lastMessageAt: null,
+    };
+    setChatSessions(prev => [...prev, newSession]);
+    setChatPanel({ isOpen: true, taskId: null, suggestionId: null, sessionId: newSession.id, pageContext: newSession.pageContext });
   }, []);
 
   const closeChat = useCallback(() => {
-    setChatPanel({ isOpen: false, suggestionId: null, taskId: null });
+    setChatPanel({ isOpen: false, suggestionId: null, taskId: null, sessionId: null, pageContext: null });
   }, []);
 
   return (
     <AppContext.Provider value={{
-      properties, tenants, suggestions, tickets, actionDeskTasks, isLoading: apiLoading, documents, autonomySettings,
-      chatPanel, globalChatThread, entityContext, getEntityContext, setEntityContext,
+      properties, tenants, suggestions, tickets, actionDeskTasks, isLoading: apiLoading && actionDeskTasks.length === 0 && properties.length === 0, documents, autonomySettings,
+      chatPanel, chatSessions, entityContext, getEntityContext, setEntityContext,
       updateSuggestionStatus, updateSuggestion, addChatMessage, updateTaskMessage, setTaskMessages, updateTask,
       addTask, removeTask,
       addProperty, updateProperty, removeProperty, addTenant, addDocument, updateDocument, replaceDocument, removeDocument, openChat, closeChat, setAutonomySettings, refreshData,

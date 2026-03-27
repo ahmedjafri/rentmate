@@ -1,20 +1,96 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Bell, ShieldCheck, Hand } from 'lucide-react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { Bell, ShieldCheck, Hand, Bot } from 'lucide-react';
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from './Sidebar';
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { useApp } from '@/context/AppContext';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 
+function usePageContext() {
+  const location = useLocation();
+  const { properties, tenants, actionDeskTasks } = useApp();
+  const path = location.pathname;
+
+  const propMatch = path.match(/^\/properties\/([^/]+)$/);
+  if (propMatch) {
+    const p = properties.find(x => x.id === propMatch[1]);
+    if (p) {
+      const tasks = actionDeskTasks.filter(t => t.propertyId === p.id && t.status === 'active');
+      const occupants = tenants.filter(t => t.propertyId === p.id && t.isActive);
+      const label = p.name || p.address;
+      return {
+        label,
+        contextKey: `property:${p.id}`,
+        sessionTitle: `Ask about ${label}`,
+        context: [
+          `Property: ${p.name || p.address}`,
+          `Address: ${p.address}`,
+          `Units: ${p.units} total, ${p.occupiedUnits} occupied`,
+          `Monthly revenue: $${p.monthlyRevenue.toLocaleString()}`,
+          occupants.length ? `Active tenants: ${occupants.map(t => `${t.name} (${t.unit})`).join(', ')}` : 'No active tenants',
+          tasks.length ? `Open tasks: ${tasks.map(t => t.title).join('; ')}` : 'No open tasks',
+        ].join('\n'),
+      };
+    }
+  }
+
+  const tenantMatch = path.match(/^\/tenants\/([^/]+)$/);
+  if (tenantMatch) {
+    const t = tenants.find(x => x.id === tenantMatch[1]);
+    if (t) {
+      const p = properties.find(x => x.id === t.propertyId);
+      const tasks = actionDeskTasks.filter(x => x.status === 'active' && x.participants.some(pp => pp.name === t.name));
+      return {
+        label: t.name,
+        contextKey: `tenant:${t.id}`,
+        sessionTitle: `Ask about ${t.name}`,
+        context: [
+          `Tenant: ${t.name}`,
+          p ? `Property: ${p.name || p.address}, Unit ${t.unit}` : `Unit: ${t.unit}`,
+          `Rent: $${t.rentAmount.toLocaleString()}/mo (${t.paymentStatus})`,
+          `Lease ends: ${t.leaseEnd instanceof Date ? t.leaseEnd.toLocaleDateString() : new Date(t.leaseEnd as unknown as string).toLocaleDateString()}`,
+          tasks.length ? `Related tasks: ${tasks.map(x => x.title).join('; ')}` : '',
+        ].filter(Boolean).join('\n'),
+      };
+    }
+  }
+
+  if (path === '/action-desk') {
+    const needs = actionDeskTasks.filter(t => t.status === 'active' && (t.mode === 'waiting_approval' || t.mode === 'manual'));
+    return {
+      label: 'Action Desk',
+      contextKey: 'page:action-desk',
+      sessionTitle: 'Ask about Action Desk',
+      context: needs.length
+        ? `Action Desk — ${needs.length} task${needs.length !== 1 ? 's' : ''} need attention:\n${needs.map(t => `• ${t.title} (${t.mode === 'waiting_approval' ? 'needs approval' : 'manual'})`).join('\n')}`
+        : 'Action Desk — all tasks are running autonomously.',
+    };
+  }
+
+  if (path === '/properties') {
+    return { label: 'Properties', contextKey: 'page:properties', sessionTitle: 'Ask about Properties', context: `Viewing all ${properties.length} properties.` };
+  }
+
+  if (path === '/tenants') {
+    const active = tenants.filter(t => t.isActive).length;
+    return { label: 'Tenants', contextKey: 'page:tenants', sessionTitle: 'Ask about Tenants', context: `Viewing ${active} active tenants out of ${tenants.length} total.` };
+  }
+
+  return null;
+}
+
 export function AppLayout({ children }: {children: React.ReactNode;}) {
-  const { chatPanel, actionDeskTasks } = useApp();
+  const { chatPanel, openChat, closeChat, actionDeskTasks, chatSessions } = useApp();
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
+  const pageCtx = usePageContext();
+
   const attentionTasks = actionDeskTasks.filter(
     t => t.status === 'active' && (t.mode === 'waiting_approval' || t.mode === 'manual')
   );
@@ -22,15 +98,47 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
 
   const close = () => setOpen(false);
 
+  const handleRentMateClick = () => {
+    const targetContextKey = pageCtx?.contextKey ?? null;
+    if (chatPanel.isOpen && !chatPanel.taskId) {
+      // Only toggle closed when the current session is already showing this context.
+      // If the user navigated to a different page, switch context instead of closing.
+      const currentSession = chatSessions.find(s => s.id === chatPanel.sessionId);
+      if ((currentSession?.contextKey ?? null) === targetContextKey) {
+        closeChat();
+        return;
+      }
+    }
+    openChat({
+      pageContext: pageCtx?.context ?? null,
+      contextKey: targetContextKey,
+      sessionTitle: pageCtx?.sessionTitle ?? null,
+    });
+  };
+
   return (
     <SidebarProvider defaultOpen={false}>
         <div className="h-screen flex w-full overflow-hidden">
         <AppSidebar />
         <div className="flex-1 flex flex-col min-w-0 h-full">
-          <header className="h-10 flex items-center border-b px-4 bg-card/50 backdrop-blur-sm shrink-0">
-            <SidebarTrigger className="mr-3" />
-            <h2 className="text-xs font-medium text-muted-foreground flex-1">
-</h2>
+          <header className="h-10 flex items-center border-b px-4 bg-card/50 backdrop-blur-sm shrink-0 gap-2">
+            <SidebarTrigger className="mr-1 shrink-0" />
+
+            {/* RentMate chat button */}
+            <Button
+              variant={chatPanel.isOpen && !chatPanel.taskId ? 'default' : 'outline'}
+              size="sm"
+              onClick={handleRentMateClick}
+              className="h-7 rounded-xl gap-1.5 text-xs shrink-0"
+            >
+              <Bot className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden sm:inline">
+                {pageCtx ? `Ask about ${pageCtx.label}` : 'Ask RentMate'}
+              </span>
+            </Button>
+
+            <div className="flex-1" />
+
             {attentionCount > 0 && (
               <Popover open={open} onOpenChange={setOpen}>
                 <PopoverTrigger asChild>

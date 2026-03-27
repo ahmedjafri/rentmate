@@ -276,14 +276,45 @@ async def chat_endpoint(
     agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
     conv_id = body.conversation_id or str(_uuid.uuid4())
     session_key = f"chat:{conv_id}"
-    messages = [{"role": "system", "content": context}] + history
-    try:
-        reply = await chat_with_agent(agent_id, session_key, messages)
-    except Exception as e:
-        print(f"Chat agent error: {e}")
-        raise HTTPException(status_code=502, detail="AI unavailable")
+    messages_payload = [{"role": "system", "content": context}] + history
 
-    return {"reply": reply, "conversation_id": conv_id}
+    async def generate():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def on_progress(text: str):
+            await queue.put(text)
+
+        async def run():
+            await on_progress("Thinking\u2026")
+            return await chat_with_agent(agent_id, session_key, messages_payload, on_progress)
+
+        task = asyncio.create_task(run())
+        try:
+            while not task.done():
+                try:
+                    text = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
+                except asyncio.TimeoutError:
+                    pass
+
+            while not queue.empty():
+                yield f"data: {_json.dumps({'type': 'progress', 'text': queue.get_nowait()})}\n\n"
+
+            try:
+                reply = task.result()
+            except Exception:
+                yield f"data: {_json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
+                return
+
+            yield f"data: {_json.dumps({'type': 'done', 'reply': reply, 'conversation_id': conv_id})}\n\n"
+        finally:
+            pass  # no subscriber cleanup needed for session chats
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/chat/task")
@@ -338,6 +369,11 @@ async def task_chat_endpoint(
             if the SSE generator is cancelled (client navigates away).
             """
             try:
+                # Always emit at least one progress event so the UI shows a
+                # status line (nanobot only calls on_progress for tool-call
+                # responses, not direct replies).  Emitting via on_progress
+                # also adds it to progress_log so reconnecting clients see it.
+                await on_progress("Thinking\u2026")
                 reply = await chat_with_agent(agent_id, session_key, messages_payload, on_progress)
 
                 write_db = _SessionLocal()
