@@ -76,7 +76,7 @@ class Query:
         today = date.today()
         return [TenantType.from_sql(t, today) for t in fetch_tenants(_session(info))]
 
-    @strawberry.field(description="Returns tasks (conversations with is_task=True). Filters: category, status (comma-separated), source")
+    @strawberry.field(description="Returns tasks. Filters: category, status (comma-separated), source")
     def tasks(
         self,
         info,
@@ -137,7 +137,7 @@ class Mutation(AuthMutation):
         _current_user(info)
         return TenantService.delete_tenant(_session(info), uid)
 
-    @strawberry.mutation(description="Create a new task (is_task=True conversation)")
+    @strawberry.mutation(description="Create a new task")
     def create_task(self, info, input: CreateTaskInput) -> TaskType:
         _current_user(info)
         return TaskType.from_sql(TaskService.create_task(_session(info), input))

@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db.lib import route_inbound_to_task, get_conversation_with_messages
-from db.models import Conversation, ConversationParticipant, Message, ParticipantType, Tenant
+from db.models import Conversation, ConversationParticipant, Message, ParticipantType, Task, Tenant
 from handlers.deps import get_db, require_user
 from llm.context import build_task_context
 from llm.registry import agent_registry
@@ -70,16 +70,27 @@ async def simulate_inbound(
 
     if body.force_new:
         now = datetime.utcnow()
-        conv = Conversation(
+        task = Task(
             id=str(uuid.uuid4()),
-            subject=f"Message from {tenant.first_name} {tenant.last_name}",
-            is_group=False,
-            is_archived=False,
-            is_task=True,
+            account_id=tenant.account_id,
+            title=f"Message from {tenant.first_name} {tenant.last_name}",
             task_status="active",
             task_mode="autonomous",
             source=DEV_SIM_SOURCE,
             channel_type=body.channel_type,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(task)
+        db.flush()
+
+        conv = Conversation(
+            id=str(uuid.uuid4()),
+            account_id=tenant.account_id,
+            task_id=task.id,
+            subject=f"Message from {tenant.first_name} {tenant.last_name}",
+            is_group=False,
+            is_archived=False,
             created_at=now,
             updated_at=now,
         )
@@ -110,12 +121,12 @@ async def simulate_inbound(
     else:
         # Count existing dev_sim tasks for this tenant to detect new creation
         existing_count = (
-            db.query(Conversation)
-            .join(ConversationParticipant)
+            db.query(Task)
+            .join(Conversation, Conversation.task_id == Task.id)
+            .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
             .filter(
-                Conversation.is_task.is_(True),
-                Conversation.source == DEV_SIM_SOURCE,
-                Conversation.task_status == "active",
+                Task.source == DEV_SIM_SOURCE,
+                Task.task_status == "active",
                 ConversationParticipant.tenant_id == tenant.id,
                 ConversationParticipant.is_active.is_(True),
             )
@@ -130,17 +141,20 @@ async def simulate_inbound(
             channel_type=body.channel_type,
             sender_meta=sender_meta,
         )
-        # Stamp the conversation as dev_sim (route_inbound_to_task sets source=channel_type)
-        conv.source = DEV_SIM_SOURCE
+        # Stamp the task as dev_sim (route_inbound_to_task sets source=channel_type)
+        if conv.task_id:
+            linked_task = db.query(Task).filter(Task.id == conv.task_id).first()
+            if linked_task:
+                linked_task.source = DEV_SIM_SOURCE
         db.flush()
 
         after_count = (
-            db.query(Conversation)
-            .join(ConversationParticipant)
+            db.query(Task)
+            .join(Conversation, Conversation.task_id == Task.id)
+            .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
             .filter(
-                Conversation.is_task.is_(True),
-                Conversation.source == DEV_SIM_SOURCE,
-                Conversation.task_status == "active",
+                Task.source == DEV_SIM_SOURCE,
+                Task.task_status == "active",
                 ConversationParticipant.tenant_id == tenant.id,
                 ConversationParticipant.is_active.is_(True),
             )
@@ -150,7 +164,7 @@ async def simulate_inbound(
 
     db.commit()
 
-    # Run agent
+    # Run agent — use the conversation id for context building
     context = build_task_context(db, conv.id)
     full_conv = get_conversation_with_messages(db=db, conversation_id=conv.id)
     sorted_msgs = sorted(full_conv.messages, key=lambda m: m.sent_at)
@@ -182,7 +196,8 @@ async def simulate_inbound(
     ))
     db.commit()
 
-    return SimulateInboundResponse(task_id=conv.id, reply=reply, task_created=task_created)
+    task_id = conv.task_id if conv.task_id else conv.id
+    return SimulateInboundResponse(task_id=task_id, reply=reply, task_created=task_created)
 
 
 @router.get("/history/{tenant_id}", response_model=DevHistoryResponse)
@@ -196,11 +211,11 @@ async def get_dev_history(
     # Most recent active dev_sim task for this tenant
     conv = (
         db.query(Conversation)
-        .join(ConversationParticipant)
+        .join(Task, Task.id == Conversation.task_id)
+        .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
         .filter(
-            Conversation.is_task.is_(True),
-            Conversation.source == DEV_SIM_SOURCE,
-            Conversation.task_status == "active",
+            Task.source == DEV_SIM_SOURCE,
+            Task.task_status == "active",
             ConversationParticipant.tenant_id == tenant_id,
             ConversationParticipant.is_active.is_(True),
         )
@@ -211,16 +226,17 @@ async def get_dev_history(
     if not conv:
         return DevHistoryResponse(task_id=None, messages=[])
 
+    task_id = conv.task_id if conv.task_id else conv.id
     full = get_conversation_with_messages(db, conv.id)
     sorted_msgs = sorted(full.messages, key=lambda m: m.sent_at)
 
     return DevHistoryResponse(
-        task_id=conv.id,
+        task_id=task_id,
         messages=[
             DevChatMessage(
                 role="agent" if m.is_ai else "tenant",
                 text=m.body or "",
-                task_id=conv.id,
+                task_id=task_id,
             )
             for m in sorted_msgs
             if m.body  # skip empty/system messages

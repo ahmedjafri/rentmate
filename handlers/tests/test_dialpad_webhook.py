@@ -84,8 +84,7 @@ class TestDialpadWebhook(unittest.TestCase):
             .one()
         )
         self.assertFalse(conv.is_archived)
-        self.assertFalse(conv.is_task)
-        self.assertEqual(conv.channel_type, "sms")
+        self.assertIsNone(conv.task_id)
 
         msg = (
             self.db.query(Message)

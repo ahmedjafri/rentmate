@@ -50,7 +50,7 @@ from datetime import date, timedelta
 import pytest
 
 from db.audit import run_data_audit, EXPIRY_WARN_DAYS
-from db.models import Conversation, Lease, Message, Property, Tenant, Unit
+from db.models import Conversation, Task, Lease, Message, Property, Tenant, Unit
 
 
 # ---------------------------------------------------------------------------
@@ -103,10 +103,9 @@ def _cfg(**checks):
 
 def _tasks(db):
     return (
-        db.query(Conversation)
+        db.query(Task)
         .filter(
-            Conversation.is_task == True,           # noqa: E712
-            Conversation.source == "ai_suggestion",
+            Task.source == "ai_suggestion",
         )
         .all()
     )
@@ -117,13 +116,16 @@ def _open_tasks(db):
 
 
 def _subjects(db):
-    return [t.subject for t in _open_tasks(db)]
+    return [t.title for t in _open_tasks(db)]
 
 
 def _context_body(db, task):
+    conv_id = task.conversations[0].id if task.conversations else None
+    if not conv_id:
+        return ""
     msg = (
         db.query(Message)
-        .filter(Message.conversation_id == task.id, Message.message_type == "context")
+        .filter(Message.conversation_id == conv_id, Message.message_type == "context")
         .first()
     )
     return msg.body if msg else ""
@@ -274,7 +276,7 @@ class TestVacantUnits:
         t = _tenant(db, phone="555-0020")
         _lease(db, p, u, t, end=TODAY - timedelta(days=61))
         _audit(db, "vacant_units")
-        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.title)
         assert task.urgency == "high"
 
     def test_urgency_high_at_exactly_61_days(self, db):
@@ -283,7 +285,7 @@ class TestVacantUnits:
         t = _tenant(db, phone="555-0021")
         _lease(db, p, u, t, end=TODAY - timedelta(days=61))
         _audit(db, "vacant_units")
-        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.title)
         assert task.urgency == "high"
 
     def test_urgency_medium_when_vacant_15_to_60_days(self, db):
@@ -292,7 +294,7 @@ class TestVacantUnits:
         t = _tenant(db, phone="555-0022")
         _lease(db, p, u, t, end=TODAY - timedelta(days=30))  # 30 days vacant
         _audit(db, "vacant_units")
-        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.title)
         assert task.urgency == "medium"
 
     def test_urgency_medium_at_exactly_15_days(self, db):
@@ -301,7 +303,7 @@ class TestVacantUnits:
         t = _tenant(db, phone="555-0023")
         _lease(db, p, u, t, end=TODAY - timedelta(days=15))
         _audit(db, "vacant_units")
-        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.title)
         assert task.urgency == "medium"
 
     def test_urgency_low_when_vacant_14_days_or_fewer(self, db):
@@ -310,14 +312,14 @@ class TestVacantUnits:
         t = _tenant(db, phone="555-0024")
         _lease(db, p, u, t, end=TODAY - timedelta(days=5))
         _audit(db, "vacant_units")
-        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.title)
         assert task.urgency == "low"
 
     def test_urgency_low_never_leased(self, db):
         p = _prop(db)
         _unit(db, p, "Never2")
         _audit(db, "vacant_units", min_vacancy_days=0)
-        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.title)
         assert task.urgency == "low"
 
     # ── task metadata ────────────────────────────────────────────────────────
@@ -326,14 +328,14 @@ class TestVacantUnits:
         p = _prop(db)
         _unit(db, p)
         _audit(db, "vacant_units")
-        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.title)
         assert task.category == "leasing"
 
     def test_task_links_unit_and_property(self, db):
         p = _prop(db)
         u = _unit(db, p)
         _audit(db, "vacant_units")
-        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.title)
         assert task.unit_id == u.id
         assert task.property_id == p.id
 
@@ -349,7 +351,7 @@ class TestVacantUnits:
         t = _tenant(db, first="Carlos", last="Rivera", phone="555-0030")
         _lease(db, p, u, t, end=TODAY - timedelta(days=20))
         _audit(db, "vacant_units")
-        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.title)
         body = _context_body(db, task)
         assert "Carlos Rivera" in body or "Carlos" in body
 
@@ -359,7 +361,7 @@ class TestVacantUnits:
         t = _tenant(db, phone="555-0031")
         _lease(db, p, u, t, end=TODAY - timedelta(days=20), rent=1500.0)
         _audit(db, "vacant_units")
-        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.title)
         body = _context_body(db, task)
         assert "1,500" in body or "1500" in body
 
@@ -378,7 +380,7 @@ class TestVacantUnits:
         _unit(db, p2, "201")
         n = _audit(db, "vacant_units")
         assert n == 2
-        property_ids = {t.property_id for t in _open_tasks(db) if "Vacant unit" in t.subject}
+        property_ids = {t.property_id for t in _open_tasks(db) if "Vacant unit" in t.title}
         assert p1.id in property_ids
         assert p2.id in property_ids
 
@@ -461,7 +463,7 @@ class TestExpiringLeases:
         t = _tenant(db, phone="555-1010")
         _lease(db, p, u, t, end=TODAY + timedelta(days=45))
         _audit(db, "expiring_leases", warn_days=60)
-        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.title)
         assert task.urgency == "medium"
 
     def test_urgency_high_when_exactly_30_days(self, db):
@@ -470,7 +472,7 @@ class TestExpiringLeases:
         t = _tenant(db, phone="555-1011")
         _lease(db, p, u, t, end=TODAY + timedelta(days=30))
         _audit(db, "expiring_leases", warn_days=60)
-        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.title)
         assert task.urgency == "high"
 
     def test_urgency_high_when_under_30_days(self, db):
@@ -479,7 +481,7 @@ class TestExpiringLeases:
         t = _tenant(db, phone="555-1012")
         _lease(db, p, u, t, end=TODAY + timedelta(days=15))
         _audit(db, "expiring_leases", warn_days=60)
-        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.title)
         assert task.urgency == "high"
 
     def test_urgency_high_when_ending_today(self, db):
@@ -488,7 +490,7 @@ class TestExpiringLeases:
         t = _tenant(db, phone="555-1013")
         _lease(db, p, u, t, end=TODAY)
         _audit(db, "expiring_leases", warn_days=60)
-        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.title)
         assert task.urgency == "high"
 
     # ── task metadata ────────────────────────────────────────────────────────
@@ -499,7 +501,7 @@ class TestExpiringLeases:
         t = _tenant(db, phone="555-1020")
         _lease(db, p, u, t, end=TODAY + timedelta(days=20))
         _audit(db, "expiring_leases", warn_days=60)
-        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.title)
         assert task.category == "leasing"
 
     def test_subject_includes_end_date(self, db):
@@ -526,7 +528,7 @@ class TestExpiringLeases:
         t = _tenant(db, phone="555-1023")
         _lease(db, p, u, t, end=TODAY + timedelta(days=20))
         _audit(db, "expiring_leases", warn_days=60)
-        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.title)
         assert task.unit_id == u.id
         assert task.property_id == p.id
 
@@ -545,7 +547,7 @@ class TestExpiringLeases:
         t = _tenant(db, phone="555-1030")
         _lease(db, p, u, t, end=TODAY + timedelta(days=25))
         _audit(db, "expiring_leases", warn_days=60)
-        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.title)
         body = _context_body(db, task)
         assert "25" in body or "days" in body.lower()
 
@@ -607,7 +609,7 @@ class TestOverdueRent:
         t = _tenant(db, phone="555-2010")
         _lease(db, p, u, t, payment_status="late")
         _audit(db, "overdue_rent")
-        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.title)
         assert task.urgency == "high"
 
     def test_overdue_also_high_urgency(self, db):
@@ -616,7 +618,7 @@ class TestOverdueRent:
         t = _tenant(db, phone="555-2011")
         _lease(db, p, u, t, payment_status="overdue")
         _audit(db, "overdue_rent")
-        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.title)
         assert task.urgency == "high"
 
     def test_category_is_rent(self, db):
@@ -625,7 +627,7 @@ class TestOverdueRent:
         t = _tenant(db, phone="555-2012")
         _lease(db, p, u, t, payment_status="late")
         _audit(db, "overdue_rent")
-        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.title)
         assert task.category == "rent"
 
     def test_subject_includes_tenant_name_and_unit(self, db):
@@ -644,7 +646,7 @@ class TestOverdueRent:
         t = _tenant(db, phone="555-2014")
         _lease(db, p, u, t, payment_status="overdue")
         _audit(db, "overdue_rent")
-        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.title)
         body = _context_body(db, task)
         assert "overdue" in body.lower()
 
@@ -654,7 +656,7 @@ class TestOverdueRent:
         t = _tenant(db, phone="555-2015")
         _lease(db, p, u, t, payment_status="late", rent=2200.0)
         _audit(db, "overdue_rent")
-        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.title)
         body = _context_body(db, task)
         assert "2,200" in body or "2200" in body
 
@@ -673,7 +675,7 @@ class TestOverdueRent:
         t = _tenant(db, phone="555-2020")
         _lease(db, p, u, t, payment_status="late")
         _audit(db, "overdue_rent")
-        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.title)
         assert task.unit_id == u.id
         assert task.property_id == p.id
 
@@ -723,19 +725,19 @@ class TestIncompleteProperties:
     def test_category_is_compliance(self, db):
         _prop(db, city=None)
         _audit(db, "incomplete_properties")
-        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.title)
         assert task.category == "compliance"
 
     def test_urgency_is_low(self, db):
         _prop(db, city=None)
         _audit(db, "incomplete_properties")
-        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.title)
         assert task.urgency == "low"
 
     def test_task_property_id_set(self, db):
         p = _prop(db, city=None)
         _audit(db, "incomplete_properties")
-        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.title)
         assert task.property_id == p.id
 
     def test_subject_includes_address(self, db):
@@ -752,7 +754,7 @@ class TestIncompleteProperties:
     def test_context_body_mentions_missing_field(self, db):
         _prop(db, city=None)
         _audit(db, "incomplete_properties")
-        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.title)
         body = _context_body(db, task)
         assert "city" in body.lower() or "missing" in body.lower()
 
@@ -807,13 +809,13 @@ class TestMissingContact:
     def test_category_is_compliance(self, db):
         _tenant(db)
         _audit(db, "missing_contact")
-        task = next(t for t in _open_tasks(db) if "Missing contact info" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Missing contact info" in t.title)
         assert task.category == "compliance"
 
     def test_urgency_is_low(self, db):
         _tenant(db)
         _audit(db, "missing_contact")
-        task = next(t for t in _open_tasks(db) if "Missing contact info" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Missing contact info" in t.title)
         assert task.urgency == "low"
 
     def test_subject_includes_tenant_full_name(self, db):
@@ -837,7 +839,7 @@ class TestMissingContact:
     def test_context_body_contains_tenant_name(self, db):
         _tenant(db, first="Wei", last="Zhang")
         _audit(db, "missing_contact")
-        task = next(t for t in _open_tasks(db) if "Missing contact info" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Missing contact info" in t.title)
         body = _context_body(db, task)
         assert "Wei" in body and "Zhang" in body
 
@@ -845,9 +847,10 @@ class TestMissingContact:
         _tenant(db)
         _audit(db, "missing_contact")
         task = _open_tasks(db)[0]
+        conv_id = task.conversations[0].id
         msg = (
             db.query(Message)
-            .filter(Message.conversation_id == task.id)
+            .filter(Message.conversation_id == conv_id)
             .first()
         )
         assert msg.is_ai is True
@@ -909,7 +912,7 @@ class TestExpiredLeases:
         t = _tenant(db, phone="555-4020")
         _lease(db, p, u, t, end=TODAY - timedelta(days=5))
         _audit(db, "expired_leases")
-        task = next(t for t in _open_tasks(db) if "Expired lease" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Expired lease" in t.title)
         assert task.urgency == "high"
 
     def test_category_is_leasing(self, db):
@@ -918,7 +921,7 @@ class TestExpiredLeases:
         t = _tenant(db, phone="555-4021")
         _lease(db, p, u, t, end=TODAY - timedelta(days=5))
         _audit(db, "expired_leases")
-        task = next(t for t in _open_tasks(db) if "Expired lease" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Expired lease" in t.title)
         assert task.category == "leasing"
 
     def test_subject_includes_tenant_name_and_unit(self, db):
@@ -937,7 +940,7 @@ class TestExpiredLeases:
         t = _tenant(db, phone="555-4023")
         _lease(db, p, u, t, end=TODAY - timedelta(days=5))
         _audit(db, "expired_leases")
-        task = next(t for t in _open_tasks(db) if "Expired lease" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Expired lease" in t.title)
         assert task.unit_id == u.id
         assert task.property_id == p.id
 
@@ -948,7 +951,7 @@ class TestExpiredLeases:
         end = TODAY - timedelta(days=8)
         _lease(db, p, u, t, end=end)
         _audit(db, "expired_leases")
-        task = next(t for t in _open_tasks(db) if "Expired lease" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Expired lease" in t.title)
         body = _context_body(db, task)
         assert str(end) in body
 
@@ -988,48 +991,48 @@ class TestDeduplication:
         _prop(db, city=None)
         _audit(db, "incomplete_properties")
         _audit(db, "incomplete_properties")
-        tasks = [t for t in _open_tasks(db) if "Incomplete address" in t.subject]
+        tasks = [t for t in _open_tasks(db) if "Incomplete address" in t.title]
         assert len(tasks) == 1
 
     def test_suggested_status_blocks_dedup(self, db):
         _prop(db, city=None)
         _audit(db, "incomplete_properties")
-        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.title)
         assert task.task_status == "suggested"
         _audit(db, "incomplete_properties")
-        count = len([t for t in _open_tasks(db) if "Incomplete address" in t.subject])
+        count = len([t for t in _open_tasks(db) if "Incomplete address" in t.title])
         assert count == 1
 
     def test_resolved_task_is_recreated(self, db):
         _prop(db, city=None)
         _audit(db, "incomplete_properties")
-        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.title)
         task.task_status = "resolved"
         db.flush()
         _audit(db, "incomplete_properties")
         open_count = len([
             t for t in _tasks(db)
-            if "Incomplete address" in t.subject and t.task_status in {"suggested", "active", "paused"}
+            if "Incomplete address" in t.title and t.task_status in {"suggested", "active", "paused"}
         ])
         assert open_count == 1
 
     def test_cancelled_task_is_recreated(self, db):
         _prop(db, city=None)
         _audit(db, "incomplete_properties")
-        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.title)
         task.task_status = "cancelled"
         db.flush()
         _audit(db, "incomplete_properties")
         open_count = len([
             t for t in _tasks(db)
-            if "Incomplete address" in t.subject and t.task_status in {"suggested", "active", "paused"}
+            if "Incomplete address" in t.title and t.task_status in {"suggested", "active", "paused"}
         ])
         assert open_count == 1
 
     def test_active_task_blocks_new_creation(self, db):
         _prop(db, city=None)
         _audit(db, "incomplete_properties")
-        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.subject)
+        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.title)
         task.task_status = "active"
         db.flush()
         n = _audit(db, "incomplete_properties")
@@ -1041,7 +1044,7 @@ class TestDeduplication:
         u2 = _unit(db, p, "V2")
         _audit(db, "vacant_units")   # creates 2 tasks
         _audit(db, "vacant_units")   # should create 0 more
-        tasks = [t for t in _open_tasks(db) if "Vacant unit" in t.subject]
+        tasks = [t for t in _open_tasks(db) if "Vacant unit" in t.title]
         assert len(tasks) == 2
 
     def test_overdue_rent_dedup_per_lease(self, db):
@@ -1051,7 +1054,7 @@ class TestDeduplication:
         _lease(db, p, u, t, payment_status="late")
         _audit(db, "overdue_rent")
         _audit(db, "overdue_rent")
-        tasks = [t for t in _open_tasks(db) if "Overdue rent" in t.subject]
+        tasks = [t for t in _open_tasks(db) if "Overdue rent" in t.title]
         assert len(tasks) == 1
 
     def test_two_properties_same_issue_get_separate_tasks(self, db):
@@ -1075,7 +1078,7 @@ class TestCheckFiltering:
         _prop(db, city=None)
         cfg = {"checks": {"incomplete_properties": {"enabled": False, "interval_hours": 1}}}
         n = run_data_audit(db, config=cfg)
-        tasks = [t for t in _open_tasks(db) if "Incomplete address" in t.subject]
+        tasks = [t for t in _open_tasks(db) if "Incomplete address" in t.title]
         assert len(tasks) == 0
 
     def test_check_name_filter_runs_only_that_check(self, db):
@@ -1208,8 +1211,9 @@ class TestContextMessages:
     def test_incomplete_property_has_context_message(self, db):
         _prop(db, city=None)
         _audit(db, "incomplete_properties")
-        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.subject)
-        msgs = db.query(Message).filter(Message.conversation_id == task.id).all()
+        task = next(t for t in _open_tasks(db) if "Incomplete address" in t.title)
+        conv_id = task.conversations[0].id
+        msgs = db.query(Message).filter(Message.conversation_id == conv_id).all()
         assert len(msgs) == 1
         assert msgs[0].message_type == "context"
         assert msgs[0].is_ai is True
@@ -1218,8 +1222,9 @@ class TestContextMessages:
         p = _prop(db)
         _unit(db, p)
         _audit(db, "vacant_units")
-        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.subject)
-        msgs = db.query(Message).filter(Message.conversation_id == task.id).all()
+        task = next(t for t in _open_tasks(db) if "Vacant unit" in t.title)
+        conv_id = task.conversations[0].id
+        msgs = db.query(Message).filter(Message.conversation_id == conv_id).all()
         assert len(msgs) == 1
         assert msgs[0].message_type == "context"
 
@@ -1229,8 +1234,9 @@ class TestContextMessages:
         t = _tenant(db, phone="555-7001")
         _lease(db, p, u, t, payment_status="late")
         _audit(db, "overdue_rent")
-        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.subject)
-        msgs = db.query(Message).filter(Message.conversation_id == task.id).all()
+        task = next(t for t in _open_tasks(db) if "Overdue rent" in t.title)
+        conv_id = task.conversations[0].id
+        msgs = db.query(Message).filter(Message.conversation_id == conv_id).all()
         assert len(msgs) == 1
         assert msgs[0].message_type == "context"
 
@@ -1240,8 +1246,9 @@ class TestContextMessages:
         t = _tenant(db, phone="555-7002")
         _lease(db, p, u, t, end=TODAY + timedelta(days=20))
         _audit(db, "expiring_leases", warn_days=60)
-        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.subject)
-        msgs = db.query(Message).filter(Message.conversation_id == task.id).all()
+        task = next(t for t in _open_tasks(db) if "Lease expiring" in t.title)
+        conv_id = task.conversations[0].id
+        msgs = db.query(Message).filter(Message.conversation_id == conv_id).all()
         assert len(msgs) == 1
         assert msgs[0].message_type == "context"
 
@@ -1251,15 +1258,17 @@ class TestContextMessages:
         t = _tenant(db, phone="555-7003")
         _lease(db, p, u, t, end=TODAY - timedelta(days=5))
         _audit(db, "expired_leases")
-        task = next(t for t in _open_tasks(db) if "Expired lease" in t.subject)
-        msgs = db.query(Message).filter(Message.conversation_id == task.id).all()
+        task = next(t for t in _open_tasks(db) if "Expired lease" in t.title)
+        conv_id = task.conversations[0].id
+        msgs = db.query(Message).filter(Message.conversation_id == conv_id).all()
         assert len(msgs) == 1
 
     def test_missing_contact_has_context_message(self, db):
         _tenant(db, first="Lone", last="Wolf")
         _audit(db, "missing_contact")
-        task = next(t for t in _open_tasks(db) if "Missing contact info" in t.subject)
-        msgs = db.query(Message).filter(Message.conversation_id == task.id).all()
+        task = next(t for t in _open_tasks(db) if "Missing contact info" in t.title)
+        conv_id = task.conversations[0].id
+        msgs = db.query(Message).filter(Message.conversation_id == conv_id).all()
         assert len(msgs) == 1
         assert msgs[0].sender_name == "RentMate"
 
@@ -1276,9 +1285,9 @@ class TestTaskShape:
         _audit(db, "incomplete_properties")
         return _open_tasks(db)[0]
 
-    def test_is_task_true(self, db):
+    def test_is_task_model(self, db):
         task = self._any_task(db)
-        assert task.is_task is True
+        assert isinstance(task, Task)
 
     def test_source_is_ai_suggestion(self, db):
         task = self._any_task(db)

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger("rentmate.audit")
 
 from .models import (
+    Task,
     Conversation,
     Message,
     ParticipantType,
@@ -61,18 +62,17 @@ def _task_exists(
     """Return True if a non-closed ai_suggestion task with this exact
     subject + property/unit combo already exists."""
     q = (
-        db.query(Conversation)
+        db.query(Task)
         .filter(
-            Conversation.is_task == True,        # noqa: E712
-            Conversation.source == "ai_suggestion",
-            Conversation.task_status.in_(_OPEN_STATUSES),
-            Conversation.subject == subject,
+            Task.source == "ai_suggestion",
+            Task.task_status.in_(_OPEN_STATUSES),
+            Task.title == subject,
         )
     )
     if property_id:
-        q = q.filter(Conversation.property_id == property_id)
+        q = q.filter(Task.property_id == property_id)
     if unit_id:
-        q = q.filter(Conversation.unit_id == unit_id)
+        q = q.filter(Task.unit_id == unit_id)
     return q.first() is not None
 
 
@@ -91,10 +91,10 @@ def _create_task(
     """Insert a suggested ai_suggestion task with a context message and, when in
     waiting_approval mode, an approval message containing a draft suggested action."""
     task_mode, task_status = _AUTONOMY_MODE.get(autonomy_level or "suggest", _DEFAULT_MODE)
-    task = Conversation(
-        id=str(uuid.uuid4()),
-        subject=subject,
-        is_task=True,
+    task_id = str(uuid.uuid4())
+    task = Task(
+        id=task_id,
+        title=subject,
         task_status=task_status,
         task_mode=task_mode,
         source="ai_suggestion",
@@ -110,9 +110,22 @@ def _create_task(
     db.add(task)
     db.flush()  # get task.id without committing
 
+    # Create primary internal conversation thread for this task
+    convo = Conversation(
+        id=str(uuid.uuid4()),
+        task_id=task.id,
+        subject=subject,
+        property_id=property_id,
+        unit_id=unit_id,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(convo)
+    db.flush()
+
     db.add(Message(
         id=str(uuid.uuid4()),
-        conversation_id=task.id,
+        conversation_id=convo.id,
         sender_type=ParticipantType.ACCOUNT_USER,
         body=context_body,
         message_type="context",
@@ -135,7 +148,7 @@ def _create_task(
         if draft:
             db.add(Message(
                 id=str(uuid.uuid4()),
-                conversation_id=task.id,
+                conversation_id=convo.id,
                 sender_type=ParticipantType.ACCOUNT_USER,
                 body="Here's a suggested message you can send:",
                 message_type="approval",

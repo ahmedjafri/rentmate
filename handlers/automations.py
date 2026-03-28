@@ -433,7 +433,7 @@ async def revert_automation(request: Request):
 async def simulate_automations(request: Request):
     await require_user(request)
     from db.audit import run_data_audit
-    from db.models import Conversation
+    from db.models import Task
 
     check_name: Optional[str] = None
     if request.headers.get("content-type", "").startswith("application/json"):
@@ -458,29 +458,31 @@ async def simulate_automations(request: Request):
     db = SessionLocal.session_factory()
     preview = []
     try:
-        existing_ids = {
-            row.id for row in
-            db.query(Conversation.id).filter(Conversation.is_task == True).all()
-        }
+        existing_ids = {row.id for row in db.query(Task.id).all()}
         savepoint = db.begin_nested()
         try:
             run_data_audit(db, config=cfg, check_name=check_name, dry_run=True)
             # Query for tasks flushed within the savepoint (more reliable than identity_map)
-            q = db.query(Conversation).filter(Conversation.is_task == True)
+            q = db.query(Task)
             if existing_ids:
-                q = q.filter(Conversation.id.notin_(existing_ids))
+                q = q.filter(Task.id.notin_(existing_ids))
             new_tasks = q.all()
             _logger.info("simulate: new_tasks=%d", len(new_tasks))
             for t in new_tasks:
-                ctx = next((m for m in t.messages if m.message_type == "context"), None)
+                # Find the context message from linked conversations
+                ctx_msg = None
+                for convo in t.conversations:
+                    ctx_msg = next((m for m in convo.messages if m.message_type == "context"), None)
+                    if ctx_msg:
+                        break
                 preview.append({
-                    "subject": t.subject,
+                    "subject": t.title,
                     "category": t.category,
                     "urgency": t.urgency,
                     "source": t.source,
                     "property_id": t.property_id,
                     "unit_id": t.unit_id,
-                    "description": ctx.body if ctx else "",
+                    "description": ctx_msg.body if ctx_msg else "",
                 })
         finally:
             savepoint.rollback()
@@ -498,27 +500,27 @@ async def simulate_automations(request: Request):
 @router.post("/automations/simulate/create-task")
 async def create_simulated_task(body: CreateSimulatedTaskBody, request: Request):
     await require_user(request)
-    from db.models import Conversation as Conv
+    from db.models import Task, Conversation as Conv
     import uuid
     from datetime import datetime
     from db.models import Message, ParticipantType
     db = SessionLocal.session_factory()
     try:
         # Only block if an active/paused task already exists (not just a suggestion)
-        exists = db.query(Conv).filter(
-            Conv.is_task == True,          # noqa: E712
-            Conv.source == "ai_suggestion",
-            Conv.task_status.in_(["active", "paused"]),
-            Conv.subject == body.subject,
-            *([Conv.property_id == body.property_id] if body.property_id else []),
-            *([Conv.unit_id == body.unit_id] if body.unit_id else []),
-        ).first()
-        if exists:
+        q = db.query(Task).filter(
+            Task.source == "ai_suggestion",
+            Task.task_status.in_(["active", "paused"]),
+            Task.title == body.subject,
+        )
+        if body.property_id:
+            q = q.filter(Task.property_id == body.property_id)
+        if body.unit_id:
+            q = q.filter(Task.unit_id == body.unit_id)
+        if q.first():
             raise HTTPException(status_code=409, detail="Task already exists in action desk")
-        task = Conv(
+        task = Task(
             id=str(uuid.uuid4()),
-            subject=body.subject,
-            is_task=True,
+            title=body.subject,
             task_status="active",
             task_mode="manual",
             source="ai_suggestion",
@@ -533,9 +535,20 @@ async def create_simulated_task(body: CreateSimulatedTaskBody, request: Request)
         )
         db.add(task)
         db.flush()
+        convo = Conv(
+            id=str(uuid.uuid4()),
+            task_id=task.id,
+            subject=body.subject,
+            property_id=body.property_id,
+            unit_id=body.unit_id,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(convo)
+        db.flush()
         db.add(Message(
             id=str(uuid.uuid4()),
-            conversation_id=task.id,
+            conversation_id=convo.id,
             sender_type=ParticipantType.ACCOUNT_USER,
             body=body.body,
             message_type="context",

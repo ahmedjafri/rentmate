@@ -67,7 +67,7 @@ def test_sqlite_columns_present():
     eng = _sqlite_engine()
     _init(eng)
     assert "is_ai" in _column_names(eng, "messages")
-    assert "is_task" in _column_names(eng, "conversations")
+    assert "task_id" in _column_names(eng, "conversations")
     assert "sha256_checksum" in _column_names(eng, "documents")
     assert "payment_status" in _column_names(eng, "leases")
     assert "property_type" in _column_names(eng, "properties")
@@ -95,7 +95,7 @@ def test_sqlite_migrate_on_partial_schema():
         _main._migrate_schema()
 
     assert "property_type" in _column_names(eng, "properties")
-    assert "is_task" in _column_names(eng, "conversations")
+    assert "task_id" in _column_names(eng, "conversations")
     assert "conversation_type" in _column_names(eng, "conversations")
     assert "is_ai" in _column_names(eng, "messages")
     assert "sha256_checksum" in _column_names(eng, "documents")
@@ -249,7 +249,7 @@ def test_postgres_idempotent(pg_engine):
 def test_postgres_columns_present(pg_engine):
     """All migrated columns are present in Postgres after startup."""
     assert "is_ai" in _column_names(pg_engine, "messages")
-    assert "is_task" in _column_names(pg_engine, "conversations")
+    assert "task_id" in _column_names(pg_engine, "conversations")
     assert "sha256_checksum" in _column_names(pg_engine, "documents")
     assert "payment_status" in _column_names(pg_engine, "leases")
     assert "property_type" in _column_names(pg_engine, "properties")

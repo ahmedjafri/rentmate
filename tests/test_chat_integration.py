@@ -31,7 +31,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from db.models import Base, Conversation, Message
+from db.models import Base, Conversation, Message, Task
 
 
 # ─── DB helpers ──────────────────────────────────────────────────────────────
@@ -115,11 +115,11 @@ def db(session_factory):
 
 @pytest.fixture()
 def task_id(db):
-    """Insert a minimal task (Conversation) and return its ID."""
-    conv = Conversation(
+    """Insert a minimal Task with a linked Conversation and return the Task's ID."""
+    task = Task(
         id=str(uuid.uuid4()),
-        subject="HVAC Repair",
-        is_task=True,
+        account_id="00000000-0000-0000-0000-000000000001",
+        title="HVAC Repair",
         task_status="active",
         task_mode="manual",
         category="maintenance",
@@ -127,9 +127,16 @@ def task_id(db):
         confidential=False,
         last_message_at=datetime.utcnow(),
     )
+    db.add(task)
+    db.flush()
+    conv = Conversation(
+        id=str(uuid.uuid4()),
+        task_id=task.id,
+        subject="HVAC Repair",
+    )
     db.add(conv)
     db.commit()
-    return conv.id
+    return task.id
 
 
 # ─── Generic /chat tests ──────────────────────────────────────────────────────
@@ -311,10 +318,12 @@ class TestTaskChatSSE:
         asyncio.run(_run())
 
         db.expire_all()
+        task = db.query(Task).filter_by(id=task_id).first()
+        conv_id = task.conversations[0].id
         ai_msgs = (
             db.query(Message)
             .filter_by(
-                conversation_id=task_id,
+                conversation_id=conv_id,
                 is_ai=True,
                 message_type="message",
             )

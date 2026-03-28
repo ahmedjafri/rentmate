@@ -341,7 +341,6 @@ class TaskChatMessageType:
 class TaskType:
     uid: str
     title: typing.Optional[str] = None
-    is_task: bool = False
     task_status: typing.Optional[str] = None
     task_mode: typing.Optional[str] = None
     source: typing.Optional[str] = None
@@ -365,51 +364,60 @@ class TaskType:
     assigned_vendor_name: typing.Optional[str] = None
 
     @classmethod
-    def from_sql(cls, c: typing.Any) -> "TaskType":
+    def from_sql(cls, t: typing.Any) -> "TaskType":
         from db.models import ParticipantType as PT
-        messages = [TaskChatMessageType.from_sql(m) for m in getattr(c, "messages", [])]
+        # Collect all messages from all linked conversations
+        all_msgs = []
+        for convo in getattr(t, "conversations", []):
+            all_msgs.extend(getattr(convo, "messages", []))
+        all_msgs.sort(key=lambda m: m.sent_at)
+
+        messages = [TaskChatMessageType.from_sql(m) for m in all_msgs]
 
         tenant_name = None
-        if getattr(c, "lease", None) and c.lease.tenant:
-            t = c.lease.tenant
-            tenant_name = f"{t.first_name} {t.last_name}".strip()
+        if getattr(t, "lease", None) and t.lease.tenant:
+            ten = t.lease.tenant
+            tenant_name = f"{ten.first_name} {ten.last_name}".strip()
 
         unit_label = None
-        if getattr(c, "unit", None):
-            unit_label = c.unit.label
-        elif getattr(c, "lease", None) and c.lease.unit:
-            unit_label = c.lease.unit.label
+        if getattr(t, "unit", None):
+            unit_label = t.unit.label
+        elif getattr(t, "lease", None) and t.lease.unit:
+            unit_label = t.lease.unit.label
 
-        msgs = getattr(c, "messages", [])
-        context_msgs = [m for m in msgs if getattr(m, "message_type", None) == "context"]
+        context_msgs = [m for m in all_msgs if getattr(m, "message_type", None) == "context"]
         ai_triage_suggestion = context_msgs[0].body if context_msgs else None
 
-        vendor_msgs = [m for m in msgs if m.sender_type == PT.EXTERNAL_CONTACT and m.sender_name]
+        vendor_msgs = [m for m in all_msgs if m.sender_type == PT.EXTERNAL_CONTACT and m.sender_name]
         vendor_assigned = vendor_msgs[0].sender_name if vendor_msgs else None
 
-        extra = getattr(c, 'extra', None) or {}
+        # Get extra from first linked conversation
+        extra = {}
+        convos = getattr(t, "conversations", [])
+        if convos:
+            extra = getattr(convos[0], 'extra', None) or {}
+
         return cls(
-            uid=str(c.id),
-            title=c.subject,
-            is_task=c.is_task,
-            task_status=c.task_status,
-            task_mode=c.task_mode,
-            source=c.source,
-            category=c.category,
-            urgency=c.urgency,
-            priority=c.priority,
-            confidential=c.confidential,
-            last_message_at=str(c.last_message_at) if c.last_message_at else None,
-            property_id=str(c.property_id) if c.property_id else None,
-            unit_id=str(c.unit_id) if c.unit_id else None,
-            created_at=str(c.created_at),
+            uid=str(t.id),
+            title=t.title,
+            task_status=t.task_status,
+            task_mode=t.task_mode,
+            source=t.source,
+            category=t.category,
+            urgency=t.urgency,
+            priority=t.priority,
+            confidential=t.confidential,
+            last_message_at=str(t.last_message_at) if t.last_message_at else None,
+            property_id=str(t.property_id) if t.property_id else None,
+            unit_id=str(t.unit_id) if t.unit_id else None,
+            created_at=str(t.created_at),
             messages=messages,
             tenant_name=tenant_name,
             unit_label=unit_label,
             ai_triage_suggestion=ai_triage_suggestion,
             vendor_assigned=vendor_assigned,
-            parent_conversation_id=str(c.parent_conversation_id) if getattr(c, 'parent_conversation_id', None) else None,
-            ancestor_ids=getattr(c, 'ancestor_ids', None) or [],
+            parent_conversation_id=None,
+            ancestor_ids=[],
             require_vendor_type=extra.get('require_vendor_type'),
             assigned_vendor_id=extra.get('assigned_vendor_id'),
             assigned_vendor_name=extra.get('assigned_vendor_name'),

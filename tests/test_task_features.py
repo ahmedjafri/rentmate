@@ -31,6 +31,7 @@ from db.models import (
     Tenant,
     Lease,
     Conversation,
+    Task,
     Message,
     ParticipantType,
     Document,
@@ -39,6 +40,7 @@ from db.models import (
 )
 from gql.schema import schema
 
+DEFAULT_ACCOUNT_ID = "00000000-0000-0000-0000-000000000001"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -101,9 +103,9 @@ def _mk_task(
     unit=None,
     prop=None,
 ):
-    conv = Conversation(
-        subject=subject,
-        is_task=True,
+    task = Task(
+        account_id=DEFAULT_ACCOUNT_ID,
+        title=subject,
         task_status=task_status,
         category=category,
         source=source,
@@ -115,9 +117,18 @@ def _mk_task(
         unit_id=unit.id if unit else None,
         property_id=prop.id if prop else None,
     )
+    db.add(task)
+    db.flush()
+    conv = Conversation(
+        task_id=task.id,
+        subject=subject,
+        lease_id=lease.id if lease else None,
+        unit_id=unit.id if unit else None,
+        property_id=prop.id if prop else None,
+    )
     db.add(conv)
     db.flush()
-    return conv
+    return task
 
 
 def _mk_document(db, filename="lease.pdf"):
@@ -129,15 +140,20 @@ def _mk_document(db, filename="lease.pdf"):
 
 def _add_message(
     db,
-    conv,
+    conv_or_task,
     body="hello",
     sender_type=ParticipantType.ACCOUNT_USER,
     message_type="message",
     sender_name="Manager",
     is_ai=False,
 ):
+    # Accept either a Conversation or a Task (use its first linked conversation)
+    if isinstance(conv_or_task, Task):
+        conv_id = conv_or_task.conversations[0].id
+    else:
+        conv_id = conv_or_task.id
     msg = Message(
-        conversation_id=conv.id,
+        conversation_id=conv_id,
         sender_type=sender_type,
         body=body,
         message_type=message_type,
@@ -164,9 +180,9 @@ class TestTasksQuery:
         assert result.errors is None
         assert result.data["tasks"] == []
 
-    def test_tasks_returns_only_is_task_conversations(self, db):
-        # Plain conversation — should not appear
-        plain_conv = Conversation(subject="Chat", is_task=False)
+    def test_tasks_returns_only_tasks_not_plain_conversations(self, db):
+        # Plain conversation (no linked task) — should not appear in tasks query
+        plain_conv = Conversation(subject="Chat")
         db.add(plain_conv)
         db.flush()
 
@@ -252,7 +268,7 @@ class TestTasksQuery:
 
         result = schema.execute_sync(
             """{ tasks {
-                uid title isTask taskStatus taskMode source
+                uid title taskStatus taskMode source
                 category urgency priority confidential
                 createdAt
             } }""",
@@ -262,7 +278,6 @@ class TestTasksQuery:
         t = result.data["tasks"][0]
         assert t["uid"] == task.id
         assert t["title"] == "Urgent repair"
-        assert t["isTask"] is True
         assert t["taskStatus"] == "active"
         assert t["taskMode"] == "autonomous"
         assert t["source"] == "tenant_report"
@@ -357,7 +372,7 @@ class TestTasksQuery:
     def test_tasks_vendor_assigned_from_external_contact_message(self, db):
         task = _mk_task(db, subject="Vendor task")
         msg = Message(
-            conversation_id=task.id,
+            conversation_id=task.conversations[0].id,
             sender_type=ParticipantType.EXTERNAL_CONTACT,
             body="I'll fix it",
             sender_name="Bob's Plumbing",
@@ -447,7 +462,7 @@ class TestCreateTaskMutation:
     CREATE_TASK_MUTATION = """
     mutation CreateTask($input: CreateTaskInput!) {
         createTask(input: $input) {
-            uid title isTask taskStatus taskMode source
+            uid title taskStatus taskMode source
             category urgency priority confidential
         }
     }
@@ -463,7 +478,6 @@ class TestCreateTaskMutation:
         task = result.data["createTask"]
         assert task["uid"] is not None
         assert task["title"] == "Fix roof"
-        assert task["isTask"] is True
         assert task["taskStatus"] == "active"
         assert task["source"] == "manual"
         assert task["confidential"] is False
@@ -506,11 +520,10 @@ class TestCreateTaskMutation:
 
         db.expire_all()
         from sqlalchemy import select
-        conv = db.execute(select(Conversation).where(Conversation.id == uid)).scalar_one_or_none()
-        assert conv is not None
-        assert conv.is_task is True
-        assert conv.subject == "Check boiler"
-        assert conv.source == "tenant_report"
+        task = db.execute(select(Task).where(Task.id == uid)).scalar_one_or_none()
+        assert task is not None
+        assert task.title == "Check boiler"
+        assert task.source == "tenant_report"
 
     def test_create_task_unauthenticated_fails(self, db):
         result = schema.execute_sync(
@@ -569,8 +582,8 @@ class TestUpdateTaskStatusMutation:
 
         db.expire_all()
         from sqlalchemy import select
-        conv = db.execute(select(Conversation).where(Conversation.id == task.id)).scalar_one()
-        assert conv.task_status == "paused"
+        fetched = db.execute(select(Task).where(Task.id == task.id)).scalar_one()
+        assert fetched.task_status == "paused"
 
     def test_update_task_status_not_found_raises_error(self, db):
         result = schema.execute_sync(
@@ -581,8 +594,8 @@ class TestUpdateTaskStatusMutation:
         assert result.errors is not None
 
     def test_update_task_status_on_non_task_conversation_fails(self, db):
-        # A regular conversation (is_task=False) should NOT be found by updateTaskStatus
-        conv = Conversation(subject="Not a task", is_task=False)
+        # A regular conversation (no linked task) should NOT be found by updateTaskStatus
+        conv = Conversation(subject="Not a task")
         db.add(conv)
         db.flush()
 
@@ -672,9 +685,9 @@ class TestUpdateTaskMutation:
 
         db.expire_all()
         from sqlalchemy import select
-        conv = db.execute(select(Conversation).where(Conversation.id == task.id)).scalar_one()
-        assert conv.task_mode == "autonomous"
-        assert conv.task_status == "resolved"
+        fetched = db.execute(select(Task).where(Task.id == task.id)).scalar_one()
+        assert fetched.task_mode == "autonomous"
+        assert fetched.task_status == "resolved"
 
 
 # ---------------------------------------------------------------------------
@@ -753,8 +766,8 @@ class TestAddTaskMessageMutation:
 
         db.expire_all()
         from sqlalchemy import select
-        conv = db.execute(select(Conversation).where(Conversation.id == task.id)).scalar_one()
-        assert conv.last_message_at is not None
+        fetched = db.execute(select(Task).where(Task.id == task.id)).scalar_one()
+        assert fetched.last_message_at is not None
 
     def test_add_task_message_persists_to_db(self, db):
         task = _mk_task(db)
@@ -778,7 +791,9 @@ class TestAddTaskMessageMutation:
         msg = db.execute(select(Message).where(Message.id == msg_uid)).scalar_one_or_none()
         assert msg is not None
         assert msg.body == "Persisted message"
-        assert msg.conversation_id == task.id
+        # Message is stored on the task's linked conversation
+        fetched_task = db.execute(select(Task).where(Task.id == task.id)).scalar_one()
+        assert msg.conversation_id == fetched_task.conversations[0].id
 
     def test_add_task_message_task_not_found_raises_error(self, db):
         result = schema.execute_sync(
@@ -794,7 +809,7 @@ class TestAddTaskMessageMutation:
         assert result.errors is not None
 
     def test_add_task_message_on_non_task_conversation_fails(self, db):
-        conv = Conversation(subject="Not a task", is_task=False)
+        conv = Conversation(subject="Not a task")
         db.add(conv)
         db.flush()
 
@@ -1205,21 +1220,21 @@ class TestMigrateSchema:
         # (SQLite doesn't support DROP COLUMN until 3.35, so we instead
         # create a minimal bare table and confirm ALTER TABLE works).
         with eng.connect() as conn:
-            # Create a minimal conversations table without is_task
+            # Create a minimal conversations table without task_id
             conn.execute(text(
                 "CREATE TABLE IF NOT EXISTS conversations_bare "
                 "(id TEXT PRIMARY KEY, subject TEXT)"
             ))
             # Attempt to add a column as _migrate_schema would
             conn.execute(text(
-                "ALTER TABLE conversations_bare ADD COLUMN is_task BOOLEAN NOT NULL DEFAULT 0"
+                "ALTER TABLE conversations_bare ADD COLUMN task_id VARCHAR(36)"
             ))
             conn.commit()
 
             # Idempotent — running it again should not raise
             try:
                 conn.execute(text(
-                    "ALTER TABLE conversations_bare ADD COLUMN is_task BOOLEAN NOT NULL DEFAULT 0"
+                    "ALTER TABLE conversations_bare ADD COLUMN task_id VARCHAR(36)"
                 ))
                 conn.commit()
             except Exception:
@@ -1228,7 +1243,7 @@ class TestMigrateSchema:
             # Verify the column is there
             result = conn.execute(text("PRAGMA table_info(conversations_bare)"))
             cols = [row[1] for row in result.fetchall()]
-            assert "is_task" in cols
+            assert "task_id" in cols
 
     def test_migrate_schema_new_columns_present_after_migration(self):
         """
@@ -1254,11 +1269,7 @@ class TestMigrateSchema:
         inspector = sa_inspect(eng)
 
         conv_cols = {c["name"] for c in inspector.get_columns("conversations")}
-        for expected in [
-            "is_task", "task_status", "task_mode", "source",
-            "category", "urgency", "priority", "confidential", "last_message_at",
-        ]:
-            assert expected in conv_cols, f"Missing column in conversations: {expected}"
+        assert "task_id" in conv_cols, "Missing column in conversations: task_id"
 
         msg_cols = {c["name"] for c in inspector.get_columns("messages")}
         for expected in ["message_type", "sender_name", "is_ai", "draft_reply",

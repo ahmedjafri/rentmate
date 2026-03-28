@@ -25,6 +25,7 @@ nanobot-ai = "^0.1"
 pytest = "^9.0.0"
 alembic = "^1.17.1"
 testcontainers = {extras = ["postgres"], version = "^4.14.2"}
+psycopg2-binary = "^2.9"
 
 [tool.pytest.ini_options]
 addopts = "-m 'not eval'"

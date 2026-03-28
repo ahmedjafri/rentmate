@@ -4,7 +4,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from db.models import Conversation, Lease, Property, Unit, Tenant
+from db.models import Task, Lease, Property, Unit, Tenant
 
 
 def load_account_context(db: Session) -> str:
@@ -49,23 +49,27 @@ def load_account_context(db: Session) -> str:
 
 def build_task_context(db: Session, task_id: str) -> str:
     """
-    Build a rich context string for a task conversation, including
+    Build a rich context string for a task, including
     task details, property, unit, current tenant, and account overview.
+    task_id may be a Task.id or a Conversation.id linked to a task.
     """
-    task = db.query(Conversation).filter_by(id=task_id).first()
+    task = db.query(Task).filter_by(id=task_id).first()
     if not task:
         return load_account_context(db)
 
     lines = [
         f"Task ID: {task.id}",
-        f"Task: {task.subject}",
+        f"Task: {task.title}",
         f"Category: {task.category or 'general'}",
         f"Urgency: {task.urgency or 'normal'}",
         f"Status: {task.task_status or 'active'}",
     ]
 
-    # Task description (first context message)
-    context_msgs = [m for m in task.messages if m.message_type == "context"]
+    # Task description (first context message across all linked conversations)
+    all_msgs = []
+    for convo in task.conversations:
+        all_msgs.extend(convo.messages)
+    context_msgs = [m for m in all_msgs if m.message_type == "context"]
     if context_msgs:
         lines.append(f"Description: {context_msgs[0].body}")
 

@@ -10,7 +10,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from db.models import Conversation, ConversationParticipant, ExternalContact, Lease, Message, Property, Tenant
+from db.models import Conversation, ConversationParticipant, ExternalContact, Lease, Message, Property, Task, Tenant
 
 
 # ---------------------------------------------------------------------------
@@ -82,33 +82,33 @@ def fetch_tasks(
     category: Optional[str] = None,
     status: Optional[str] = None,
     source: Optional[str] = None,
-) -> list[Conversation]:
-    q = select(Conversation).where(Conversation.is_task == True)  # noqa: E712
+) -> list[Task]:
+    q = select(Task)
     if category:
-        q = q.where(Conversation.category == category)
+        q = q.where(Task.category == category)
     if status:
         statuses = [s.strip() for s in status.split(",")]
-        q = q.where(Conversation.task_status.in_(statuses))
+        q = q.where(Task.task_status.in_(statuses))
     if source:
-        q = q.where(Conversation.source == source)
+        q = q.where(Task.source == source)
     q = q.options(
-        selectinload(Conversation.messages),
-        selectinload(Conversation.unit),
-        selectinload(Conversation.lease).selectinload(Lease.tenant),
-        selectinload(Conversation.lease).selectinload(Lease.unit),
+        selectinload(Task.conversations).selectinload(Conversation.messages),
+        selectinload(Task.unit),
+        selectinload(Task.lease).selectinload(Lease.tenant),
+        selectinload(Task.lease).selectinload(Lease.unit),
     )
     return db.execute(q).scalars().all()
 
 
-def fetch_task(db: Session, uid: str) -> Optional[Conversation]:
+def fetch_task(db: Session, uid: str) -> Optional[Task]:
     return db.execute(
-        select(Conversation)
-        .where(Conversation.id == uid, Conversation.is_task == True)  # noqa: E712
+        select(Task)
+        .where(Task.id == uid)
         .options(
-            selectinload(Conversation.messages),
-            selectinload(Conversation.unit),
-            selectinload(Conversation.lease).selectinload(Lease.tenant),
-            selectinload(Conversation.lease).selectinload(Lease.unit),
+            selectinload(Task.conversations).selectinload(Conversation.messages),
+            selectinload(Task.unit),
+            selectinload(Task.lease).selectinload(Lease.tenant),
+            selectinload(Task.lease).selectinload(Lease.unit),
         )
     ).scalar_one_or_none()
 
