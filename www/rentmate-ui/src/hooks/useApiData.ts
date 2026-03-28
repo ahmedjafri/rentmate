@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { graphqlQuery, HOUSES_QUERY, TENANTS_QUERY, TASKS_QUERY } from '@/data/api';
-import { Property, Tenant, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, TaskParticipant } from '@/data/mockData';
+import { graphqlQuery, HOUSES_QUERY, TENANTS_QUERY, TASKS_QUERY, VENDORS_QUERY } from '@/data/api';
+import { Property, Tenant, Vendor, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, TaskParticipant } from '@/data/mockData';
 
 interface ApiState {
   properties: Property[];
   tenants: Tenant[];
+  vendors: Vendor[];
   actionDeskTasks: ActionDeskTask[];
   tickets: MaintenanceTicket[];
   suggestions: Suggestion[];
@@ -20,6 +21,7 @@ export function useApiData(): ApiState {
   const [state, setState] = useState<Omit<ApiState, 'refresh'>>({
     properties: [],
     tenants: [],
+    vendors: [],
     actionDeskTasks: [],
     tickets: [],
     suggestions: [],
@@ -27,24 +29,36 @@ export function useApiData(): ApiState {
     error: null,
   });
 
-  // Re-fetch when window regains focus or tab becomes visible
+  // Re-fetch when the tab becomes visible after being hidden for a while.
+  // Only refresh if the page was hidden for more than 5 minutes — avoids reloading
+  // on every app-switch on mobile Safari.
   useEffect(() => {
-    const handleFocus = () => setRefreshKey(k => k + 1);
-    window.addEventListener('focus', handleFocus);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') setRefreshKey(k => k + 1);
-    });
-    return () => window.removeEventListener('focus', handleFocus);
+    let hiddenAt: number | null = null;
+    const STALE_MS = 5 * 60 * 1000;
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now();
+      } else if (document.visibilityState === 'visible') {
+        if (hiddenAt !== null && Date.now() - hiddenAt > STALE_MS) {
+          setRefreshKey(k => k + 1);
+        }
+        hiddenAt = null;
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, []);
 
   useEffect(() => {
     let cancelled = false;
 
     async function fetchAll() {
-      const [housesResult, tenantsResult, tasksResult] = await Promise.allSettled([
+      const [housesResult, tenantsResult, tasksResult, vendorsResult] = await Promise.allSettled([
         graphqlQuery<{ houses: ApiHouse[] }>(HOUSES_QUERY),
         graphqlQuery<{ tenants: ApiTenant[] }>(TENANTS_QUERY),
         graphqlQuery<{ tasks: ApiTask[] }>(TASKS_QUERY),
+        graphqlQuery<{ vendors: ApiVendor[] }>(VENDORS_QUERY),
       ]);
 
       if (cancelled) return;
@@ -94,11 +108,23 @@ export function useApiData(): ApiState {
         .filter(t => t.taskStatus === 'suggested')
         .map(apiTaskToSuggestion);
 
+      const vendors: Vendor[] = vendorsResult.status === 'fulfilled'
+        ? (vendorsResult.value.vendors || []).map(v => ({
+            id: v.uid,
+            name: v.name,
+            company: v.company,
+            vendorType: v.vendorType,
+            phone: v.phone,
+            email: v.email,
+            notes: v.notes,
+          }))
+        : [];
+
       // Only set error if all three queries failed
       const allFailed = housesResult.status === 'rejected' && tenantsResult.status === 'rejected' && tasksResult.status === 'rejected';
       const firstError = allFailed ? (housesResult.reason as Error).message : null;
 
-      setState({ properties, tenants, actionDeskTasks, tickets, suggestions, isLoading: false, error: firstError });
+      setState({ properties, tenants, vendors, actionDeskTasks, tickets, suggestions, isLoading: false, error: firstError });
     }
 
     fetchAll();
@@ -107,6 +133,7 @@ export function useApiData(): ApiState {
 
   return { ...state, refresh };
 }
+
 
 // --- API → local type mappers ---
 
@@ -171,6 +198,9 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
     urgency: (t.urgency as ActionDeskTask['urgency']) ?? 'low',
     chatThread: thread,
     confidential: t.confidential ?? false,
+    requireVendorType: t.requireVendorType,
+    assignedVendorId: t.assignedVendorId,
+    assignedVendorName: t.assignedVendorName,
   };
 }
 
@@ -234,6 +264,16 @@ interface ApiHouse {
   unitList?: ApiHouseUnit[];
 }
 
+interface ApiVendor {
+  uid: string;
+  name: string;
+  company?: string;
+  vendorType?: string;
+  phone?: string;
+  email?: string;
+  notes?: string;
+}
+
 interface ApiTenant {
   uid: string;
   name: string;
@@ -279,4 +319,7 @@ interface ApiTask {
   unitLabel?: string;
   aiTriageSuggestion?: string;
   vendorAssigned?: string;
+  requireVendorType?: string;
+  assignedVendorId?: string;
+  assignedVendorName?: string;
 }

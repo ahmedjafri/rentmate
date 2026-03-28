@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle, useCallback } from 'react';
-import { Send } from 'lucide-react';
+import { Send, Paperclip, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 
@@ -8,16 +8,19 @@ interface Props {
   disabled?: boolean;
   placeholder?: string;
   onInsertCleared?: (messageId: string) => void;
+  onFileUpload?: (file: File) => Promise<void>;
 }
 
 export interface ChatInputHandle {
   insertText: (text: string, fromMessageId?: string) => void;
 }
 
-export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, placeholder = 'Type a message...', onInsertCleared }, ref) => {
+export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, placeholder = 'Type a message...', onInsertCleared, onFileUpload }, ref) => {
   const [input, setInput] = useState('');
   const [insertedMessageId, setInsertedMessageId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useImperativeHandle(ref, () => ({
     insertText: (text: string, fromMessageId?: string) => {
@@ -55,6 +58,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled,
     }
   }, [insertedMessageId, onInsertCleared]);
 
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !onFileUpload) return;
+    e.target.value = '';
+    setUploading(true);
+    try {
+      await onFileUpload(file);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -64,6 +79,21 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled,
 
   return (
     <div className="flex items-end gap-2 p-3 border-t bg-card/50">
+      {onFileUpload && (
+        <>
+          <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={disabled || uploading}
+            className="rounded-xl shrink-0 h-10 w-10 text-muted-foreground hover:text-foreground"
+          >
+            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+          </Button>
+        </>
+      )}
       <Textarea
         ref={textareaRef}
         value={input}

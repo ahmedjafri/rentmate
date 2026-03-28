@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from db.lib import get_conversation_with_messages, record_sms_from_dialpad, route_inbound_to_task
+from db.lib import get_conversation_with_messages, record_sms_from_dialpad, route_inbound_to_tenant_chat
 from db.models import Conversation, Message, ParticipantType
 from handlers.deps import get_db, require_user
 from llm.context import build_task_context, load_account_context
@@ -203,7 +203,7 @@ async def handle_message(
     }
 
     conv, msg = await asyncio.to_thread(
-        route_inbound_to_task,
+        route_inbound_to_tenant_chat,
         db,
         tenant=tenant,
         body=body,
@@ -262,20 +262,46 @@ async def chat_endpoint(
     db: Session = Depends(get_db),
 ):
     await require_user(request)
+    from db.lib import get_or_create_user_ai_conversation, add_message as _add_msg
+    from db.models import Message as _Msg, ParticipantType as _PT
 
     context = load_account_context(db)
 
-    # Build history: prior messages + current message at the end
-    history = [
-        {"role": m.get("role", "user"), "content": m.get("content", m.get("text", ""))}
-        for m in body.conversation_history
-    ]
+    # Look up or create DB-backed user_ai conversation.
+    # If the client supplies a conversation_id, look it up by PK first; if not
+    # found, create a new conversation using that exact ID so the client's ID is
+    # always echoed back in the done event.
+    from db.models import ConversationType as _ConvType
+    if body.conversation_id:
+        conv = db.query(Conversation).filter_by(id=body.conversation_id).first()
+        if conv is None:
+            from datetime import datetime as _dt
+            conv = Conversation(
+                id=body.conversation_id,
+                subject="Chat with RentMate",
+                is_group=False,
+                is_archived=False,
+                is_task=False,
+                conversation_type=_ConvType.USER_AI,
+                created_at=_dt.utcnow(),
+                updated_at=_dt.utcnow(),
+            )
+            db.add(conv)
+    else:
+        from db.lib import get_or_create_user_ai_conversation as _get_conv
+        conv = _get_conv(db, account_id="default", user_id="default")
+    conv_id = conv.id
+    db.commit()  # persist conv before streaming
+
+    # Build message history from DB (last 20 messages) + current message
+    full_conv = get_conversation_with_messages(db, conv_id)
+    db_msgs = sorted(full_conv.messages, key=lambda m: m.sent_at)[-20:] if full_conv else []
+    history = [{"role": "assistant" if m.is_ai else "user", "content": m.body or ""} for m in db_msgs]
     history.append({"role": "user", "content": body.message})
 
     from backends.local_auth import DEFAULT_USER_ID
     agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
-    conv_id = body.conversation_id or str(_uuid.uuid4())
-    session_key = f"chat:{conv_id}"
+    session_key_agent = f"chat:{conv_id}"
     messages_payload = [{"role": "system", "content": context}] + history
 
     async def generate():
@@ -286,7 +312,7 @@ async def chat_endpoint(
 
         async def run():
             await on_progress("Thinking\u2026")
-            return await chat_with_agent(agent_id, session_key, messages_payload, on_progress)
+            return await chat_with_agent(agent_id, session_key_agent, messages_payload, on_progress)
 
         task = asyncio.create_task(run())
         try:
@@ -306,6 +332,41 @@ async def chat_endpoint(
                 yield f"data: {_json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
                 return
 
+            # Persist user message + AI reply to DB
+            from handlers.deps import SessionLocal as _SL
+            write_db = _SL()
+            try:
+                now = datetime.utcnow()
+                write_db.add(_Msg(
+                    id=str(_uuid.uuid4()),
+                    conversation_id=conv_id,
+                    sender_type=_PT.ACCOUNT_USER,
+                    body=body.message,
+                    message_type="message",
+                    sender_name="You",
+                    is_ai=False,
+                    sent_at=now,
+                ))
+                write_db.add(_Msg(
+                    id=str(_uuid.uuid4()),
+                    conversation_id=conv_id,
+                    sender_type=_PT.ACCOUNT_USER,
+                    body=reply,
+                    message_type="message",
+                    sender_name="RentMate",
+                    is_ai=True,
+                    sent_at=now,
+                ))
+                c = write_db.query(Conversation).filter_by(id=conv_id).first()
+                if c:
+                    c.updated_at = now
+                write_db.commit()
+            except Exception as e:
+                write_db.rollback()
+                print(f"[chat] DB write failed: {e}")
+            finally:
+                write_db.close()
+
             yield f"data: {_json.dumps({'type': 'done', 'reply': reply, 'conversation_id': conv_id})}\n\n"
         finally:
             pass  # no subscriber cleanup needed for session chats
@@ -315,6 +376,66 @@ async def chat_endpoint(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/chat/conversations")
+async def list_chat_conversations(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    await require_user(request)
+    from db.queries import fetch_conversations as _fetch_convs
+    convs = _fetch_convs(db, "user_ai", limit=50)
+    return [
+        {
+            "id": c.id,
+            "title": c.subject or "Chat with RentMate",
+            "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+            "last_message": c.messages[-1].body[:100] if c.messages else None,
+        }
+        for c in convs
+    ]
+
+
+class SpawnTaskRequest(BaseModel):
+    parent_conversation_id: str
+    objective: str
+    category: Optional[str] = None
+    urgency: Optional[str] = None
+    priority: Optional[str] = None
+    task_mode: str = "autonomous"
+    source: str = "manual"
+
+
+@router.post("/chat/task/spawn")
+async def spawn_task_endpoint(
+    body: SpawnTaskRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    await require_user(request)
+    from db.lib import spawn_task_from_conversation
+    task = spawn_task_from_conversation(
+        db,
+        parent_conversation_id=body.parent_conversation_id,
+        objective=body.objective,
+        category=body.category,
+        urgency=body.urgency,
+        priority=body.priority,
+        task_mode=body.task_mode,
+        source=body.source,
+    )
+    db.commit()
+    return {
+        "uid": task.id,
+        "title": task.subject,
+        "parent_conversation_id": task.parent_conversation_id,
+        "ancestor_ids": task.ancestor_ids or [],
+        "task_status": task.task_status,
+        "task_mode": task.task_mode,
+        "category": task.category,
+        "urgency": task.urgency,
+    }
 
 
 @router.post("/chat/task")

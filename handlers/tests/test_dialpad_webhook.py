@@ -76,7 +76,7 @@ class TestDialpadWebhook(unittest.TestCase):
         # send_via_channel was called
         mock_send_via_channel.assert_called_once()
 
-        # DB assertions: task conversation + message persisted
+        # DB assertions: tenant conversation + message persisted
         conv = (
             self.db.query(Conversation)
             .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
@@ -84,9 +84,7 @@ class TestDialpadWebhook(unittest.TestCase):
             .one()
         )
         self.assertFalse(conv.is_archived)
-        self.assertTrue(conv.is_task)
-        self.assertEqual(conv.task_status, "active")
-        self.assertEqual(conv.task_mode, "autonomous")
+        self.assertFalse(conv.is_task)
         self.assertEqual(conv.channel_type, "sms")
 
         msg = (

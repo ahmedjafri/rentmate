@@ -10,7 +10,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from db.models import Conversation, Lease, Message, Property, Tenant
+from db.models import Conversation, ConversationParticipant, ExternalContact, Lease, Message, Property, Tenant
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +111,35 @@ def fetch_task(db: Session, uid: str) -> Optional[Conversation]:
             selectinload(Conversation.lease).selectinload(Lease.unit),
         )
     ).scalar_one_or_none()
+
+
+def fetch_conversations(
+    db: Session,
+    conversation_type: str,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[Conversation]:
+    """Fetch conversations by type, newest first."""
+    q = (
+        select(Conversation)
+        .where(Conversation.conversation_type == conversation_type)
+        .where(Conversation.is_archived.is_(False))
+        .options(
+            selectinload(Conversation.participants)
+            .selectinload(ConversationParticipant.tenant),
+            selectinload(Conversation.participants)
+            .selectinload(ConversationParticipant.external_contact),
+            selectinload(Conversation.messages),
+        )
+        .order_by(Conversation.updated_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    return db.execute(q).scalars().all()
+
+
+def fetch_vendors(db: Session) -> list[ExternalContact]:
+    return db.execute(select(ExternalContact)).scalars().all()
 
 
 def fetch_messages(db: Session, conversation_id: str) -> list[Message]:

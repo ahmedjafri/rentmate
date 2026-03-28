@@ -133,6 +133,21 @@ def _revert_automation_config(sha: str) -> Dict[str, Any]:
         db.close()
 
 
+def _parse_require_vendor_type(script: Optional[str]) -> Optional[str]:
+    """Extract require_vendor_type from the first create_task action in a DSL script."""
+    if not script:
+        return None
+    try:
+        import yaml as _yaml
+        parsed = _yaml.safe_load(script) or {}
+        for action in parsed.get("actions", []):
+            if action.get("type") == "create_task" and action.get("require_vendor_type"):
+                return str(action["require_vendor_type"])
+    except Exception:
+        pass
+    return None
+
+
 def _build_automations_response() -> Dict[str, Any]:
     """Return the full automations list (metadata + current config) for API responses."""
     cfg = _load_automation_config()
@@ -141,15 +156,27 @@ def _build_automations_response() -> Dict[str, Any]:
     automations = []
     for key, meta in _CHECK_META.items():
         check_cfg = checks.get(key, _DEFAULT_AUTOMATION_CONFIG["checks"].get(key, {}))
-        automations.append({"key": key, **meta, **check_cfg, "custom": False})
+        req_vendor = _parse_require_vendor_type(meta.get("script"))
+        entry = {"key": key, **meta, **check_cfg, "custom": False}
+        if req_vendor:
+            entry["require_vendor_type"] = req_vendor
+        entry.setdefault("vendor_ids", check_cfg.get("vendor_ids", []))
+        entry.setdefault("preferred_vendor_id", check_cfg.get("preferred_vendor_id"))
+        automations.append(entry)
     for key, meta in custom_meta.items():
         check_cfg = checks.get(key, {"enabled": False, "interval_hours": 1})
-        automations.append({
+        req_vendor = _parse_require_vendor_type(meta.get("script"))
+        entry = {
             "key": key, "has_params": False, "params": [],
             **meta, **check_cfg,
             "custom": True,
             "simulation_run": meta.get("simulation_run", False),
-        })
+        }
+        if req_vendor:
+            entry["require_vendor_type"] = req_vendor
+        entry.setdefault("vendor_ids", check_cfg.get("vendor_ids", []))
+        entry.setdefault("preferred_vendor_id", check_cfg.get("preferred_vendor_id"))
+        automations.append(entry)
     return {"automations": automations}
 
 
@@ -313,6 +340,8 @@ class AutomationCheckBody(BaseModel):
     interval_hours: int = 1
     warn_days: Optional[int] = None
     min_vacancy_days: Optional[int] = None
+    vendor_ids: Optional[List[str]] = None
+    preferred_vendor_id: Optional[str] = None
 
 
 class AutomationConfigBody(BaseModel):
@@ -535,7 +564,11 @@ async def add_automation(body: NewAutomationBody, request: Request):
     return _build_automations_response()
 
 
-_GENERATE_SCRIPT_SYSTEM = """\
+from gql.types import VENDOR_TYPES as _VENDOR_TYPES
+
+def _build_generate_script_system() -> str:
+    vendor_list = ", ".join(_VENDOR_TYPES)
+    return f"""\
 You are a Property-Flow DSL expert for a property management app called RentMate.
 Generate a valid Property-Flow YAML script based on the user's description.
 Return ONLY valid YAML — no markdown fences, no explanation, no extra text.
@@ -578,6 +611,8 @@ actions:
       medium if <field> <op> <value>
       low otherwise
     body: "Longer description with {{variable}} placeholders."
+    require_vendor_type: <vendor type>   # optional — prompts manager to assign a vendor
+    # Valid vendor types: {vendor_list}
 
 ═══════════════════════════════════════════════
 RESOURCES & FIELDS
@@ -698,9 +733,30 @@ actions:
     body: >
       Tenant {{tenant.first_name}} {{tenant.last_name}} is missing
       contact information. Add a phone number or email address.
-\
+
+═══════════════════════════════════════════════
+COMPLETE EXAMPLE — gutter cleaning (require_vendor_type)
+═══════════════════════════════════════════════
+
+schedule:
+  interval: monthly
+
+scope:
+  resource: property
+
+actions:
+  - type: create_task
+    subject: "Schedule gutter cleaning: {{property.address_line1}}"
+    category: maintenance
+    urgency: low
+    require_vendor_type: Landscaper
+    body: >
+      Gutters at {{property.address_line1}} are due for cleaning.
+      Assign a landscaper and schedule the service.
 """
 
+
+_GENERATE_SCRIPT_SYSTEM = _build_generate_script_system()
 
 _GENERATE_SCRIPT_USER = """\
 Before writing the YAML, wrap your reasoning in <thinking>...</thinking> tags.

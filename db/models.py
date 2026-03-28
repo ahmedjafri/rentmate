@@ -174,6 +174,13 @@ class ParticipantType(str, Enum):
     EXTERNAL_CONTACT = "external_contact"
 
 
+class ConversationType(str, Enum):
+    TENANT  = "tenant"
+    VENDOR  = "vendor"
+    USER_AI = "user_ai"
+    TASK    = "task"
+
+
 class ExternalContact(Base):
     """
     Non-auth contacts (e.g., maintenance vendors).
@@ -188,6 +195,7 @@ class ExternalContact(Base):
     role_label = Column(String(100), nullable=True)
     notes = Column(Text, nullable=True)
     extra = Column(JSON, nullable=True)
+    account_id = Column(String(36), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
@@ -223,9 +231,19 @@ class Conversation(Base):
     last_message_at = Column(DateTime, nullable=True)
     channel_type = Column(String(20), nullable=True)   # 'sms' | 'email' | None (manual/internal)
 
+    # Conversation type taxonomy
+    conversation_type = Column(String(20), nullable=True, default="task")
+    parent_conversation_id = Column(String(36), ForeignKey("conversations.id"), nullable=True)
+    ancestor_ids = Column(JSON, nullable=True, default=list)
+    ai_initiated = Column(Boolean, nullable=False, default=False)
+
+    # Flexible metadata (vendor requirements, assignments, etc.)
+    extra = Column(JSON, nullable=True)
+
     property = relationship("Property")
     unit = relationship("Unit")
     lease = relationship("Lease")
+    parent = relationship("Conversation", remote_side="Conversation.id", foreign_keys="Conversation.parent_conversation_id")
 
     participants = relationship(
         "ConversationParticipant",

@@ -1,0 +1,13 @@
+{
+  "key": "seasonal_gutter_cleaning",
+  "label": "Seasonal Gutter Cleaning",
+  "description": "Creates a maintenance task for each property every month so gutters are cleaned before winter and after autumn leaf-fall.",
+  "hint": "No configurable parameters — toggle on/off only.",
+  "has_params": false,
+  "params": [],
+  "default_config": {
+    "enabled": false,
+    "interval_hours": 720
+  },
+  "script": "name: \"Seasonal Gutter Cleaning\"\ndescription: >\n  Creates a monthly maintenance task for each property reminding the manager\n  to arrange gutter cleaning and assign a landscaper.\n\nschedule:\n  interval: monthly\n\nscope:\n  resource: property\n\nactions:\n  - type: create_task\n    subject: \"Gutter cleaning due: {{property.address_line1}}\"\n    category: maintenance\n    urgency: low\n    require_vendor_type: Landscaper\n    body: >\n      Gutters at {{property.address_line1}} are due for their monthly cleaning.\n      Assign a landscaper and schedule the service to prevent water damage\n      and ice dams during the colder months.\n"
+}

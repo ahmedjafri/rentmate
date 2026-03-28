@@ -18,14 +18,6 @@ _root = Path(__file__).parent.parent
 sys.path.insert(0, str(_root))
 
 
-def _make_session():
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
-    _data_dir = os.getenv("RENTMATE_DATA_DIR", str(_root / "data"))
-    db_path = os.getenv("RENTMATE_DB_PATH", f"{_data_dir}/rentmate.db")
-    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
-    return sessionmaker(bind=engine)()
-
 
 def _queue_action(action: dict):
     """Append action JSON to the workspace side-channel file."""
@@ -76,46 +68,14 @@ def main():
             result = {"status": "ok", "message": f"Task proposal '{args.title}' queued for user review."}
 
         elif args.operation == "close_task":
-            from sqlalchemy import select
-            from db.models import Conversation
-            db = _make_session()
-            try:
-                task = db.execute(
-                    select(Conversation).where(
-                        Conversation.id == args.id,
-                        Conversation.is_task == True,  # noqa: E712
-                    )
-                ).scalar_one_or_none()
-                if not task:
-                    result = {"error": f"Task {args.id!r} not found"}
-                else:
-                    task.task_status = "resolved"
-                    db.commit()
-                    _queue_action({"action": "task_closed", "task_id": args.id})
-                    result = {"status": "ok", "message": f"Task '{task.subject}' closed."}
-            finally:
-                db.close()
+            # Queue for human confirmation — do NOT write to DB directly.
+            _queue_action({"action": "close_task_proposed", "task_id": args.id})
+            result = {"status": "ok", "message": "Close request queued for manager confirmation."}
 
         elif args.operation == "set_mode":
-            from sqlalchemy import select
-            from db.models import Conversation
-            db = _make_session()
-            try:
-                task = db.execute(
-                    select(Conversation).where(
-                        Conversation.id == args.id,
-                        Conversation.is_task == True,  # noqa: E712
-                    )
-                ).scalar_one_or_none()
-                if not task:
-                    result = {"error": f"Task {args.id!r} not found"}
-                else:
-                    task.task_mode = args.mode
-                    db.commit()
-                    _queue_action({"action": "mode_changed", "task_id": args.id, "mode": args.mode})
-                    result = {"status": "ok", "message": f"Task mode changed to '{args.mode}'."}
-            finally:
-                db.close()
+            # Queue for human confirmation — do NOT write to DB directly.
+            _queue_action({"action": "set_mode_proposed", "task_id": args.id, "mode": args.mode})
+            result = {"status": "ok", "message": f"Mode change to '{args.mode}' queued for manager confirmation."}
 
         else:
             result = {"error": f"Unknown operation: {args.operation!r}"}

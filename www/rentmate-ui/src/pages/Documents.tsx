@@ -17,6 +17,7 @@ import {
   FileText, Upload, Search, Tag, CheckCircle2, Clock,
   Loader2, AlertCircle, Trash2, Bot, FileSpreadsheet, FileImage,
 } from 'lucide-react';
+import { PageLoader } from '@/components/ui/page-loader';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import {
@@ -58,6 +59,7 @@ const Documents = () => {
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<FilterType>('all');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Initial load
@@ -78,7 +80,8 @@ const Documents = () => {
           });
         });
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setIsLoading(false));
   }, []);
 
   // Poll analyzing documents until they finish processing
@@ -168,6 +171,8 @@ const Documents = () => {
 
   const readyCount = documents.filter(d => d.status === 'ready').length;
   const analyzingCount = documents.filter(d => d.status === 'analyzing').length;
+
+  if (isLoading) return <PageLoader />;
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-5">

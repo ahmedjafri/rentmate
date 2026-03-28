@@ -96,9 +96,123 @@ def test_sqlite_migrate_on_partial_schema():
 
     assert "property_type" in _column_names(eng, "properties")
     assert "is_task" in _column_names(eng, "conversations")
+    assert "conversation_type" in _column_names(eng, "conversations")
     assert "is_ai" in _column_names(eng, "messages")
     assert "sha256_checksum" in _column_names(eng, "documents")
     assert "payment_status" in _column_names(eng, "leases")
+
+
+def test_migrate_schema_covers_all_orm_columns():
+    """
+    Guard against the gap where a column is added to the ORM model but not to
+    _migrate_schema(), causing failures on existing databases that were created
+    before create_all would have added the column.
+
+    Strategy: build each covered table with only its 'original' base columns
+    (the columns that predated any _migrate_schema additions), run
+    _migrate_schema() alone, then assert every ORM column is present.
+
+    When you add a new column to the ORM for one of these tables you MUST also
+    add it to _MIGRATE_COLS in main.py — or this test will tell you.
+    """
+    import main as _main
+
+    # Original schema for each table — columns that have always existed and are
+    # therefore guaranteed to be on any real database without needing ALTER TABLE.
+    # Columns added after the initial deploy belong in _MIGRATE_COLS instead.
+    BASE_DDL = [
+        """CREATE TABLE properties (
+            id TEXT PRIMARY KEY,
+            account_id TEXT,
+            address_line1 TEXT NOT NULL,
+            address_line2 TEXT,
+            name TEXT,
+            city TEXT,
+            state TEXT,
+            postal_code TEXT,
+            country TEXT,
+            created_at DATETIME NOT NULL
+        )""",
+        """CREATE TABLE conversations (
+            id TEXT PRIMARY KEY,
+            account_id TEXT,
+            property_id TEXT,
+            unit_id TEXT,
+            lease_id TEXT,
+            subject TEXT,
+            is_group BOOLEAN NOT NULL DEFAULT 0,
+            is_archived BOOLEAN NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+        )""",
+        """CREATE TABLE messages (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            body TEXT,
+            body_html TEXT,
+            sent_at DATETIME,
+            is_system BOOLEAN,
+            sender_type TEXT,
+            sender_tenant_id TEXT,
+            sender_external_contact_id TEXT,
+            meta TEXT,
+            attachments TEXT,
+            edited_at DATETIME,
+            deleted_at DATETIME
+        )""",
+        """CREATE TABLE documents (
+            id TEXT PRIMARY KEY,
+            account_id TEXT,
+            filename TEXT,
+            storage_path TEXT,
+            document_type TEXT,
+            status TEXT,
+            content_type TEXT,
+            created_at DATETIME,
+            processed_at DATETIME,
+            raw_text TEXT,
+            extracted_data TEXT,
+            error_message TEXT,
+            progress TEXT
+        )""",
+        """CREATE TABLE leases (
+            id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            unit_id TEXT NOT NULL,
+            property_id TEXT NOT NULL,
+            start_date DATE NOT NULL,
+            end_date DATE NOT NULL,
+            rent_amount REAL NOT NULL,
+            created_at DATETIME NOT NULL
+        )""",
+    ]
+
+    eng = _sqlite_engine()
+    with eng.connect() as conn:
+        for ddl in BASE_DDL:
+            conn.execute(text(ddl))
+        conn.commit()
+
+    with patch.object(_main, "engine", eng):
+        _main._migrate_schema()
+
+    migrated_tables = {t for t, _, _ in _main._MIGRATE_COLS}
+    orm_cols_by_table = {
+        t.name: {col.name for col in t.columns}
+        for t in Base.metadata.tables.values()
+        if t.name in migrated_tables
+    }
+    missing = []
+    for table, orm_cols in orm_cols_by_table.items():
+        db_cols = _column_names(eng, table)
+        for col in orm_cols:
+            if col not in db_cols:
+                missing.append(f"{table}.{col}")
+
+    assert not missing, (
+        "These ORM columns are absent after _migrate_schema() — add them to "
+        "_MIGRATE_COLS in main.py:\n  " + "\n  ".join(sorted(missing))
+    )
 
 
 # ---------------------------------------------------------------------------

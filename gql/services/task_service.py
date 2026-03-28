@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from db.models import Conversation, Message, ParticipantType as PT
+from db.models import Conversation, ExternalContact, Message, ParticipantType as PT
 from gql.types import CreateTaskInput, AddTaskMessageInput, UpdateTaskInput
 
 
@@ -63,6 +63,28 @@ class TaskService:
         sess.delete(task)
         sess.commit()
         return True
+
+    @staticmethod
+    def assign_vendor_to_task(sess: Session, task_id: str, vendor_id: str) -> Conversation:
+        task = sess.execute(
+            select(Conversation).where(Conversation.id == task_id, Conversation.is_task == True)  # noqa: E712
+        ).scalar_one_or_none()
+        if not task:
+            raise ValueError(f"Task {task_id} not found")
+        vendor = sess.execute(
+            select(ExternalContact).where(ExternalContact.id == vendor_id)
+        ).scalar_one_or_none()
+        if not vendor:
+            raise ValueError(f"Vendor {vendor_id} not found")
+        extra = dict(task.extra or {})
+        extra["assigned_vendor_id"] = vendor_id
+        extra["assigned_vendor_name"] = vendor.name
+        task.extra = extra
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(task, "extra")
+        sess.commit()
+        sess.refresh(task)
+        return task
 
     @staticmethod
     def add_task_message(sess: Session, input: AddTaskMessageInput) -> Message:

@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Building2, Users, ChevronRight, Home, Plus, X, Loader2, FileText } from 'lucide-react';
+import { PageLoader } from '@/components/ui/page-loader';
 import { Link } from 'react-router-dom';
 import { graphqlQuery } from '@/data/api';
 import { CREATE_PROPERTY_MUTATION } from '@/data/api';
@@ -17,7 +18,7 @@ const sourceConfig = {
 };
 
 const Properties = () => {
-  const { properties, tenants, actionDeskTasks, addProperty } = useApp();
+  const { properties, tenants, actionDeskTasks, addProperty, isLoading } = useApp();
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -83,15 +84,17 @@ const Properties = () => {
     });
   }, [properties, actionDeskTasks]);
 
+  if (isLoading) return <PageLoader />;
+
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-6">
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-bold">Properties</h1>
           <p className="text-sm text-muted-foreground">{properties.length} properties under management</p>
         </div>
-        <Button onClick={() => setShowForm(s => !s)} variant={showForm ? 'outline' : 'default'} className="gap-2 rounded-xl">
-          {showForm ? <><X className="h-4 w-4" /> Cancel</> : <><Plus className="h-4 w-4" /> Add Property</>}
+        <Button onClick={() => setShowForm(s => !s)} variant={showForm ? 'outline' : 'default'} className="gap-2 rounded-xl shrink-0">
+          {showForm ? <><X className="h-4 w-4" /><span className="hidden sm:inline">Cancel</span></> : <><Plus className="h-4 w-4" /><span className="hidden sm:inline">Add Property</span><span className="sm:hidden">Add</span></>}
         </Button>
       </div>
 
@@ -135,9 +138,9 @@ const Properties = () => {
               className="rounded-lg"
             />
             <div className="grid grid-cols-3 gap-2">
-              <Input placeholder="City" value={city} onChange={e => setCity(e.target.value)} className="rounded-lg" />
+              <Input placeholder="City" value={city} onChange={e => setCity(e.target.value)} className="rounded-lg col-span-2 sm:col-span-1" />
               <Input placeholder="State" value={state} onChange={e => setState(e.target.value)} className="rounded-lg" />
-              <Input placeholder="ZIP" value={postalCode} onChange={e => setPostalCode(e.target.value)} className="rounded-lg" />
+              <Input placeholder="ZIP" value={postalCode} onChange={e => setPostalCode(e.target.value)} className="rounded-lg col-span-3 sm:col-span-1" />
             </div>
           </div>
 
@@ -187,12 +190,12 @@ const Properties = () => {
           const srcCfg = sourceConfig[src as keyof typeof sourceConfig] ?? sourceConfig.manual;
 
           return (
-            <Link key={property.id} to={`/properties/${property.id}`}>
-              <Card className="p-5 rounded-xl hover:shadow-md transition-shadow cursor-pointer">
+            <Link key={property.id} to={`/properties/${property.id}`} className="block min-w-0">
+              <Card className="p-5 rounded-xl hover:shadow-md transition-shadow cursor-pointer overflow-hidden">
                 <div className="flex items-start justify-between mb-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="font-semibold text-base">{property.name || property.address}</h3>
+                      <h3 className="font-semibold text-base truncate">{property.name || property.address}</h3>
                       <Badge variant="secondary" className="text-[10px] rounded-md gap-1 shrink-0">
                         {isSingleFamily ? <Home className="h-2.5 w-2.5" /> : <Building2 className="h-2.5 w-2.5" />}
                         {isSingleFamily ? 'Single Family' : 'Multi-Family'}

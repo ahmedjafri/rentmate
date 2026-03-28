@@ -1,19 +1,26 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
-import { Property, Tenant, ActionDeskTask } from '@/data/mockData';
+import { Property, Tenant, ActionDeskTask, Vendor } from '@/data/mockData';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   Bot, CheckCircle2, PauseCircle, Zap, ShieldCheck, Hand, Lock, XCircle,
-  ChevronDown, X, Building2, User,
+  ChevronDown, X, Building2, User, MessageCircle, Plus, Wrench,
 } from 'lucide-react';
+import { PageLoader } from '@/components/ui/page-loader';
 import { formatMessageTime } from '@/components/chat/ChatMessage';
-import { TaskMode, SuggestionCategory, categoryColors, categoryLabels } from '@/data/mockData';
+import { TaskMode, SuggestionCategory, SuggestionUrgency, categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
+import { graphqlQuery, CREATE_TASK_MUTATION, ASSIGN_VENDOR_TO_TASK_MUTATION } from '@/data/api';
+import { toast } from 'sonner';
 
 // ─── Mode badge ───────────────────────────────────────────────────────────────
 
@@ -233,7 +240,7 @@ function SmartSearch({ chips, onChipsChange, tasks, properties, tenants }: Smart
 // ─── ActionDesk ───────────────────────────────────────────────────────────────
 
 const ActionDesk = () => {
-  const { actionDeskTasks, properties, tenants, openChat, chatPanel, isLoading } = useApp();
+  const { actionDeskTasks, properties, tenants, vendors, openChat, chatPanel, isLoading, addTask, updateTask } = useApp();
   const [statusFilters, setStatusFilters] = useState<StatusFilter[]>([]);
   const [categoryFilters, setCategoryFilters] = useState<SuggestionCategory[]>([]);
   const [chips, setChips] = useState<SearchChip[]>([]);
@@ -241,6 +248,72 @@ const ActionDesk = () => {
   const COMPLETED_PREVIEW = 3;
   const [searchParams, setSearchParams] = useSearchParams();
   const hasRestoredRef = useRef(false);
+
+  // Vendor assignment dialog state
+  const [vendorDialogTask, setVendorDialogTask] = useState<ActionDeskTask | null>(null);
+  const [vendorSearch, setVendorSearch] = useState('');
+  const [assigningVendor, setAssigningVendor] = useState(false);
+
+  const handleAssignVendor = async (task: ActionDeskTask, vendor: Vendor) => {
+    setAssigningVendor(true);
+    try {
+      await graphqlQuery(ASSIGN_VENDOR_TO_TASK_MUTATION, { taskId: task.id, vendorId: vendor.id });
+      updateTask(task.id, { assignedVendorId: vendor.id, assignedVendorName: vendor.name });
+      setVendorDialogTask(null);
+      toast.success(`Assigned ${vendor.name} to task`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to assign vendor');
+    } finally {
+      setAssigningVendor(false);
+    }
+  };
+
+  // New Task dialog state
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskCategory, setNewTaskCategory] = useState<SuggestionCategory>('maintenance');
+  const [newTaskUrgency, setNewTaskUrgency] = useState<SuggestionUrgency>('medium');
+  const [newTaskMode, setNewTaskMode] = useState<'manual' | 'autonomous'>('manual');
+  const [newTaskSubmitting, setNewTaskSubmitting] = useState(false);
+
+  const handleCreateTask = async () => {
+    if (!newTaskTitle.trim()) return;
+    setNewTaskSubmitting(true);
+    try {
+      const result = await graphqlQuery<{ createTask: { uid: string; title: string; taskStatus: string; taskMode: string; category: string; urgency: string; source: string; propertyId: string | null; unitId: string | null; createdAt: string } }>(
+        CREATE_TASK_MUTATION,
+        { input: { title: newTaskTitle.trim(), source: 'manual', taskStatus: 'active', taskMode: newTaskMode, category: newTaskCategory, urgency: newTaskUrgency } }
+      );
+      const t = result.createTask;
+      const newTask: ActionDeskTask = {
+        id: t.uid,
+        title: t.title,
+        mode: (t.taskMode as TaskMode) ?? 'manual',
+        status: 'active',
+        participants: [],
+        lastMessage: '',
+        lastMessageBy: '',
+        lastMessageAt: new Date(),
+        unreadCount: 0,
+        propertyId: t.propertyId ?? undefined,
+        category: t.category as SuggestionCategory,
+        urgency: t.urgency as SuggestionUrgency,
+        chatThread: [],
+      };
+      addTask(newTask);
+      setNewTaskOpen(false);
+      setNewTaskTitle('');
+      setNewTaskCategory('maintenance');
+      setNewTaskUrgency('medium');
+      setNewTaskMode('manual');
+      toast.success('Task created');
+      openChat({ taskId: t.uid });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to create task');
+    } finally {
+      setNewTaskSubmitting(false);
+    }
+  };
 
   // Restore open chat from URL once data has loaded
   useEffect(() => {
@@ -355,9 +428,43 @@ const ActionDesk = () => {
             <span className="text-[10px] text-muted-foreground shrink-0">{property.name || property.address}</span>
           )}
         </div>
+        {task.parentConversationId && (
+          <div className="mt-1.5">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                openChat({ conversationId: task.parentConversationId! });
+              }}
+              className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground hover:bg-muted/80 border"
+            >
+              <MessageCircle className="h-2.5 w-2.5" />
+              Spawned from chat
+            </button>
+          </div>
+        )}
+        {task.requireVendorType && (
+          <div className="mt-1.5">
+            {task.assignedVendorName ? (
+              <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border border-green-200 dark:border-green-800">
+                <Wrench className="h-2.5 w-2.5" />
+                {task.assignedVendorName}
+              </span>
+            ) : (
+              <button
+                onClick={(e) => { e.stopPropagation(); setVendorDialogTask(task); setVendorSearch(''); }}
+                className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-orange-50 text-orange-700 dark:bg-orange-900/20 dark:text-orange-400 hover:bg-orange-100 border border-orange-200 dark:border-orange-800"
+              >
+                <Wrench className="h-2.5 w-2.5" />
+                Assign {task.requireVendorType}
+              </button>
+            )}
+          </div>
+        )}
       </Card>
     );
   };
+
+  if (isLoading) return <PageLoader />;
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-5">
@@ -383,8 +490,144 @@ const ActionDesk = () => {
             placeholder="All Categories"
             width="w-44"
           />
+          <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setNewTaskOpen(true)}>
+            <Plus className="h-3.5 w-3.5" />
+            New Task
+          </Button>
         </div>
       </div>
+
+      {/* New Task Dialog */}
+      <Dialog open={newTaskOpen} onOpenChange={setNewTaskOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create New Task</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="task-title">Title</Label>
+              <Input
+                id="task-title"
+                placeholder="Describe the task…"
+                value={newTaskTitle}
+                onChange={e => setNewTaskTitle(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleCreateTask(); }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Category</Label>
+              <Select value={newTaskCategory} onValueChange={v => setNewTaskCategory(v as SuggestionCategory)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="rent">Rent &amp; Payments</SelectItem>
+                  <SelectItem value="maintenance">Maintenance</SelectItem>
+                  <SelectItem value="leasing">Leasing</SelectItem>
+                  <SelectItem value="compliance">Compliance</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Urgency</Label>
+              <Select value={newTaskUrgency} onValueChange={v => setNewTaskUrgency(v as SuggestionUrgency)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="low">Low</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                  <SelectItem value="critical">Critical</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Mode</Label>
+              <Select value={newTaskMode} onValueChange={v => setNewTaskMode(v as 'manual' | 'autonomous')}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="manual">Manual</SelectItem>
+                  <SelectItem value="autonomous">Autonomous</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setNewTaskOpen(false)}>Cancel</Button>
+              <Button onClick={handleCreateTask} disabled={!newTaskTitle.trim() || newTaskSubmitting}>
+                {newTaskSubmitting ? 'Creating…' : 'Create Task'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Vendor Assignment Dialog */}
+      {vendorDialogTask && (() => {
+        const filteredVendors = vendors.filter(v => {
+          const matchesType = !vendorDialogTask.requireVendorType || v.vendorType === vendorDialogTask.requireVendorType;
+          const q = vendorSearch.trim().toLowerCase();
+          const matchesSearch = !q || v.name.toLowerCase().includes(q) || (v.company ?? '').toLowerCase().includes(q);
+          return matchesType && matchesSearch;
+        });
+        const allVendors = !vendorSearch && filteredVendors.length === 0 ? vendors.filter(v => {
+          const q = vendorSearch.trim().toLowerCase();
+          return !q || v.name.toLowerCase().includes(q) || (v.company ?? '').toLowerCase().includes(q);
+        }) : filteredVendors;
+
+        return (
+          <Dialog open onOpenChange={() => setVendorDialogTask(null)}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>
+                  Assign {vendorDialogTask.requireVendorType ?? 'Vendor'}
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-3 pt-1">
+                <p className="text-sm text-muted-foreground">
+                  Task: <span className="font-medium text-foreground">{vendorDialogTask.title}</span>
+                </p>
+                <Input
+                  placeholder="Search vendors…"
+                  value={vendorSearch}
+                  onChange={e => setVendorSearch(e.target.value)}
+                  autoFocus
+                />
+                <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                  {allVendors.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-6">
+                      No vendors found.{' '}
+                      <a href="/vendors" className="underline" onClick={() => setVendorDialogTask(null)}>
+                        Add vendors
+                      </a>{' '}
+                      first.
+                    </p>
+                  ) : (
+                    allVendors.map(v => (
+                      <button
+                        key={v.id}
+                        disabled={assigningVendor}
+                        onClick={() => handleAssignVendor(vendorDialogTask, v)}
+                        className="w-full text-left px-3 py-2.5 rounded-lg border hover:bg-muted transition-colors flex items-center justify-between gap-3 disabled:opacity-50"
+                      >
+                        <div>
+                          <div className="text-sm font-medium">{v.name}</div>
+                          {v.company && <div className="text-xs text-muted-foreground">{v.company}</div>}
+                        </div>
+                        {v.vendorType && (
+                          <Badge variant="secondary" className="text-[10px] shrink-0">{v.vendorType}</Badge>
+                        )}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+        );
+      })()}
 
       <SmartSearch
         chips={chips}

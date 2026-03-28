@@ -62,6 +62,16 @@ class CreateTaskInput:
     confidential: bool = False
 
 @strawberry.input
+class SpawnTaskInput:
+    parent_conversation_id: str
+    objective: str
+    category: typing.Optional[str] = None
+    urgency: typing.Optional[str] = None
+    priority: typing.Optional[str] = None
+    task_mode: str = "autonomous"
+    source: str = "manual"
+
+@strawberry.input
 class AddDocumentTagInput:
     document_id: str
     tag_type: str
@@ -348,6 +358,11 @@ class TaskType:
     unit_label: typing.Optional[str] = None
     ai_triage_suggestion: typing.Optional[str] = None
     vendor_assigned: typing.Optional[str] = None
+    parent_conversation_id: typing.Optional[str] = None
+    ancestor_ids: typing.Optional[typing.List[str]] = None
+    require_vendor_type: typing.Optional[str] = None
+    assigned_vendor_id: typing.Optional[str] = None
+    assigned_vendor_name: typing.Optional[str] = None
 
     @classmethod
     def from_sql(cls, c: typing.Any) -> "TaskType":
@@ -372,6 +387,7 @@ class TaskType:
         vendor_msgs = [m for m in msgs if m.sender_type == PT.EXTERNAL_CONTACT and m.sender_name]
         vendor_assigned = vendor_msgs[0].sender_name if vendor_msgs else None
 
+        extra = getattr(c, 'extra', None) or {}
         return cls(
             uid=str(c.id),
             title=c.subject,
@@ -392,6 +408,11 @@ class TaskType:
             unit_label=unit_label,
             ai_triage_suggestion=ai_triage_suggestion,
             vendor_assigned=vendor_assigned,
+            parent_conversation_id=str(c.parent_conversation_id) if getattr(c, 'parent_conversation_id', None) else None,
+            ancestor_ids=getattr(c, 'ancestor_ids', None) or [],
+            require_vendor_type=extra.get('require_vendor_type'),
+            assigned_vendor_id=extra.get('assigned_vendor_id'),
+            assigned_vendor_name=extra.get('assigned_vendor_name'),
         )
 
 
@@ -415,4 +436,76 @@ class DocumentTagType:
             unit_id=str(tag.unit_id) if tag.unit_id else None,
             tenant_id=str(tag.tenant_id) if tag.tenant_id else None,
             created_at=str(tag.created_at),
+        )
+
+
+VENDOR_TYPES: list[str] = [
+    "Plumber", "Electrician", "HVAC", "General Contractor", "Handyman",
+    "Landscaper", "Cleaning/Janitorial", "Pest Control", "Locksmith",
+    "Roofer", "Painter", "Appliance Repair", "Inspector", "Snow Removal",
+]
+
+
+@strawberry.type
+class VendorType:
+    uid: str
+    name: str
+    company: typing.Optional[str] = None
+    vendor_type: typing.Optional[str] = None
+    phone: typing.Optional[str] = None
+    email: typing.Optional[str] = None
+    notes: typing.Optional[str] = None
+    created_at: str = ""
+
+    @classmethod
+    def from_sql(cls, v) -> "VendorType":
+        return cls(
+            uid=str(v.id),
+            name=v.name,
+            company=v.company,
+            vendor_type=v.role_label,
+            phone=v.phone,
+            email=v.email,
+            notes=v.notes,
+            created_at=str(v.created_at),
+        )
+
+
+@strawberry.input
+class CreateVendorInput:
+    name: str
+    company: typing.Optional[str] = None
+    vendor_type: typing.Optional[str] = None
+    phone: typing.Optional[str] = None
+    email: typing.Optional[str] = None
+    notes: typing.Optional[str] = None
+
+
+@strawberry.input
+class UpdateVendorInput:
+    uid: str
+    name: typing.Optional[str] = None
+    company: typing.Optional[str] = None
+    vendor_type: typing.Optional[str] = None
+    phone: typing.Optional[str] = None
+    email: typing.Optional[str] = None
+    notes: typing.Optional[str] = None
+
+
+@strawberry.type
+class ConversationSummaryType:
+    uid: str
+    conversation_type: str
+    title: typing.Optional[str] = None
+    last_message_at: typing.Optional[str] = None
+    updated_at: str = ""
+
+    @classmethod
+    def from_sql(cls, c: typing.Any) -> "ConversationSummaryType":
+        return cls(
+            uid=str(c.id),
+            conversation_type=c.conversation_type or "tenant",
+            title=c.subject,
+            last_message_at=str(c.last_message_at) if c.last_message_at else None,
+            updated_at=str(c.updated_at),
         )

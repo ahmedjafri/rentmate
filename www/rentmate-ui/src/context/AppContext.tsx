@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
-  Suggestion, Property, Tenant, MaintenanceTicket, AutonomySettings, ChatMessage, ActionDeskTask, ManagedDocument,
+  Suggestion, Property, Tenant, Vendor, MaintenanceTicket, AutonomySettings, ChatMessage, ActionDeskTask, ManagedDocument,
   defaultAutonomySettings,
   SuggestionStatus, ActionDeskTask as ADT,
 } from '@/data/mockData';
@@ -35,12 +35,14 @@ interface ChatPanelState {
   suggestionId: string | null;
   taskId: string | null;
   sessionId: string | null;
+  conversationId: string | null;  // DB-backed conversation ID
   pageContext: string | null;
 }
 
 interface AppContextType {
   properties: Property[];
   tenants: Tenant[];
+  vendors: Vendor[];
   suggestions: Suggestion[];
   tickets: MaintenanceTicket[];
   actionDeskTasks: ActionDeskTask[];
@@ -64,11 +66,14 @@ interface AppContextType {
   updateProperty: (id: string, updates: Partial<Property>) => void;
   removeProperty: (id: string) => void;
   addTenant: (tenant: Tenant) => void;
+  addVendor: (vendor: Vendor) => void;
+  updateVendor: (id: string, updates: Partial<Vendor>) => void;
+  removeVendor: (id: string) => void;
   addDocument: (doc: ManagedDocument) => void;
   updateDocument: (id: string, updates: Partial<ManagedDocument>) => void;
   replaceDocument: (oldId: string, doc: ManagedDocument) => void;
   removeDocument: (id: string) => void;
-  openChat: (opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; contextKey?: string | null; sessionTitle?: string | null }) => void;
+  openChat: (opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; contextKey?: string | null; sessionTitle?: string | null; conversationId?: string | null; conversationType?: string | null }) => void;
   closeChat: () => void;
   setAutonomySettings: (settings: AutonomySettings) => void;
   refreshData: () => void;
@@ -105,7 +110,7 @@ const loadFromStorage = <T,>(key: string, fallback: T): T => {
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { properties: apiProperties, tenants: apiTenants, actionDeskTasks: apiActionDeskTasks, tickets: apiTickets, suggestions: apiSuggestions, isLoading: apiLoading, error: apiError, refresh: refreshData } = useApiData();
+  const { properties: apiProperties, tenants: apiTenants, vendors: apiVendors, actionDeskTasks: apiActionDeskTasks, tickets: apiTickets, suggestions: apiSuggestions, isLoading: apiLoading, error: apiError, refresh: refreshData } = useApiData();
 
   // Re-fetch on route navigation
   const location = useLocation();
@@ -120,6 +125,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // from strings since JSON.parse can't reconstruct Date objects.
   const [properties, setProperties] = useState<Property[]>(() => loadFromStorage('rm_properties', []));
   const [tenants, setTenants] = useState<Tenant[]>(() => (loadFromStorage('rm_tenants', []) as Tenant[]).map(coerceTenant));
+  const [vendors, setVendors] = useState<Vendor[]>(() => loadFromStorage('rm_vendors', []));
   const [suggestions, setSuggestions] = useState<Suggestion[]>(() => loadFromStorage('rm_suggestions', []));
   const [tickets, setTickets] = useState<MaintenanceTicket[]>(() => loadFromStorage('rm_tickets', []));
   const [actionDeskTasks, setActionDeskTasks] = useState<ActionDeskTask[]>(() => (loadFromStorage('rm_action_desk', []) as ActionDeskTask[]).map(coerceTask));
@@ -135,21 +141,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } else {
       setProperties(apiProperties);
       setTenants(apiTenants);
+      setVendors(apiVendors);
       setActionDeskTasks(apiActionDeskTasks);
       setTickets(apiTickets);
       setSuggestions(apiSuggestions);
       // Persist so the next page reload (e.g. iOS tab eviction) can show cached data.
       localStorage.setItem('rm_properties', JSON.stringify(apiProperties));
       localStorage.setItem('rm_tenants', JSON.stringify(apiTenants));
+      localStorage.setItem('rm_vendors', JSON.stringify(apiVendors));
       localStorage.setItem('rm_action_desk', JSON.stringify(apiActionDeskTasks));
       localStorage.setItem('rm_tickets', JSON.stringify(apiTickets));
       localStorage.setItem('rm_suggestions', JSON.stringify(apiSuggestions));
     }
-  }, [apiLoading, apiError, apiProperties, apiTenants, apiActionDeskTasks, apiTickets, apiSuggestions]);
+  }, [apiLoading, apiError, apiProperties, apiTenants, apiVendors, apiActionDeskTasks, apiTickets, apiSuggestions]);
 
   const [documents, setDocuments] = useState<ManagedDocument[]>([]);
   const [autonomySettings, setAutonomySettings] = useState<AutonomySettings>(() => loadFromStorage('rm_autonomy', defaultAutonomySettings));
-  const [chatPanel, setChatPanel] = useState<ChatPanelState>({ isOpen: false, suggestionId: null, taskId: null, sessionId: null, pageContext: null });
+  const [chatPanel, setChatPanel] = useState<ChatPanelState>({ isOpen: false, suggestionId: null, taskId: null, sessionId: null, conversationId: null, pageContext: null });
 
   const [chatSessions, setChatSessions] = useState<ChatSession[]>(() => {
     const stored = loadFromStorage('rm_chat_sessions', null) as ChatSession[] | null;
@@ -272,6 +280,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTenants(prev => [tenant, ...prev]);
   }, []);
 
+  const addVendor = useCallback((vendor: Vendor) => {
+    setVendors(prev => [vendor, ...prev]);
+  }, []);
+
+  const updateVendor = useCallback((id: string, updates: Partial<Vendor>) => {
+    setVendors(prev => prev.map(v => v.id === id ? { ...v, ...updates } : v));
+  }, []);
+
+  const removeVendor = useCallback((id: string) => {
+    setVendors(prev => prev.filter(v => v.id !== id));
+  }, []);
+
   const addDocument = useCallback((doc: ManagedDocument) => {
     setDocuments(prev => {
       const exists = prev.find(d => d.id === doc.id);
@@ -314,7 +334,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActionDeskTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...updates } : t));
   }, []);
 
-  const openChat = useCallback((opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; contextKey?: string | null; sessionTitle?: string | null }) => {
+  const openChat = useCallback((opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; contextKey?: string | null; sessionTitle?: string | null; conversationId?: string | null; conversationType?: string | null }) => {
     // Task/suggestion threads don't use the session system
     if (opts?.taskId || opts?.suggestionId) {
       setChatPanel({
@@ -322,7 +342,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         taskId: opts?.taskId ?? null,
         suggestionId: opts?.suggestionId ?? null,
         sessionId: null,
+        conversationId: null,
         pageContext: opts?.pageContext ?? null,
+      });
+      return;
+    }
+
+    // DB-backed conversation (from Chats page or tenant chat)
+    if (opts?.conversationId) {
+      setChatPanel({
+        isOpen: true,
+        taskId: null,
+        suggestionId: null,
+        sessionId: null,
+        conversationId: opts.conversationId,
+        pageContext: null,
       });
       return;
     }
@@ -336,7 +370,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       : sessions.find(s => s.id === 'general');
 
     if (existing) {
-      setChatPanel({ isOpen: true, taskId: null, suggestionId: null, sessionId: existing.id, pageContext: existing.pageContext });
+      setChatPanel({ isOpen: true, taskId: null, suggestionId: null, sessionId: existing.id, conversationId: null, pageContext: existing.pageContext });
       return;
     }
 
@@ -354,20 +388,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       lastMessageAt: null,
     };
     setChatSessions(prev => [...prev, newSession]);
-    setChatPanel({ isOpen: true, taskId: null, suggestionId: null, sessionId: newSession.id, pageContext: newSession.pageContext });
+    setChatPanel({ isOpen: true, taskId: null, suggestionId: null, sessionId: newSession.id, conversationId: null, pageContext: newSession.pageContext });
   }, []);
 
   const closeChat = useCallback(() => {
-    setChatPanel({ isOpen: false, suggestionId: null, taskId: null, sessionId: null, pageContext: null });
+    setChatPanel({ isOpen: false, suggestionId: null, taskId: null, sessionId: null, conversationId: null, pageContext: null });
   }, []);
 
   return (
     <AppContext.Provider value={{
-      properties, tenants, suggestions, tickets, actionDeskTasks, isLoading: apiLoading && actionDeskTasks.length === 0 && properties.length === 0, documents, autonomySettings,
+      properties, tenants, vendors, suggestions, tickets, actionDeskTasks, isLoading: apiLoading && actionDeskTasks.length === 0 && properties.length === 0, documents, autonomySettings,
       chatPanel, chatSessions, entityContext, getEntityContext, setEntityContext,
       updateSuggestionStatus, updateSuggestion, addChatMessage, updateTaskMessage, setTaskMessages, updateTask,
       addTask, removeTask,
-      addProperty, updateProperty, removeProperty, addTenant, addDocument, updateDocument, replaceDocument, removeDocument, openChat, closeChat, setAutonomySettings, refreshData,
+      addProperty, updateProperty, removeProperty, addTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, closeChat, setAutonomySettings, refreshData,
     }}>
       {children}
     </AppContext.Provider>

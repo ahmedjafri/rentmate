@@ -128,6 +128,9 @@ const TASK_FIELDS = `
   unitLabel
   aiTriageSuggestion
   vendorAssigned
+  requireVendorType
+  assignedVendorId
+  assignedVendorName
   messages {
     uid
     body
@@ -245,6 +248,20 @@ export const CREATE_TENANT_WITH_LEASE_MUTATION = `
   }
 `;
 
+export const CONVERSATION_MESSAGES_QUERY = `
+  query ConversationMessages($uid: String!) {
+    conversationMessages(uid: $uid) {
+      uid
+      body
+      messageType
+      senderName
+      isAi
+      isSystem
+      sentAt
+    }
+  }
+`;
+
 export const CREATE_TASK_MUTATION = `
   mutation CreateTask($input: CreateTaskInput!) {
     createTask(input: $input) {
@@ -258,6 +275,40 @@ export const CREATE_TASK_MUTATION = `
       propertyId
       unitId
       createdAt
+    }
+  }
+`;
+
+export const VENDORS_QUERY = `
+  query { vendors { uid name company vendorType phone email notes createdAt } }
+`;
+
+export const VENDOR_TYPES_QUERY = `
+  query { vendorTypes }
+`;
+
+export const CREATE_VENDOR_MUTATION = `
+  mutation CreateVendor($input: CreateVendorInput!) {
+    createVendor(input: $input) { uid name company vendorType phone email notes }
+  }
+`;
+
+export const UPDATE_VENDOR_MUTATION = `
+  mutation UpdateVendor($input: UpdateVendorInput!) {
+    updateVendor(input: $input) { uid name company vendorType phone email notes }
+  }
+`;
+
+export const DELETE_VENDOR_MUTATION = `
+  mutation DeleteVendor($uid: String!) { deleteVendor(uid: $uid) }
+`;
+
+export const ASSIGN_VENDOR_TO_TASK_MUTATION = `
+  mutation AssignVendorToTask($taskId: String!, $vendorId: String!) {
+    assignVendorToTask(taskId: $taskId, vendorId: $vendorId) {
+      uid
+      assignedVendorId
+      assignedVendorName
     }
   }
 `;

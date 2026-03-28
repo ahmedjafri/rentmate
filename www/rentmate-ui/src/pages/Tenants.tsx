@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Users, Search, ChevronRight, CalendarDays, DollarSign } from 'lucide-react';
+import { PageLoader } from '@/components/ui/page-loader';
 
 const paymentConfig = {
   current:  { label: 'Current',  className: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
@@ -13,7 +14,7 @@ const paymentConfig = {
 };
 
 const Tenants = () => {
-  const { tenants, properties } = useApp();
+  const { tenants, properties, isLoading } = useApp();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'active' | 'inactive'>('active');
 
@@ -39,6 +40,8 @@ const Tenants = () => {
 
   const activeCount = tenants.filter(t => t.isActive).length;
   const inactiveCount = tenants.length - activeCount;
+
+  if (isLoading) return <PageLoader />;
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">

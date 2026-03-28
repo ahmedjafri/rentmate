@@ -210,35 +210,34 @@ const PropertyDetail = () => {
   ];
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-4">
-      <div className="flex items-center justify-between">
-        <Link to="/properties" className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="h-4 w-4" /> Back to Properties
-        </Link>
-        <div className="flex items-center gap-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="gap-1.5 text-xs"
-          onClick={handleEditOpen}
-        >
-          <Pencil className="h-3.5 w-3.5" />
-          Edit
-        </Button>
-        <Button
-          variant={confirmDelete ? 'destructive' : 'ghost'}
-          size="sm"
-          className="gap-1.5 text-xs"
-          disabled={deleting}
-          onClick={handleDelete}
-          onBlur={() => setConfirmDelete(false)}
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-          {confirmDelete ? 'Confirm delete' : 'Delete'}
-        </Button>
-        <div className="text-right">
-          <div className="flex items-center justify-end gap-2 mb-0.5">
-            <h1 className="text-base font-semibold">{property.name || property.address}</h1>
+    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-4">
+      {/* Header: back link + actions row, then title row */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <Link to="/properties" className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground shrink-0">
+            <ArrowLeft className="h-4 w-4" /> Back to Properties
+          </Link>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Button variant="ghost" size="sm" className="h-7 gap-1.5 text-xs" onClick={handleEditOpen}>
+              <Pencil className="h-3.5 w-3.5" />
+              Edit
+            </Button>
+            <Button
+              variant={confirmDelete ? 'destructive' : 'ghost'}
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              disabled={deleting}
+              onClick={handleDelete}
+              onBlur={() => setConfirmDelete(false)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {confirmDelete ? 'Confirm' : 'Delete'}
+            </Button>
+          </div>
+        </div>
+        <div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-lg font-semibold">{property.name || property.address}</h1>
             <Badge variant="secondary" className="text-[10px] rounded-md gap-1">
               {isSingleFamily ? <Home className="h-2.5 w-2.5" /> : <Building2 className="h-2.5 w-2.5" />}
               {isSingleFamily ? 'Single Family' : 'Multi-Family'}
@@ -252,11 +251,10 @@ const PropertyDetail = () => {
               {property.source === 'document' ? 'From document' : 'Manual'}
             </Badge>
           </div>
-          <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
             <MapPin className="h-3 w-3" />
             {property.address}
           </div>
-        </div>
         </div>
       </div>
 
@@ -406,7 +404,7 @@ const PropertyDetail = () => {
                 <form onSubmit={handleAddTenant} className="space-y-3">
                   {addMode === 'new' ? (
                     <>
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div className="space-y-1">
                           <Label className="text-xs">First Name *</Label>
                           <Input className="h-8 text-sm rounded-lg" value={tenantForm.firstName} onChange={e => setTenantForm(f => ({ ...f, firstName: e.target.value }))} required />
@@ -416,7 +414,7 @@ const PropertyDetail = () => {
                           <Input className="h-8 text-sm rounded-lg" value={tenantForm.lastName} onChange={e => setTenantForm(f => ({ ...f, lastName: e.target.value }))} required />
                         </div>
                       </div>
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div className="space-y-1">
                           <Label className="text-xs">Email</Label>
                           <Input className="h-8 text-sm rounded-lg" type="email" value={tenantForm.email} onChange={e => setTenantForm(f => ({ ...f, email: e.target.value }))} />

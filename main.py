@@ -34,40 +34,59 @@ _gql_logger = logging.getLogger("rentmate.gql")
 
 # ─── database ────────────────────────────────────────────────────────────────
 
+_MIGRATE_COLS = [
+    ("documents",      "sha256_checksum",   "TEXT"),
+    ("documents",      "suggestion_states",  "TEXT"),
+    ("documents",      "confirmed_at",       "DATETIME"),
+    ("documents",      "extraction_meta",    "TEXT"),
+    ("conversations",  "is_task",            "BOOLEAN NOT NULL DEFAULT 0"),
+    ("conversations",  "task_status",        "VARCHAR(20)"),
+    ("conversations",  "task_mode",          "VARCHAR(25)"),
+    ("conversations",  "source",             "VARCHAR(25)"),
+    ("conversations",  "category",           "VARCHAR(20)"),
+    ("conversations",  "urgency",            "VARCHAR(20)"),
+    ("conversations",  "priority",           "VARCHAR(20)"),
+    ("conversations",  "confidential",       "BOOLEAN NOT NULL DEFAULT 0"),
+    ("conversations",  "last_message_at",    "DATETIME"),
+    ("conversations",  "channel_type",       "VARCHAR(20)"),
+    ("conversations",  "conversation_type",        "VARCHAR(20)"),
+    ("conversations",  "parent_conversation_id",   "VARCHAR(36)"),
+    ("conversations",  "ancestor_ids",             "TEXT"),
+    ("conversations",  "ai_initiated",             "BOOLEAN NOT NULL DEFAULT 0"),
+    ("conversations",  "extra",                    "TEXT"),
+    ("messages",       "message_type",       "VARCHAR(20)"),
+    ("messages",       "sender_name",        "VARCHAR(255)"),
+    ("messages",       "is_ai",              "BOOLEAN NOT NULL DEFAULT 0"),
+    ("messages",       "draft_reply",        "TEXT"),
+    ("messages",       "approval_status",    "VARCHAR(20)"),
+    ("messages",       "related_task_ids",   "TEXT"),
+    ("leases",         "payment_status",     "VARCHAR(20) DEFAULT 'current'"),
+    ("properties",     "property_type",      "VARCHAR(20) DEFAULT 'multi_family'"),
+    ("properties",     "source",             "VARCHAR(20)"),
+]
+
+
 def _migrate_schema():
     """Add columns that may be missing from older schema versions."""
-    new_cols = [
-        ("documents",      "sha256_checksum",   "TEXT"),
-        ("documents",      "suggestion_states",  "TEXT"),
-        ("documents",      "confirmed_at",       "DATETIME"),
-        ("documents",      "extraction_meta",    "TEXT"),
-        ("conversations",  "is_task",            "BOOLEAN NOT NULL DEFAULT 0"),
-        ("conversations",  "task_status",        "VARCHAR(20)"),
-        ("conversations",  "task_mode",          "VARCHAR(25)"),
-        ("conversations",  "source",             "VARCHAR(25)"),
-        ("conversations",  "category",           "VARCHAR(20)"),
-        ("conversations",  "urgency",            "VARCHAR(20)"),
-        ("conversations",  "priority",           "VARCHAR(20)"),
-        ("conversations",  "confidential",       "BOOLEAN NOT NULL DEFAULT 0"),
-        ("conversations",  "last_message_at",    "DATETIME"),
-        ("conversations",  "channel_type",       "VARCHAR(20)"),
-        ("messages",       "message_type",       "VARCHAR(20)"),
-        ("messages",       "sender_name",        "VARCHAR(255)"),
-        ("messages",       "is_ai",              "BOOLEAN NOT NULL DEFAULT 0"),
-        ("messages",       "draft_reply",        "TEXT"),
-        ("messages",       "approval_status",    "VARCHAR(20)"),
-        ("messages",       "related_task_ids",   "TEXT"),
-        ("leases",         "payment_status",     "VARCHAR(20) DEFAULT 'current'"),
-        ("properties",     "property_type",      "VARCHAR(20) DEFAULT 'multi_family'"),
-        ("properties",     "source",             "VARCHAR(20)"),
-    ]
+    new_cols = _MIGRATE_COLS
     tables = {t for t, _, _ in new_cols}
     with engine.connect() as conn:
         # Detect DB dialect and query existing columns in one pass per table
         dialect = engine.dialect.name
         existing: set[tuple[str, str]] = set()
         if dialect == "sqlite":
+            present_tables: set[str] = set()
+            try:
+                rows = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+                present_tables = {row[0] for row in rows}
+            except Exception:
+                pass
             for table in tables:
+                if table not in present_tables:
+                    # Mark all columns as already "existing" so we don't try ALTER
+                    for _, col, _ in new_cols:
+                        existing.add((table, col))
+                    continue
                 try:
                     rows = conn.execute(text(f"PRAGMA table_info({table})"))
                     for row in rows:

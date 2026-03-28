@@ -8,7 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { getToken } from "@/lib/auth";
-import { Loader2, Play, Zap, ChevronLeft, ChevronDown, ChevronUp, Wand2, Save, PlusCircle, CheckCircle2, Trash2, XCircle } from "lucide-react";
+import { Loader2, Play, Zap, ChevronLeft, ChevronDown, ChevronUp, Wand2, Save, PlusCircle, CheckCircle2, Trash2, XCircle, Star, Wrench } from "lucide-react";
+import { graphqlQuery, VENDORS_QUERY } from "@/data/api";
 
 // ─── types ───────────────────────────────────────────────────────────────────
 
@@ -25,6 +26,18 @@ interface Automation {
   script?: string;
   custom?: boolean;
   simulation_run?: boolean;
+  require_vendor_type?: string;
+  vendor_ids?: string[];
+  preferred_vendor_id?: string | null;
+}
+
+interface Vendor {
+  id: string;
+  name: string;
+  company?: string;
+  vendorType?: string;
+  phone?: string;
+  email?: string;
 }
 
 interface SimulatedTask {
@@ -67,6 +80,8 @@ function automationsToChecks(automations: Automation[]) {
       interval_hours: a.interval_hours,
       ...(a.warn_days !== undefined ? { warn_days: a.warn_days } : {}),
       ...(a.min_vacancy_days !== undefined ? { min_vacancy_days: a.min_vacancy_days } : {}),
+      ...(a.vendor_ids?.length ? { vendor_ids: a.vendor_ids } : {}),
+      ...(a.preferred_vendor_id ? { preferred_vendor_id: a.preferred_vendor_id } : {}),
     }])
   );
 }
@@ -191,6 +206,8 @@ export default function AutomationDetail() {
   const [scriptValidation, setScriptValidation] = useState<{ valid: boolean; errors: string[] } | null>(null);
   const [validatingScript, setValidatingScript] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [vendorsLoading, setVendorsLoading] = useState(false);
 
 useEffect(() => {
     fetchAutomations()
@@ -203,6 +220,23 @@ useEffect(() => {
       .catch(() => setLoadError(true))
       .finally(() => setLoading(false));
   }, [key]);
+
+  useEffect(() => {
+    setVendorsLoading(true);
+    graphqlQuery<{ vendors: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string }[] }>(VENDORS_QUERY)
+      .then(data => {
+        setVendors((data.vendors ?? []).map(v => ({
+          id: v.uid,
+          name: v.name,
+          company: v.company,
+          vendorType: v.vendorType,
+          phone: v.phone,
+          email: v.email,
+        })));
+      })
+      .catch(() => {})
+      .finally(() => setVendorsLoading(false));
+  }, []);
 
   const automation = automations.find(a => a.key === key);
 
@@ -249,6 +283,37 @@ useEffect(() => {
     } finally {
       setSaving(false);
     }
+  };
+
+  const matchingVendors = vendors.filter(
+    v => !automation?.require_vendor_type || v.vendorType === automation.require_vendor_type
+  );
+
+  const toggleVendor = (vendorId: string, selected: boolean) => {
+    const currentIds = automation?.vendor_ids ?? [];
+    let nextIds: string[];
+    if (selected) {
+      nextIds = [...currentIds, vendorId];
+    } else {
+      nextIds = currentIds.filter(id => id !== vendorId);
+    }
+    // If removing the preferred vendor, clear it
+    const nextPreferred = nextIds.includes(automation?.preferred_vendor_id ?? '')
+      ? automation?.preferred_vendor_id
+      : (nextIds[0] ?? null);
+    patch(
+      { vendor_ids: nextIds, preferred_vendor_id: nextPreferred },
+      `Update vendors for ${automation?.label}`,
+      false,
+    );
+  };
+
+  const setPreferredVendor = (vendorId: string) => {
+    patch(
+      { preferred_vendor_id: vendorId },
+      `Set preferred vendor for ${automation?.label}`,
+      false,
+    );
   };
 
   const handleSimulate = async () => {
@@ -395,11 +460,17 @@ useEffect(() => {
             <div className="flex flex-col items-end gap-1">
               <Switch
                 checked={automation.enabled}
-                disabled={automation.custom && !automation.simulation_run}
+                disabled={
+                  (automation.custom && !automation.simulation_run) ||
+                  (!!automation.require_vendor_type && !(automation.vendor_ids?.length))
+                }
                 onCheckedChange={v => patch({ enabled: v }, `${v ? "Enable" : "Disable"} ${automation.label} check`, false)}
               />
               {automation.custom && !automation.simulation_run && (
                 <p className="text-xs text-muted-foreground text-right">Run a simulation first</p>
+              )}
+              {!!automation.require_vendor_type && !(automation.vendor_ids?.length) && (
+                <p className="text-xs text-muted-foreground text-right">Select a vendor first</p>
               )}
             </div>
           </div>
@@ -453,6 +524,94 @@ useEffect(() => {
                   {saving && <span className="ml-2 text-xs">(saving…)</span>}
                 </span>
               </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* vendor picker — shown when the automation requires a vendor type */}
+      {automation.require_vendor_type && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <Wrench className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <CardTitle className="text-base">Vendor Assignment</CardTitle>
+                <CardDescription>
+                  Select one or more <strong>{automation.require_vendor_type}</strong> vendors.
+                  The preferred vendor will be pre-assigned when tasks are created.
+                  At least one is required to enable this automation.
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {vendorsLoading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading vendors…
+              </div>
+            ) : matchingVendors.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No {automation.require_vendor_type} vendors found.{" "}
+                <a href="/vendors" className="underline text-primary">Add one in the Vendors page</a>.
+              </p>
+            ) : (
+              <div className="divide-y rounded-md border">
+                {matchingVendors.map(vendor => {
+                  const isSelected = (automation.vendor_ids ?? []).includes(vendor.id);
+                  const isPreferred = automation.preferred_vendor_id === vendor.id;
+                  return (
+                    <div
+                      key={vendor.id}
+                      className={`flex items-center gap-3 px-3 py-2.5 ${isSelected ? "bg-muted/30" : ""}`}
+                    >
+                      {/* checkbox */}
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={e => toggleVendor(vendor.id, e.target.checked)}
+                        className="h-4 w-4 rounded border-input accent-primary cursor-pointer"
+                      />
+                      {/* info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm font-medium">{vendor.name}</span>
+                          {vendor.company && (
+                            <span className="text-xs text-muted-foreground">· {vendor.company}</span>
+                          )}
+                        </div>
+                        {(vendor.phone || vendor.email) && (
+                          <p className="text-xs text-muted-foreground">
+                            {[vendor.phone, vendor.email].filter(Boolean).join(" · ")}
+                          </p>
+                        )}
+                      </div>
+                      {/* preferred star — only shown when this vendor is selected */}
+                      {isSelected && (
+                        <button
+                          onClick={() => setPreferredVendor(vendor.id)}
+                          title={isPreferred ? "Preferred vendor" : "Set as preferred"}
+                          className="shrink-0 p-1 rounded hover:bg-muted transition-colors"
+                        >
+                          <Star
+                            className={`h-4 w-4 ${isPreferred ? "fill-yellow-400 text-yellow-400" : "text-muted-foreground"}`}
+                          />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {(automation.vendor_ids?.length ?? 0) > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {automation.vendor_ids!.length} vendor{automation.vendor_ids!.length !== 1 ? "s" : ""} selected
+                {automation.preferred_vendor_id && (() => {
+                  const pv = vendors.find(v => v.id === automation.preferred_vendor_id);
+                  return pv ? ` · ${pv.name} preferred` : "";
+                })()}
+              </p>
             )}
           </CardContent>
         </Card>

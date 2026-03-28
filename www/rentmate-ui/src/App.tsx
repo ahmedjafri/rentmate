@@ -14,7 +14,9 @@ import PropertyDetail from "./pages/PropertyDetail";
 import Tenants from "./pages/Tenants";
 import TenantDetail from "./pages/TenantDetail";
 import ActionDesk from "./pages/ActionDesk";
+import Chats from "./pages/Chats";
 import Documents from "./pages/Documents";
+import Vendors from "./pages/Vendors";
 import DocumentPage from './pages/DocumentPage';
 import Settings from "./pages/Settings";
 import DevTools from "./pages/DevTools";
@@ -52,9 +54,11 @@ const App = () => (
                 <Route path="/properties/:id" element={<PropertyDetail />} />
                 <Route path="/tenants" element={<Tenants />} />
                 <Route path="/tenants/:id" element={<TenantDetail />} />
+                <Route path="/vendors" element={<Vendors />} />
                 <Route path="/documents" element={<Documents />} />
                 <Route path="/documents/:id" element={<DocumentPage />} />
                 <Route path="/action-desk" element={<ActionDesk />} />
+                <Route path="/chats" element={<Chats />} />
                 <Route path="/automation" element={<Automation />} />
                 <Route path="/automation/:key" element={<AutomationDetail />} />
                 <Route path="/settings" element={<Settings />} />

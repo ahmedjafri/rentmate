@@ -491,11 +491,36 @@ def run_data_audit(
         logger.exception("Error during data audit: %s", exc)
         return 0
 
+    # Run built-in DSL scripts for checks not handled by a dedicated Python function above.
+    # Like custom automations, these only run when explicitly enabled in the config.
+    _PYTHON_HANDLED = {
+        "incomplete_properties", "vacant_units", "missing_contact",
+        "expiring_leases", "expired_leases", "overdue_rent",
+    }
+    from handlers.default_automations import _CHECK_META as _BUILTIN_META
+    from db.dsl_runner import run_script
+    for builtin_key, meta in _BUILTIN_META.items():
+        if builtin_key in _PYTHON_HANDLED:
+            continue
+        if check_name is not None and check_name != builtin_key:
+            continue
+        if check_name is None and not checks.get(builtin_key, {}).get("enabled", False):
+            continue
+        script = meta.get("script")
+        if not script:
+            continue
+        logger.info("Running built-in DSL script for %r", builtin_key)
+        check_params = {k: v for k, v in checks.get(builtin_key, {}).items()
+                        if k not in ("enabled", "interval_hours")}
+        try:
+            total += run_script(db, script, params=check_params, dry_run=dry_run)
+        except Exception as exc:
+            logger.exception("Error running built-in DSL script for %r: %s", builtin_key, exc)
+
     # Run custom automation scripts
     custom_meta = cfg.get("custom_meta", {})
     logger.info("audit: custom_meta keys=%r  check_name=%r", list(custom_meta.keys()), check_name)
     if custom_meta:
-        from db.dsl_runner import run_script
         for custom_key, meta in custom_meta.items():
             if check_name is not None and custom_key != check_name:
                 continue

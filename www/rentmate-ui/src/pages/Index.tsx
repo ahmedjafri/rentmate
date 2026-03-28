@@ -1,4 +1,5 @@
 import { useApp } from '@/context/AppContext';
+import { PageLoader } from '@/components/ui/page-loader';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Link } from 'react-router-dom';
@@ -21,13 +22,15 @@ const participantIcon: Record<TaskParticipantType, React.ElementType> = {
 };
 
 const Index = () => {
-  const { properties, tenants, tickets, actionDeskTasks, openChat } = useApp();
+  const { properties, tenants, tickets, actionDeskTasks, openChat, isLoading } = useApp();
 
   const totalUnits = properties.reduce((a, p) => a + p.units, 0);
   const occupiedUnits = properties.reduce((a, p) => a + p.occupiedUnits, 0);
   const occupancyRate = Math.round((occupiedUnits / totalUnits) * 100);
   const totalRevenue = properties.reduce((a, p) => a + p.monthlyRevenue, 0);
   const openTickets = tickets.filter(t => t.status === 'open' || t.status === 'in_progress').length;
+
+  if (isLoading) return <PageLoader />;
 
   const needsAttention = actionDeskTasks.filter(
     t => t.status === 'active' && (t.mode === 'waiting_approval' || t.mode === 'manual')

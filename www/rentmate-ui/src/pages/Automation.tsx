@@ -46,6 +46,9 @@ interface Automation {
   min_vacancy_days?: number;
   script?: string;
   custom?: boolean;
+  require_vendor_type?: string;
+  vendor_ids?: string[];
+  preferred_vendor_id?: string | null;
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -62,6 +65,8 @@ function automationsToChecks(automations: Automation[]) {
       interval_hours: a.interval_hours,
       ...(a.warn_days !== undefined ? { warn_days: a.warn_days } : {}),
       ...(a.min_vacancy_days !== undefined ? { min_vacancy_days: a.min_vacancy_days } : {}),
+      ...(a.vendor_ids?.length ? { vendor_ids: a.vendor_ids } : {}),
+      ...(a.preferred_vendor_id ? { preferred_vendor_id: a.preferred_vendor_id } : {}),
     }])
   );
 }

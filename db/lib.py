@@ -20,6 +20,7 @@ from .models import (
     MessageReceipt,
     ExternalContact,
     ParticipantType,
+    ConversationType,
 )
 
 
@@ -746,6 +747,163 @@ def group_suggestions(doc_id: str, filename: str, suggestions: list, suggestion_
             })
 
     return groups
+
+
+def route_inbound_to_tenant_chat(
+    db: Session,
+    *,
+    tenant: Tenant,
+    body: str,
+    channel_type: str,
+    sender_meta: dict,
+) -> tuple:
+    """
+    Route an inbound message to a persistent tenant conversation (not a task).
+    Finds or creates a conversation_type='tenant' conversation for the tenant,
+    adds the message, and returns (conversation, message).
+    """
+    now = datetime.utcnow()
+
+    # Find existing open tenant conversation for this tenant
+    existing = (
+        db.query(Conversation)
+        .options(joinedload(Conversation.participants))
+        .join(ConversationParticipant)
+        .filter(
+            Conversation.conversation_type == ConversationType.TENANT,
+            Conversation.is_archived.is_(False),
+            ConversationParticipant.tenant_id == tenant.id,
+            ConversationParticipant.is_active.is_(True),
+        )
+        .order_by(Conversation.updated_at.desc())
+        .first()
+    )
+
+    if existing is None:
+        existing = Conversation(
+            id=str(uuid.uuid4()),
+            subject=f"Conversation with {tenant.first_name} {tenant.last_name}",
+            is_group=False,
+            is_archived=False,
+            is_task=False,
+            conversation_type=ConversationType.TENANT,
+            channel_type=channel_type,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(existing)
+        db.flush()
+
+        participant = ConversationParticipant(
+            id=str(uuid.uuid4()),
+            conversation_id=existing.id,
+            participant_type=ParticipantType.TENANT,
+            tenant_id=tenant.id,
+            is_active=True,
+            joined_at=now,
+        )
+        db.add(participant)
+        db.flush()
+        db.refresh(existing)
+
+    msg = add_message(
+        db=db,
+        conversation=existing,
+        sender_type=ParticipantType.TENANT,
+        body=body,
+        meta=sender_meta,
+        sender_tenant=tenant,
+    )
+    return existing, msg
+
+
+def spawn_task_from_conversation(
+    db: Session,
+    *,
+    parent_conversation_id: str,
+    objective: str,
+    category: Optional[str] = None,
+    urgency: Optional[str] = None,
+    priority: Optional[str] = None,
+    task_mode: str = "autonomous",
+    source: str = "manual",
+) -> Conversation:
+    """
+    Spawn a Task conversation as a child of an existing conversation.
+    Sets parent_conversation_id and ancestor_ids for full lineage tracking.
+    """
+    parent = db.query(Conversation).filter(Conversation.id == parent_conversation_id).one_or_none()
+    if not parent:
+        raise ValueError(f"Parent conversation {parent_conversation_id} not found")
+
+    parent_ancestors = parent.ancestor_ids or []
+    now = datetime.utcnow()
+
+    task = Conversation(
+        id=str(uuid.uuid4()),
+        subject=objective,
+        is_group=False,
+        is_archived=False,
+        is_task=True,
+        conversation_type=ConversationType.TASK,
+        task_status="active",
+        task_mode=task_mode,
+        source=source,
+        category=category,
+        urgency=urgency,
+        priority=priority,
+        parent_conversation_id=parent_conversation_id,
+        ancestor_ids=parent_ancestors + [parent_conversation_id],
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(task)
+    db.flush()
+    return task
+
+
+def get_or_create_user_ai_conversation(
+    db: Session,
+    *,
+    account_id: str,
+    user_id: str,
+    session_key: Optional[str] = None,
+) -> Conversation:
+    """
+    Get or create a persistent user_ai conversation for the given user.
+    If session_key is provided, looks up an existing conversation by that key in subject.
+    """
+    now = datetime.utcnow()
+
+    if session_key:
+        # Try to find by session_key in subject or a recent one
+        existing = (
+            db.query(Conversation)
+            .filter(
+                Conversation.conversation_type == ConversationType.USER_AI,
+                Conversation.is_archived.is_(False),
+                Conversation.subject == session_key,
+            )
+            .order_by(Conversation.updated_at.desc())
+            .first()
+        )
+        if existing:
+            return existing
+
+    # Create a new user_ai conversation
+    conv = Conversation(
+        id=str(uuid.uuid4()),
+        subject=session_key or f"Chat with RentMate",
+        is_group=False,
+        is_archived=False,
+        is_task=False,
+        conversation_type=ConversationType.USER_AI,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(conv)
+    db.flush()
+    return conv
 
 
 def apply_document_extraction(

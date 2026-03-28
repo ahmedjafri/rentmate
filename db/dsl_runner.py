@@ -343,7 +343,18 @@ def _do_create_task(db: Session, subject: str, body: str, category: str,
                     urgency: str, property_id: Optional[str],
                     unit_id: Optional[str],
                     tenant_name: Optional[str] = None,
-                    property_address: Optional[str] = None) -> None:
+                    property_address: Optional[str] = None,
+                    require_vendor_type: Optional[str] = None,
+                    preferred_vendor_id: Optional[str] = None) -> None:
+    extra = {}
+    if require_vendor_type:
+        extra["require_vendor_type"] = require_vendor_type
+    if preferred_vendor_id:
+        from db.models import ExternalContact as _EC
+        vendor = db.query(_EC).filter_by(id=preferred_vendor_id).first()
+        if vendor:
+            extra["assigned_vendor_id"] = preferred_vendor_id
+            extra["assigned_vendor_name"] = vendor.name
     task = Conversation(
         id=str(uuid.uuid4()),
         subject=subject,
@@ -357,6 +368,7 @@ def _do_create_task(db: Session, subject: str, body: str, category: str,
         confidential=False,
         property_id=property_id,
         unit_id=unit_id,
+        extra=extra or None,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
@@ -511,10 +523,11 @@ def run_script(
             if action.get("type") != "create_task":
                 continue
 
-            subject  = _render(action.get("subject", "Untitled task"), ctx)
-            body     = _render(action.get("body", ""), ctx)
-            category = action.get("category", "compliance")
-            urgency  = _eval_urgency(action.get("urgency", "medium"), ctx)
+            subject             = _render(action.get("subject", "Untitled task"), ctx)
+            body                = _render(action.get("body", ""), ctx)
+            category            = action.get("category", "compliance")
+            urgency             = _eval_urgency(action.get("urgency", "medium"), ctx)
+            require_vendor_type = action.get("require_vendor_type") or None
 
             property_id, unit_id = _extract_ids(resource, record)
 
@@ -539,8 +552,11 @@ def run_script(
             elif resource == "tenant":
                 t_name = f"{record.first_name} {record.last_name}".strip()
 
+            preferred_vendor_id = (params or {}).get("preferred_vendor_id") or None
             _do_create_task(db, subject, body, category, urgency, property_id, unit_id,
-                            tenant_name=t_name, property_address=p_addr)
+                            tenant_name=t_name, property_address=p_addr,
+                            require_vendor_type=require_vendor_type,
+                            preferred_vendor_id=preferred_vendor_id)
             count += 1
             logger.debug("DSL created task: %r (urgency=%s)", subject, urgency)
 

@@ -1,7 +1,6 @@
-import { Home, Building2, Users, ClipboardList, Settings, MessageCircle, Bot, FileText, Zap } from 'lucide-react';
+import { Home, Building2, Users, ClipboardList, Settings, Bot, FileText, Zap, MessageCircle, Wrench } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useLocation } from 'react-router-dom';
-import { useApp } from '@/context/AppContext';
 import {
   Sidebar as SidebarUI,
   SidebarContent,
@@ -12,17 +11,17 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarHeader,
-  SidebarFooter,
   useSidebar,
 } from '@/components/ui/sidebar';
-import { Button } from '@/components/ui/button';
 
 const navItems = [
   { title: 'Dashboard', url: '/', icon: Home },
   { title: 'Properties', url: '/properties', icon: Building2 },
   { title: 'Tenants', url: '/tenants', icon: Users },
+  { title: 'Vendors', url: '/vendors', icon: Wrench },
   { title: 'Documents', url: '/documents', icon: FileText },
   { title: 'Action Desk', url: '/action-desk', icon: ClipboardList },
+  { title: 'Chats', url: '/chats', icon: MessageCircle },
   { title: 'Automation', url: '/automation', icon: Zap },
   { title: 'Settings', url: '/settings', icon: Settings },
 ];
@@ -30,9 +29,7 @@ const navItems = [
 export function AppSidebar() {
   const { state, setOpen, isMobile, setOpenMobile } = useSidebar();
   const dismissSidebar = () => isMobile ? setOpenMobile(false) : setOpen(false);
-  const collapsed = state === 'collapsed';
   const location = useLocation();
-  const { openChat } = useApp();
 
   return (
     <SidebarUI
@@ -71,20 +68,6 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-
-      <SidebarFooter className="p-2 group-data-[state=expanded]:p-3 transition-all duration-200">
-        <Button
-          onClick={() => openChat()}
-          variant="outline"
-          size="icon"
-          className={`rounded-xl border-primary/20 hover:bg-primary/5 overflow-hidden transition-all duration-200 shrink-0 ${
-            collapsed ? 'h-8 w-8' : 'h-9 w-full justify-start gap-2 px-3'
-          }`}
-        >
-          <MessageCircle className="h-4 w-4 text-primary shrink-0" />
-          {!collapsed && <span className="text-sm truncate">Chat with AI</span>}
-        </Button>
-      </SidebarFooter>
     </SidebarUI>
   );
 }

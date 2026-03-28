@@ -47,13 +47,16 @@ class EvalCase:
     dialog: list[DialogTurn]
     expected: dict[str, Any]
 
+    context: str = ""
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "EvalCase":
         return cls(
             id=data["id"],
-            automation=data["automation"],
+            automation=data.get("automation"),
             description=data["description"],
-            task=data["task"],
+            task=data.get("task"),
+            context=data.get("context", ""),
             dialog=[DialogTurn(**t) for t in data["dialog"]],
             expected=data["expected"],
         )
@@ -150,13 +153,17 @@ def judge_case(case: EvalCase, meta: dict[str, Any]) -> EvalResult:
         "If it is ambiguous or only partially met, mark it as failed."
     )
 
+    task_title = case.task['title'] if case.task else '(no task — generic chat session)'
+    task_body = case.task.get('body', '') if case.task else case.context
+    automation_label = automation_label or 'general'
+
     user_prompt = f"""Evaluate the following task dialog.
 
 AUTOMATION: {automation_label}
 AUTOMATION DESCRIPTION: {automation_desc}
 
-TASK TITLE: {case.task['title']}
-TASK BODY: {case.task.get('body', '')}
+TASK TITLE: {task_title}
+TASK BODY: {task_body}
 
 DIALOG:
 {_format_dialog(case.dialog)}

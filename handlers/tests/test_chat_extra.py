@@ -1,4 +1,5 @@
 """Tests for handlers/chat.py — /chat endpoint and helpers."""
+import json
 import os
 import pytest
 import unittest
@@ -20,6 +21,25 @@ def make_token():
 
 
 AUTH = {"Authorization": f"Bearer {make_token()}"}
+
+
+def _parse_sse(response_text: str) -> list[dict]:
+    """Parse SSE data lines from a response body into a list of event dicts."""
+    events = []
+    for line in response_text.splitlines():
+        if line.startswith("data: "):
+            try:
+                events.append(json.loads(line[6:]))
+            except Exception:
+                pass
+    return events
+
+
+def _done_event(response_text: str) -> dict | None:
+    for e in _parse_sse(response_text):
+        if e.get("type") == "done":
+            return e
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -50,9 +70,10 @@ class TestChatEndpoint(unittest.TestCase):
                 headers=AUTH,
             )
         assert response.status_code == 200
-        data = response.json()
-        assert data["reply"] == "Hi there!"
-        assert "conversation_id" in data
+        done = _done_event(response.text)
+        assert done is not None
+        assert done["reply"] == "Hi there!"
+        assert "conversation_id" in done
 
     def test_preserves_conversation_id(self):
         with (
@@ -64,9 +85,11 @@ class TestChatEndpoint(unittest.TestCase):
                 json={"message": "Hey", "conversation_id": "conv-abc", "conversation_history": []},
                 headers=AUTH,
             )
-        assert response.json()["conversation_id"] == "conv-abc"
+        done = _done_event(response.text)
+        assert done is not None
+        assert done["conversation_id"] == "conv-abc"
 
-    def test_agent_error_returns_502(self):
+    def test_agent_error_returns_error_event(self):
         with (
             patch("handlers.chat.load_account_context", return_value="ctx"),
             patch("handlers.chat.chat_with_agent", new_callable=AsyncMock, side_effect=RuntimeError("boom")),
@@ -76,12 +99,16 @@ class TestChatEndpoint(unittest.TestCase):
                 json={"message": "fail", "conversation_history": []},
                 headers=AUTH,
             )
-        assert response.status_code == 502
+        assert response.status_code == 200
+        events = _parse_sse(response.text)
+        error_events = [e for e in events if e.get("type") == "error"]
+        assert len(error_events) == 1
+        assert error_events[0]["message"] == "AI unavailable"
 
     def test_builds_history_from_prior_messages(self):
         captured = {}
 
-        async def _fake_chat(agent_id, session_key, messages):
+        async def _fake_chat(agent_id, session_key, messages, on_progress=None):
             captured["messages"] = messages
             return "ok"
 
@@ -102,7 +129,6 @@ class TestChatEndpoint(unittest.TestCase):
             )
         msgs = captured.get("messages", [])
         assert msgs[0]["role"] == "system"
-        assert msgs[1]["content"] == "first message"
         assert msgs[-1]["content"] == "follow-up"
 
 

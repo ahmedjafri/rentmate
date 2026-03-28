@@ -1,6 +1,6 @@
 import hashlib
 import uuid as _uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from backends.wire import storage_backend
 from db.lib import apply_document_extraction, compute_suggestions, group_suggestions, find_candidate_properties
-from db.models import Document
+from db.models import Document, DocumentTask
 from handlers.deps import extract_json, get_db, require_user
 
 router = APIRouter()
@@ -51,6 +51,7 @@ async def upload_document(
     request: Request,
     file: UploadFile = File(...),
     document_type: str = Form("lease"),
+    task_id: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
     await require_user(request)
@@ -59,6 +60,11 @@ async def upload_document(
 
     existing = db.query(Document).filter(Document.sha256_checksum == checksum).one_or_none()
     if existing:
+        if task_id:
+            exists = db.query(DocumentTask).filter_by(document_id=existing.id, task_id=task_id).one_or_none()
+            if not exists:
+                db.add(DocumentTask(document_id=existing.id, task_id=task_id))
+                db.commit()
         return {"document_id": existing.id, "duplicate": True}
 
     doc_id = str(_uuid.uuid4())
@@ -76,6 +82,8 @@ async def upload_document(
         sha256_checksum=checksum,
     )
     db.add(doc)
+    if task_id:
+        db.add(DocumentTask(document_id=doc_id, task_id=task_id))
     db.commit()
 
     from llm.document_processor import process_document
