@@ -222,7 +222,6 @@ def test_migrate_schema_covers_all_orm_columns():
 @pytest.fixture(scope="module")
 def pg_engine():
     """Spin up a real Postgres container shared across all postgres tests."""
-    pytest.importorskip("psycopg2")
     from testcontainers.postgres import PostgresContainer
     with PostgresContainer("postgres:16-alpine") as pg:
         eng = create_engine(pg.get_connection_url())
