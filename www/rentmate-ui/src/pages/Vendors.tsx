@@ -286,11 +286,11 @@ const Vendors = () => {
 
       {/* Add / Edit dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md flex flex-col max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>{editingId ? 'Edit Vendor' : 'Add Vendor'}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-2">
+          <div className="space-y-4 py-2 overflow-y-auto pr-1">
             <div className="space-y-1.5">
               <Label htmlFor="v-name">Name *</Label>
               <Input
