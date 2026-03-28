@@ -22,7 +22,7 @@ import pytest
 
 from db.audit import run_data_audit
 from db.dsl_runner import run_script
-from db.models import Conversation, Lease, Message, Property, Tenant, Unit
+from db.models import Conversation, Task, Lease, Message, Property, Tenant, Unit
 
 TODAY = date.today()
 
@@ -53,20 +53,22 @@ def _lease(db, prop, unit, tenant, start=None, end=None, rent=1000.0, status="cu
     db.add(l); db.flush(); return l
 
 def _tasks(db):
-    return (db.query(Conversation)
-              .filter(Conversation.is_task == True,             # noqa: E712
-                      Conversation.source == "ai_suggestion")
+    return (db.query(Task)
+              .filter(Task.source == "ai_suggestion")
               .all())
 
 def _open_tasks(db):
     return [t for t in _tasks(db) if t.task_status in {"suggested", "active", "paused"}]
 
 def _subjects(db):
-    return [t.subject for t in _open_tasks(db)]
+    return [t.title for t in _open_tasks(db)]
 
 def _body(db, task):
+    conv_id = task.conversations[0].id if task.conversations else None
+    if not conv_id:
+        return ""
     m = (db.query(Message)
-           .filter(Message.conversation_id == task.id,
+           .filter(Message.conversation_id == conv_id,
                    Message.message_type == "context")
            .first())
     return m.body if m else ""
@@ -371,7 +373,7 @@ class TestScopeUnit:
             _lease(db, p, u, t, end=TODAY - timedelta(days=days))
 
         run_script(db, script)
-        tasks_by_label = {t.subject.split(": ")[1]: t.urgency for t in _open_tasks(db)}
+        tasks_by_label = {t.title.split(": ")[1]: t.urgency for t in _open_tasks(db)}
         assert tasks_by_label["H"] == "high"
         assert tasks_by_label["M"] == "medium"
         assert tasks_by_label["L"] == "low"
@@ -538,7 +540,7 @@ class TestScopeLease:
             _lease(db, p, u, t, end=TODAY + timedelta(days=days))
 
         run_script(db, script)
-        tasks = {t.subject: t.urgency for t in _open_tasks(db)}
+        tasks = {t.title: t.urgency for t in _open_tasks(db)}
         assert tasks["Expiring: 20d"] == "high"
         assert tasks["Expiring: 50d"] == "medium"
 
@@ -952,7 +954,7 @@ class TestUrgencyExpressions:
         for lbl in ("A", "B", "C"):
             _unit(db, p_large, lbl)
         run_script(db, script)
-        tasks = {t.subject: t.urgency for t in _open_tasks(db)}
+        tasks = {t.title: t.urgency for t in _open_tasks(db)}
         assert tasks["U Small"] == "medium"
         assert tasks["U Large"] == "high"
 
@@ -1116,7 +1118,7 @@ class TestAuditIntegration:
         cfg = self._cfg("my_check", enabled=True, script=self.SCRIPT)
         n = run_data_audit(db, config=cfg)
         assert n == 1
-        assert any("Custom review" in s for s in [t.subject for t in _open_tasks(db)])
+        assert any("Custom review" in s for s in [t.title for t in _open_tasks(db)])
 
     def test_disabled_custom_automation_skipped(self, db):
         _prop(db)
@@ -1205,6 +1207,6 @@ class TestAuditIntegration:
         }
         n = run_data_audit(db, config=cfg)
         assert n == 2
-        subjects = [t.subject for t in _open_tasks(db)]
+        subjects = [t.title for t in _open_tasks(db)]
         assert any("100 A" in s for s in subjects)
         assert any("200 B" in s for s in subjects)

@@ -1,16 +1,15 @@
 from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from db.models import Conversation, ExternalContact, Message, ParticipantType as PT
+from db.models import Task, Conversation, ExternalContact, Message, ParticipantType as PT
 from gql.types import CreateTaskInput, AddTaskMessageInput, UpdateTaskInput
 
 
 class TaskService:
     @staticmethod
-    def create_task(sess: Session, input: CreateTaskInput) -> Conversation:
-        task = Conversation(
-            subject=input.title,
-            is_task=True,
+    def create_task(sess: Session, input: CreateTaskInput) -> Task:
+        task = Task(
+            title=input.title,
             task_status=input.task_status,
             task_mode=input.task_mode,
             source=input.source,
@@ -20,16 +19,27 @@ class TaskService:
             confidential=input.confidential,
             property_id=input.property_id,
             unit_id=input.unit_id,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
         )
         sess.add(task)
+        sess.flush()
+        # Create the primary internal conversation thread for this task
+        convo = Conversation(
+            task_id=task.id,
+            subject=input.title,
+            property_id=input.property_id,
+            unit_id=input.unit_id,
+        )
+        sess.add(convo)
         sess.commit()
         sess.refresh(task)
         return task
 
     @staticmethod
-    def update_task_status(sess: Session, uid: str, status: str) -> Conversation:
+    def update_task_status(sess: Session, uid: str, status: str) -> Task:
         task = sess.execute(
-            select(Conversation).where(Conversation.id == uid, Conversation.is_task == True)  # noqa: E712
+            select(Task).where(Task.id == uid)
         ).scalar_one_or_none()
         if not task:
             raise ValueError(f"Task {uid} not found")
@@ -39,9 +49,9 @@ class TaskService:
         return task
 
     @staticmethod
-    def update_task(sess: Session, input: UpdateTaskInput) -> Conversation:
+    def update_task(sess: Session, input: UpdateTaskInput) -> Task:
         task = sess.execute(
-            select(Conversation).where(Conversation.id == input.uid, Conversation.is_task == True)  # noqa: E712
+            select(Task).where(Task.id == input.uid)
         ).scalar_one_or_none()
         if not task:
             raise ValueError(f"Task {input.uid} not found")
@@ -56,7 +66,7 @@ class TaskService:
     @staticmethod
     def delete_task(sess: Session, uid: str) -> bool:
         task = sess.execute(
-            select(Conversation).where(Conversation.id == uid, Conversation.is_task == True)  # noqa: E712
+            select(Task).where(Task.id == uid)
         ).scalar_one_or_none()
         if not task:
             raise ValueError(f"Task {uid} not found")
@@ -65,9 +75,9 @@ class TaskService:
         return True
 
     @staticmethod
-    def assign_vendor_to_task(sess: Session, task_id: str, vendor_id: str) -> Conversation:
+    def assign_vendor_to_task(sess: Session, task_id: str, vendor_id: str) -> Task:
         task = sess.execute(
-            select(Conversation).where(Conversation.id == task_id, Conversation.is_task == True)  # noqa: E712
+            select(Task).where(Task.id == task_id)
         ).scalar_one_or_none()
         if not task:
             raise ValueError(f"Task {task_id} not found")
@@ -76,12 +86,17 @@ class TaskService:
         ).scalar_one_or_none()
         if not vendor:
             raise ValueError(f"Vendor {vendor_id} not found")
-        extra = dict(task.extra or {})
-        extra["assigned_vendor_id"] = vendor_id
-        extra["assigned_vendor_name"] = vendor.name
-        task.extra = extra
-        from sqlalchemy.orm.attributes import flag_modified
-        flag_modified(task, "extra")
+        # Store vendor assignment in the first linked conversation's extra field
+        convo = sess.execute(
+            select(Conversation).where(Conversation.task_id == task.id)
+        ).scalars().first()
+        if convo:
+            extra = dict(convo.extra or {})
+            extra["assigned_vendor_id"] = vendor_id
+            extra["assigned_vendor_name"] = vendor.name
+            convo.extra = extra
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(convo, "extra")
         sess.commit()
         sess.refresh(task)
         return task
@@ -89,12 +104,18 @@ class TaskService:
     @staticmethod
     def add_task_message(sess: Session, input: AddTaskMessageInput) -> Message:
         task = sess.execute(
-            select(Conversation).where(Conversation.id == input.task_id, Conversation.is_task == True)  # noqa: E712
+            select(Task).where(Task.id == input.task_id)
         ).scalar_one_or_none()
         if not task:
             raise ValueError(f"Task {input.task_id} not found")
+        # Find the primary (first) conversation for this task
+        convo = sess.execute(
+            select(Conversation).where(Conversation.task_id == task.id)
+        ).scalars().first()
+        if not convo:
+            raise ValueError(f"No conversation found for task {input.task_id}")
         msg = Message(
-            conversation_id=input.task_id,
+            conversation_id=convo.id,
             sender_type=PT.ACCOUNT_USER,
             body=input.body,
             message_type=input.message_type,

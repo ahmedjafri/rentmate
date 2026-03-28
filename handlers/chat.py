@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db.lib import get_conversation_with_messages, record_sms_from_dialpad, route_inbound_to_tenant_chat
-from db.models import Conversation, Message, ParticipantType
+from db.models import Conversation, Message, ParticipantType, Task
 from handlers.deps import get_db, require_user
 from llm.context import build_task_context, load_account_context
 from llm.registry import agent_registry, DATA_DIR
@@ -281,7 +281,6 @@ async def chat_endpoint(
                 subject="Chat with RentMate",
                 is_group=False,
                 is_archived=False,
-                is_task=False,
                 conversation_type=_ConvType.USER_AI,
                 created_at=_dt.utcnow(),
                 updated_at=_dt.utcnow(),
@@ -446,15 +445,17 @@ async def task_chat_endpoint(
 ):
     await require_user(request)
 
-    task = db.query(Conversation).filter_by(id=body.task_id).first()
+    task = db.query(Task).filter_by(id=body.task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    # Find the primary conversation for this task (first one linked)
+    primary_convo = task.conversations[0] if task.conversations else None
 
     context = build_task_context(db, body.task_id)
-    msg_rows = sorted(
-        [m for m in task.messages if m.message_type == "message"],
-        key=lambda m: m.sent_at,
-    )[-20:]
+    all_msgs = []
+    for convo in task.conversations:
+        all_msgs.extend(m for m in convo.messages if m.message_type == "message")
+    msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
     history = [
         {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
         for m in msg_rows
@@ -467,6 +468,7 @@ async def task_chat_endpoint(
     session_key = f"task:{body.task_id}"
     messages_payload = [{"role": "system", "content": context}] + history
     task_id = body.task_id
+    convo_id = primary_convo.id if primary_convo else body.task_id
 
     async def generate():
         queue: asyncio.Queue = asyncio.Queue()
@@ -505,7 +507,7 @@ async def task_chat_endpoint(
                         thinking_body = "\n".join(running.progress_log)
                         write_db.add(Message(
                             id=str(_uuid.uuid4()),
-                            conversation_id=task_id,
+                            conversation_id=convo_id,
                             sender_type=ParticipantType.ACCOUNT_USER,
                             body=thinking_body,
                             message_type="internal",
@@ -515,7 +517,7 @@ async def task_chat_endpoint(
                         ))
                     ai_msg = Message(
                         id=str(_uuid.uuid4()),
-                        conversation_id=task_id,
+                        conversation_id=convo_id,
                         sender_type=ParticipantType.ACCOUNT_USER,
                         body=reply,
                         message_type="message",
@@ -524,7 +526,7 @@ async def task_chat_endpoint(
                         sent_at=now,
                     )
                     write_db.add(ai_msg)
-                    conv = write_db.query(Conversation).filter_by(id=task_id).first()
+                    conv = write_db.query(Conversation).filter_by(id=convo_id).first()
                     if conv:
                         conv.updated_at = now
                     write_db.commit()

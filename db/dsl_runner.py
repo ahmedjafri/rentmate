@@ -18,6 +18,7 @@ import yaml
 from sqlalchemy.orm import Session
 
 from .models import (
+    Task,
     Conversation,
     Lease,
     Message,
@@ -324,18 +325,17 @@ def _eval_urgency(urgency: Any, ctx: Dict[str, Any]) -> str:
 def _task_exists(db: Session, subject: str,
                  property_id: Optional[str], unit_id: Optional[str]) -> bool:
     q = (
-        db.query(Conversation)
+        db.query(Task)
         .filter(
-            Conversation.is_task == True,           # noqa: E712
-            Conversation.source == "ai_suggestion",
-            Conversation.task_status.in_(_OPEN_STATUSES),
-            Conversation.subject == subject,
+            Task.source == "ai_suggestion",
+            Task.task_status.in_(_OPEN_STATUSES),
+            Task.title == subject,
         )
     )
     if property_id:
-        q = q.filter(Conversation.property_id == property_id)
+        q = q.filter(Task.property_id == property_id)
     if unit_id:
-        q = q.filter(Conversation.unit_id == unit_id)
+        q = q.filter(Task.unit_id == unit_id)
     return q.first() is not None
 
 
@@ -355,10 +355,9 @@ def _do_create_task(db: Session, subject: str, body: str, category: str,
         if vendor:
             extra["assigned_vendor_id"] = preferred_vendor_id
             extra["assigned_vendor_name"] = vendor.name
-    task = Conversation(
+    task = Task(
         id=str(uuid.uuid4()),
-        subject=subject,
-        is_task=True,
+        title=subject,
         task_status="suggested",
         task_mode="waiting_approval",
         source="ai_suggestion",
@@ -368,15 +367,28 @@ def _do_create_task(db: Session, subject: str, body: str, category: str,
         confidential=False,
         property_id=property_id,
         unit_id=unit_id,
-        extra=extra or None,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
     db.add(task)
     db.flush()
+
+    convo = Conversation(
+        id=str(uuid.uuid4()),
+        task_id=task.id,
+        subject=subject,
+        property_id=property_id,
+        unit_id=unit_id,
+        extra=extra or None,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(convo)
+    db.flush()
+
     db.add(Message(
         id=str(uuid.uuid4()),
-        conversation_id=task.id,
+        conversation_id=convo.id,
         sender_type=ParticipantType.ACCOUNT_USER,
         body=body,
         message_type="context",
@@ -398,7 +410,7 @@ def _do_create_task(db: Session, subject: str, body: str, category: str,
     if draft:
         db.add(Message(
             id=str(uuid.uuid4()),
-            conversation_id=task.id,
+            conversation_id=convo.id,
             sender_type=ParticipantType.ACCOUNT_USER,
             body="Here's a suggested message you can send:",
             message_type="approval",

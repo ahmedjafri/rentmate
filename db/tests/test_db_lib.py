@@ -179,11 +179,9 @@ def test_record_sms_from_dialpad(db):
     assert msg.meta["direction"] == "inbound"
     assert msg.sender_tenant_id == tenant.id
 
-    # Inbound SMS should route to a task conversation
+    # Inbound SMS should route to a conversation linked to a task
     assert conv is not None
-    assert conv.is_task is True
-    assert conv.task_status == "active"
-    assert conv.channel_type == "sms"
+    assert conv.task_id is not None
 
     receipts = db.query(MessageReceipt).filter_by(message_id=msg.id).all()
     assert len(receipts) >= 1

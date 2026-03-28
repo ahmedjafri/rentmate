@@ -12,6 +12,7 @@ from .utils import normalize_phone
 from .models import (
     Tenant,
     Property,
+    Task,
     Unit,
     Lease,
     Conversation,
@@ -322,6 +323,7 @@ def route_inbound_to_task(
     recency_cutoff = now - timedelta(days=30)
 
     # Find active tasks for this tenant updated within last 30 days
+    # Look for conversations linked to tasks that have participants matching this tenant
     candidates_raw = (
         db.query(Conversation)
         .options(
@@ -329,9 +331,10 @@ def route_inbound_to_task(
             joinedload(Conversation.messages),
         )
         .join(ConversationParticipant)
+        .join(Task, Task.id == Conversation.task_id)
         .filter(
-            Conversation.is_task.is_(True),
-            Conversation.task_status == "active",
+            Conversation.task_id.isnot(None),
+            Task.task_status == "active",
             Conversation.updated_at >= recency_cutoff,
             ConversationParticipant.tenant_id == tenant.id,
             ConversationParticipant.is_active.is_(True),
@@ -366,16 +369,27 @@ def route_inbound_to_task(
             task_created = True
 
     if task_created or conv is None:
-        conv = Conversation(
+        task = Task(
             id=str(uuid.uuid4()),
-            subject=f"Message from {tenant.first_name} {tenant.last_name}",
-            is_group=False,
-            is_archived=False,
-            is_task=True,
+            account_id=account_id,
+            title=f"Message from {tenant.first_name} {tenant.last_name}",
             task_status="active",
             task_mode="autonomous",
             source=channel_type,
             channel_type=channel_type,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(task)
+        db.flush()
+
+        conv = Conversation(
+            id=str(uuid.uuid4()),
+            account_id=account_id,
+            task_id=task.id,
+            subject=f"Message from {tenant.first_name} {tenant.last_name}",
+            is_group=False,
+            is_archived=False,
             created_at=now,
             updated_at=now,
         )
@@ -474,7 +488,7 @@ def record_sms_from_dialpad(
 
     print(
         f"[Dialpad] Recorded SMS msg={msg.id} conv={msg.conversation_id} tenant={tenant.id} "
-        f"task={conv.is_task} new={conv.source}"
+        f"task={conv.task_id is not None} new={getattr(conv.task, 'source', None) if conv.task_id else None}"
     )
 
     return msg, conv
@@ -785,7 +799,6 @@ def route_inbound_to_tenant_chat(
             subject=f"Conversation with {tenant.first_name} {tenant.last_name}",
             is_group=False,
             is_archived=False,
-            is_task=False,
             conversation_type=ConversationType.TENANT,
             channel_type=channel_type,
             created_at=now,
@@ -827,37 +840,45 @@ def spawn_task_from_conversation(
     priority: Optional[str] = None,
     task_mode: str = "autonomous",
     source: str = "manual",
-) -> Conversation:
+) -> Task:
     """
-    Spawn a Task conversation as a child of an existing conversation.
-    Sets parent_conversation_id and ancestor_ids for full lineage tracking.
+    Spawn a Task as a child of an existing conversation.
+    Creates a linked Conversation for the task thread.
     """
     parent = db.query(Conversation).filter(Conversation.id == parent_conversation_id).one_or_none()
     if not parent:
         raise ValueError(f"Parent conversation {parent_conversation_id} not found")
 
-    parent_ancestors = parent.ancestor_ids or []
     now = datetime.utcnow()
 
-    task = Conversation(
+    task = Task(
         id=str(uuid.uuid4()),
-        subject=objective,
-        is_group=False,
-        is_archived=False,
-        is_task=True,
-        conversation_type=ConversationType.TASK,
+        title=objective,
         task_status="active",
         task_mode=task_mode,
         source=source,
         category=category,
         urgency=urgency,
         priority=priority,
-        parent_conversation_id=parent_conversation_id,
-        ancestor_ids=parent_ancestors + [parent_conversation_id],
         created_at=now,
         updated_at=now,
     )
     db.add(task)
+    db.flush()
+
+    convo = Conversation(
+        id=str(uuid.uuid4()),
+        task_id=task.id,
+        subject=objective,
+        is_group=False,
+        is_archived=False,
+        conversation_type=ConversationType.TASK,
+        parent_conversation_id=parent_conversation_id,
+        ancestor_ids=(parent.ancestor_ids or []) + [parent_conversation_id],
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(convo)
     db.flush()
     return task
 
@@ -896,7 +917,6 @@ def get_or_create_user_ai_conversation(
         subject=session_key or f"Chat with RentMate",
         is_group=False,
         is_archived=False,
-        is_task=False,
         conversation_type=ConversationType.USER_AI,
         created_at=now,
         updated_at=now,
