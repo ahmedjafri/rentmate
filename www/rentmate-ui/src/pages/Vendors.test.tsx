@@ -80,6 +80,16 @@ describe('Vendors page', () => {
     mockUpdateVendor.mockReset();
     mockRemoveVendor.mockReset();
     mockGraphqlQuery.mockReset();
+    // Default: vendorTypes query returns canonical list
+    mockGraphqlQuery.mockResolvedValue({ vendorTypes: ['Plumber', 'Electrician', 'HVAC', 'Landscaper'] });
+  });
+
+  // --- Render without crash ---
+
+  it('renders without crashing (catches missing VENDOR_TYPES constant regression)', () => {
+    // This test would have caught the ReferenceError: VENDOR_TYPES is not defined
+    // that occurred when the hardcoded constant was removed but JSX still referenced it.
+    expect(() => renderPage()).not.toThrow();
   });
 
   // --- Empty state ---

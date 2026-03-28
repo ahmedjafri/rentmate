@@ -196,7 +196,7 @@ const Vendors = () => {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="_all">All types</SelectItem>
-            {VENDOR_TYPES.map(t => (
+            {vendorTypes.map(t => (
               <SelectItem key={t} value={t}>{t}</SelectItem>
             ))}
           </SelectContent>
@@ -294,7 +294,7 @@ const Vendors = () => {
                   <SelectValue placeholder="Select type" />
                 </SelectTrigger>
                 <SelectContent>
-                  {VENDOR_TYPES.map(t => (
+                  {vendorTypes.map(t => (
                     <SelectItem key={t} value={t}>{t}</SelectItem>
                   ))}
                 </SelectContent>
