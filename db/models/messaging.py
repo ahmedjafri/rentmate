@@ -1,172 +1,23 @@
-# db/models.py
-
 import uuid
-from datetime import datetime, date
+from datetime import datetime
+from enum import Enum
 
 from sqlalchemy import (
     Column,
     String,
-    Date,
     DateTime,
-    Float,
     ForeignKey,
     Boolean,
     Text,
     UniqueConstraint,
-    Integer,
     JSON,
+    Index,
 )
-from sqlalchemy.orm import declarative_base, relationship
-from enum import Enum
-from sqlalchemy import Enum as SqlEnum, Index
+from sqlalchemy.orm import relationship
+from sqlalchemy import Enum as SqlEnum
 
-Base = declarative_base()
+from .base import Base
 
-
-class Property(Base):
-    """
-    A property managed by the landlord.
-    """
-
-    __tablename__ = "properties"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    name = Column(String(255), nullable=True)
-    address_line1 = Column(String(255), nullable=False)
-    address_line2 = Column(String(255), nullable=True)
-    city = Column(String(100), nullable=True)
-    state = Column(String(100), nullable=True)
-    postal_code = Column(String(20), nullable=True)
-    country = Column(String(100), nullable=True, default="USA")
-    # 'single_family' — one tenant, no distinct units (house/condo)
-    # 'multi_family'  — multiple units (apartment building, duplex, etc.)
-    property_type = Column(String(20), nullable=True, default='multi_family')
-    source = Column(String(20), nullable=True)  # 'manual' | 'document'
-
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-
-    units = relationship(
-        "Unit",
-        back_populates="property",
-        cascade="all, delete-orphan",
-    )
-
-    leases = relationship(
-        "Lease",
-        back_populates="property",
-        cascade="all, delete-orphan",
-    )
-
-
-class Unit(Base):
-    """
-    A rentable unit within a property.
-    """
-
-    __tablename__ = "units"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    property_id = Column(
-        String(36),
-        ForeignKey("properties.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-
-    label = Column(String(100), nullable=False)
-
-    __table_args__ = (
-        UniqueConstraint(
-            "property_id",
-            "label",
-            name="uq_units_property_label",
-        ),
-    )
-
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-
-    property = relationship("Property", back_populates="units")
-
-    leases = relationship(
-        "Lease",
-        back_populates="unit",
-        cascade="all, delete-orphan",
-    )
-
-
-class Tenant(Base):
-    """
-    A tenant/contact.
-    """
-
-    __tablename__ = "tenants"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    first_name = Column(String(100), nullable=False)
-    last_name = Column(String(100), nullable=False)
-    email = Column(String(255), nullable=True)
-    phone = Column(String(50), nullable=True)
-    notes = Column(Text, nullable=True)
-
-    extra = Column(JSON, nullable=True)
-
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-
-    leases = relationship(
-        "Lease",
-        back_populates="tenant",
-        cascade="all, delete-orphan",
-    )
-
-    @property
-    def units(self):
-        return [lease.unit for lease in self.leases if lease.unit is not None]
-
-
-class Lease(Base):
-    """
-    A lease agreement between a tenant and a unit.
-    """
-
-    __tablename__ = "leases"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    tenant_id = Column(
-        String(36),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-
-    unit_id = Column(
-        String(36),
-        ForeignKey("units.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-
-    property_id = Column(
-        String(36),
-        ForeignKey("properties.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-
-    start_date = Column(Date, nullable=False)
-    end_date = Column(Date, nullable=False)
-    rent_amount = Column(Float, nullable=False)
-    payment_status = Column(String(20), nullable=True, default='current')  # current/late/overdue
-
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-
-    tenant = relationship("Tenant", back_populates="leases")
-    unit = relationship("Unit", back_populates="leases")
-    property = relationship("Property", back_populates="leases")
-
-
-# -------------------------------
-# Messaging & Contacts
-# -------------------------------
 
 class ParticipantType(str, Enum):
     TENANT = "tenant"
@@ -360,76 +211,6 @@ class Message(Base):
             raise ValueError("sender_tenant_id required for TENANT message")
         if self.sender_type == ParticipantType.EXTERNAL_CONTACT and not self.sender_external_contact_id:
             raise ValueError("sender_external_contact_id required for EXTERNAL_CONTACT message")
-
-
-class Document(Base):
-    """
-    An uploaded document (e.g. lease PDF).
-    """
-    __tablename__ = "documents"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    filename = Column(String(255), nullable=False)
-    content_type = Column(String(100), nullable=True)
-    storage_path = Column(String(512), nullable=True)
-    document_type = Column(String(50), nullable=False, default="lease")
-    status = Column(String(50), nullable=False, default="pending")
-    progress = Column(String(255), nullable=True)
-
-    raw_text = Column(Text, nullable=True)
-    extracted_data = Column(JSON, nullable=True)
-    error_message = Column(Text, nullable=True)
-
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    processed_at = Column(DateTime, nullable=True)
-    sha256_checksum = Column(String(64), nullable=True, index=True)
-    suggestion_states = Column(JSON, nullable=True)  # {category: 'accepted'|'rejected'}
-    confirmed_at = Column(DateTime, nullable=True)
-    extraction_meta = Column(JSON, nullable=True)   # {llm_model, text_extractor, page_count, raw_text_chars, form_fields_found, form_fields_filled, input_chars_sent_to_llm}
-
-
-class DocumentTask(Base):
-    """
-    Many-to-many junction: one document can spawn multiple tasks;
-    one task can reference multiple documents.
-    """
-    __tablename__ = "document_tasks"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    document_id = Column(String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
-    task_id = Column(String(36), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-
-    __table_args__ = (UniqueConstraint("document_id", "task_id", name="uq_document_task"),)
-
-
-class DocumentTag(Base):
-    """
-    Links a document to a property, unit, or tenant for the Documents UI tagging feature.
-    """
-    __tablename__ = "document_tags"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    document_id = Column(String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
-    tag_type = Column(String(20), nullable=False)  # property/unit/tenant
-    property_id = Column(String(36), ForeignKey("properties.id", ondelete="CASCADE"), nullable=True)
-    unit_id = Column(String(36), ForeignKey("units.id", ondelete="CASCADE"), nullable=True)
-    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-
-
-class AutomationRevision(Base):
-    """
-    A snapshot of the automation config, stored as a linked list (git-like versioning).
-    """
-    __tablename__ = "automation_revisions"
-
-    id = Column(String(16), primary_key=True)        # sha256[:16] of content+timestamp
-    config = Column(JSON, nullable=False)             # full config snapshot
-    message = Column(String(500), nullable=False, default="Update automation config")
-    parent_id = Column(String(16), nullable=True)    # previous revision id (soft link)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class MessageReceipt(Base):
