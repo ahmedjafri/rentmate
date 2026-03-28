@@ -131,7 +131,6 @@ def task_id(db):
     db.flush()
     conv = Conversation(
         id=str(uuid.uuid4()),
-        account_id="00000000-0000-0000-0000-000000000001",
         task_id=task.id,
         subject="HVAC Repair",
     )
@@ -319,10 +318,12 @@ class TestTaskChatSSE:
         asyncio.run(_run())
 
         db.expire_all()
+        task = db.query(Task).filter_by(id=task_id).first()
+        conv_id = task.conversations[0].id
         ai_msgs = (
             db.query(Message)
             .filter_by(
-                conversation_id=task_id,
+                conversation_id=conv_id,
                 is_ai=True,
                 message_type="message",
             )

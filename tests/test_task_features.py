@@ -120,7 +120,6 @@ def _mk_task(
     db.add(task)
     db.flush()
     conv = Conversation(
-        account_id=DEFAULT_ACCOUNT_ID,
         task_id=task.id,
         subject=subject,
         lease_id=lease.id if lease else None,
@@ -183,7 +182,7 @@ class TestTasksQuery:
 
     def test_tasks_returns_only_tasks_not_plain_conversations(self, db):
         # Plain conversation (no linked task) — should not appear in tasks query
-        plain_conv = Conversation(account_id=DEFAULT_ACCOUNT_ID, subject="Chat")
+        plain_conv = Conversation(subject="Chat")
         db.add(plain_conv)
         db.flush()
 
@@ -596,7 +595,7 @@ class TestUpdateTaskStatusMutation:
 
     def test_update_task_status_on_non_task_conversation_fails(self, db):
         # A regular conversation (no linked task) should NOT be found by updateTaskStatus
-        conv = Conversation(account_id=DEFAULT_ACCOUNT_ID, subject="Not a task")
+        conv = Conversation(subject="Not a task")
         db.add(conv)
         db.flush()
 
@@ -810,7 +809,7 @@ class TestAddTaskMessageMutation:
         assert result.errors is not None
 
     def test_add_task_message_on_non_task_conversation_fails(self, db):
-        conv = Conversation(account_id=DEFAULT_ACCOUNT_ID, subject="Not a task")
+        conv = Conversation(subject="Not a task")
         db.add(conv)
         db.flush()
 

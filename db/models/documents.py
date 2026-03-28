@@ -10,6 +10,7 @@ from sqlalchemy import (
     UniqueConstraint,
     JSON,
 )
+from sqlalchemy.orm import relationship
 
 from .base import Base
 

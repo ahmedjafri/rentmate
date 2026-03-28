@@ -312,6 +312,7 @@ def route_inbound_to_task(
     body: str,
     channel_type: str,
     sender_meta: dict,
+    account_id: str = "default",
 ) -> tuple:
     """
     Central router for all inbound channels (SMS, email).
@@ -385,7 +386,6 @@ def route_inbound_to_task(
 
         conv = Conversation(
             id=str(uuid.uuid4()),
-            account_id=account_id,
             task_id=task.id,
             subject=f"Message from {tenant.first_name} {tenant.last_name}",
             is_group=False,
@@ -800,7 +800,6 @@ def route_inbound_to_tenant_chat(
             is_group=False,
             is_archived=False,
             conversation_type=ConversationType.TENANT,
-            channel_type=channel_type,
             created_at=now,
             updated_at=now,
         )
