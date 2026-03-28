@@ -117,6 +117,7 @@ export function useApiData(): ApiState {
             phone: v.phone,
             email: v.email,
             notes: v.notes,
+            contactMethod: v.contactMethod ?? 'rentmate',
           }))
         : [];
 
@@ -272,6 +273,7 @@ interface ApiVendor {
   phone?: string;
   email?: string;
   notes?: string;
+  contactMethod?: string;
 }
 
 interface ApiTenant {

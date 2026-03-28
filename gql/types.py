@@ -446,6 +446,9 @@ VENDOR_TYPES: list[str] = [
 ]
 
 
+VENDOR_CONTACT_METHODS: list[str] = ["rentmate", "email", "phone"]
+
+
 @strawberry.type
 class VendorType:
     uid: str
@@ -455,10 +458,12 @@ class VendorType:
     phone: typing.Optional[str] = None
     email: typing.Optional[str] = None
     notes: typing.Optional[str] = None
+    contact_method: str = "rentmate"
     created_at: str = ""
 
     @classmethod
     def from_sql(cls, v) -> "VendorType":
+        extra = v.extra or {}
         return cls(
             uid=str(v.id),
             name=v.name,
@@ -467,6 +472,7 @@ class VendorType:
             phone=v.phone,
             email=v.email,
             notes=v.notes,
+            contact_method=extra.get("contact_method", "rentmate"),
             created_at=str(v.created_at),
         )
 
@@ -479,6 +485,7 @@ class CreateVendorInput:
     phone: typing.Optional[str] = None
     email: typing.Optional[str] = None
     notes: typing.Optional[str] = None
+    contact_method: str = "rentmate"
 
 
 @strawberry.input
@@ -490,6 +497,7 @@ class UpdateVendorInput:
     phone: typing.Optional[str] = None
     email: typing.Optional[str] = None
     notes: typing.Optional[str] = None
+    contact_method: typing.Optional[str] = None
 
 
 @strawberry.type

@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from db.models import ExternalContact
-from gql.types import CreateVendorInput, UpdateVendorInput, VENDOR_TYPES
+from gql.types import CreateVendorInput, UpdateVendorInput, VENDOR_TYPES, VENDOR_CONTACT_METHODS
 
 
 def _validate_vendor_type(vendor_type: str | None) -> None:
@@ -11,10 +11,16 @@ def _validate_vendor_type(vendor_type: str | None) -> None:
         raise ValueError(f"Invalid vendor type '{vendor_type}'. Must be one of: {', '.join(VENDOR_TYPES)}")
 
 
+def _validate_contact_method(method: str | None) -> None:
+    if method is not None and method not in VENDOR_CONTACT_METHODS:
+        raise ValueError(f"Invalid contact method '{method}'. Must be one of: {', '.join(VENDOR_CONTACT_METHODS)}")
+
+
 class VendorService:
     @staticmethod
     def create_vendor(sess: Session, input: CreateVendorInput) -> ExternalContact:
         _validate_vendor_type(input.vendor_type)
+        _validate_contact_method(input.contact_method)
         vendor = ExternalContact(
             id=str(uuid.uuid4()),
             name=input.name,
@@ -23,6 +29,7 @@ class VendorService:
             phone=input.phone,
             email=input.email,
             notes=input.notes,
+            extra={"contact_method": input.contact_method or "rentmate"},
             created_at=datetime.utcnow(),
         )
         sess.add(vendor)
@@ -50,6 +57,9 @@ class VendorService:
             vendor.email = input.email
         if input.notes is not None:
             vendor.notes = input.notes
+        if input.contact_method is not None:
+            _validate_contact_method(input.contact_method)
+            vendor.extra = {**(vendor.extra or {}), "contact_method": input.contact_method}
         sess.commit()
         return vendor
 

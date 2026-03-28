@@ -21,9 +21,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Wrench, Plus, Pencil, Trash2, Search } from 'lucide-react';
+import { Wrench, Plus, Pencil, Trash2, Search, MessageSquare, Mail, Phone } from 'lucide-react';
 import { toast } from 'sonner';
 
 
@@ -34,11 +35,22 @@ interface FormState {
   phone: string;
   email: string;
   notes: string;
+  contactMethod: string;
 }
 
 const emptyForm = (): FormState => ({
   name: '', company: '', vendorType: '', phone: '', email: '', notes: '',
+  contactMethod: 'rentmate',
 });
+
+const CONTACT_METHOD_LABELS: Record<string, { label: string; icon: React.ReactNode; disabled?: boolean; hint?: string }> = {
+  rentmate: { label: 'RentMate', icon: <MessageSquare className="h-3.5 w-3.5" /> },
+  email: { label: 'Email', icon: <Mail className="h-3.5 w-3.5" />, disabled: true, hint: 'Coming soon' },
+  phone: { label: 'Phone / SMS', icon: <Phone className="h-3.5 w-3.5" />, disabled: true, hint: 'Coming soon' },
+};
+
+const contactMethodLabel = (method: string) =>
+  CONTACT_METHOD_LABELS[method]?.label ?? method;
 
 const Vendors = () => {
   const { vendors, isLoading, addVendor, updateVendor, removeVendor } = useApp();
@@ -89,6 +101,7 @@ const Vendors = () => {
       phone: v.phone ?? '',
       email: v.email ?? '',
       notes: v.notes ?? '',
+      contactMethod: v.contactMethod ?? 'rentmate',
     });
     setDialogOpen(true);
   };
@@ -107,10 +120,11 @@ const Vendors = () => {
         phone: form.phone.trim() || null,
         email: form.email.trim() || null,
         notes: form.notes.trim() || null,
+        contactMethod: form.contactMethod,
       };
 
       if (editingId) {
-        const data = await graphqlQuery<{ updateVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string } }>(
+        const data = await graphqlQuery<{ updateVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string; contactMethod?: string } }>(
           UPDATE_VENDOR_MUTATION,
           { input: { uid: editingId, ...input } },
         );
@@ -121,10 +135,11 @@ const Vendors = () => {
           phone: data.updateVendor.phone,
           email: data.updateVendor.email,
           notes: data.updateVendor.notes,
+          contactMethod: data.updateVendor.contactMethod ?? 'rentmate',
         });
         toast.success('Vendor updated');
       } else {
-        const data = await graphqlQuery<{ createVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string } }>(
+        const data = await graphqlQuery<{ createVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string; contactMethod?: string } }>(
           CREATE_VENDOR_MUTATION,
           { input },
         );
@@ -136,6 +151,7 @@ const Vendors = () => {
           phone: data.createVendor.phone,
           email: data.createVendor.email,
           notes: data.createVendor.notes,
+          contactMethod: data.createVendor.contactMethod ?? 'rentmate',
         });
         toast.success('Vendor added');
       }
@@ -249,9 +265,15 @@ const Vendors = () => {
               <div className="pr-16 space-y-1">
                 <div className="font-semibold">{v.name}</div>
                 {v.company && <div className="text-sm text-muted-foreground">{v.company}</div>}
-                {v.vendorType && (
-                  <Badge variant="secondary" className="text-xs">{v.vendorType}</Badge>
-                )}
+                <div className="flex flex-wrap gap-1.5 pt-0.5">
+                  {v.vendorType && (
+                    <Badge variant="secondary" className="text-xs">{v.vendorType}</Badge>
+                  )}
+                  <Badge variant="outline" className="text-xs gap-1">
+                    {CONTACT_METHOD_LABELS[v.contactMethod ?? 'rentmate']?.icon}
+                    {contactMethodLabel(v.contactMethod ?? 'rentmate')}
+                  </Badge>
+                </div>
                 <div className="pt-1 space-y-0.5 text-sm text-muted-foreground">
                   {v.phone && <div>{v.phone}</div>}
                   {v.email && <div>{v.email}</div>}
@@ -299,6 +321,36 @@ const Vendors = () => {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Contact Method</Label>
+              <RadioGroup
+                value={form.contactMethod}
+                onValueChange={val => setForm(f => ({ ...f, contactMethod: val }))}
+                className="flex flex-col gap-2"
+              >
+                {Object.entries(CONTACT_METHOD_LABELS).map(([value, { label, icon, disabled, hint }]) => (
+                  <label
+                    key={value}
+                    className={`flex items-center gap-3 rounded-md border px-3 py-2 cursor-pointer transition-colors ${
+                      disabled
+                        ? 'opacity-40 cursor-not-allowed'
+                        : form.contactMethod === value
+                        ? 'border-primary bg-primary/5'
+                        : 'hover:bg-muted/50'
+                    }`}
+                  >
+                    <RadioGroupItem value={value} disabled={disabled} />
+                    <span className="flex items-center gap-2 text-sm">
+                      {icon}
+                      {label}
+                    </span>
+                    {hint && (
+                      <span className="ml-auto text-xs text-muted-foreground">{hint}</span>
+                    )}
+                  </label>
+                ))}
+              </RadioGroup>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="v-phone">Phone</Label>

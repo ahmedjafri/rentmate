@@ -280,7 +280,7 @@ export const CREATE_TASK_MUTATION = `
 `;
 
 export const VENDORS_QUERY = `
-  query { vendors { uid name company vendorType phone email notes createdAt } }
+  query { vendors { uid name company vendorType phone email notes contactMethod createdAt } }
 `;
 
 export const VENDOR_TYPES_QUERY = `
@@ -289,13 +289,13 @@ export const VENDOR_TYPES_QUERY = `
 
 export const CREATE_VENDOR_MUTATION = `
   mutation CreateVendor($input: CreateVendorInput!) {
-    createVendor(input: $input) { uid name company vendorType phone email notes }
+    createVendor(input: $input) { uid name company vendorType phone email notes contactMethod }
   }
 `;
 
 export const UPDATE_VENDOR_MUTATION = `
   mutation UpdateVendor($input: UpdateVendorInput!) {
-    updateVendor(input: $input) { uid name company vendorType phone email notes }
+    updateVendor(input: $input) { uid name company vendorType phone email notes contactMethod }
   }
 `;
 
