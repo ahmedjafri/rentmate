@@ -2,7 +2,7 @@
 
 import os
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import lru_cache
 from io import BytesIO
 
@@ -152,7 +152,7 @@ async def process_document(document_id: str) -> None:
         doc.extracted_data = extracted_data
         doc.status = "done"
         doc.progress = None
-        doc.processed_at = datetime.utcnow()
+        doc.processed_at = datetime.now(UTC)
         db.commit()
 
     except Exception as exc:

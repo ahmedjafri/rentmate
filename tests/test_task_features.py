@@ -120,7 +120,6 @@ def _mk_task(
     db.add(task)
     db.flush()
     conv = Conversation(
-        task_id=task.id,
         subject=subject,
         lease_id=lease.id if lease else None,
         unit_id=unit.id if unit else None,
@@ -128,6 +127,16 @@ def _mk_task(
     )
     db.add(conv)
     db.flush()
+    task.ai_conversation_id = conv.id
+    ext_conv = Conversation(
+        subject=subject,
+        lease_id=lease.id if lease else None,
+        unit_id=unit.id if unit else None,
+        property_id=prop.id if prop else None,
+    )
+    db.add(ext_conv)
+    db.flush()
+    task.external_conversation_id = ext_conv.id
     return task
 
 
@@ -147,9 +156,9 @@ def _add_message(
     sender_name="Manager",
     is_ai=False,
 ):
-    # Accept either a Conversation or a Task (use its first linked conversation)
+    # Accept either a Conversation or a Task (use its AI conversation)
     if isinstance(conv_or_task, Task):
-        conv_id = conv_or_task.conversations[0].id
+        conv_id = conv_or_task.ai_conversation.id
     else:
         conv_id = conv_or_task.id
     msg = Message(
@@ -303,6 +312,49 @@ class TestTasksQuery:
         assert "First note" in bodies
         assert "Second note" in bodies
 
+    def test_tasks_includes_messages_after_gql_create_and_add(self, db):
+        """Full GQL round-trip: create task, add context message, re-query tasks."""
+        # 1. Create task via mutation
+        create_result = schema.execute_sync(
+            """mutation CreateTask($input: CreateTaskInput!) {
+                createTask(input: $input) { uid }
+            }""",
+            context_value=_gql_context(db),
+            variable_values={"input": {"title": "Gutter cleaning", "source": "ai_suggestion"}},
+        )
+        assert create_result.errors is None
+        task_uid = create_result.data["createTask"]["uid"]
+
+        # 2. Add context message via mutation
+        msg_result = schema.execute_sync(
+            """mutation AddMsg($input: AddTaskMessageInput!) {
+                addTaskMessage(input: $input) { uid body messageType }
+            }""",
+            context_value=_gql_context(db),
+            variable_values={"input": {
+                "taskId": task_uid,
+                "body": "Gutters need cleaning before winter.",
+                "messageType": "context",
+                "senderName": "RentMate",
+                "isAi": True,
+            }},
+        )
+        assert msg_result.errors is None
+        assert msg_result.data["addTaskMessage"]["messageType"] == "context"
+
+        # 3. Re-query via tasks query — message must be present
+        query_result = schema.execute_sync(
+            "{ tasks { uid messages { uid body messageType senderName isAi } } }",
+            context_value=_gql_context(db),
+        )
+        assert query_result.errors is None
+        task_data = next(t for t in query_result.data["tasks"] if t["uid"] == task_uid)
+        assert len(task_data["messages"]) >= 1
+        ctx = [m for m in task_data["messages"] if m["messageType"] == "context"]
+        assert len(ctx) == 1
+        assert "Gutters need cleaning" in ctx[0]["body"]
+        assert ctx[0]["isAi"] is True
+
     def test_tasks_derives_tenant_name_from_lease(self, db):
         prop = _mk_property(db)
         unit = _mk_unit(db, prop, "202")
@@ -372,7 +424,7 @@ class TestTasksQuery:
     def test_tasks_vendor_assigned_from_external_contact_message(self, db):
         task = _mk_task(db, subject="Vendor task")
         msg = Message(
-            conversation_id=task.conversations[0].id,
+            conversation_id=task.ai_conversation.id,
             sender_type=ParticipantType.EXTERNAL_CONTACT,
             body="I'll fix it",
             sender_name="Bob's Plumbing",
@@ -524,6 +576,30 @@ class TestCreateTaskMutation:
         assert task is not None
         assert task.title == "Check boiler"
         assert task.source == "tenant_report"
+
+    def test_create_task_sets_external_conversation_id(self, db):
+        result = schema.execute_sync(
+            """
+            mutation CreateTask($input: CreateTaskInput!) {
+                createTask(input: $input) {
+                    uid externalConversationId
+                }
+            }
+            """,
+            context_value=_gql_context(db),
+            variable_values={"input": {"title": "Pipe leak", "source": "manual"}},
+        )
+        assert result.errors is None
+        task = result.data["createTask"]
+        assert task["externalConversationId"] is not None
+
+        # Verify the DB task has distinct ai and external conversations
+        from sqlalchemy import select
+        db.expire_all()
+        db_task = db.execute(select(Task).where(Task.id == task["uid"])).scalar_one()
+        assert db_task.ai_conversation_id is not None
+        assert db_task.external_conversation_id is not None
+        assert db_task.ai_conversation_id != db_task.external_conversation_id
 
     def test_create_task_unauthenticated_fails(self, db):
         result = schema.execute_sync(
@@ -791,9 +867,9 @@ class TestAddTaskMessageMutation:
         msg = db.execute(select(Message).where(Message.id == msg_uid)).scalar_one_or_none()
         assert msg is not None
         assert msg.body == "Persisted message"
-        # Message is stored on the task's linked conversation
+        # Message is stored on the task's AI conversation
         fetched_task = db.execute(select(Task).where(Task.id == task.id)).scalar_one()
-        assert msg.conversation_id == fetched_task.conversations[0].id
+        assert msg.conversation_id == fetched_task.ai_conversation_id
 
     def test_add_task_message_task_not_found_raises_error(self, db):
         result = schema.execute_sync(
@@ -1220,21 +1296,21 @@ class TestMigrateSchema:
         # (SQLite doesn't support DROP COLUMN until 3.35, so we instead
         # create a minimal bare table and confirm ALTER TABLE works).
         with eng.connect() as conn:
-            # Create a minimal conversations table without task_id
+            # Create a minimal conversations table without ai_initiated
             conn.execute(text(
                 "CREATE TABLE IF NOT EXISTS conversations_bare "
                 "(id TEXT PRIMARY KEY, subject TEXT)"
             ))
             # Attempt to add a column as _migrate_schema would
             conn.execute(text(
-                "ALTER TABLE conversations_bare ADD COLUMN task_id VARCHAR(36)"
+                "ALTER TABLE conversations_bare ADD COLUMN ai_initiated BOOLEAN NOT NULL DEFAULT 0"
             ))
             conn.commit()
 
             # Idempotent — running it again should not raise
             try:
                 conn.execute(text(
-                    "ALTER TABLE conversations_bare ADD COLUMN task_id VARCHAR(36)"
+                    "ALTER TABLE conversations_bare ADD COLUMN ai_initiated BOOLEAN NOT NULL DEFAULT 0"
                 ))
                 conn.commit()
             except Exception:
@@ -1243,7 +1319,7 @@ class TestMigrateSchema:
             # Verify the column is there
             result = conn.execute(text("PRAGMA table_info(conversations_bare)"))
             cols = [row[1] for row in result.fetchall()]
-            assert "task_id" in cols
+            assert "ai_initiated" in cols
 
     def test_migrate_schema_new_columns_present_after_migration(self):
         """
@@ -1269,7 +1345,11 @@ class TestMigrateSchema:
         inspector = sa_inspect(eng)
 
         conv_cols = {c["name"] for c in inspector.get_columns("conversations")}
-        assert "task_id" in conv_cols, "Missing column in conversations: task_id"
+        assert "ai_initiated" in conv_cols, "Missing column in conversations: ai_initiated"
+
+        task_cols = {c["name"] for c in inspector.get_columns("tasks")}
+        for expected in ["task_number", "ai_conversation_id", "parent_conversation_id", "external_conversation_id"]:
+            assert expected in task_cols, f"Missing column in tasks: {expected}"
 
         msg_cols = {c["name"] for c in inspector.get_columns("messages")}
         for expected in ["message_type", "sender_name", "is_ai", "draft_reply",

@@ -4,7 +4,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from db.models import Task, Lease, Property, Unit, Tenant
+from db.models import Task, Lease, MessageType, Property, Unit, Tenant
 
 
 def load_account_context(db: Session) -> str:
@@ -65,11 +65,10 @@ def build_task_context(db: Session, task_id: str) -> str:
         f"Status: {task.task_status or 'active'}",
     ]
 
-    # Task description (first context message across all linked conversations)
-    all_msgs = []
-    for convo in task.conversations:
-        all_msgs.extend(convo.messages)
-    context_msgs = [m for m in all_msgs if m.message_type == "context"]
+    # Task description (first context message from the AI conversation)
+    ai_convo = task.ai_conversation
+    all_msgs = list(ai_convo.messages) if ai_convo else []
+    context_msgs = [m for m in all_msgs if m.message_type == MessageType.CONTEXT]
     if context_msgs:
         lines.append(f"Description: {context_msgs[0].body}")
 

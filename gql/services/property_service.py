@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from db.models import Property as SqlProperty, Unit as SqlUnit
@@ -26,14 +26,14 @@ class PropertyService:
             postal_code=postal_code,
             property_type=property_type,
             source="manual",
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(UTC),
         )
         sess.add(prop)
         sess.flush()
 
         units: list[SqlUnit] = []
         if property_type == "single_family":
-            unit = SqlUnit(id=str(uuid.uuid4()), property_id=prop.id, label="Main", created_at=datetime.utcnow())
+            unit = SqlUnit(id=str(uuid.uuid4()), property_id=prop.id, label="Main", created_at=datetime.now(UTC))
             sess.add(unit)
             sess.flush()
             units.append(unit)
@@ -42,7 +42,7 @@ class PropertyService:
                 label = label.strip()
                 if not label:
                     continue
-                unit = SqlUnit(id=str(uuid.uuid4()), property_id=prop.id, label=label, created_at=datetime.utcnow())
+                unit = SqlUnit(id=str(uuid.uuid4()), property_id=prop.id, label=label, created_at=datetime.now(UTC))
                 sess.add(unit)
                 sess.flush()
                 units.append(unit)

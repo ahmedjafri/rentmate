@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from db.models import DocumentTag as SqlDocumentTag, Document as SqlDocument
@@ -25,6 +25,6 @@ class DocumentService:
         doc = sess.execute(select(SqlDocument).where(SqlDocument.id == document_id)).scalar_one_or_none()
         if not doc:
             raise ValueError(f"Document {document_id} not found")
-        doc.confirmed_at = datetime.utcnow()
+        doc.confirmed_at = datetime.now(UTC)
         sess.commit()
         return True

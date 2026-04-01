@@ -211,7 +211,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         input: {
           taskId: context.taskId,
           body: message.content,
-          messageType: message.messageType ?? 'message',
+          // 'message' type goes to the AI thread — store as 'thread' so the Chat tab
+          // (which shows participant messages) doesn't surface these.
+          messageType: message.messageType === 'message' ? 'thread' : (message.messageType ?? 'thread'),
           senderName: message.senderName ?? 'You',
           isAi: false,
         }

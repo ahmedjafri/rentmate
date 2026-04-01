@@ -1,10 +1,11 @@
 from .base import Base
 from .rental import Property, Unit, Tenant, Lease
+from .tasks import Task
 from .messaging import (
     ParticipantType,
     ConversationType,
+    MessageType,
     ExternalContact,
-    Task,
     Conversation,
     ConversationParticipant,
     Message,
@@ -12,6 +13,7 @@ from .messaging import (
 )
 from .documents import Document, DocumentTask, DocumentTag
 from .automation import AutomationRevision
+from .suggestions import Suggestion
 
 __all__ = [
     "Base",
@@ -21,8 +23,10 @@ __all__ = [
     "Lease",
     "ParticipantType",
     "ConversationType",
+    "MessageType",
     "ExternalContact",
     "Task",
+    "Suggestion",
     "Conversation",
     "ConversationParticipant",
     "Message",

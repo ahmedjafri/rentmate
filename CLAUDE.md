@@ -46,6 +46,20 @@ Required at runtime:
 
 ## Architecture
 
+### Backend 3-layer design
+
+The backend follows a strict **handlers → services → models** layering:
+
+1. **Handlers** (`handlers/`, `gql/schema.py` mutations) — HTTP/GraphQL entry points. Responsible for auth, request validation, orchestrating multiple service calls, creating/finding conversations, and managing transactions (savepoints). Handlers decide *what* to do and in what order.
+
+2. **Services** (`gql/services/`) — Stateless business logic. Each service operates on the DB session it receives. Services must NOT create conversations or manage cross-entity orchestration — that belongs in the handler. Import services as modules (`from gql.services import chat_service`) not individual functions.
+
+3. **Models** (`db/models/`) — SQLAlchemy ORM definitions. Pure data layer, no business logic.
+
+Key rules:
+- Conversation creation/lookup always happens at the handler layer via `chat_service.get_or_create_external_conversation()`. Services like `TaskService.create_task()` create only the task and its AI conversation; the handler is responsible for the external conversation.
+- `db/lib.py` contains lower-level DB helpers (SMS recording, tenant upserts) that predate the service layer. New business logic should go in `gql/services/`.
+
 ### Backend (Python / FastAPI)
 
 **`main.py`** — FastAPI entry point. Mounts:
@@ -56,20 +70,21 @@ Required at runtime:
 
 Authentication uses Supabase JWTs validated per-request in `get_context()`. The resolved user is passed into GraphQL resolvers via context.
 
-**`db/models.py`** — SQLAlchemy ORM models (PostgreSQL via Supabase):
+**`db/models/`** — SQLAlchemy ORM models (PostgreSQL via Supabase):
 - `Account` → `Property` → `Unit` → `Lease` → `Tenant` (core rental hierarchy)
 - `AccountUser` — links Supabase `auth.users` to an `Account` with a role (`admin`, `manager`, `tenant`)
 - `Conversation` / `ConversationParticipant` / `Message` / `MessageReceipt` — messaging layer, participants can be tenants, account users, or external contacts (vendors)
 
-**`db/lib.py`** — Business logic layer over the ORM. Key functions:
-- `record_sms_from_dialpad()` — resolves account/tenant/direction from phone numbers and persists the SMS as a `Message`
-- `get_or_create_tenant_by_phone()` / `get_or_create_conversation_for_tenant()` — upsert helpers
-- `_find_account_for_dialpad_numbers()` — determines inbound vs. outbound by matching phone numbers against `AccountUser.phone` (admin) and `Tenant.phone`
+**`gql/services/`** — Business logic services:
+- `task_service.py` — Task CRUD, vendor assignment metadata, message persistence
+- `chat_service.py` — Conversation lookup/creation (`get_or_create_external_conversation`), autonomous messaging, typing indicators, message history
+- `property_service.py`, `tenant_service.py`, `vendor_service.py`, `document_service.py` — Domain services
 
-**`gql/`** — Strawberry GraphQL schema:
-- `schema.py` — assembles `Query` + merged `Mutation` (auth + app mutations)
-- `queries.py` — `me`, `houses`, `tenants`, `leases` queries scoped to the authenticated user's account
-- `auth_mutations.py` / `other_mutations.py` — separated by concern
+**`handlers/`** — HTTP route handlers (automations, chat, vendor portal, etc.). Orchestrate service calls, manage transactions, and handle external conversation wiring.
+
+**`gql/schema.py`** — GraphQL query/mutation definitions. Mutations act as handlers: they resolve auth, call services, and wire conversations.
+
+**`db/lib.py`** — Legacy DB helpers (SMS recording, tenant upserts). Predates the service layer.
 
 **`llm/`** — AI agent:
 - `llm.py` — Initializes `ChatLiteLLM` with DeepSeek (`deepseek/deepseek-chat`), loads system prompt from `llm/.context/index.md`
@@ -91,6 +106,7 @@ Before finishing any frontend change:
 
 ### Key design patterns
 
+- When using a service from `gql/services/`, import the module itself rather than individual functions. Use `from gql.services import chat_service` and call `chat_service.should_ai_respond(...)`, not `from gql.services.chat_service import should_ai_respond`.
 - All data is multi-tenant: every query is scoped to an `account_id` resolved from the authenticated user's `AccountUser` record.
 - The Dialpad integration is the primary inbound channel for SMS. Phone number normalization (`db/utils.py`) is critical for matching tenants/admins.
 - Tests use per-test transaction rollback (savepoints) for isolation — do not call `db.commit()` inside test fixtures.

@@ -38,9 +38,9 @@ class TestMergeAutomationConfig:
         assert len(result["checks"]) > 0
 
     def test_stored_overrides_default(self):
-        stored = {"checks": {"overdue_rent": {"enabled": False}}}
+        stored = {"checks": {"lease_status": {"enabled": False}}}
         result = _merge_automation_config(stored)
-        assert result["checks"]["overdue_rent"]["enabled"] is False
+        assert result["checks"]["lease_status"]["enabled"] is False
 
     def test_custom_checks_preserved(self):
         stored = {"checks": {"my_custom": {"enabled": True, "interval_hours": 24}}}
@@ -195,22 +195,20 @@ class TestCreateSimulatedTask(unittest.TestCase):
     def tearDown(self):
         app.dependency_overrides = {}
 
-    def _post(self, payload, headers=None):
+    def _post(self, payload, headers=None, endpoint="/automations/simulate/create-suggestion"):
         return self.client.post(
-            "/automations/simulate/create-task",
+            endpoint,
             json=payload,
             headers=headers or AUTH,
         )
 
     def test_requires_auth(self):
-        response = self.client.post("/automations/simulate/create-task", json={"subject": "x", "body": "", "category": "maintenance", "urgency": "low", "property_id": None, "unit_id": None})
+        response = self.client.post("/automations/simulate/create-suggestion", json={"subject": "x", "body": "", "category": "maintenance", "urgency": "low", "property_id": None, "unit_id": None})
         assert response.status_code == 401
 
-    def test_creates_task_successfully(self):
+    def test_creates_suggestion_successfully(self):
         with patch("handlers.automations.SessionLocal") as mock_sl:
-            mock_db = MagicMock()
-            mock_sl.session_factory.return_value = mock_db
-            mock_db.query.return_value.filter.return_value.first.return_value = None
+            mock_sl.session_factory.return_value = self.db
 
             response = self._post({
                 "subject": "Fix roof",
@@ -220,22 +218,193 @@ class TestCreateSimulatedTask(unittest.TestCase):
                 "property_id": None,
                 "unit_id": None,
             })
-        assert response.status_code == 200
-        assert response.json() == {"ok": True}
+        assert response.status_code == 200, response.json()
+        data = response.json()
+        assert data["ok"] is True
+        assert "suggestion_id" in data
 
-    def test_returns_409_if_task_already_exists(self):
+    def test_create_suggestion_seeds_context_message(self):
+        """The context message must be persisted on the suggestion's AI conversation."""
+        from db.models import Suggestion, Message
+
         with patch("handlers.automations.SessionLocal") as mock_sl:
-            mock_db = MagicMock()
-            mock_sl.session_factory.return_value = mock_db
-            mock_db.query.return_value.filter.return_value.first.return_value = MagicMock()
+            mock_sl.session_factory.return_value = self.db
 
             response = self._post({
-                "subject": "Duplicate task",
-                "body": "Body",
+                "subject": "Gutter cleaning due",
+                "body": "Gutters at 123 Main St are due for cleaning.",
                 "category": "maintenance",
                 "urgency": "low",
                 "property_id": None,
                 "unit_id": None,
+            })
+        assert response.status_code == 200, response.json()
+
+        suggestion = self.db.query(Suggestion).filter(Suggestion.title == "Gutter cleaning due").first()
+        assert suggestion is not None, "Suggestion should exist in DB"
+        assert suggestion.status == "pending"
+        assert suggestion.ai_conversation_id is not None, "AI conversation should be set"
+
+        msgs = self.db.query(Message).filter(
+            Message.conversation_id == suggestion.ai_conversation_id,
+            Message.message_type == "context",
+        ).all()
+        assert len(msgs) == 1, f"Expected 1 context message, got {len(msgs)}"
+        assert "Gutters at 123 Main St" in msgs[0].body
+
+    @patch("llm.vendor_outreach.generate_vendor_outreach", return_value=None)
+    @patch("gql.services.settings_service.get_autonomy_for_category", return_value="manual")
+    def test_suggestion_with_vendor_stores_payload(self, *_):
+        """Vendor info should be stored in the suggestion's action_payload."""
+        from db.models import Suggestion, ExternalContact
+
+        vendor = ExternalContact(name="Ace Plumbing", role_label="plumber", extra={"contact_method": "email"})
+        self.db.add(vendor)
+        self.db.flush()
+        vendor_id = vendor.id
+
+        auto_cfg = {"checks": {"test_plumbing": {"preferred_vendor_id": vendor_id}}}
+
+        with patch("handlers.automations.SessionLocal") as mock_sl, \
+             patch("handlers.automations._load_automation_config", return_value=auto_cfg):
+            mock_sl.session_factory.return_value = self.db
+
+            response = self._post({
+                "subject": "Fix kitchen faucet",
+                "body": "The kitchen faucet is dripping.",
+                "category": "plumbing",
+                "urgency": "high",
+                "automation_key": "test_plumbing",
+            })
+        assert response.status_code == 200, response.json()
+
+        suggestion = self.db.query(Suggestion).filter(Suggestion.title == "Fix kitchen faucet").first()
+        assert suggestion is not None
+        assert suggestion.action_payload is not None
+        assert suggestion.action_payload.get("vendor_id") == vendor_id
+        assert suggestion.action_payload.get("vendor_name") == "Ace Plumbing"
+
+    @patch("llm.vendor_outreach.generate_vendor_outreach", return_value="Hi, can you take this job?")
+    @patch("gql.services.settings_service.get_autonomy_for_category", return_value="suggest")
+    def test_suggest_mode_creates_approval_with_draft(self, *_):
+        """In suggest mode, vendor draft should be in action_payload and approval message."""
+        from db.models import Suggestion, Message, ExternalContact
+
+        vendor = ExternalContact(name="Draft Vendor", extra={"contact_method": "email"})
+        self.db.add(vendor)
+        self.db.flush()
+        vendor_id = vendor.id
+
+        auto_cfg = {"checks": {"test_draft": {"preferred_vendor_id": vendor_id}}}
+
+        with patch("handlers.automations.SessionLocal") as mock_sl, \
+             patch("handlers.automations._load_automation_config", return_value=auto_cfg):
+            mock_sl.session_factory.return_value = self.db
+            response = self._post({
+                "subject": "Suggest mode test",
+                "body": "Test body.",
+                "category": "maintenance",
+                "urgency": "low",
+                "automation_key": "test_draft",
+            })
+        assert response.status_code == 200, response.json()
+
+        suggestion = self.db.query(Suggestion).filter(Suggestion.title == "Suggest mode test").first()
+        assert suggestion is not None
+        assert suggestion.status == "pending"
+
+        # Draft should be stored in action_payload
+        assert suggestion.action_payload.get("draft_message") == "Hi, can you take this job?"
+
+        # Should have approval message
+        approval = self.db.query(Message).filter(
+            Message.conversation_id == suggestion.ai_conversation_id,
+            Message.message_type == "approval",
+        ).first()
+        assert approval is not None, "Expected an approval message"
+        assert approval.draft_reply == "Hi, can you take this job?"
+
+        # Options should include vendor draft actions
+        option_keys = [o["key"] for o in suggestion.options]
+        assert "send" in option_keys
+        assert "edit" in option_keys
+        assert "skip" in option_keys
+
+    @patch("llm.vendor_outreach.generate_vendor_outreach", return_value=None)
+    @patch("gql.services.settings_service.get_autonomy_for_category", return_value="manual")
+    def test_manual_mode_default_options(self, *_):
+        """In manual mode, suggestion should have accept/reject options."""
+        from db.models import Suggestion, Message, ExternalContact
+
+        vendor = ExternalContact(name="Manual Vendor", extra={"contact_method": "email"})
+        self.db.add(vendor)
+        self.db.flush()
+        vendor_id = vendor.id
+
+        auto_cfg = {"checks": {"test_manual": {"preferred_vendor_id": vendor_id}}}
+
+        with patch("handlers.automations.SessionLocal") as mock_sl, \
+             patch("handlers.automations._load_automation_config", return_value=auto_cfg):
+            mock_sl.session_factory.return_value = self.db
+            response = self._post({
+                "subject": "Manual mode test",
+                "body": "Test body.",
+                "category": "maintenance",
+                "urgency": "low",
+                "automation_key": "test_manual",
+            })
+        assert response.status_code == 200
+
+        suggestion = self.db.query(Suggestion).filter(Suggestion.title == "Manual mode test").first()
+        assert suggestion is not None
+
+        # Only context message, no approval
+        msgs = self.db.query(Message).filter(
+            Message.conversation_id == suggestion.ai_conversation_id,
+        ).all()
+        assert len(msgs) == 1, f"Expected only context message, got {len(msgs)}"
+
+        # Default accept/reject options
+        option_keys = [o["key"] for o in suggestion.options]
+        assert "accept" in option_keys
+        assert "reject" in option_keys
+
+    def test_suggestion_without_vendor_has_no_payload(self):
+        """A suggestion without a vendor should have no action_payload."""
+        from db.models import Suggestion
+
+        with patch("handlers.automations.SessionLocal") as mock_sl:
+            mock_sl.session_factory.return_value = self.db
+
+            response = self._post({
+                "subject": "Gutter cleaning seasonal",
+                "body": "Schedule gutter cleaning for spring.",
+                "category": "maintenance",
+                "urgency": "low",
+            })
+        assert response.status_code == 200
+
+        suggestion = self.db.query(Suggestion).filter(Suggestion.title == "Gutter cleaning seasonal").first()
+        assert suggestion is not None
+        assert suggestion.action_payload is None
+
+    def test_returns_409_if_suggestion_already_exists(self):
+        with patch("handlers.automations.SessionLocal") as mock_sl:
+            mock_sl.session_factory.return_value = self.db
+
+            # Create the first suggestion
+            self._post({
+                "subject": "Duplicate suggestion",
+                "body": "Body",
+                "category": "maintenance",
+                "urgency": "low",
+            })
+            # Second call with same subject should 409
+            response = self._post({
+                "subject": "Duplicate suggestion",
+                "body": "Body",
+                "category": "maintenance",
+                "urgency": "low",
             })
         assert response.status_code == 409
 
@@ -279,7 +448,7 @@ class TestDeleteAutomation(unittest.TestCase):
         app.dependency_overrides = {}
 
     def test_cannot_delete_builtin(self):
-        response = self.client.delete("/automations/overdue_rent", headers=AUTH)
+        response = self.client.delete("/automations/lease_status", headers=AUTH)
         assert response.status_code == 400
 
     def test_delete_nonexistent_returns_404(self):

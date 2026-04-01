@@ -1,6 +1,6 @@
 import os
 import jwt
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 JWT_SECRET = os.getenv("JWT_SECRET", "rentmate-local-secret")
 RENTMATE_PASSWORD = os.getenv("RENTMATE_PASSWORD", "rentmate")
@@ -31,6 +31,6 @@ class LocalAuthBackend:
         payload = {
             "sub": DEFAULT_USER_ID,
             "email": DEFAULT_USER_EMAIL,
-            "exp": datetime.utcnow() + timedelta(days=30),
+            "exp": datetime.now(UTC) + timedelta(days=30),
         }
         return jwt.encode(payload, JWT_SECRET, algorithm="HS256")

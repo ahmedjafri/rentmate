@@ -11,7 +11,7 @@ Does NOT commit — callers are responsible for committing or rolling back.
 import logging
 import re
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
@@ -20,8 +20,11 @@ from sqlalchemy.orm import Session
 from .models import (
     Task,
     Conversation,
+    ConversationParticipant,
+    ConversationType,
     Lease,
     Message,
+    MessageType,
     ParticipantType,
     Property,
     Tenant,
@@ -320,6 +323,92 @@ def _eval_urgency(urgency: Any, ctx: Dict[str, Any]) -> str:
     return "medium"
 
 
+# ─── llm gate ────────────────────────────────────────────────────────────────
+
+def _last_resolved_date(db: Session, category: str,
+                        property_id: Optional[str],
+                        unit_id: Optional[str]) -> Optional[date]:
+    """Find the most recent resolved_at date for a given category + property/unit."""
+    q = (
+        db.query(Task.resolved_at)
+        .filter(
+            Task.category == category,
+            Task.task_status == "resolved",
+            Task.resolved_at.isnot(None),
+        )
+    )
+    if property_id:
+        q = q.filter(Task.property_id == property_id)
+    if unit_id:
+        q = q.filter(Task.unit_id == unit_id)
+    row = q.order_by(Task.resolved_at.desc()).first()
+    if row and row[0]:
+        return row[0].date() if isinstance(row[0], datetime) else row[0]
+    return None
+
+
+def _eval_llm_gate(gate: dict, ctx: Dict[str, Any], *,
+                   db: Session, category: str,
+                   property_id: Optional[str],
+                   unit_id: Optional[str]) -> bool:
+    """Ask the LLM whether an action should proceed.
+
+    The gate dict must contain a ``prompt`` key (template string).
+    Automatically appends task history context (last completed date).
+    Returns True if the LLM answers yes, False otherwise.
+    Falls back to True on any error so tasks are never silently dropped.
+    """
+    import os
+    api_key = os.getenv("LLM_API_KEY")
+    if not api_key:
+        logger.debug("llm_gate: no LLM_API_KEY, allowing by default")
+        return True
+
+    prompt = _render(gate.get("prompt", ""), ctx)
+    if not prompt.strip():
+        return True
+
+    # Enrich with task history
+    last_done = _last_resolved_date(db, category, property_id, unit_id)
+    if last_done:
+        days_ago = (date.today() - last_done).days
+        prompt += (
+            f"\nThis was last completed on {last_done.isoformat()} "
+            f"({days_ago} day(s) ago)."
+        )
+    else:
+        prompt += "\nThere is no record of this ever being completed at this property."
+
+    try:
+        import litellm
+
+        resp = litellm.completion(
+            model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
+            api_key=api_key,
+            api_base=os.getenv("LLM_BASE_URL") or None,
+            messages=[
+                {"role": "system", "content": (
+                    "You are a property management assistant. "
+                    "Answer the following yes/no question. "
+                    "Respond with ONLY a JSON object: {\"answer\": true} or {\"answer\": false}."
+                )},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0,
+            response_format={"type": "json_object"},
+            max_tokens=20,
+        )
+        import json
+        raw = resp.choices[0].message.content or "{}"
+        result = json.loads(raw)
+        answer = bool(result.get("answer", True))
+        logger.info("llm_gate: %s -> %s", prompt[:120], answer)
+        return answer
+    except Exception as exc:
+        logger.warning("llm_gate: LLM call failed (%s), allowing by default", exc)
+        return True
+
+
 # ─── task helpers ─────────────────────────────────────────────────────────────
 
 def _task_exists(db: Session, subject: str,
@@ -339,6 +428,24 @@ def _task_exists(db: Session, subject: str,
     return q.first() is not None
 
 
+def _get_account_id(db: Session, property_id: Optional[str], unit_id: Optional[str]) -> str:
+    from sqlalchemy import text
+    try:
+        if property_id:
+            res = db.execute(text("SELECT account_id FROM properties WHERE id = :id"), {"id": property_id}).fetchone()
+            if res and res[0]:
+                return res[0]
+        if unit_id:
+            res = db.execute(text("SELECT account_id FROM units WHERE id = :id"), {"id": unit_id}).fetchone()
+            if res and res[0]:
+                return res[0]
+        res = db.execute(text("SELECT id FROM hosted_accounts LIMIT 1")).fetchone()
+        if res and res[0]:
+            return res[0]
+    except Exception:
+        pass
+    return "00000000-0000-0000-0000-000000000001"
+
 def _do_create_task(db: Session, subject: str, body: str, category: str,
                     urgency: str, property_id: Optional[str],
                     unit_id: Optional[str],
@@ -357,6 +464,7 @@ def _do_create_task(db: Session, subject: str, body: str, category: str,
             extra["assigned_vendor_name"] = vendor.name
     task = Task(
         id=str(uuid.uuid4()),
+        account_id=_get_account_id(db, property_id, unit_id),
         title=subject,
         task_status="suggested",
         task_mode="waiting_approval",
@@ -367,34 +475,74 @@ def _do_create_task(db: Session, subject: str, body: str, category: str,
         confidential=False,
         property_id=property_id,
         unit_id=unit_id,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
     db.add(task)
     db.flush()
 
-    convo = Conversation(
+    # Assign task_number per account
+    from sqlalchemy import select as sa_select, func as sa_func
+    max_num = db.execute(
+        sa_select(sa_func.coalesce(sa_func.max(Task.task_number), 0))
+        .where(Task.account_id == task.account_id)
+    ).scalar()
+    task.task_number = max_num + 1
+
+    # Create the internal AI conversation thread
+    ai_convo = Conversation(
         id=str(uuid.uuid4()),
-        task_id=task.id,
         subject=subject,
         property_id=property_id,
         unit_id=unit_id,
-        extra=extra or None,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        conversation_type=ConversationType.TASK_AI,
+        is_group=False,
+        is_archived=False,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
-    db.add(convo)
+    db.add(ai_convo)
     db.flush()
+    task.ai_conversation_id = ai_convo.id
+
+    # Create the external conversation thread (vendor if vendor required, else tenant)
+    ext_type = ConversationType.VENDOR if require_vendor_type else ConversationType.TENANT
+    ext_convo = Conversation(
+        id=str(uuid.uuid4()),
+        subject=subject,
+        property_id=property_id,
+        unit_id=unit_id,
+        conversation_type=ext_type,
+        is_group=False,
+        is_archived=False,
+        extra=extra or None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    db.add(ext_convo)
+    db.flush()
+    task.external_conversation_id = ext_convo.id
+
+    # Add preferred vendor as a participant on the external conversation
+    if preferred_vendor_id and require_vendor_type:
+        db.add(ConversationParticipant(
+            id=str(uuid.uuid4()),
+            conversation_id=ext_convo.id,
+            participant_type=ParticipantType.EXTERNAL_CONTACT,
+            external_contact_id=preferred_vendor_id,
+            is_active=True,
+        ))
+        db.flush()
 
     db.add(Message(
         id=str(uuid.uuid4()),
-        conversation_id=convo.id,
+        conversation_id=ai_convo.id,
         sender_type=ParticipantType.ACCOUNT_USER,
         body=body,
-        message_type="context",
+        message_type=MessageType.CONTEXT,
         sender_name="RentMate",
         is_ai=True,
-        sent_at=datetime.utcnow(),
+        sent_at=datetime.now(UTC),
     ))
     db.flush()
 
@@ -410,14 +558,14 @@ def _do_create_task(db: Session, subject: str, body: str, category: str,
     if draft:
         db.add(Message(
             id=str(uuid.uuid4()),
-            conversation_id=convo.id,
+            conversation_id=ai_convo.id,
             sender_type=ParticipantType.ACCOUNT_USER,
             body="Here's a suggested message you can send:",
-            message_type="approval",
+            message_type=MessageType.APPROVAL,
             sender_name="RentMate",
             is_ai=True,
             draft_reply=draft,
-            sent_at=datetime.utcnow(),
+            sent_at=datetime.now(UTC),
         ))
         db.flush()
 
@@ -535,13 +683,23 @@ def run_script(
             if action.get("type") != "create_task":
                 continue
 
+            category            = action.get("category", "compliance")
+            property_id, unit_id = _extract_ids(resource, record)
+
+            # Optional LLM gate — skip action if the LLM says no
+            llm_gate = action.get("llm_gate")
+            if llm_gate and not dry_run and not _eval_llm_gate(
+                llm_gate, ctx, db=db, category=category,
+                property_id=property_id, unit_id=unit_id,
+            ):
+                logger.debug("DSL: llm_gate rejected action for record %r",
+                             getattr(record, "id", record))
+                continue
+
             subject             = _render(action.get("subject", "Untitled task"), ctx)
             body                = _render(action.get("body", ""), ctx)
-            category            = action.get("category", "compliance")
             urgency             = _eval_urgency(action.get("urgency", "medium"), ctx)
             require_vendor_type = action.get("require_vendor_type") or None
-
-            property_id, unit_id = _extract_ids(resource, record)
 
             if not dry_run and _task_exists(db, subject, property_id, unit_id):
                 deduped += 1

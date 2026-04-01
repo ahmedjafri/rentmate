@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 _HERE = Path(__file__).parent
@@ -19,7 +20,7 @@ from db.models import Base
 from gql.schema import schema
 from handlers.deps import SessionLocal, engine, require_user
 from handlers.settings import read_env_file, load_integrations
-from handlers import auth, automations, chat, documents, dev, settings
+from handlers import auth, automations, chat, documents, dev, settings, vendor_invite, vendor_portal
 from llm.registry import agent_registry
 
 # ─── logging ─────────────────────────────────────────────────────────────────
@@ -39,12 +40,15 @@ _MIGRATE_COLS = [
     ("documents",      "suggestion_states",  "TEXT"),
     ("documents",      "confirmed_at",       "DATETIME"),
     ("documents",      "extraction_meta",    "TEXT"),
-    ("conversations",  "task_id",            "VARCHAR(36)"),
     ("conversations",  "conversation_type",        "VARCHAR(20)"),
     ("conversations",  "parent_conversation_id",   "VARCHAR(36)"),
-    ("conversations",  "ancestor_ids",             "TEXT"),
     ("conversations",  "ai_initiated",             "BOOLEAN NOT NULL DEFAULT 0"),
     ("conversations",  "extra",                    "TEXT"),
+    ("tasks",          "task_number",              "INTEGER"),
+    ("tasks",          "ai_conversation_id",       "VARCHAR(36)"),
+    ("tasks",          "parent_conversation_id",   "VARCHAR(36)"),
+    ("tasks",          "external_conversation_id", "VARCHAR(36)"),
+    ("tasks",          "resolved_at",              "TIMESTAMP"),
     ("messages",       "message_type",       "VARCHAR(20)"),
     ("messages",       "sender_name",        "VARCHAR(255)"),
     ("messages",       "is_ai",              "BOOLEAN NOT NULL DEFAULT 0"),
@@ -116,9 +120,62 @@ async def get_context(request: Request):
 
 graphql_app = GraphQLRouter(schema, context_getter=get_context)
 
+# ─── lifecycle ────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ── startup ──────────────────────────────────────────────────────────────
+    for key, value in read_env_file().items():
+        if not os.environ.get(key):  # set if missing or empty
+            os.environ[key] = value
+
+    # Run DB init and nanobot gateway startup in parallel (both are blocking I/O / imports)
+    async def _init_db():
+        await asyncio.to_thread(Base.metadata.create_all, engine)
+        await asyncio.to_thread(_migrate_schema)
+        print("Database tables created/migrated")
+
+    await asyncio.gather(
+        _init_db(),
+        asyncio.to_thread(agent_registry.start_gateway),
+    )
+
+    db = SessionLocal()
+    try:
+        agent_registry.populate_all_agents(db)
+        from db.models import Document as DocModel
+        stuck = db.query(DocModel).filter(DocModel.status.in_(["pending", "processing"])).all()
+        for doc in stuck:
+            doc.status = "pending"
+            doc.progress = None
+        if stuck:
+            db.commit()
+            print(f"Re-queuing {len(stuck)} stuck document(s)…")
+            from llm.document_processor import process_document
+            for doc in stuck:
+                asyncio.create_task(process_document(doc.id))
+    finally:
+        db.close()
+
+    await agent_registry.restart_channels_async(load_integrations())
+
+    if os.getenv("RENTMATE_ENV") == "development":
+        automations.seed_automations()
+
+    asyncio.create_task(automations.audit_loop())
+
+    if os.getenv("GMAIL_CLIENT_ID"):
+        asyncio.create_task(_gmail_poll_loop())
+        print("Gmail polling enabled")
+
+    yield
+
+    # ── shutdown ─────────────────────────────────────────────────────────────
+    agent_registry.stop_gateway()
+
 # ─── app ─────────────────────────────────────────────────────────────────────
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 app.include_router(graphql_app, prefix="/graphql")
 app.include_router(auth.router)
 app.include_router(settings.router)
@@ -126,6 +183,8 @@ app.include_router(automations.router)
 app.include_router(documents.router, prefix="/api")
 app.include_router(chat.router)
 app.include_router(dev.router, prefix="/dev")
+app.include_router(vendor_invite.router)
+app.include_router(vendor_portal.router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -194,7 +253,7 @@ def _handle_gmail_batch():
     """Synchronous handler for a single Gmail poll cycle."""
     from backends.gmail import GmailClient
     from db.lib import route_inbound_to_task
-    from db.models import Conversation, Message, ParticipantType, Tenant
+    from db.models import Conversation, Message, MessageType, ParticipantType, Tenant
     from sqlalchemy import func
     import uuid as _uuid
     from datetime import datetime as _dt
@@ -253,16 +312,16 @@ def _handle_gmail_batch():
                 if reply:
                     # Persist AI reply
                     import uuid as _uuid2
-                    from datetime import datetime as _dt2
+                    from datetime import UTC as _UTC2, datetime as _dt2
                     ai_msg = Message(
                         id=str(_uuid2.uuid4()),
                         conversation_id=conv.id,
                         sender_type=ParticipantType.ACCOUNT_USER,
                         body=reply,
-                        message_type="message",
+                        message_type=MessageType.MESSAGE,
                         sender_name="RentMate",
                         is_ai=True,
-                        sent_at=_dt2.utcnow(),
+                        sent_at=_dt2.now(_UTC2),
                     )
                     db.add(ai_msg)
                     db.commit()
@@ -309,58 +368,6 @@ def _run_agent_for_task(db, conv, latest_body: str) -> str:
     finally:
         loop.close()
 
-
-# ─── lifecycle ────────────────────────────────────────────────────────────────
-
-@app.on_event("startup")
-async def on_startup():
-    for key, value in read_env_file().items():
-        if not os.environ.get(key):  # set if missing or empty
-            os.environ[key] = value
-
-    # Run DB init and nanobot gateway startup in parallel (both are blocking I/O / imports)
-    async def _init_db():
-        await asyncio.to_thread(Base.metadata.create_all, engine)
-        await asyncio.to_thread(_migrate_schema)
-        print("Database tables created/migrated")
-
-    await asyncio.gather(
-        _init_db(),
-        asyncio.to_thread(agent_registry.start_gateway),
-    )
-
-    db = SessionLocal()
-    try:
-        agent_registry.populate_all_agents(db)
-        from db.models import Document as DocModel
-        stuck = db.query(DocModel).filter(DocModel.status.in_(["pending", "processing"])).all()
-        for doc in stuck:
-            doc.status = "pending"
-            doc.progress = None
-        if stuck:
-            db.commit()
-            print(f"Re-queuing {len(stuck)} stuck document(s)…")
-            from llm.document_processor import process_document
-            for doc in stuck:
-                asyncio.create_task(process_document(doc.id))
-    finally:
-        db.close()
-
-    await agent_registry.restart_channels_async(load_integrations())
-
-    if os.getenv("RENTMATE_ENV") == "development":
-        automations.seed_automations()
-
-    asyncio.create_task(automations.audit_loop())
-
-    if os.getenv("GMAIL_CLIENT_ID"):
-        asyncio.create_task(_gmail_poll_loop())
-        print("Gmail polling enabled")
-
-
-@app.on_event("shutdown")
-def on_shutdown():
-    agent_registry.stop_gateway()
 
 # ─── health ───────────────────────────────────────────────────────────────────
 

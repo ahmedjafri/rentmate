@@ -2,11 +2,11 @@
 
 import re
 import uuid
-from datetime import datetime, date, timedelta
+from datetime import UTC, datetime, date, timedelta
 from typing import List, Optional
 
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
+from sqlalchemy import func, select as sa_select
 from .utils import normalize_phone
 
 from .models import (
@@ -106,7 +106,7 @@ def get_or_create_tenant_by_phone(
         first_name=first_name,
         last_name=last_name,
         phone=phone_norm,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
     db.add(tenant)
     db.flush()
@@ -139,7 +139,7 @@ def get_or_create_conversation_for_tenant(
         if len(active_parts) == 1 and active_parts[0].tenant_id == tenant.id:
             return conv
 
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     conv = Conversation(
         id=str(uuid.uuid4()),
         subject=subject or f"Conversation with {tenant.first_name} {tenant.last_name}",
@@ -181,7 +181,7 @@ def add_message(
     Create a Message in a Conversation, update the conversation's updated_at,
     and create MessageReceipt rows for all active participants.
     """
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
 
     msg = Message(
         id=str(uuid.uuid4()),
@@ -320,21 +320,20 @@ def route_inbound_to_task(
     Finds or creates a task for the inbound message, adds the message,
     and returns (conversation, message).
     """
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     recency_cutoff = now - timedelta(days=30)
 
     # Find active tasks for this tenant updated within last 30 days
-    # Look for conversations linked to tasks that have participants matching this tenant
+    # Join from Conversation to Task via Task.ai_conversation_id (inverted FK)
     candidates_raw = (
         db.query(Conversation)
         .options(
             joinedload(Conversation.participants),
             joinedload(Conversation.messages),
         )
-        .join(ConversationParticipant)
-        .join(Task, Task.id == Conversation.task_id)
+        .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
+        .join(Task, Task.ai_conversation_id == Conversation.id)
         .filter(
-            Conversation.task_id.isnot(None),
             Task.task_status == "active",
             Conversation.updated_at >= recency_cutoff,
             ConversationParticipant.tenant_id == tenant.id,
@@ -384,9 +383,15 @@ def route_inbound_to_task(
         db.add(task)
         db.flush()
 
+        # Assign task_number per account
+        max_num = db.execute(
+            sa_select(func.coalesce(func.max(Task.task_number), 0))
+            .where(Task.account_id == task.account_id)
+        ).scalar()
+        task.task_number = max_num + 1
+
         conv = Conversation(
             id=str(uuid.uuid4()),
-            task_id=task.id,
             subject=f"Message from {tenant.first_name} {tenant.last_name}",
             is_group=False,
             is_archived=False,
@@ -395,6 +400,8 @@ def route_inbound_to_task(
         )
         db.add(conv)
         db.flush()
+
+        task.ai_conversation_id = conv.id
 
         participant = ConversationParticipant(
             id=str(uuid.uuid4()),
@@ -487,8 +494,7 @@ def record_sms_from_dialpad(
     db.commit()
 
     print(
-        f"[Dialpad] Recorded SMS msg={msg.id} conv={msg.conversation_id} tenant={tenant.id} "
-        f"task={conv.task_id is not None} new={getattr(conv.task, 'source', None) if conv.task_id else None}"
+        f"[Dialpad] Recorded SMS msg={msg.id} conv={msg.conversation_id} tenant={tenant.id}"
     )
 
     return msg, conv
@@ -776,7 +782,7 @@ def route_inbound_to_tenant_chat(
     Finds or creates a conversation_type='tenant' conversation for the tenant,
     adds the message, and returns (conversation, message).
     """
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
 
     # Find existing open tenant conversation for this tenant
     existing = (
@@ -839,19 +845,35 @@ def spawn_task_from_conversation(
     priority: Optional[str] = None,
     task_mode: str = "autonomous",
     source: str = "manual",
+    account_id: Optional[str] = None,
 ) -> Task:
     """
     Spawn a Task as a child of an existing conversation.
-    Creates a linked Conversation for the task thread.
+    Creates a linked AI Conversation for the task thread.
     """
     parent = db.query(Conversation).filter(Conversation.id == parent_conversation_id).one_or_none()
     if not parent:
         raise ValueError(f"Parent conversation {parent_conversation_id} not found")
 
-    now = datetime.utcnow()
+    # Derive account_id from parent conversation's property/unit if not provided
+    if not account_id:
+        from sqlalchemy import text as sa_text
+        try:
+            if parent.property_id:
+                res = db.execute(sa_text("SELECT account_id FROM properties WHERE id = :id"), {"id": parent.property_id}).fetchone()
+                account_id = res[0] if res and res[0] else None
+            if not account_id and parent.unit_id:
+                res = db.execute(sa_text("SELECT account_id FROM units WHERE id = :id"), {"id": parent.unit_id}).fetchone()
+                account_id = res[0] if res and res[0] else None
+        except Exception:
+            pass
+        account_id = account_id or "00000000-0000-0000-0000-000000000001"
+
+    now = datetime.now(UTC)
 
     task = Task(
         id=str(uuid.uuid4()),
+        account_id=account_id,
         title=objective,
         task_status="active",
         task_mode=task_mode,
@@ -865,20 +887,29 @@ def spawn_task_from_conversation(
     db.add(task)
     db.flush()
 
+    # Assign task_number per account
+    max_num = db.execute(
+        sa_select(func.coalesce(func.max(Task.task_number), 0))
+        .where(Task.account_id == task.account_id)
+    ).scalar()
+    task.task_number = max_num + 1
+
     convo = Conversation(
         id=str(uuid.uuid4()),
-        task_id=task.id,
         subject=objective,
         is_group=False,
         is_archived=False,
-        conversation_type=ConversationType.TASK,
+        conversation_type=ConversationType.TASK_AI,
         parent_conversation_id=parent_conversation_id,
-        ancestor_ids=(parent.ancestor_ids or []) + [parent_conversation_id],
         created_at=now,
         updated_at=now,
     )
     db.add(convo)
     db.flush()
+
+    task.ai_conversation_id = convo.id
+    task.parent_conversation_id = parent_conversation_id
+    task.external_conversation_id = parent_conversation_id
     return task
 
 
@@ -893,7 +924,7 @@ def get_or_create_user_ai_conversation(
     Get or create a persistent user_ai conversation for the given user.
     If session_key is provided, looks up an existing conversation by that key in subject.
     """
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
 
     if session_key:
         # Try to find by session_key in subject or a recent one
@@ -971,7 +1002,7 @@ def apply_document_extraction(
                 address_line1=address,
                 property_type=data.get("property_type") or "multi_family",
                 source="document",
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(UTC),
             )
             db.add(prop)
             db.flush()
@@ -993,7 +1024,7 @@ def apply_document_extraction(
                 id=str(uuid.uuid4()),
                 property_id=prop.id,
                 label=unit_label,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(UTC),
             )
             db.add(unit)
             db.flush()
@@ -1028,7 +1059,7 @@ def apply_document_extraction(
             last_name=last_name or "Tenant",
             email=email,
             phone=normalize_phone(phone) if phone else None,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(UTC),
         )
         db.add(tenant)
         db.flush()
@@ -1085,7 +1116,7 @@ def apply_document_extraction(
                 start_date=start_date,
                 end_date=end_date,
                 rent_amount=float(rent),
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(UTC),
             )
             db.add(lease)
             db.flush()

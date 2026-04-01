@@ -111,8 +111,8 @@ export const TENANTS_QUERY = `
 
 const TASK_FIELDS = `
   uid
+  taskNumber
   title
-  isTask
   taskStatus
   taskMode
   source
@@ -131,6 +131,9 @@ const TASK_FIELDS = `
   requireVendorType
   assignedVendorId
   assignedVendorName
+  parentConversationId
+  externalConversationId
+  suggestionOptions
   messages {
     uid
     body
@@ -162,9 +165,44 @@ export const TASK_QUERY = `
 `;
 
 export const SUGGESTIONS_QUERY = `
-  query {
-    tasks(status: "suggested", source: "ai_suggestion") {
-      ${TASK_FIELDS}
+  query Suggestions($status: String) {
+    suggestions(status: $status) {
+      uid
+      title
+      body
+      category
+      urgency
+      status
+      source
+      automationKey
+      options
+      actionTaken
+      propertyId
+      unitId
+      taskId
+      createdAt
+      messages {
+        uid
+        body
+        messageType
+        senderName
+        isAi
+        isSystem
+        sentAt
+        draftReply
+        approvalStatus
+      }
+    }
+  }
+`;
+
+export const ACT_ON_SUGGESTION_MUTATION = `
+  mutation ActOnSuggestion($uid: String!, $action: String!, $editedBody: String) {
+    actOnSuggestion(uid: $uid, action: $action, editedBody: $editedBody) {
+      uid
+      status
+      actionTaken
+      taskId
     }
   }
 `;
@@ -179,6 +217,15 @@ export const ADD_TASK_MESSAGE_MUTATION = `
       isAi
       isSystem
       sentAt
+    }
+  }
+`;
+
+export const ADD_EXTERNAL_TASK_MESSAGE_MUTATION = `
+  mutation AddExternalTaskMessage($input: AddTaskMessageInput!) {
+    addExternalTaskMessage(input: $input) {
+      uid
+      body
     }
   }
 `;

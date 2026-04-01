@@ -12,9 +12,9 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Bot, User, ExternalLink, Terminal } from 'lucide-react';
+import { Bot, User, ExternalLink, Terminal, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { getToken } from '@/lib/auth';
+import { getToken, authFetch } from '@/lib/auth';
 import { toast } from 'sonner';
 import { Link } from 'react-router-dom';
 
@@ -133,6 +133,29 @@ const DevTools = () => {
   };
 
   const selectedTenant = tenants.find(t => t.id === tenantId);
+  const [wiping, setWiping] = useState<string | null>(null);
+
+  const handleWipe = async (target: 'tasks' | 'suggestions' | 'chats') => {
+    if (!confirm(`Are you sure you want to delete ALL ${target}? This cannot be undone.`)) return;
+    setWiping(target);
+    try {
+      const res = await authFetch(`/dev/wipe-${target}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (target === 'tasks') {
+        toast.success(`Deleted ${data.deleted_tasks} tasks and ${data.deleted_conversations} conversations`);
+      } else if (target === 'suggestions') {
+        toast.success(`Deleted ${data.deleted_suggestions} suggestions and ${data.deleted_conversations} conversations`);
+      } else {
+        toast.success(`Deleted ${data.deleted_conversations} conversations (unlinked ${data.unlinked_tasks} tasks)`);
+      }
+      if (tenantId) loadHistory(tenantId);
+    } catch (err) {
+      toast.error(`Wipe failed: ${(err as Error).message}`);
+    } finally {
+      setWiping(null);
+    }
+  };
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-4">
@@ -311,6 +334,45 @@ const DevTools = () => {
           </div>
         </Card>
       </div>
+
+      {/* Danger zone */}
+      <Card className="p-4 rounded-xl border-destructive/30">
+        <h2 className="font-semibold text-sm text-destructive mb-3">Danger Zone</h2>
+        <div className="flex flex-wrap gap-3">
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={wiping !== null}
+            onClick={() => handleWipe('tasks')}
+          >
+            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+            {wiping === 'tasks' ? 'Wiping…' : 'Wipe all tasks'}
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={wiping !== null}
+            onClick={() => handleWipe('suggestions')}
+          >
+            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+            {wiping === 'suggestions' ? 'Wiping…' : 'Wipe all suggestions'}
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={wiping !== null}
+            onClick={() => handleWipe('chats')}
+          >
+            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+            {wiping === 'chats' ? 'Wiping…' : 'Wipe all chats'}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground mt-2">
+          Permanently deletes data from the database. Tasks wipe also removes linked suggestions and conversations.
+          Suggestions wipe removes all suggestions and their AI conversations.
+          Chats wipe removes all conversations and unlinks them from tasks.
+        </p>
+      </Card>
     </div>
   );
 };

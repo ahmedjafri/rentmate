@@ -1,4 +1,4 @@
-import { Home, Building2, Users, ClipboardList, Settings, Bot, FileText, Zap, MessageCircle, Wrench } from 'lucide-react';
+import { Home, Building2, Users, ClipboardList, Lightbulb, Settings, Bot, FileText, Zap, MessageCircle, Wrench } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useLocation } from 'react-router-dom';
 import {
@@ -20,7 +20,8 @@ const navItems = [
   { title: 'Tenants', url: '/tenants', icon: Users },
   { title: 'Vendors', url: '/vendors', icon: Wrench },
   { title: 'Documents', url: '/documents', icon: FileText },
-  { title: 'Action Desk', url: '/action-desk', icon: ClipboardList },
+  { title: 'Suggestions', url: '/action-desk', icon: Lightbulb },
+  { title: 'Tasks', url: '/tasks', icon: ClipboardList },
   { title: 'Chats', url: '/chats', icon: MessageCircle },
   { title: 'Automation', url: '/automation', icon: Zap },
   { title: 'Settings', url: '/settings', icon: Settings },

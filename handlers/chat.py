@@ -3,7 +3,7 @@ import json as _json
 import os
 import uuid as _uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Callable, Dict, List, Optional
 
 import httpx
@@ -13,10 +13,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db.lib import get_conversation_with_messages, record_sms_from_dialpad, route_inbound_to_tenant_chat
-from db.models import Conversation, Message, ParticipantType, Task
+from db.models import Conversation, Message, MessageType, ParticipantType, Task
 from handlers.deps import get_db, require_user
 from llm.context import build_task_context, load_account_context
 from llm.registry import agent_registry, DATA_DIR
+from gql.services import chat_service
 
 router = APIRouter()
 
@@ -215,16 +216,7 @@ async def handle_message(
     # Build agent context and history
     from llm.context import build_task_context
     context = build_task_context(db, conv.id)
-    full_conv = get_conversation_with_messages(db=db, conversation_id=conv.id)
-    HISTORY_LIMIT = 20
-    recent_msgs = sorted(full_conv.messages, key=lambda m: m.sent_at)
-    # Exclude the message we just added (last one) for history, then take last 20
-    history_msgs = recent_msgs[:-1][-HISTORY_LIMIT:]
-    messages = [{"role": "system", "content": context}]
-    for m in history_msgs:
-        role = "assistant" if m.is_ai else "user"
-        messages.append({"role": role, "content": m.body or ""})
-    messages.append({"role": "user", "content": body})
+    messages = chat_service.build_agent_message_history(db, conv.id, body, context, exclude_last=True)
 
     from backends.local_auth import DEFAULT_USER_ID
     agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
@@ -241,10 +233,10 @@ async def handle_message(
         conversation_id=conv.id,
         sender_type=_PT.ACCOUNT_USER,
         body=response_text,
-        message_type="message",
+        message_type=MessageType.MESSAGE,
         sender_name="RentMate",
         is_ai=True,
-        sent_at=datetime.utcnow(),
+        sent_at=datetime.now(UTC),
     )
     db.add(ai_msg)
     db.commit()
@@ -262,46 +254,45 @@ async def chat_endpoint(
     db: Session = Depends(get_db),
 ):
     await require_user(request)
-    from db.lib import get_or_create_user_ai_conversation, add_message as _add_msg
-    from db.models import Message as _Msg, ParticipantType as _PT
+    from db.lib import get_or_create_user_ai_conversation
 
     context = load_account_context(db)
 
     # Look up or create DB-backed user_ai conversation.
-    # If the client supplies a conversation_id, look it up by PK first; if not
-    # found, create a new conversation using that exact ID so the client's ID is
-    # always echoed back in the done event.
-    from db.models import ConversationType as _ConvType
     if body.conversation_id:
-        conv = db.query(Conversation).filter_by(id=body.conversation_id).first()
-        if conv is None:
-            from datetime import datetime as _dt
-            conv = Conversation(
-                id=body.conversation_id,
-                subject="Chat with RentMate",
-                is_group=False,
-                is_archived=False,
-                conversation_type=_ConvType.USER_AI,
-                created_at=_dt.utcnow(),
-                updated_at=_dt.utcnow(),
-            )
-            db.add(conv)
+        conv = chat_service.get_or_create_conversation(db, body.conversation_id)
     else:
-        from db.lib import get_or_create_user_ai_conversation as _get_conv
-        conv = _get_conv(db, account_id="default", user_id="default")
+        conv = get_or_create_user_ai_conversation(db, account_id="default", user_id="default")
     conv_id = conv.id
     db.commit()  # persist conv before streaming
 
-    # Build message history from DB (last 20 messages) + current message
-    full_conv = get_conversation_with_messages(db, conv_id)
-    db_msgs = sorted(full_conv.messages, key=lambda m: m.sent_at)[-20:] if full_conv else []
-    history = [{"role": "assistant" if m.is_ai else "user", "content": m.body or ""} for m in db_msgs]
-    history.append({"role": "user", "content": body.message})
+    # If this conversation has human participants (tenant/external), stay silent.
+    if not chat_service.should_ai_respond(conv):
+        from handlers.deps import SessionLocal as _SL
+
+        async def _no_ai():
+            write_db = _SL()
+            try:
+                chat_service.persist_user_message_only(write_db, conv_id, body.message)
+                write_db.commit()
+            except Exception as e:
+                write_db.rollback()
+                print(f"[chat] DB write failed (no-ai path): {e}")
+            finally:
+                write_db.close()
+            yield f"data: {_json.dumps({'type': 'done', 'reply': None, 'conversation_id': conv_id})}\n\n"
+
+        return StreamingResponse(
+            _no_ai(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    messages_payload = chat_service.build_agent_message_history(db, conv_id, body.message, context)
 
     from backends.local_auth import DEFAULT_USER_ID
     agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
     session_key_agent = f"chat:{conv_id}"
-    messages_payload = [{"role": "system", "content": context}] + history
 
     async def generate():
         queue: asyncio.Queue = asyncio.Queue()
@@ -335,31 +326,7 @@ async def chat_endpoint(
             from handlers.deps import SessionLocal as _SL
             write_db = _SL()
             try:
-                now = datetime.utcnow()
-                write_db.add(_Msg(
-                    id=str(_uuid.uuid4()),
-                    conversation_id=conv_id,
-                    sender_type=_PT.ACCOUNT_USER,
-                    body=body.message,
-                    message_type="message",
-                    sender_name="You",
-                    is_ai=False,
-                    sent_at=now,
-                ))
-                write_db.add(_Msg(
-                    id=str(_uuid.uuid4()),
-                    conversation_id=conv_id,
-                    sender_type=_PT.ACCOUNT_USER,
-                    body=reply,
-                    message_type="message",
-                    sender_name="RentMate",
-                    is_ai=True,
-                    sent_at=now,
-                ))
-                c = write_db.query(Conversation).filter_by(id=conv_id).first()
-                if c:
-                    c.updated_at = now
-                write_db.commit()
+                chat_service.persist_user_ai_messages(write_db, conv_id, body.message, reply)
             except Exception as e:
                 write_db.rollback()
                 print(f"[chat] DB write failed: {e}")
@@ -383,8 +350,7 @@ async def list_chat_conversations(
     db: Session = Depends(get_db),
 ):
     await require_user(request)
-    from db.queries import fetch_conversations as _fetch_convs
-    convs = _fetch_convs(db, "user_ai", limit=50)
+    convs = chat_service.list_conversations(db, "user_ai", limit=50)
     return [
         {
             "id": c.id,
@@ -427,9 +393,8 @@ async def spawn_task_endpoint(
     db.commit()
     return {
         "uid": task.id,
-        "title": task.subject,
+        "title": task.title,
         "parent_conversation_id": task.parent_conversation_id,
-        "ancestor_ids": task.ancestor_ids or [],
         "task_status": task.task_status,
         "task_mode": task.task_mode,
         "category": task.category,
@@ -448,13 +413,12 @@ async def task_chat_endpoint(
     task = db.query(Task).filter_by(id=body.task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    # Find the primary conversation for this task (first one linked)
-    primary_convo = task.conversations[0] if task.conversations else None
+    # Use the task's AI conversation as the primary thread
+    primary_convo = task.ai_conversation
 
     context = build_task_context(db, body.task_id)
-    all_msgs = []
-    for convo in task.conversations:
-        all_msgs.extend(m for m in convo.messages if m.message_type == "message")
+    ai_convo = task.ai_conversation
+    all_msgs = [m for m in (ai_convo.messages if ai_convo else []) if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)]
     msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
     history = [
         {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
@@ -501,7 +465,7 @@ async def task_chat_endpoint(
 
                 write_db = _SessionLocal()
                 try:
-                    now = datetime.utcnow()
+                    now = datetime.now(UTC)
                     # Persist thinking chain as an internal message before the reply
                     if running.progress_log:
                         thinking_body = "\n".join(running.progress_log)
@@ -510,7 +474,7 @@ async def task_chat_endpoint(
                             conversation_id=convo_id,
                             sender_type=ParticipantType.ACCOUNT_USER,
                             body=thinking_body,
-                            message_type="internal",
+                            message_type=MessageType.INTERNAL,
                             sender_name="RentMate",
                             is_ai=True,
                             sent_at=now,
@@ -520,7 +484,7 @@ async def task_chat_endpoint(
                         conversation_id=convo_id,
                         sender_type=ParticipantType.ACCOUNT_USER,
                         body=reply,
-                        message_type="message",
+                        message_type=MessageType.THREAD,
                         sender_name="RentMate",
                         is_ai=True,
                         sent_at=now,

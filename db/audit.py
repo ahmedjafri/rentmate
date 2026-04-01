@@ -11,7 +11,7 @@ resolved/cancelled.
 
 import logging
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -22,6 +22,7 @@ from .models import (
     Task,
     Conversation,
     Message,
+    MessageType,
     ParticipantType,
     Property,
     Unit,
@@ -76,6 +77,24 @@ def _task_exists(
     return q.first() is not None
 
 
+def _get_account_id(db: Session, property_id: Optional[str], unit_id: Optional[str]) -> str:
+    from sqlalchemy import text
+    try:
+        if property_id:
+            res = db.execute(text("SELECT account_id FROM properties WHERE id = :id"), {"id": property_id}).fetchone()
+            if res and res[0]:
+                return res[0]
+        if unit_id:
+            res = db.execute(text("SELECT account_id FROM units WHERE id = :id"), {"id": unit_id}).fetchone()
+            if res and res[0]:
+                return res[0]
+        res = db.execute(text("SELECT id FROM hosted_accounts LIMIT 1")).fetchone()
+        if res and res[0]:
+            return res[0]
+    except Exception:
+        pass
+    return "00000000-0000-0000-0000-000000000001"
+
 def _create_task(
     db: Session,
     subject: str,
@@ -94,6 +113,7 @@ def _create_task(
     task_id = str(uuid.uuid4())
     task = Task(
         id=task_id,
+        account_id=_get_account_id(db, property_id, unit_id),
         title=subject,
         task_status=task_status,
         task_mode=task_mode,
@@ -104,34 +124,43 @@ def _create_task(
         confidential=False,
         property_id=property_id,
         unit_id=unit_id,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
     db.add(task)
     db.flush()  # get task.id without committing
 
+    # Assign task_number per account
+    from sqlalchemy import select as sa_select, func as sa_func
+    max_num = db.execute(
+        sa_select(sa_func.coalesce(sa_func.max(Task.task_number), 0))
+        .where(Task.account_id == task.account_id)
+    ).scalar()
+    task.task_number = max_num + 1
+
     # Create primary internal conversation thread for this task
     convo = Conversation(
         id=str(uuid.uuid4()),
-        task_id=task.id,
         subject=subject,
         property_id=property_id,
         unit_id=unit_id,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
     )
     db.add(convo)
     db.flush()
+
+    task.ai_conversation_id = convo.id
 
     db.add(Message(
         id=str(uuid.uuid4()),
         conversation_id=convo.id,
         sender_type=ParticipantType.ACCOUNT_USER,
         body=context_body,
-        message_type="context",
+        message_type=MessageType.CONTEXT,
         sender_name="RentMate",
         is_ai=True,
-        sent_at=datetime.utcnow(),
+        sent_at=datetime.now(UTC),
     ))
     db.flush()
 
@@ -151,11 +180,11 @@ def _create_task(
                 conversation_id=convo.id,
                 sender_type=ParticipantType.ACCOUNT_USER,
                 body="Here's a suggested message you can send:",
-                message_type="approval",
+                message_type=MessageType.APPROVAL,
                 sender_name="RentMate",
                 is_ai=True,
                 draft_reply=draft,
-                sent_at=datetime.utcnow(),
+                sent_at=datetime.now(UTC),
             ))
             db.flush()
 
@@ -204,79 +233,6 @@ def _check_incomplete_properties(db: Session, dry_run: bool = False, autonomy_le
     return created
 
 
-def _check_vacant_units(db: Session, min_vacancy_days: int = 0, dry_run: bool = False, autonomy_level: Optional[str] = None) -> int:
-    """Flag units that have no active (non-expired) lease."""
-    created = 0
-    today = date.today()
-    units = db.query(Unit).all()
-    for unit in units:
-        active_leases = [
-            l for l in unit.leases
-            if l.end_date >= today
-        ]
-        if active_leases:
-            continue
-
-        prop = unit.property
-        prop_label = _addr_summary(prop) if prop else "unknown property"
-        subject = f"Vacant unit: {unit.label} at {prop_label}"
-        if not dry_run and _task_exists(db, subject, property_id=unit.property_id, unit_id=unit.id):
-            continue
-
-        # Build richer context from lease history
-        past_leases = sorted(unit.leases, key=lambda l: l.end_date, reverse=True)
-        last_lease = past_leases[0] if past_leases else None
-
-        days_vacant = (today - last_lease.end_date).days if last_lease else 0
-        # Respect min_vacancy_days threshold — applies to never-leased units too (days_vacant=0)
-        if days_vacant < min_vacancy_days:
-            continue
-
-        if last_lease:
-            tenant_name = (
-                f"{last_lease.tenant.first_name} {last_lease.tenant.last_name}".strip()
-                if last_lease.tenant else "previous tenant"
-            )
-            urgency = "high" if days_vacant > 60 else "medium" if days_vacant > 14 else "low"
-            vacancy_line = (
-                f"Unit {unit.label!r} at {prop_label} has been vacant for "
-                f"{days_vacant} day{'s' if days_vacant != 1 else ''} "
-                f"(last leased to {tenant_name}, ended {last_lease.end_date})."
-            )
-            rent_hint = (
-                f" Previous rent was ${last_lease.rent_amount:,.2f}/month — "
-                "use this as a baseline when listing."
-            )
-        else:
-            urgency = "low"
-            vacancy_line = (
-                f"Unit {unit.label!r} at {prop_label} has never had a lease on record."
-            )
-            rent_hint = ""
-
-        context_body = (
-            f"{vacancy_line}{rent_hint}\n\n"
-            "Suggested next steps:\n"
-            "1. Confirm the unit is move-in ready (inspect, clean, repairs).\n"
-            "2. List the unit on rental platforms with current pricing.\n"
-            "3. Follow up with any existing prospects or waitlist applicants.\n"
-            "4. Once a tenant is found, create a new lease in RentMate."
-        )
-
-        _create_task(
-            db,
-            subject=subject,
-            context_body=context_body,
-            category="leasing",
-            urgency=urgency,
-            property_id=unit.property_id,
-            unit_id=unit.id,
-            autonomy_level=autonomy_level,
-        )
-        created += 1
-    return created
-
-
 def _check_tenants_missing_contact(db: Session, dry_run: bool = False, autonomy_level: Optional[str] = None) -> int:
     """Flag tenants with neither phone nor email."""
     created = 0
@@ -290,7 +246,6 @@ def _check_tenants_missing_contact(db: Session, dry_run: bool = False, autonomy_
         if not dry_run and _task_exists(db, subject):
             continue
 
-        # Try to find a linked property for context
         prop_id = None
         if t.leases:
             prop_id = t.leases[0].property_id
@@ -311,18 +266,19 @@ def _check_tenants_missing_contact(db: Session, dry_run: bool = False, autonomy_
     return created
 
 
-def _check_expiring_leases(db: Session, warn_days: int = EXPIRY_WARN_DAYS, dry_run: bool = False, autonomy_level: Optional[str] = None) -> int:
-    """Flag leases expiring within warn_days days."""
+def _check_lease_status(db: Session, warn_days: int = EXPIRY_WARN_DAYS, dry_run: bool = False, autonomy_level: Optional[str] = None) -> int:
+    """Flag leases that are expiring soon or already expired without replacement."""
     created = 0
     today = date.today()
     cutoff = today + timedelta(days=warn_days)
 
-    leases = (
+    # Expiring leases (end_date between today and cutoff)
+    expiring = (
         db.query(Lease)
         .filter(Lease.end_date >= today, Lease.end_date <= cutoff)
         .all()
     )
-    for lease in leases:
+    for lease in expiring:
         tenant_name = (
             f"{lease.tenant.first_name} {lease.tenant.last_name}".strip()
             if lease.tenant else "Unknown tenant"
@@ -352,61 +308,14 @@ def _check_expiring_leases(db: Session, warn_days: int = EXPIRY_WARN_DAYS, dry_r
             property_address=prop_label,
         )
         created += 1
-    return created
 
-
-def _check_overdue_rent(db: Session, dry_run: bool = False, autonomy_level: Optional[str] = None) -> int:
-    """Flag leases whose payment_status is late or overdue."""
-    created = 0
-    leases = (
-        db.query(Lease)
-        .filter(Lease.payment_status.in_(["late", "overdue"]))
-        .all()
-    )
-    for lease in leases:
-        tenant_name = (
-            f"{lease.tenant.first_name} {lease.tenant.last_name}".strip()
-            if lease.tenant else "Unknown tenant"
-        )
-        unit_label = lease.unit.label if lease.unit else "unknown unit"
-
-        subject = f"Overdue rent: {tenant_name} – {unit_label}"
-        if not dry_run and _task_exists(db, subject, property_id=lease.property_id, unit_id=lease.unit_id):
-            continue
-
-        prop_label = _addr_summary(lease.property) if lease.property else "unknown property"
-        _create_task(
-            db,
-            subject=subject,
-            context_body=(
-                f"{tenant_name} at {unit_label}, {prop_label} "
-                f"has payment status '{lease.payment_status}' "
-                f"(${lease.rent_amount:,.2f}/month). Follow up on outstanding rent."
-            ),
-            category="rent",
-            urgency="high",
-            property_id=lease.property_id,
-            unit_id=lease.unit_id,
-            autonomy_level=autonomy_level,
-            tenant_name=tenant_name,
-            property_address=prop_label,
-        )
-        created += 1
-    return created
-
-
-def _check_expired_leases(db: Session, dry_run: bool = False, autonomy_level: Optional[str] = None) -> int:
-    """Flag leases that expired without a newer lease replacing them."""
-    created = 0
-    today = date.today()
-
+    # Expired leases (end_date < today, no newer active lease on the same unit)
     expired = (
         db.query(Lease)
         .filter(Lease.end_date < today)
         .all()
     )
     for lease in expired:
-        # Skip if the same unit has a newer active lease
         newer = any(
             l.id != lease.id and l.end_date >= today
             for l in (lease.unit.leases if lease.unit else [])
@@ -442,6 +351,7 @@ def _check_expired_leases(db: Session, dry_run: bool = False, autonomy_level: Op
             property_address=prop_label,
         )
         created += 1
+
     return created
 
 
@@ -481,20 +391,13 @@ def run_data_audit(
 
     total = 0
     try:
+        if _enabled("lease_status"):
+            warn_days = checks.get("lease_status", {}).get("warn_days", EXPIRY_WARN_DAYS)
+            total += _check_lease_status(db, warn_days=warn_days, dry_run=dry_run, autonomy_level=_autonomy("leasing"))
         if _enabled("incomplete_properties"):
             total += _check_incomplete_properties(db, dry_run=dry_run, autonomy_level=_autonomy("compliance"))
-        if _enabled("vacant_units"):
-            min_days = checks.get("vacant_units", {}).get("min_vacancy_days", 0)
-            total += _check_vacant_units(db, min_vacancy_days=min_days, dry_run=dry_run, autonomy_level=_autonomy("leasing"))
         if _enabled("missing_contact"):
             total += _check_tenants_missing_contact(db, dry_run=dry_run, autonomy_level=_autonomy("compliance"))
-        if _enabled("expiring_leases"):
-            warn_days = checks.get("expiring_leases", {}).get("warn_days", EXPIRY_WARN_DAYS)
-            total += _check_expiring_leases(db, warn_days=warn_days, dry_run=dry_run, autonomy_level=_autonomy("leasing"))
-        if _enabled("expired_leases"):
-            total += _check_expired_leases(db, dry_run=dry_run, autonomy_level=_autonomy("leasing"))
-        if _enabled("overdue_rent"):
-            total += _check_overdue_rent(db, dry_run=dry_run, autonomy_level=_autonomy("rent"))
         if total:
             logger.info("Created %d new suggested task(s).", total)
         else:
@@ -507,8 +410,7 @@ def run_data_audit(
     # Run built-in DSL scripts for checks not handled by a dedicated Python function above.
     # Like custom automations, these only run when explicitly enabled in the config.
     _PYTHON_HANDLED = {
-        "incomplete_properties", "vacant_units", "missing_contact",
-        "expiring_leases", "expired_leases", "overdue_rent",
+        "lease_status", "incomplete_properties", "missing_contact",
     }
     from handlers.default_automations import _CHECK_META as _BUILTIN_META
     from db.dsl_runner import run_script

@@ -4,6 +4,7 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Wrench } from 'lucide-react';
 
 interface LoginProps {
   onSuccess: () => void;
@@ -63,6 +64,16 @@ export default function Login({ onSuccess }: LoginProps) {
             </Button>
           </form>
         </Card>
+
+        <div className="mt-6 text-center">
+          <a
+            href="/vendor-login"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Wrench className="h-3.5 w-3.5" />
+            Vendor portal login
+          </a>
+        </div>
       </div>
     </div>
   );

@@ -1,0 +1,28 @@
+{
+  "id": "vendor_outreach_gutter_cleaning",
+  "automation": "vendor_outreach",
+  "description": "Outreach to a gutter cleaning vendor should ask about availability and pricing, not give scheduling instructions.",
+  "task": {
+    "title": "Schedule gutter cleaning",
+    "category": "maintenance",
+    "urgency": "normal",
+    "body": "Schedule a monthly gutter cleaning at 16617 3rd Dr SE Bothell WA 98012 to prevent potential water damage and ice dams."
+  },
+  "context": "Property: 16617 3rd Dr SE, Bothell, WA 98012\nVendor: CleanPro Gutters",
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "{{generated}}"
+    }
+  ],
+  "expected": {
+    "resolution": "active",
+    "criteria": [
+      "Message asks the vendor about availability rather than telling them when to come",
+      "Message asks for a quote or pricing information",
+      "Message briefly describes the work needed (gutter cleaning) and mentions the property address",
+      "Message does NOT read like a directive or scheduling confirmation — it is an inquiry",
+      "Message is 2-3 sentences max, professional and friendly"
+    ]
+  }
+}

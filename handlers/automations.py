@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from collections import deque
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -27,7 +27,7 @@ def _record_run(key: str, tasks_created: int, error: str | None = None) -> None:
     if key not in _run_log:
         _run_log[key] = deque(maxlen=_MAX_RUNS)
     _run_log[key].appendleft({
-        "ran_at": datetime.utcnow().isoformat(),
+        "ran_at": datetime.now(UTC).isoformat(),
         "tasks_created": tasks_created,
         "outcome": "error" if error else "ok",
         "error": error,
@@ -36,8 +36,7 @@ def _record_run(key: str, tasks_created: int, error: str | None = None) -> None:
 # ─── config helpers ───────────────────────────────────────────────────────────
 
 def _make_revision_id(cfg: Dict[str, Any]) -> str:
-    from datetime import datetime as _dt
-    raw = json.dumps(cfg, sort_keys=True) + _dt.utcnow().isoformat()
+    raw = json.dumps(cfg, sort_keys=True) + datetime.now(UTC).isoformat()
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
@@ -379,6 +378,8 @@ class CreateSimulatedTaskBody(BaseModel):
     body: str = ""
     property_id: Optional[str] = None
     unit_id: Optional[str] = None
+    automation_key: Optional[str] = None
+    notify_tenant: bool = False
 
 
 # ─── routes ───────────────────────────────────────────────────────────────────
@@ -444,7 +445,8 @@ async def simulate_automations(request: Request):
             pass
 
     from handlers.settings import get_autonomy_settings
-    cfg = {**_load_automation_config(), "autonomy": get_autonomy_settings()}
+    autonomy_settings = get_autonomy_settings()
+    cfg = {**_load_automation_config(), "autonomy": autonomy_settings}
     _logger.info("simulate: check_name=%r  custom_meta_keys=%r",
                  check_name, list(cfg.get("custom_meta", {}).keys()))
     if check_name:
@@ -469,12 +471,21 @@ async def simulate_automations(request: Request):
             new_tasks = q.all()
             _logger.info("simulate: new_tasks=%d", len(new_tasks))
             for t in new_tasks:
-                # Find the context message from linked conversations
+                # Find the context message from the AI conversation
+                ai_convo = t.ai_conversation
                 ctx_msg = None
-                for convo in t.conversations:
-                    ctx_msg = next((m for m in convo.messages if m.message_type == "context"), None)
-                    if ctx_msg:
-                        break
+                if ai_convo:
+                    from db.models import MessageType as _MT
+                    ctx_msg = next((m for m in ai_convo.messages if m.message_type == _MT.CONTEXT), None)
+                vendor_name = None
+                vendor_id = None
+                try:
+                    if ai_convo:
+                        extra = ai_convo.extra or {}
+                        vendor_name = extra.get("assigned_vendor_name")
+                        vendor_id = extra.get("assigned_vendor_id")
+                except Exception:
+                    pass
                 preview.append({
                     "subject": t.title,
                     "category": t.category,
@@ -483,6 +494,9 @@ async def simulate_automations(request: Request):
                     "property_id": t.property_id,
                     "unit_id": t.unit_id,
                     "description": ctx_msg.body if ctx_msg else "",
+                    "assigned_vendor_id": vendor_id,
+                    "assigned_vendor_name": vendor_name,
+                    "autonomy": autonomy_settings.get(t.category or "", "suggest"),
                 })
         finally:
             savepoint.rollback()
@@ -497,75 +511,238 @@ async def simulate_automations(request: Request):
     return {"tasks": preview, "count": len(preview)}
 
 
-@router.post("/automations/simulate/create-task")
-async def create_simulated_task(body: CreateSimulatedTaskBody, request: Request):
+@router.post("/automations/simulate/create-suggestion")
+async def create_suggestion(body: CreateSimulatedTaskBody, request: Request):
     await require_user(request)
-    from db.models import Task, Conversation as Conv
-    import uuid
-    from datetime import datetime
-    from db.models import Message, ParticipantType
+    from sqlalchemy import select as sa_select
+    from db.models import Suggestion, Task, ExternalContact, MessageType
+    from gql.services import suggestion_service, settings_service
+    from llm.vendor_outreach import generate_vendor_outreach
+
+    # Resolve autonomy level for this category
+    autonomy = settings_service.get_autonomy_for_category(body.category)
+
+    # Resolve vendor from automation config
+    vendor_id = None
+    vendor_name = None
+    if body.automation_key:
+        cfg = _load_automation_config()
+        check_cfg = cfg.get("checks", {}).get(body.automation_key, {})
+        vendor_id = check_cfg.get("preferred_vendor_id") or None
+
     db = SessionLocal.session_factory()
     try:
-        # Only block if an active/paused task already exists (not just a suggestion)
-        q = db.query(Task).filter(
-            Task.source == "ai_suggestion",
+        # Validate vendor
+        if vendor_id:
+            vendor = db.execute(
+                sa_select(ExternalContact).where(ExternalContact.id == vendor_id)
+            ).scalar_one_or_none()
+            if vendor:
+                vendor_name = vendor.name
+            else:
+                vendor_id = None
+
+        # Dedup: block if a pending suggestion or active task already exists
+        existing_suggestion = db.query(Suggestion).filter(
+            Suggestion.status == "pending",
+            Suggestion.title == body.subject,
+        )
+        if body.property_id:
+            existing_suggestion = existing_suggestion.filter(Suggestion.property_id == body.property_id)
+        if body.unit_id:
+            existing_suggestion = existing_suggestion.filter(Suggestion.unit_id == body.unit_id)
+        if existing_suggestion.first():
+            raise HTTPException(status_code=409, detail="Suggestion already exists")
+
+        existing_task = db.query(Task).filter(
+            Task.source.in_(["ai_suggestion", "automation"]),
             Task.task_status.in_(["active", "paused"]),
             Task.title == body.subject,
         )
         if body.property_id:
-            q = q.filter(Task.property_id == body.property_id)
+            existing_task = existing_task.filter(Task.property_id == body.property_id)
         if body.unit_id:
-            q = q.filter(Task.unit_id == body.unit_id)
-        if q.first():
+            existing_task = existing_task.filter(Task.unit_id == body.unit_id)
+        if existing_task.first():
             raise HTTPException(status_code=409, detail="Task already exists in action desk")
-        task = Task(
-            id=str(uuid.uuid4()),
+
+        # Build action payload with vendor info for later execution
+        action_payload: dict = {}
+        if vendor_id:
+            action_payload["vendor_id"] = vendor_id
+            action_payload["vendor_name"] = vendor_name
+
+        # Generate vendor draft if in suggest mode
+        has_vendor_draft = False
+        if vendor_id and autonomy == "suggest":
+            try:
+                draft = generate_vendor_outreach(
+                    task_title=body.subject,
+                    task_body=body.body,
+                    category=body.category,
+                    vendor_name=vendor_name,
+                )
+                if draft:
+                    action_payload["draft_message"] = draft
+                    has_vendor_draft = True
+            except Exception:
+                pass
+
+        # Build suggestion options based on autonomy + context
+        options = settings_service.build_suggestion_options(
+            autonomy, has_vendor_draft=has_vendor_draft,
+        )
+
+        # Create the suggestion
+        suggestion = suggestion_service.create_suggestion(
+            db,
             title=body.subject,
+            body=body.body,
+            category=body.category,
+            urgency=body.urgency,
+            source="automation",
+            automation_key=body.automation_key,
+            options=options,
+            action_payload=action_payload or None,
+            property_id=body.property_id,
+            unit_id=body.unit_id,
+        )
+
+        # Add approval message with draft if available
+        if has_vendor_draft:
+            suggestion_service.add_message(
+                db,
+                suggestion.id,
+                body="Here's a suggested message you can send to the vendor:",
+                message_type=MessageType.APPROVAL,
+                draft_reply=action_payload["draft_message"],
+            )
+
+        suggestion_id = suggestion.id
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        db.close()
+    return {"ok": True, "suggestion_id": suggestion_id}
+
+
+class ActOnSuggestionBody(BaseModel):
+    action: str
+    edited_body: Optional[str] = None
+
+
+@router.post("/suggestions/{suggestion_id}/act")
+async def act_on_suggestion_endpoint(suggestion_id: str, body: ActOnSuggestionBody, request: Request):
+    await require_user(request)
+    from gql.services import suggestion_service
+
+    db = SessionLocal.session_factory()
+    try:
+        suggestion, task = suggestion_service.act_on_suggestion(
+            db, suggestion_id, body.action, edited_body=body.edited_body,
+        )
+        db.commit()
+        return {
+            "ok": True,
+            "status": suggestion.status,
+            "task_id": str(task.id) if task else None,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        db.close()
+
+
+@router.post("/automations/simulate/create-task")
+async def create_task_directly(body: CreateSimulatedTaskBody, request: Request):
+    """Create a Task directly from a simulation result (skipping the suggestion stage)."""
+    await require_user(request)
+    from sqlalchemy import select as sa_select
+    from db.models import Task, Conversation, MessageType, ConversationType, ExternalContact
+    from gql.services.task_service import TaskService
+    from gql.services import chat_service, settings_service
+    from gql.types import CreateTaskInput, AddTaskMessageInput
+
+    # Resolve vendor from automation config
+    vendor_id = None
+    vendor_name = None
+    if body.automation_key:
+        cfg = _load_automation_config()
+        check_cfg = cfg.get("checks", {}).get(body.automation_key, {})
+        vendor_id = check_cfg.get("preferred_vendor_id") or None
+
+    db = SessionLocal.session_factory()
+    try:
+        if vendor_id:
+            vendor = db.execute(
+                sa_select(ExternalContact).where(ExternalContact.id == vendor_id)
+            ).scalar_one_or_none()
+            if vendor:
+                vendor_name = vendor.name
+            else:
+                vendor_id = None
+
+        # Dedup
+        existing = db.query(Task).filter(
+            Task.source.in_(["ai_suggestion", "automation"]),
+            Task.task_status.in_(["active", "paused"]),
+            Task.title == body.subject,
+        )
+        if body.property_id:
+            existing = existing.filter(Task.property_id == body.property_id)
+        if body.unit_id:
+            existing = existing.filter(Task.unit_id == body.unit_id)
+        if existing.first():
+            raise HTTPException(status_code=409, detail="Task already exists")
+
+        task = TaskService.create_task(db, CreateTaskInput(
+            title=body.subject,
+            source="automation",
             task_status="active",
             task_mode="manual",
-            source="ai_suggestion",
             category=body.category,
             urgency=body.urgency,
             priority="routine",
             confidential=False,
             property_id=body.property_id,
             unit_id=body.unit_id,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
-        )
-        db.add(task)
-        db.flush()
-        convo = Conv(
-            id=str(uuid.uuid4()),
+        ))
+
+        # Wire up vendor conversation
+        if vendor_id:
+            ext_convo = chat_service.get_or_create_external_conversation(
+                db,
+                conversation_type=ConversationType.VENDOR,
+                subject=body.subject,
+                property_id=body.property_id,
+                unit_id=body.unit_id,
+                vendor_id=vendor_id,
+            )
+            task.external_conversation_id = ext_convo.id
+            TaskService.assign_vendor_to_task(db, task.id, vendor_id)
+
+        TaskService.add_message_to_ai_chat(db, AddTaskMessageInput(
             task_id=task.id,
-            subject=body.subject,
-            property_id=body.property_id,
-            unit_id=body.unit_id,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
-        )
-        db.add(convo)
-        db.flush()
-        db.add(Message(
-            id=str(uuid.uuid4()),
-            conversation_id=convo.id,
-            sender_type=ParticipantType.ACCOUNT_USER,
             body=body.body,
-            message_type="context",
+            message_type=MessageType.CONTEXT,
             sender_name="RentMate",
             is_ai=True,
-            sent_at=datetime.utcnow(),
         ))
+
+        task_id = task.id
         db.commit()
     except HTTPException:
-        db.rollback()
         raise
     except Exception as exc:
-        db.rollback()
         raise HTTPException(status_code=500, detail=str(exc))
     finally:
         db.close()
-    return {"ok": True}
+    return {"ok": True, "task_id": task_id}
 
 
 @router.post("/automations/new")

@@ -10,7 +10,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from db.models import Conversation, ConversationParticipant, ExternalContact, Lease, Message, Property, Task, Tenant
+from db.models import Conversation, ConversationParticipant, ExternalContact, Lease, Message, MessageType, Property, Task, Tenant
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ def fetch_tasks(
     if source:
         q = q.where(Task.source == source)
     q = q.options(
-        selectinload(Task.conversations).selectinload(Conversation.messages),
+        selectinload(Task.ai_conversation).selectinload(Conversation.messages),
         selectinload(Task.unit),
         selectinload(Task.lease).selectinload(Lease.tenant),
         selectinload(Task.lease).selectinload(Lease.unit),
@@ -105,7 +105,7 @@ def fetch_task(db: Session, uid: str) -> Optional[Task]:
         select(Task)
         .where(Task.id == uid)
         .options(
-            selectinload(Task.conversations).selectinload(Conversation.messages),
+            selectinload(Task.ai_conversation).selectinload(Conversation.messages),
             selectinload(Task.unit),
             selectinload(Task.lease).selectinload(Lease.tenant),
             selectinload(Task.lease).selectinload(Lease.unit),
@@ -130,6 +130,7 @@ def fetch_conversations(
             selectinload(Conversation.participants)
             .selectinload(ConversationParticipant.external_contact),
             selectinload(Conversation.messages),
+            selectinload(Conversation.property),
         )
         .order_by(Conversation.updated_at.desc())
         .offset(offset)
@@ -147,6 +148,7 @@ def fetch_messages(db: Session, conversation_id: str) -> list[Message]:
         db.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)
+            .where(Message.message_type != MessageType.THREAD)
             .order_by(Message.sent_at)
         )
         .scalars()

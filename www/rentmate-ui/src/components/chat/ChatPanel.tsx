@@ -13,7 +13,8 @@ import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { AgentTaskProposal, AgentProposedTask } from './AgentTaskProposal';
 import { AgentActionConfirm, AgentProposedAction } from './AgentActionConfirm';
-import { graphqlQuery, TASK_QUERY, ADD_TASK_MESSAGE_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
+import { SuggestionOptions } from './SuggestionOptions';
+import { graphqlQuery, TASK_QUERY, ADD_TASK_MESSAGE_MUTATION, ADD_EXTERNAL_TASK_MESSAGE_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
 import { apiMessagesToChatThread } from '@/hooks/useApiData';
 
 function authHeaders() {
@@ -40,12 +41,12 @@ function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }
 }
 
 export function ChatPanel() {
-  const { chatPanel, closeChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, chatSessions, addDocument, replaceDocument, removeDocument } = useApp();
+  const { chatPanel, closeChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, chatSessions, addDocument, replaceDocument, removeDocument } = useApp();
   const [dismissConfirm, setDismissConfirm] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [activeTaskTab, setActiveTaskTab] = useState<'rentmate' | 'participants'>('rentmate');
+  const [activeTaskTab, setActiveTaskTab] = useState<'chat' | 'ai'>('chat');
   const [participantMessages, setParticipantMessages] = useState<ChatMessage[]>([]);
   const [participantLoading, setParticipantLoading] = useState(false);
 
@@ -93,7 +94,7 @@ export function ChatPanel() {
   useEffect(() => {
     setDismissConfirm(false);
     setDeleteConfirm(false);
-    setActiveTaskTab('rentmate');
+    setActiveTaskTab('chat');
     setParticipantMessages([]);
   }, [chatPanel.taskId]);
 
@@ -157,6 +158,15 @@ export function ChatPanel() {
     return result;
   }, [messages]);
 
+  const aiRenderedItems = useMemo(() =>
+    renderedItems.filter(item =>
+      item.kind === 'divider'
+        ? false
+        : item.msg.senderType !== 'tenant' && item.msg.senderType !== 'vendor'
+    ),
+    [renderedItems]
+  );
+
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -179,10 +189,10 @@ export function ChatPanel() {
     });
   }, [chatPanel.taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load participant messages when switching to participants tab
+  // Load participant messages when switching to chat tab
   useEffect(() => {
     const parentId = activeTask?.parentConversationId;
-    if (activeTaskTab !== 'participants' || !parentId) return;
+    if (activeTaskTab !== 'chat' || !parentId) return;
     setParticipantLoading(true);
     graphqlQuery<{ conversationMessages: Array<{ uid: string; body: string; messageType: string; senderName: string; isAi: boolean; isSystem: boolean; sentAt: string }> }>(
       CONVERSATION_MESSAGES_QUERY, { uid: parentId }
@@ -419,7 +429,7 @@ export function ChatPanel() {
           .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }));
 
         const suggestionHint = activeSuggestion
-          ? `Discussing suggestion: "${activeSuggestion.title}". ${activeSuggestion.recommendedAction ?? ''}`
+          ? `Discussing suggestion: "${activeSuggestion.title}". ${activeSuggestion.body ?? ''}`
           : '';
         const contextPrefix = suggestionHint || activeSession?.pageContext || chatPanel.pageContext || '';
 
@@ -744,43 +754,41 @@ export function ChatPanel() {
             <span className="text-[11px] font-medium text-primary">Discussing</span>
           </div>
           <p className="text-xs font-medium">{activeSuggestion.title}</p>
-          <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">{activeSuggestion.recommendedAction}</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">{activeSuggestion.body}</p>
         </div>
       )}
 
       {activeTask ? (
         <Tabs
           value={activeTaskTab}
-          onValueChange={v => setActiveTaskTab(v as 'rentmate' | 'participants')}
+          onValueChange={v => setActiveTaskTab(v as 'chat' | 'ai')}
           className="flex-1 flex flex-col min-h-0"
         >
           <TabsList className="shrink-0 mx-3 mt-2 mb-0 h-8 self-start gap-1 bg-muted/50">
-            <TabsTrigger value="rentmate" className="text-xs h-6 px-3">RentMate</TabsTrigger>
-            <TabsTrigger value="participants" className="text-xs h-6 px-3">Participants</TabsTrigger>
+            <TabsTrigger value="chat" className="text-xs h-6 px-3">Chat</TabsTrigger>
+            <TabsTrigger value="ai" className="text-xs h-6 px-3">AI</TabsTrigger>
           </TabsList>
 
-          {/* RentMate tab — existing chat thread */}
-          <TabsContent value="rentmate" className="flex-1 flex flex-col min-h-0 mt-0 data-[state=inactive]:hidden">
+          {/* AI tab — internal RentMate thread */}
+          <TabsContent value="ai" className="hidden data-[state=active]:flex flex-1 flex-col min-h-0 mt-0">
+            {/* AI participant chip */}
+            <div className="flex items-center gap-1.5 px-3 py-1.5 border-b bg-muted/20 shrink-0">
+              <Badge variant="secondary" className="text-[10px] rounded-lg gap-1 bg-primary/10 text-primary">
+                <Bot className="h-3 w-3" />
+                RentMate AI
+              </Badge>
+            </div>
             <ScrollArea className="flex-1 overflow-x-hidden" ref={scrollRef}>
               <div className="p-4 space-y-4 w-full overflow-x-hidden">
-                {messages.length === 0 && !isTyping && (
+                {aiRenderedItems.length === 0 && !isTyping && (
                   <div className="text-center py-8 text-muted-foreground">
                     <Bot className="h-8 w-8 mx-auto mb-2 opacity-40" />
-                    <p className="text-sm font-medium">Chat with RentMate about this task</p>
-                    <p className="text-xs mt-1">Try: "Draft a message to the tenant" or "What should I do next?"</p>
+                    <p className="text-sm font-medium">Ask RentMate about this task</p>
+                    <p className="text-xs mt-1">Try: "Draft a message to the tenant"</p>
                   </div>
                 )}
-                {renderedItems.map(item =>
-                  item.kind === 'divider' ? (
-                    <div key={item.key} className="flex items-center gap-2 py-1">
-                      <div className="flex-1 h-px bg-border/60" />
-                      <span className="flex items-center gap-1 text-[10px] text-muted-foreground font-medium">
-                        <MessageSquare className="h-2.5 w-2.5" />
-                        {item.label}
-                      </span>
-                      <div className="flex-1 h-px bg-border/60" />
-                    </div>
-                  ) : (
+                {aiRenderedItems.map(item =>
+                  item.kind === 'divider' ? null : (
                     <ChatMessageBubble
                       key={item.msg.id}
                       message={item.msg}
@@ -857,7 +865,7 @@ export function ChatPanel() {
                 ))}
               </div>
             )}
-            {/* RentMate tab input */}
+            {/* AI tab input */}
             {activeTask.status === 'cancelled' || activeTask.status === 'resolved' ? (
               <div className="flex items-center gap-2 px-4 py-3 border-t bg-muted/30 shrink-0">
                 <p className="flex-1 text-xs text-muted-foreground">
@@ -881,22 +889,6 @@ export function ChatPanel() {
                   Re-open
                 </Button>
               </div>
-            ) : isAutonomous && chatPanel.taskId ? (
-              <div className="flex items-center gap-2 px-4 py-3 border-t bg-muted/30 shrink-0">
-                <Zap className="h-4 w-4 text-accent shrink-0" />
-                <p className="flex-1 text-xs text-muted-foreground">RentMate is handling this conversation autonomously.</p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 rounded-lg text-[11px] px-2.5 shrink-0"
-                  onClick={() => {
-                    updateTask(chatPanel.taskId!, { mode: 'manual' });
-                    addChatMessage({ taskId: chatPanel.taskId }, { id: `msg-${Date.now()}`, role: 'assistant', content: 'Switched to manual — you\'re in control now.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' });
-                  }}
-                >
-                  Take control
-                </Button>
-              </div>
             ) : (
               <div className="border-t shrink-0">
                 <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} onFileUpload={handleFileUpload} />
@@ -904,8 +896,25 @@ export function ChatPanel() {
             )}
           </TabsContent>
 
-          {/* Participants tab — parent conversation */}
-          <TabsContent value="participants" className="flex-1 flex flex-col min-h-0 mt-0 data-[state=inactive]:hidden">
+          {/* Chat tab — participant conversation */}
+          <TabsContent value="chat" className="hidden data-[state=active]:flex flex-1 flex-col min-h-0 mt-0">
+            {/* Participant chips */}
+            <div className="flex items-center gap-1.5 px-3 py-1.5 border-b bg-muted/20 shrink-0 flex-wrap">
+              {activeTask.participants.filter(p => p.type === 'tenant' || p.type === 'vendor').length === 0 ? (
+                <span className="text-[11px] text-muted-foreground italic">No external participants yet</span>
+              ) : (
+                activeTask.participants
+                  .filter(p => p.type === 'tenant' || p.type === 'vendor')
+                  .map((p, idx) => (
+                    <Badge key={p.id ?? `${p.name}-${idx}`} variant="secondary" className="text-[10px] rounded-lg gap-1">
+                      <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted-foreground/20 text-[9px] font-bold">
+                        {p.name.charAt(0).toUpperCase()}
+                      </span>
+                      {p.name}
+                    </Badge>
+                  ))
+              )}
+            </div>
             <ScrollArea className="flex-1 overflow-x-hidden">
               <div className="p-4 space-y-4 w-full overflow-x-hidden">
                 {participantLoading && (
@@ -917,7 +926,7 @@ export function ChatPanel() {
                   <div className="text-center py-8 text-muted-foreground">
                     <Users className="h-8 w-8 mx-auto mb-2 opacity-40" />
                     <p className="text-sm font-medium">No participant conversation</p>
-                    <p className="text-xs mt-1">This task was created manually and has no linked conversation.</p>
+                    <p className="text-xs mt-1">This task has no linked conversation with a tenant or vendor.</p>
                   </div>
                 )}
                 {!participantLoading && activeTask.parentConversationId && participantMessages.length === 0 && (
@@ -931,11 +940,22 @@ export function ChatPanel() {
                 ))}
               </div>
             </ScrollArea>
-            {activeTask.parentConversationId && (
+            {activeTask.parentConversationId ? (
               isAutonomous ? (
                 <div className="flex items-center gap-2 px-4 py-3 border-t bg-muted/30 shrink-0">
                   <Zap className="h-4 w-4 text-accent shrink-0" />
-                  <p className="flex-1 text-xs text-muted-foreground">RentMate is handling participant responses automatically.</p>
+                  <p className="flex-1 text-xs text-muted-foreground">RentMate is chatting on your behalf.</p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 rounded-lg text-[11px] px-2.5 shrink-0"
+                    onClick={() => {
+                      updateTask(chatPanel.taskId!, { mode: 'manual' });
+                      addChatMessage({ taskId: chatPanel.taskId }, { id: `msg-${Date.now()}`, role: 'assistant', content: 'Switched to manual — you\'re in control now.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' });
+                    }}
+                  >
+                    Take control
+                  </Button>
                 </div>
               ) : (
                 <div className="border-t shrink-0">
@@ -964,7 +984,7 @@ export function ChatPanel() {
                   />
                 </div>
               )
-            )}
+            ) : null}
           </TabsContent>
         </Tabs>
       ) : (
@@ -1065,7 +1085,23 @@ export function ChatPanel() {
               ))}
             </div>
           )}
-          <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} />
+          {activeSuggestion && activeSuggestion.status === 'pending' ? (
+            <SuggestionOptions
+              options={activeSuggestion.options}
+              onAction={async (action) => {
+                const { graphqlQuery: gql, ACT_ON_SUGGESTION_MUTATION } = await import('@/data/api');
+                const result = await gql<{ actOnSuggestion: { uid: string; status: string; taskId?: string } }>(
+                  ACT_ON_SUGGESTION_MUTATION,
+                  { uid: activeSuggestion.id, action },
+                );
+                const { status } = result.actOnSuggestion;
+                updateSuggestionStatus(activeSuggestion.id, status as 'accepted' | 'dismissed');
+                closeChat();
+              }}
+            />
+          ) : (
+            <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} />
+          )}
         </>
       )}
     </div>
