@@ -1,4 +1,3 @@
-import hashlib
 import os
 import secrets
 import uuid
@@ -26,23 +25,13 @@ def _validate_contact_method(method: str | None) -> None:
         raise ValueError(f"Invalid contact method '{method}'. Must be one of: {', '.join(VENDOR_CONTACT_METHODS)}")
 
 
-def _hash_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    h = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
-    return f"{salt}:{h.hex()}"
-
-
-def _verify_password(password: str, stored: str) -> bool:
-    salt, expected = stored.split(":", 1)
-    h = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
-    return h.hex() == expected
-
-
 class VendorService:
     @staticmethod
     def create_vendor(sess: Session, input: CreateVendorInput) -> ExternalContact:
         _validate_vendor_type(input.vendor_type)
         _validate_contact_method(input.contact_method)
+        if not (input.phone or input.email):
+            raise ValueError("At least one of phone or email is required")
         method = input.contact_method or "rentmate"
         extra: dict = {"contact_method": method}
         if method == "rentmate":
@@ -103,7 +92,7 @@ class VendorService:
         sess.commit()
         return True
 
-    # ── Invite flow ──────────────────────────────────────────────────────────
+    # ── Invite flow (token-only auth) ────────────────────────────────────────
 
     @staticmethod
     def _find_by_invite_token(sess: Session, token: str) -> Optional[ExternalContact]:
@@ -114,56 +103,30 @@ class VendorService:
         return None
 
     @staticmethod
-    def accept_vendor_invite(sess: Session, token: str) -> ExternalContact:
+    def accept_invite(sess: Session, token: str) -> Tuple[ExternalContact, str]:
+        """Accept an invite and return the vendor + JWT."""
         vendor = VendorService._find_by_invite_token(sess, token)
         if not vendor:
             raise ValueError("Invalid or expired invite link")
         extra = dict(vendor.extra or {})
-        if extra.get("invite_status") not in ("accepted", "registered"):
+        if extra.get("invite_status") == "pending":
             extra["invite_status"] = "accepted"
-        vendor.extra = extra
-        from sqlalchemy.orm.attributes import flag_modified
-        flag_modified(vendor, "extra")
-        sess.commit()
-        sess.refresh(vendor)
-        return vendor
-
-    @staticmethod
-    def register_vendor(
-        sess: Session, token: str, email: str, password: str
-    ) -> Tuple[ExternalContact, str]:
-        vendor = VendorService._find_by_invite_token(sess, token)
-        if not vendor:
-            raise ValueError("Invalid or expired invite link")
-        # Check for duplicate email
-        all_vendors = sess.execute(select(ExternalContact)).scalars().all()
-        for v in all_vendors:
-            if v.id != vendor.id and (v.extra or {}).get("vendor_email") == email:
-                raise ValueError("Email already registered")
-        extra = dict(vendor.extra or {})
-        extra["invite_status"] = "registered"
-        extra["vendor_email"] = email
-        extra["password_hash"] = _hash_password(password)
-        vendor.extra = extra
-        from sqlalchemy.orm.attributes import flag_modified
-        flag_modified(vendor, "extra")
-        sess.commit()
-        sess.refresh(vendor)
-        jwt_token = VendorService._create_vendor_jwt(vendor, email)
+            vendor.extra = extra
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(vendor, "extra")
+            sess.commit()
+            sess.refresh(vendor)
+        jwt_token = VendorService._create_vendor_jwt(vendor)
         return vendor, jwt_token
 
     @staticmethod
-    def authenticate_vendor(
-        sess: Session, email: str, password: str
-    ) -> Tuple[ExternalContact, str]:
-        all_vendors = sess.execute(select(ExternalContact)).scalars().all()
-        for v in all_vendors:
-            extra = v.extra or {}
-            if extra.get("vendor_email") == email and extra.get("password_hash"):
-                if _verify_password(password, extra["password_hash"]):
-                    jwt_token = VendorService._create_vendor_jwt(v, email)
-                    return v, jwt_token
-        raise ValueError("Invalid email or password")
+    def get_jwt_for_token(sess: Session, token: str) -> Tuple[ExternalContact, str]:
+        """Return a fresh JWT for a vendor who already accepted their invite."""
+        vendor = VendorService._find_by_invite_token(sess, token)
+        if not vendor:
+            raise ValueError("Invalid or expired invite link")
+        jwt_token = VendorService._create_vendor_jwt(vendor)
+        return vendor, jwt_token
 
     @staticmethod
     def validate_vendor_token(token: str) -> dict:
@@ -173,11 +136,10 @@ class VendorService:
         return payload
 
     @staticmethod
-    def _create_vendor_jwt(vendor: ExternalContact, email: str) -> str:
+    def _create_vendor_jwt(vendor: ExternalContact) -> str:
         payload = {
             "type": "vendor",
             "vendor_id": str(vendor.id),
-            "email": email,
-            "exp": datetime.now(UTC) + timedelta(days=30),
+            "exp": datetime.now(UTC) + timedelta(days=365),
         }
         return jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALGORITHM)

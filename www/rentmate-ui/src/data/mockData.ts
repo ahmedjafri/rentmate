@@ -156,6 +156,8 @@ export interface Vendor {
   email?: string;
   notes?: string;
   contactMethod: string;
+  inviteToken?: string;
+  inviteStatus?: string;
 }
 
 export interface ManagedDocument {

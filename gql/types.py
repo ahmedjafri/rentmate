@@ -1,8 +1,15 @@
 # gql/types.py
 import strawberry
 import typing
-from datetime import date as _date
+from datetime import date as _date, datetime as _datetime
 from db.models import MessageType
+
+
+def _utc_iso(dt: _datetime | None) -> str:
+    """Format a naive-UTC datetime as an ISO 8601 string with Z suffix."""
+    if dt is None:
+        return ""
+    return dt.isoformat() + "Z"
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +323,7 @@ class TaskChatMessageType:
     body: typing.Optional[str] = None
     message_type: typing.Optional[str] = None
     sender_name: typing.Optional[str] = None
+    sender_type: typing.Optional[str] = None
     is_ai: bool = False
     is_system: bool = False
     draft_reply: typing.Optional[str] = None
@@ -325,17 +333,20 @@ class TaskChatMessageType:
 
     @classmethod
     def from_sql(cls, msg: typing.Any) -> "TaskChatMessageType":
+        raw_st = getattr(msg, "sender_type", None)
+        st_value = raw_st.value if hasattr(raw_st, "value") else str(raw_st) if raw_st else None
         return cls(
             uid=str(msg.id),
             body=msg.body,
             message_type=msg.message_type,
             sender_name=msg.sender_name,
+            sender_type=st_value,
             is_ai=msg.is_ai,
             is_system=msg.is_system,
             draft_reply=getattr(msg, "draft_reply", None),
             approval_status=getattr(msg, "approval_status", None),
             related_task_ids=getattr(msg, "related_task_ids", None),
-            sent_at=str(msg.sent_at),
+            sent_at=_utc_iso(msg.sent_at),
         )
 
 
@@ -409,10 +420,10 @@ class TaskType:
             urgency=t.urgency,
             priority=t.priority,
             confidential=t.confidential,
-            last_message_at=str(t.last_message_at) if t.last_message_at else None,
+            last_message_at=_utc_iso(t.last_message_at) or None,
             property_id=str(t.property_id) if t.property_id else None,
             unit_id=str(t.unit_id) if t.unit_id else None,
-            created_at=str(t.created_at),
+            created_at=_utc_iso(t.created_at),
             messages=messages,
             tenant_name=tenant_name,
             unit_label=unit_label,
@@ -468,7 +479,7 @@ class SuggestionType:
             unit_id=str(s.unit_id) if s.unit_id else None,
             task_id=str(s.task_id) if s.task_id else None,
             messages=messages,
-            created_at=str(s.created_at),
+            created_at=_utc_iso(s.created_at),
         )
 
 
@@ -491,7 +502,7 @@ class DocumentTagType:
             property_id=str(tag.property_id) if tag.property_id else None,
             unit_id=str(tag.unit_id) if tag.unit_id else None,
             tenant_id=str(tag.tenant_id) if tag.tenant_id else None,
-            created_at=str(tag.created_at),
+            created_at=_utc_iso(tag.created_at),
         )
 
 
@@ -533,7 +544,7 @@ class VendorType:
             contact_method=extra.get("contact_method", "rentmate"),
             invite_token=extra.get("invite_token"),
             invite_status=extra.get("invite_status"),
-            created_at=str(v.created_at),
+            created_at=_utc_iso(v.created_at),
         )
 
 
@@ -584,8 +595,8 @@ class ConversationSummaryType:
             uid=str(c.id),
             conversation_type=c.conversation_type or "tenant",
             title=c.subject,
-            last_message_at=str(last_msg.sent_at) if last_msg else None,
-            updated_at=str(c.updated_at),
+            last_message_at=_utc_iso(last_msg.sent_at) if last_msg else None,
+            updated_at=_utc_iso(c.updated_at),
             last_message_body=last_msg.body[:120] if last_msg and last_msg.body else None,
             last_message_sender_name=last_msg.sender_name if last_msg else None,
             property_name=prop_name,

@@ -173,41 +173,56 @@ export function ChatPanel() {
     }
   }, [messages, isTyping]);
 
-  // Refresh task messages from DB whenever a task is opened, so messages
-  // persisted server-side (e.g. agent response after navigation) are visible.
-  useEffect(() => {
-    if (!chatPanel.taskId) return;
-    const taskId = chatPanel.taskId;
+  // Refresh task messages from DB whenever a task is opened + poll for new ones
+  const loadTaskMessages = (taskId: string) => {
     graphqlQuery<{ task: { messages: Parameters<typeof apiMessagesToChatThread>[0] } | null }>(
       TASK_QUERY, { uid: taskId }
     ).then(result => {
       if (result.task) {
         setTaskMessages(taskId, apiMessagesToChatThread(result.task.messages ?? []));
       }
-    }).catch(() => {
-      // silently ignore — stale local state is still better than crashing
-    });
+    }).catch(() => {});
+  };
+
+  useEffect(() => {
+    if (!chatPanel.taskId) return;
+    const taskId = chatPanel.taskId;
+    loadTaskMessages(taskId);
+    const interval = setInterval(() => loadTaskMessages(taskId), 5000);
+    return () => clearInterval(interval);
   }, [chatPanel.taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load participant messages when switching to chat tab
+  // Load + poll participant messages when chat tab is active
+  const loadParticipantMessages = (convoId: string, showLoading = false) => {
+    if (showLoading) setParticipantLoading(true);
+    graphqlQuery<{ conversationMessages: Array<{ uid: string; body: string; messageType: string; senderName: string; senderType: string | null; isAi: boolean; isSystem: boolean; sentAt: string }> }>(
+      CONVERSATION_MESSAGES_QUERY, { uid: convoId }
+    ).then(result => {
+      const msgs: ChatMessage[] = (result.conversationMessages ?? []).map(m => {
+        let st: ChatMessage['senderType'] = 'manager';
+        if (m.isAi) st = 'ai';
+        else if (m.senderType === 'external_contact') st = 'vendor';
+        else if (m.senderType === 'tenant') st = 'tenant';
+        return {
+          id: m.uid,
+          role: m.isAi ? 'assistant' as const : 'user' as const,
+          content: m.body,
+          timestamp: new Date(m.sentAt),
+          senderName: m.senderName,
+          senderType: st,
+          messageType: m.messageType as ChatMessage['messageType'],
+        };
+      });
+      setParticipantMessages(msgs);
+    }).catch(() => {}).finally(() => { if (showLoading) setParticipantLoading(false); });
+  };
+
   useEffect(() => {
     const parentId = activeTask?.parentConversationId;
     if (activeTaskTab !== 'chat' || !parentId) return;
-    setParticipantLoading(true);
-    graphqlQuery<{ conversationMessages: Array<{ uid: string; body: string; messageType: string; senderName: string; isAi: boolean; isSystem: boolean; sentAt: string }> }>(
-      CONVERSATION_MESSAGES_QUERY, { uid: parentId }
-    ).then(result => {
-      const msgs: ChatMessage[] = (result.conversationMessages ?? []).map(m => ({
-        id: m.uid,
-        role: m.isAi ? 'assistant' as const : 'user' as const,
-        content: m.body,
-        timestamp: new Date(m.sentAt),
-        senderName: m.senderName,
-        senderType: m.isAi ? 'ai' as const : 'manager' as const,
-        messageType: m.messageType as ChatMessage['messageType'],
-      }));
-      setParticipantMessages(msgs);
-    }).catch(() => {}).finally(() => setParticipantLoading(false));
+    loadParticipantMessages(parentId, true);
+    const interval = setInterval(() => loadParticipantMessages(parentId), 5000);
+    return () => clearInterval(interval);
   }, [activeTaskTab, activeTask?.parentConversationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reconnect to an in-flight agent task when the chat panel opens.
@@ -792,22 +807,21 @@ export function ChatPanel() {
                     <ChatMessageBubble
                       key={item.msg.id}
                       message={item.msg}
-                      onApprove={(messageId) => {
-                        const found = messages.find(m => m.id === messageId);
-                        if (found?.draftReply) {
-                          chatInputRef.current?.insertText(found.draftReply, messageId);
-                        }
-                      }}
-                      onReject={(messageId) => {
-                        if (chatPanel.taskId) {
-                          updateTaskMessage(chatPanel.taskId, messageId, { approvalStatus: 'rejected' });
-                          updateTask(chatPanel.taskId, { mode: 'manual' });
-                          setTimeout(() => {
-                            addChatMessage(
-                              { taskId: chatPanel.taskId },
-                              { id: `msg-${Date.now()}`, role: 'assistant', content: 'Rejected — switching to manual mode. You\'re in control now.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' }
-                            );
-                          }, 300);
+                      onApprovalAction={async (messageId, action, editedBody) => {
+                        const taskId = chatPanel.taskId;
+                        if (!taskId) return;
+
+                        if (action === 'approve_draft') {
+                          const found = messages.find(m => m.id === messageId);
+                          const body = editedBody || found?.draftReply;
+                          if (body) {
+                            await graphqlQuery(ADD_EXTERNAL_TASK_MESSAGE_MUTATION, {
+                              input: { taskId, body },
+                            });
+                          }
+                          updateTaskMessage(taskId, messageId, { approvalStatus: 'approved' });
+                        } else if (action === 'reject_task') {
+                          updateTaskMessage(taskId, messageId, { approvalStatus: 'rejected' });
                         }
                       }}
                     />
@@ -973,8 +987,8 @@ export function ChatPanel() {
                       };
                       setParticipantMessages(prev => [...prev, msg]);
                       try {
-                        await graphqlQuery(ADD_TASK_MESSAGE_MUTATION, {
-                          input: { taskId, body: content, messageType: 'participant', senderName: 'You', isAi: false },
+                        await graphqlQuery(ADD_EXTERNAL_TASK_MESSAGE_MUTATION, {
+                          input: { taskId, body: content },
                         });
                       } catch {
                         toast.error('Failed to send message');

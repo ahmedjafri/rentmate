@@ -24,7 +24,7 @@ import {
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Wrench, Plus, Pencil, Trash2, Search, MessageSquare, Mail, Phone } from 'lucide-react';
+import { Wrench, Plus, Pencil, Trash2, Search, MessageSquare, Mail, Phone, Link, Copy, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 
@@ -51,6 +51,66 @@ const CONTACT_METHOD_LABELS: Record<string, { label: string; icon: React.ReactNo
 
 const contactMethodLabel = (method: string) =>
   CONTACT_METHOD_LABELS[method]?.label ?? method;
+
+const INVITE_STATUS_LABELS: Record<string, { label: string; color: string }> = {
+  pending: { label: 'Pending', color: 'bg-amber-100 text-amber-800' },
+  accepted: { label: 'Accepted', color: 'bg-blue-100 text-blue-800' },
+  registered: { label: 'Registered', color: 'bg-green-100 text-green-800' },
+};
+
+function InviteLink({ token, status }: { token: string; status?: string }) {
+  const [copied, setCopied] = useState(false);
+  const url = `${window.location.origin}/vendor-invite/${token}`;
+  const statusInfo = INVITE_STATUS_LABELS[status ?? 'pending'];
+
+  const handleCopy = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = url;
+        textarea.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopied(true);
+      toast.success('Invite link copied');
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error('Failed to copy — select the link manually');
+    }
+  };
+
+  return (
+    <div className="pt-1.5 space-y-1">
+      <div className="flex items-center gap-1.5">
+        <Link className="h-3 w-3 text-muted-foreground" />
+        <span className="text-xs text-muted-foreground">Invite link</span>
+        {statusInfo && (
+          <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 h-4 ${statusInfo.color}`}>
+            {statusInfo.label}
+          </Badge>
+        )}
+      </div>
+      <div className="flex items-center gap-1.5">
+        <code className="text-[11px] bg-muted px-2 py-1 rounded truncate max-w-[280px] select-all">
+          {url}
+        </code>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 shrink-0"
+          onClick={handleCopy}
+        >
+          {copied ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5 text-muted-foreground" />}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 const Vendors = () => {
   const { vendors, isLoading, addVendor, updateVendor, removeVendor } = useApp();
@@ -111,6 +171,10 @@ const Vendors = () => {
       toast.error('Name is required');
       return;
     }
+    if (!form.phone.trim() && !form.email.trim()) {
+      toast.error('At least one of phone or email is required');
+      return;
+    }
     setSaving(true);
     try {
       const input = {
@@ -124,7 +188,7 @@ const Vendors = () => {
       };
 
       if (editingId) {
-        const data = await graphqlQuery<{ updateVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string; contactMethod?: string } }>(
+        const data = await graphqlQuery<{ updateVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string; contactMethod?: string; inviteToken?: string; inviteStatus?: string } }>(
           UPDATE_VENDOR_MUTATION,
           { input: { uid: editingId, ...input } },
         );
@@ -136,10 +200,12 @@ const Vendors = () => {
           email: data.updateVendor.email,
           notes: data.updateVendor.notes,
           contactMethod: data.updateVendor.contactMethod ?? 'rentmate',
+          inviteToken: data.updateVendor.inviteToken,
+          inviteStatus: data.updateVendor.inviteStatus,
         });
         toast.success('Vendor updated');
       } else {
-        const data = await graphqlQuery<{ createVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string; contactMethod?: string } }>(
+        const data = await graphqlQuery<{ createVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string; contactMethod?: string; inviteToken?: string; inviteStatus?: string } }>(
           CREATE_VENDOR_MUTATION,
           { input },
         );
@@ -152,6 +218,8 @@ const Vendors = () => {
           email: data.createVendor.email,
           notes: data.createVendor.notes,
           contactMethod: data.createVendor.contactMethod ?? 'rentmate',
+          inviteToken: data.createVendor.inviteToken,
+          inviteStatus: data.createVendor.inviteStatus,
         });
         toast.success('Vendor added');
       }
@@ -278,6 +346,9 @@ const Vendors = () => {
                   {v.phone && <div>{v.phone}</div>}
                   {v.email && <div>{v.email}</div>}
                 </div>
+                {v.inviteToken && (
+                  <InviteLink token={v.inviteToken} status={v.inviteStatus} />
+                )}
               </div>
             </Card>
           ))}

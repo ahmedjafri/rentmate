@@ -317,7 +317,7 @@ class Mutation(AuthMutation):
 
     @strawberry.mutation(description="Accept a vendor invite (no auth required)")
     def accept_vendor_invite(self, info, token: str) -> bool:
-        VendorService.accept_vendor_invite(_session(info), token)
+        VendorService.accept_invite(_session(info), token)
         return True
 
     @strawberry.mutation(description="Spawn a Task from an existing conversation, linking lineage")

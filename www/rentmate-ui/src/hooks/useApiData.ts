@@ -119,6 +119,8 @@ export function useApiData(): ApiState {
             email: v.email,
             notes: v.notes,
             contactMethod: v.contactMethod ?? 'rentmate',
+            inviteToken: v.inviteToken,
+            inviteStatus: v.inviteStatus,
           }))
         : [];
 

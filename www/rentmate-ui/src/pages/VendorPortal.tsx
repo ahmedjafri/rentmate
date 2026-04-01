@@ -172,7 +172,8 @@ const VendorPortal = () => {
 
   useEffect(() => {
     if (!isVendorAuthenticated()) {
-      navigate('/vendor-login', { replace: true });
+      setError('Please use your invite link to access the vendor portal.');
+      setLoading(false);
       return;
     }
 
@@ -207,7 +208,10 @@ const VendorPortal = () => {
 
   const handleLogout = () => {
     vendorLogout();
-    navigate('/vendor-login');
+    setError('You have been logged out. Use your invite link to sign back in.');
+    setMe(null);
+    setTasks([]);
+    setActiveTask(null);
   };
 
   if (loading) {

@@ -302,6 +302,7 @@ export const CONVERSATION_MESSAGES_QUERY = `
       body
       messageType
       senderName
+      senderType
       isAi
       isSystem
       sentAt
@@ -327,7 +328,7 @@ export const CREATE_TASK_MUTATION = `
 `;
 
 export const VENDORS_QUERY = `
-  query { vendors { uid name company vendorType phone email notes contactMethod createdAt } }
+  query { vendors { uid name company vendorType phone email notes contactMethod inviteToken inviteStatus createdAt } }
 `;
 
 export const VENDOR_TYPES_QUERY = `
@@ -336,13 +337,13 @@ export const VENDOR_TYPES_QUERY = `
 
 export const CREATE_VENDOR_MUTATION = `
   mutation CreateVendor($input: CreateVendorInput!) {
-    createVendor(input: $input) { uid name company vendorType phone email notes contactMethod }
+    createVendor(input: $input) { uid name company vendorType phone email notes contactMethod inviteToken inviteStatus }
   }
 `;
 
 export const UPDATE_VENDOR_MUTATION = `
   mutation UpdateVendor($input: UpdateVendorInput!) {
-    updateVendor(input: $input) { uid name company vendorType phone email notes contactMethod }
+    updateVendor(input: $input) { uid name company vendorType phone email notes contactMethod inviteToken inviteStatus }
   }
 `;
 

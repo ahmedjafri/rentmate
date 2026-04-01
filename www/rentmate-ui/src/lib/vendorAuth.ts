@@ -23,7 +23,7 @@ export function isVendorAuthenticated(): boolean {
       vendorLogout();
       return false;
     }
-    return payload.role === 'vendor';
+    return payload.type === 'vendor';
   } catch {
     return false;
   }

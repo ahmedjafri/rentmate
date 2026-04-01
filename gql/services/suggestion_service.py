@@ -199,6 +199,17 @@ def act_on_suggestion(
             chat_service.send_autonomous_message(
                 sess, task.external_conversation_id, draft, task_id=task.id,
             )
+            # Mark any approval messages in the AI conversation as approved
+            # so they don't appear as pending in the task's AI tab
+            if task.ai_conversation_id:
+                approval_msgs = sess.execute(
+                    select(Message).where(
+                        Message.conversation_id == task.ai_conversation_id,
+                        Message.message_type == MessageType.APPROVAL,
+                    )
+                ).scalars().all()
+                for m in approval_msgs:
+                    m.approval_status = "approved"
 
         suggestion.task_id = task.id
         suggestion.status = "accepted"

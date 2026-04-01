@@ -1,15 +1,18 @@
 """Vendor-facing REST endpoints. All require a vendor JWT."""
+import logging
 from datetime import UTC, datetime
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from db.models import Conversation, ConversationParticipant, ExternalContact, Message, MessageType, ParticipantType
+from db.models import Conversation, ConversationParticipant, ExternalContact, Message, MessageType, ParticipantType, Task
 from gql.services.vendor_service import VendorService
 from handlers.deps import get_db
 
+_logger = logging.getLogger("rentmate.vendor_portal")
 router = APIRouter(prefix="/api/vendor")
 
 
@@ -24,19 +27,40 @@ def _require_vendor(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
-class LoginBody(BaseModel):
-    email: str
-    password: str
-
-
-@router.post("/login")
-def vendor_login(body: LoginBody, request: Request):
-    db = get_db(request)
+def _generate_reply_suggestion(db: Session, task: Task, vendor_name: str, vendor_message: str) -> None:
+    """If autonomy is 'suggest', generate a draft reply and add it as an APPROVAL message."""
     try:
-        vendor, jwt_token = VendorService.authenticate_vendor(db, body.email, body.password)
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    return {"access_token": jwt_token, "vendor_id": str(vendor.id), "name": vendor.name}
+        from gql.services import settings_service
+        autonomy = settings_service.get_autonomy_for_category(task.category)
+        if autonomy != "suggest":
+            return
+        if not task.ai_conversation_id:
+            return
+
+        from llm.suggest import generate_task_suggestion
+        draft = generate_task_suggestion(
+            subject=task.title,
+            context_body=f"Vendor {vendor_name} replied: \"{vendor_message}\"",
+            category=task.category or "maintenance",
+        )
+        if not draft:
+            return
+
+        now = datetime.now(UTC)
+        db.add(Message(
+            id=str(uuid.uuid4()),
+            conversation_id=task.ai_conversation_id,
+            sender_type=ParticipantType.ACCOUNT_USER,
+            body=f"{vendor_name} replied. Here's a suggested response:",
+            message_type=MessageType.APPROVAL,
+            sender_name="RentMate",
+            is_ai=True,
+            draft_reply=draft,
+            sent_at=now,
+        ))
+        db.commit()
+    except Exception as exc:
+        _logger.warning("Failed to generate reply suggestion: %s", exc)
 
 
 @router.get("/me")
@@ -51,7 +75,8 @@ def vendor_me(request: Request):
         "name": vendor.name,
         "company": vendor.company,
         "vendor_type": vendor.role_label,
-        "email": (vendor.extra or {}).get("vendor_email"),
+        "email": vendor.email,
+        "phone": vendor.phone,
     }
 
 
@@ -59,56 +84,83 @@ def vendor_me(request: Request):
 def vendor_tasks(request: Request):
     info = _require_vendor(request)
     db = get_db(request)
-    all_tasks = db.execute(
-        select(Conversation).where(Conversation.is_task == True)  # noqa: E712
+    vendor_id = info["vendor_id"]
+    # Find conversations where this vendor is assigned, then get their tasks
+    from sqlalchemy import text
+    convo_ids = [
+        row[0] for row in db.execute(
+            text("SELECT id FROM conversations WHERE json_extract(extra, '$.assigned_vendor_id') = :vid"),
+            {"vid": vendor_id},
+        ).fetchall()
+    ]
+    if not convo_ids:
+        return []
+    tasks = db.execute(
+        select(Task).where(Task.ai_conversation_id.in_(convo_ids))
     ).scalars().all()
-    mine = [t for t in all_tasks if (t.extra or {}).get("assigned_vendor_id") == info["vendor_id"]]
     return [
         {
             "id": str(t.id),
-            "title": t.subject,
+            "title": t.title,
             "status": t.task_status,
             "category": t.category,
-            "created_at": str(t.created_at),
+            "created_at": t.created_at.isoformat() + "Z",
         }
-        for t in mine
+        for t in tasks
     ]
 
 
-def _task_messages_for_vendor(task: Conversation) -> list:
-    """Return messages visible to the vendor: skip internal/approval/context types."""
-    visible = []
-    for m in sorted(task.messages, key=lambda x: x.sent_at):
-        if m.message_type in (MessageType.INTERNAL, MessageType.APPROVAL, MessageType.CONTEXT):
-            continue
-        visible.append({
+def _task_messages_for_vendor(db, task: Task) -> list:
+    """Return messages from the external conversation visible to the vendor."""
+    if not task.external_conversation_id:
+        return []
+    convo = db.get(Conversation, task.external_conversation_id)
+    if not convo:
+        return []
+    msgs = db.execute(
+        select(Message)
+        .where(Message.conversation_id == convo.id)
+        .order_by(Message.sent_at)
+    ).scalars().all()
+    return [
+        {
             "id": str(m.id),
             "body": m.body or "",
             "sender_name": m.sender_name or "",
             "sender_type": m.sender_type.value if m.sender_type else "account_user",
             "is_ai": m.is_ai,
-            "sent_at": str(m.sent_at),
-        })
-    return visible
+            "sent_at": m.sent_at.isoformat() + "Z",
+        }
+        for m in msgs
+        if m.message_type not in (MessageType.INTERNAL, MessageType.APPROVAL, MessageType.CONTEXT)
+    ]
+
+
+def _verify_vendor_task(db, task_id: str, vendor_id: str) -> Task:
+    """Load a task and verify the vendor is assigned to it."""
+    task = db.execute(select(Task).where(Task.id == task_id)).scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    ai_convo = db.get(Conversation, task.ai_conversation_id) if task.ai_conversation_id else None
+    ai_extra = (ai_convo.extra or {}) if ai_convo else {}
+    if ai_extra.get("assigned_vendor_id") != vendor_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
 
 
 @router.get("/tasks/{task_id}")
 def vendor_task_detail(task_id: str, request: Request):
     info = _require_vendor(request)
     db = get_db(request)
-    task = db.execute(
-        select(Conversation).where(Conversation.id == task_id, Conversation.is_task == True)  # noqa: E712
-    ).scalar_one_or_none()
-    if not task or (task.extra or {}).get("assigned_vendor_id") != info["vendor_id"]:
-        raise HTTPException(status_code=404, detail="Task not found")
+    task = _verify_vendor_task(db, task_id, info["vendor_id"])
     return {
         "id": str(task.id),
-        "title": task.subject,
+        "title": task.title,
         "status": task.task_status,
         "category": task.category,
         "urgency": task.urgency,
-        "created_at": str(task.created_at),
-        "messages": _task_messages_for_vendor(task),
+        "created_at": task.created_at.isoformat() + "Z",
+        "messages": _task_messages_for_vendor(db, task),
     }
 
 
@@ -122,20 +174,18 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
     if not body.body.strip():
         raise HTTPException(status_code=400, detail="Message body required")
     db = get_db(request)
-    task = db.execute(
-        select(Conversation).where(Conversation.id == task_id, Conversation.is_task == True)  # noqa: E712
-    ).scalar_one_or_none()
-    if not task or (task.extra or {}).get("assigned_vendor_id") != info["vendor_id"]:
-        raise HTTPException(status_code=404, detail="Task not found")
+    task = _verify_vendor_task(db, task_id, info["vendor_id"])
+    if not task.external_conversation_id:
+        raise HTTPException(status_code=400, detail="No external conversation for this task")
 
     vendor = db.get(ExternalContact, info["vendor_id"])
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
 
-    # Ensure vendor is a participant (idempotent)
+    # Ensure vendor is a participant on the external conversation (idempotent)
     existing = db.execute(
         select(ConversationParticipant).where(
-            ConversationParticipant.conversation_id == task_id,
+            ConversationParticipant.conversation_id == task.external_conversation_id,
             ConversationParticipant.participant_type == ParticipantType.EXTERNAL_CONTACT,
             ConversationParticipant.external_contact_id == info["vendor_id"],
         )
@@ -143,7 +193,7 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
     if not existing:
         db.add(ConversationParticipant(
             id=str(uuid.uuid4()),
-            conversation_id=task_id,
+            conversation_id=task.external_conversation_id,
             participant_type=ParticipantType.EXTERNAL_CONTACT,
             external_contact_id=info["vendor_id"],
             is_active=True,
@@ -151,9 +201,10 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
         ))
         db.flush()
 
+    now = datetime.now(UTC)
     msg = Message(
         id=str(uuid.uuid4()),
-        conversation_id=task_id,
+        conversation_id=task.external_conversation_id,
         sender_type=ParticipantType.EXTERNAL_CONTACT,
         sender_external_contact_id=info["vendor_id"],
         body=body.body.strip(),
@@ -161,11 +212,14 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
         sender_name=vendor.name,
         is_ai=False,
         is_system=False,
-        sent_at=datetime.now(UTC),
+        sent_at=now,
     )
     db.add(msg)
-    task.last_message_at = datetime.now(UTC)
+    task.last_message_at = now
     db.commit()
+
+    # Generate a suggested reply in the AI conversation when autonomy is suggest
+    _generate_reply_suggestion(db, task, vendor.name, body.body.strip())
 
     return {
         "id": str(msg.id),
@@ -173,5 +227,5 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
         "sender_name": msg.sender_name,
         "sender_type": "external_contact",
         "is_ai": False,
-        "sent_at": str(msg.sent_at),
+        "sent_at": msg.sent_at.isoformat() + "Z",
     }

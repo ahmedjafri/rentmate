@@ -1,9 +1,11 @@
-"""Public endpoints for vendor invite accept flow (no auth required)."""
+"""Public endpoints for vendor invite flow (no auth required).
+
+The invite link IS the vendor's permanent access credential.
+Visiting it accepts the invite and returns a JWT for portal access.
+"""
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db.models import ExternalContact
 from gql.services.vendor_service import VendorService
 from handlers.deps import get_db
 
@@ -17,34 +19,25 @@ def get_invite_info(token: str, request: Request):
     if not vendor:
         raise HTTPException(status_code=404, detail="Invalid or expired invite link")
     extra = vendor.extra or {}
-    return {
+    status = extra.get("invite_status", "pending")
+    result = {
         "name": vendor.name,
         "company": vendor.company,
         "vendor_type": vendor.role_label,
-        "invite_status": extra.get("invite_status", "pending"),
+        "invite_status": status,
     }
+    # For returning vendors, include a fresh JWT so they can go straight to the portal
+    if status == "accepted":
+        _, jwt_token = VendorService.get_jwt_for_token(db, token)
+        result["access_token"] = jwt_token
+    return result
 
 
 @router.post("/{token}/accept")
 def accept_invite(token: str, request: Request):
     db: Session = get_db(request)
     try:
-        VendorService.accept_vendor_invite(db, token)
+        vendor, jwt_token = VendorService.accept_invite(db, token)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    return {"ok": True}
-
-
-class RegisterBody(BaseModel):
-    email: str
-    password: str
-
-
-@router.post("/{token}/register")
-def register_vendor(token: str, body: RegisterBody, request: Request):
-    db: Session = get_db(request)
-    try:
-        vendor, jwt_token = VendorService.register_vendor(db, token, body.email, body.password)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"access_token": jwt_token, "vendor_id": str(vendor.id), "name": vendor.name}
+    return {"ok": True, "access_token": jwt_token, "vendor_id": str(vendor.id), "name": vendor.name}
