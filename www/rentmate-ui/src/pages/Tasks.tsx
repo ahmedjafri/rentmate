@@ -8,18 +8,16 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   Bot, CheckCircle2, PauseCircle, Zap, ShieldCheck, Hand, Lock, XCircle,
-  ChevronDown, X, Building2, User, MessageCircle, Plus, Wrench,
+  ChevronDown, X, Building2, User, MessageCircle, Wrench,
 } from 'lucide-react';
 import { PageLoader } from '@/components/ui/page-loader';
 import { formatMessageTime } from '@/components/chat/ChatMessage';
 import { TaskMode, SuggestionCategory, SuggestionUrgency, categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
-import { graphqlQuery, CREATE_TASK_MUTATION, ASSIGN_VENDOR_TO_TASK_MUTATION } from '@/data/api';
+import { graphqlQuery, ASSIGN_VENDOR_TO_TASK_MUTATION } from '@/data/api';
 import { toast } from 'sonner';
 
 // ─── Mode badge ───────────────────────────────────────────────────────────────
@@ -240,7 +238,7 @@ function SmartSearch({ chips, onChipsChange, tasks, properties, tenants }: Smart
 // ─── Tasks ───────────────────────────────────────────────────────────────────
 
 const Tasks = () => {
-  const { actionDeskTasks, properties, tenants, vendors, openChat, chatPanel, isLoading, addTask, updateTask } = useApp();
+  const { actionDeskTasks, properties, tenants, vendors, openChat, chatPanel, isLoading, updateTask } = useApp();
   const [statusFilters, setStatusFilters] = useState<StatusFilter[]>([]);
   const [categoryFilters, setCategoryFilters] = useState<SuggestionCategory[]>([]);
   const [chips, setChips] = useState<SearchChip[]>([]);
@@ -265,53 +263,6 @@ const Tasks = () => {
       toast.error(e instanceof Error ? e.message : 'Failed to assign vendor');
     } finally {
       setAssigningVendor(false);
-    }
-  };
-
-  // New Task dialog state
-  const [newTaskOpen, setNewTaskOpen] = useState(false);
-  const [newTaskTitle, setNewTaskTitle] = useState('');
-  const [newTaskCategory, setNewTaskCategory] = useState<SuggestionCategory>('maintenance');
-  const [newTaskUrgency, setNewTaskUrgency] = useState<SuggestionUrgency>('medium');
-  const [newTaskMode, setNewTaskMode] = useState<'manual' | 'autonomous'>('manual');
-  const [newTaskSubmitting, setNewTaskSubmitting] = useState(false);
-
-  const handleCreateTask = async () => {
-    if (!newTaskTitle.trim()) return;
-    setNewTaskSubmitting(true);
-    try {
-      const result = await graphqlQuery<{ createTask: { uid: string; title: string; taskStatus: string; taskMode: string; category: string; urgency: string; source: string; propertyId: string | null; unitId: string | null; createdAt: string } }>(
-        CREATE_TASK_MUTATION,
-        { input: { title: newTaskTitle.trim(), source: 'manual', taskStatus: 'active', taskMode: newTaskMode, category: newTaskCategory, urgency: newTaskUrgency } }
-      );
-      const t = result.createTask;
-      const newTask: ActionDeskTask = {
-        id: t.uid,
-        title: t.title,
-        mode: (t.taskMode as TaskMode) ?? 'manual',
-        status: 'active',
-        participants: [],
-        lastMessage: '',
-        lastMessageBy: '',
-        lastMessageAt: new Date(),
-        unreadCount: 0,
-        propertyId: t.propertyId ?? undefined,
-        category: t.category as SuggestionCategory,
-        urgency: t.urgency as SuggestionUrgency,
-        chatThread: [],
-      };
-      addTask(newTask);
-      setNewTaskOpen(false);
-      setNewTaskTitle('');
-      setNewTaskCategory('maintenance');
-      setNewTaskUrgency('medium');
-      setNewTaskMode('manual');
-      toast.success('Task created');
-      openChat({ taskId: t.uid });
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to create task');
-    } finally {
-      setNewTaskSubmitting(false);
     }
   };
 
@@ -495,79 +446,8 @@ const Tasks = () => {
             placeholder="All Categories"
             width="w-44"
           />
-          <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setNewTaskOpen(true)}>
-            <Plus className="h-3.5 w-3.5" />
-            New Task
-          </Button>
         </div>
       </div>
-
-      {/* New Task Dialog */}
-      <Dialog open={newTaskOpen} onOpenChange={setNewTaskOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Create New Task</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="task-title">Title</Label>
-              <Input
-                id="task-title"
-                placeholder="Describe the task..."
-                value={newTaskTitle}
-                onChange={e => setNewTaskTitle(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleCreateTask(); }}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Category</Label>
-              <Select value={newTaskCategory} onValueChange={v => setNewTaskCategory(v as SuggestionCategory)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="rent">Rent &amp; Payments</SelectItem>
-                  <SelectItem value="maintenance">Maintenance</SelectItem>
-                  <SelectItem value="leasing">Leasing</SelectItem>
-                  <SelectItem value="compliance">Compliance</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Urgency</Label>
-              <Select value={newTaskUrgency} onValueChange={v => setNewTaskUrgency(v as SuggestionUrgency)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="low">Low</SelectItem>
-                  <SelectItem value="medium">Medium</SelectItem>
-                  <SelectItem value="high">High</SelectItem>
-                  <SelectItem value="critical">Critical</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Mode</Label>
-              <Select value={newTaskMode} onValueChange={v => setNewTaskMode(v as 'manual' | 'autonomous')}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="manual">Manual</SelectItem>
-                  <SelectItem value="autonomous">Autonomous</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setNewTaskOpen(false)}>Cancel</Button>
-              <Button onClick={handleCreateTask} disabled={!newTaskTitle.trim() || newTaskSubmitting}>
-                {newTaskSubmitting ? 'Creating...' : 'Create Task'}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       {/* Vendor Assignment Dialog */}
       {vendorDialogTask && (() => {
