@@ -1,5 +1,7 @@
 # RentMate
 
+> **Pre-alpha software** — This project is under active development and is not ready for production use. APIs, database schemas, and features may change without notice.
+
 An open source AI-powered property management assistant. Chat with your properties, tenants, and leases using natural language.
 
 ## Features
