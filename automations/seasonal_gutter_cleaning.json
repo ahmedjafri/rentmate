@@ -1,13 +1,13 @@
 {
   "key": "seasonal_gutter_cleaning",
   "label": "Seasonal Gutter Cleaning",
-  "description": "Creates a maintenance task for each property every month so gutters are cleaned before winter and after autumn leaf-fall.",
-  "hint": "No configurable parameters — toggle on/off only.",
+  "description": "Creates a maintenance task for gutter cleaning at each property when seasonally appropriate for the property's location.",
+  "hint": "Checks weekly; an LLM decides the right timing based on each property's climate and location.",
   "has_params": false,
   "params": [],
   "default_config": {
     "enabled": false,
-    "interval_hours": 720
+    "interval_hours": 168
   },
-  "script": "name: \"Seasonal Gutter Cleaning\"\ndescription: >\n  Creates a monthly maintenance task for each property reminding the manager\n  to arrange gutter cleaning and assign a landscaper.\n\nschedule:\n  interval: monthly\n\nscope:\n  resource: property\n\nactions:\n  - type: create_task\n    subject: \"Gutter cleaning due: {{property.address_line1}}\"\n    category: maintenance\n    urgency: low\n    require_vendor_type: Landscaper\n    body: >\n      Gutters at {{property.address_line1}} are due for their monthly cleaning.\n      Assign a landscaper and schedule the service to prevent water damage\n      and ice dams during the colder months.\n"
+  "script": "name: \"Seasonal Gutter Cleaning\"\ndescription: >\n  Checks each property weekly and creates a gutter cleaning task\n  when the timing is right for the property's climate and location.\n\nschedule:\n  interval: weekly\n\nscope:\n  resource: property\n\nactions:\n  - type: create_task\n    llm_gate:\n      prompt: >\n        Today is {{today}}.\n        Property location: {{property.address_line1}}, {{property.city}}, {{property.state}} {{property.postal_code}}.\n        Gutter cleaning is typically needed in spring (after pollen/seed season)\n        and fall (after leaf drop), or roughly every 4 months in heavily\n        wooded or high-rainfall areas.\n        Based on this property's location and climate, is NOW a good time\n        to schedule gutter cleaning?\n    subject: \"Gutter cleaning due: {{property.address_line1}}\"\n    category: maintenance\n    urgency: low\n    require_vendor_type: Landscaper\n    body: >\n      Gutters at {{property.address_line1}}, {{property.city}}, {{property.state}}\n      are due for seasonal cleaning based on local climate conditions.\n"
 }

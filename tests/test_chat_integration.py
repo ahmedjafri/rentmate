@@ -131,10 +131,11 @@ def task_id(db):
     db.flush()
     conv = Conversation(
         id=str(uuid.uuid4()),
-        task_id=task.id,
         subject="HVAC Repair",
     )
     db.add(conv)
+    db.flush()
+    task.ai_conversation_id = conv.id
     db.commit()
     return task.id
 
@@ -319,13 +320,13 @@ class TestTaskChatSSE:
 
         db.expire_all()
         task = db.query(Task).filter_by(id=task_id).first()
-        conv_id = task.conversations[0].id
+        conv_id = task.ai_conversation.id
         ai_msgs = (
             db.query(Message)
             .filter_by(
                 conversation_id=conv_id,
                 is_ai=True,
-                message_type="message",
+                message_type="thread",
             )
             .all()
         )

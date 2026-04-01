@@ -14,6 +14,7 @@ import PropertyDetail from "./pages/PropertyDetail";
 import Tenants from "./pages/Tenants";
 import TenantDetail from "./pages/TenantDetail";
 import ActionDesk from "./pages/ActionDesk";
+import Tasks from "./pages/Tasks";
 import Chats from "./pages/Chats";
 import Documents from "./pages/Documents";
 import Vendors from "./pages/Vendors";
@@ -23,6 +24,8 @@ import DevTools from "./pages/DevTools";
 import Automation from "./pages/Automation";
 import AutomationDetail from "./pages/AutomationDetail";
 import NotFound from "./pages/NotFound";
+import VendorInvite from "./pages/VendorInvite";
+import VendorPortal from "./pages/VendorPortal";
 
 const queryClient = new QueryClient();
 
@@ -44,31 +47,38 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      <AuthGate>
-        <BrowserRouter>
-          <AppProvider>
-            <AppLayout>
-              <Routes>
-                <Route path="/" element={<Index />} />
-                <Route path="/properties" element={<Properties />} />
-                <Route path="/properties/:id" element={<PropertyDetail />} />
-                <Route path="/tenants" element={<Tenants />} />
-                <Route path="/tenants/:id" element={<TenantDetail />} />
-                <Route path="/vendors" element={<Vendors />} />
-                <Route path="/documents" element={<Documents />} />
-                <Route path="/documents/:id" element={<DocumentPage />} />
-                <Route path="/action-desk" element={<ActionDesk />} />
-                <Route path="/chats" element={<Chats />} />
-                <Route path="/automation" element={<Automation />} />
-                <Route path="/automation/:key" element={<AutomationDetail />} />
-                <Route path="/settings" element={<Settings />} />
-                <Route path="/dev" element={<DevTools />} />
-                <Route path="*" element={<NotFound />} />
-              </Routes>
-            </AppLayout>
-          </AppProvider>
-        </BrowserRouter>
-      </AuthGate>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/vendor-invite/:token" element={<VendorInvite />} />
+          <Route path="/vendor-portal" element={<VendorPortal />} />
+          <Route path="*" element={
+            <AuthGate>
+              <AppProvider>
+                <AppLayout>
+                  <Routes>
+                    <Route path="/" element={<Index />} />
+                    <Route path="/properties" element={<Properties />} />
+                    <Route path="/properties/:id" element={<PropertyDetail />} />
+                    <Route path="/tenants" element={<Tenants />} />
+                    <Route path="/tenants/:id" element={<TenantDetail />} />
+                    <Route path="/vendors" element={<Vendors />} />
+                    <Route path="/documents" element={<Documents />} />
+                    <Route path="/documents/:id" element={<DocumentPage />} />
+                    <Route path="/action-desk" element={<ActionDesk />} />
+                    <Route path="/tasks" element={<Tasks />} />
+                    <Route path="/chats" element={<Chats />} />
+                    <Route path="/automation" element={<Automation />} />
+                    <Route path="/automation/:key" element={<AutomationDetail />} />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="/dev" element={<DevTools />} />
+                    <Route path="*" element={<NotFound />} />
+                  </Routes>
+                </AppLayout>
+              </AppProvider>
+            </AuthGate>
+          } />
+        </Routes>
+      </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
 );

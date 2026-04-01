@@ -19,38 +19,6 @@ from sqlalchemy import Enum as SqlEnum
 from .base import Base
 
 
-class Task(Base):
-    """
-    A first-class work-item (task / action-desk item).
-    Owns task metadata; has 1:many linked Conversation threads.
-    """
-    __tablename__ = "tasks"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    account_id = Column(String(36), nullable=True)  # No FK - matches upstream pattern
-    title = Column(String(500), nullable=True)
-    task_status = Column(String(20), nullable=True)   # suggested/active/paused/resolved/cancelled/dismissed
-    task_mode = Column(String(25), nullable=True)     # autonomous/waiting_approval/manual
-    source = Column(String(25), nullable=True)        # ai_suggestion/tenant_report/document/sms/manual
-    category = Column(String(20), nullable=True)      # rent/maintenance/leasing/compliance
-    urgency = Column(String(20), nullable=True)
-    priority = Column(String(20), nullable=True)
-    confidential = Column(Boolean, nullable=False, default=False)
-    last_message_at = Column(DateTime, nullable=True)
-    channel_type = Column(String(20), nullable=True)
-    property_id = Column(String(36), ForeignKey("properties.id", ondelete="SET NULL"), nullable=True)
-    unit_id = Column(String(36), ForeignKey("units.id", ondelete="SET NULL"), nullable=True)
-    lease_id = Column(String(36), ForeignKey("leases.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
-
-    conversations = relationship("Conversation", back_populates="task", cascade="all, delete-orphan")
-    property = relationship("Property")
-    unit = relationship("Unit")
-    lease = relationship("Lease")
-    document_tasks = relationship("DocumentTask", back_populates="task", cascade="all, delete-orphan")
-
-
 class ParticipantType(str, Enum):
     TENANT = "tenant"
     ACCOUNT_USER = "account_user"
@@ -58,10 +26,19 @@ class ParticipantType(str, Enum):
 
 
 class ConversationType(str, Enum):
-    TENANT  = "tenant"
-    VENDOR  = "vendor"
-    USER_AI = "user_ai"
-    TASK    = "task"
+    TENANT        = "tenant"
+    VENDOR        = "vendor"
+    USER_AI       = "user_ai"
+    TASK_AI       = "task_ai"
+    SUGGESTION_AI = "suggestion_ai"
+
+
+class MessageType(str, Enum):
+    MESSAGE  = "message"
+    INTERNAL = "internal"
+    APPROVAL = "approval"
+    CONTEXT  = "context"
+    THREAD   = "thread"
 
 
 class ExternalContact(Base):
@@ -91,8 +68,6 @@ class Conversation(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
 
-    task_id = Column(String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True, index=True)
-
     property_id = Column(String(36), ForeignKey("properties.id", ondelete="SET NULL"), nullable=True, index=True)
     unit_id = Column(String(36), ForeignKey("units.id", ondelete="SET NULL"), nullable=True, index=True)
     lease_id = Column(String(36), ForeignKey("leases.id", ondelete="SET NULL"), nullable=True, index=True)
@@ -105,15 +80,13 @@ class Conversation(Base):
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     # Conversation type taxonomy
-    conversation_type = Column(String(20), nullable=True, default="task")
+    conversation_type = Column(String(20), nullable=True, default="task_ai")
     parent_conversation_id = Column(String(36), ForeignKey("conversations.id"), nullable=True)
-    ancestor_ids = Column(JSON, nullable=True, default=list)
     ai_initiated = Column(Boolean, nullable=False, default=False)
 
     # Flexible metadata (vendor requirements, assignments, etc.)
     extra = Column(JSON, nullable=True)
 
-    task = relationship("Task", back_populates="conversations")
     property = relationship("Property")
     unit = relationship("Unit")
     lease = relationship("Lease")

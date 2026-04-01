@@ -1,0 +1,28 @@
+{
+  "id": "vendor_outreach_painting",
+  "automation": "vendor_outreach",
+  "description": "Outreach to a painter for unit turnover should ask for a quote and availability.",
+  "task": {
+    "title": "Paint Unit 4C for new tenant move-in",
+    "category": "maintenance",
+    "urgency": "normal",
+    "body": "Unit 4C at Riverside Commons needs full interior paint before the new tenant moves in on April 15. Walls have scuff marks and one accent wall needs to be returned to neutral."
+  },
+  "context": "Property: Riverside Commons, 330 River Rd, Bellevue, WA 98004\nUnit: 4C (vacant, turnover in progress)\nVendor: Premier Painters LLC",
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "{{generated}}"
+    }
+  ],
+  "expected": {
+    "resolution": "active",
+    "criteria": [
+      "Message asks the vendor about their availability, not tells them when to show up",
+      "Message asks for a quote or estimate for the work",
+      "Message describes the scope (interior paint, unit turnover) and mentions the property/unit",
+      "Message is an inquiry from a property manager, not a directive",
+      "Message is 2-3 sentences max, professional and friendly"
+    ]
+  }
+}

@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, date as _date
+from datetime import UTC, datetime, date as _date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from db.models import Tenant as SqlTenant, Lease as SqlLease, Unit as SqlUnit
@@ -32,7 +32,7 @@ class TenantService:
             last_name=input.last_name,
             email=input.email,
             phone=input.phone,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(UTC),
         )
         sess.add(tenant)
         sess.flush()
@@ -46,7 +46,7 @@ class TenantService:
             end_date=_date.fromisoformat(input.lease_end),
             rent_amount=input.rent_amount,
             payment_status="current",
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(UTC),
         )
         sess.add(lease)
         sess.commit()
@@ -75,7 +75,7 @@ class TenantService:
             end_date=_date.fromisoformat(input.lease_end),
             rent_amount=input.rent_amount,
             payment_status="current",
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(UTC),
         )
         sess.add(lease)
         sess.commit()

@@ -12,7 +12,7 @@ GET  /dev/history/{tenant_id} — returns the most recent dev_sim task messages
 
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db.lib import route_inbound_to_task, get_conversation_with_messages
-from db.models import Conversation, ConversationParticipant, Message, ParticipantType, Task, Tenant
+from db.models import Conversation, ConversationParticipant, Message, MessageType, ParticipantType, Suggestion, Task, Tenant
 from handlers.deps import get_db, require_user
 from llm.context import build_task_context
 from llm.registry import agent_registry
@@ -69,7 +69,7 @@ async def simulate_inbound(
     sender_meta = {"source": DEV_SIM_SOURCE, "simulated": True}
 
     if body.force_new:
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         task = Task(
             id=str(uuid.uuid4()),
             account_id=tenant.account_id,
@@ -189,10 +189,10 @@ async def simulate_inbound(
         conversation_id=conv.id,
         sender_type=ParticipantType.ACCOUNT_USER,
         body=reply,
-        message_type="message",
+        message_type=MessageType.MESSAGE,
         sender_name="RentMate",
         is_ai=True,
-        sent_at=datetime.utcnow(),
+        sent_at=datetime.now(UTC),
     ))
     db.commit()
 
@@ -242,3 +242,67 @@ async def get_dev_history(
             if m.body  # skip empty/system messages
         ],
     )
+
+
+@router.delete("/wipe-tasks")
+async def wipe_tasks(request: Request, db: Session = Depends(get_db)):
+    """Delete ALL tasks, linked suggestions, and their conversations/messages."""
+    await require_user(request)
+    # Suggestions with CASCADE FK will be auto-deleted, but collect their conv IDs first
+    suggestions = db.query(Suggestion).filter(Suggestion.task_id.isnot(None)).all()
+    conv_ids = set()
+    for s in suggestions:
+        if s.ai_conversation_id:
+            conv_ids.add(s.ai_conversation_id)
+    tasks = db.query(Task).all()
+    for t in tasks:
+        if t.ai_conversation_id:
+            conv_ids.add(t.ai_conversation_id)
+        if t.external_conversation_id:
+            conv_ids.add(t.external_conversation_id)
+        db.delete(t)  # cascades to linked suggestions
+    db.flush()
+    for cid in conv_ids:
+        conv = db.get(Conversation, cid)
+        if conv:
+            db.delete(conv)
+    db.commit()
+    return {"deleted_tasks": len(tasks), "deleted_conversations": len(conv_ids)}
+
+
+@router.delete("/wipe-suggestions")
+async def wipe_suggestions(request: Request, db: Session = Depends(get_db)):
+    """Delete ALL suggestions and their AI conversations."""
+    await require_user(request)
+    suggestions = db.query(Suggestion).all()
+    conv_ids = set()
+    for s in suggestions:
+        if s.ai_conversation_id:
+            conv_ids.add(s.ai_conversation_id)
+        db.delete(s)
+    db.flush()
+    for cid in conv_ids:
+        conv = db.get(Conversation, cid)
+        if conv:
+            db.delete(conv)
+    db.commit()
+    return {"deleted_suggestions": len(suggestions), "deleted_conversations": len(conv_ids)}
+
+
+@router.delete("/wipe-chats")
+async def wipe_chats(request: Request, db: Session = Depends(get_db)):
+    """Delete ALL conversations and their messages (also clears task conversation FKs)."""
+    await require_user(request)
+    # Unlink tasks from their conversations first
+    tasks = db.query(Task).filter(
+        (Task.ai_conversation_id.isnot(None)) | (Task.external_conversation_id.isnot(None))
+    ).all()
+    for t in tasks:
+        t.ai_conversation_id = None
+        t.external_conversation_id = None
+    db.flush()
+    convos = db.query(Conversation).all()
+    for c in convos:
+        db.delete(c)
+    db.commit()
+    return {"deleted_conversations": len(convos), "unlinked_tasks": len(tasks)}

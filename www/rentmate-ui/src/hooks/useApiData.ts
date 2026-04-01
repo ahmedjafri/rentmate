@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { graphqlQuery, HOUSES_QUERY, TENANTS_QUERY, TASKS_QUERY, VENDORS_QUERY } from '@/data/api';
+import { graphqlQuery, HOUSES_QUERY, TENANTS_QUERY, TASKS_QUERY, VENDORS_QUERY, SUGGESTIONS_QUERY } from '@/data/api';
 import { Property, Tenant, Vendor, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, TaskParticipant } from '@/data/mockData';
 
 interface ApiState {
@@ -54,11 +54,12 @@ export function useApiData(): ApiState {
     let cancelled = false;
 
     async function fetchAll() {
-      const [housesResult, tenantsResult, tasksResult, vendorsResult] = await Promise.allSettled([
+      const [housesResult, tenantsResult, tasksResult, vendorsResult, suggestionsResult] = await Promise.allSettled([
         graphqlQuery<{ houses: ApiHouse[] }>(HOUSES_QUERY),
         graphqlQuery<{ tenants: ApiTenant[] }>(TENANTS_QUERY),
         graphqlQuery<{ tasks: ApiTask[] }>(TASKS_QUERY),
         graphqlQuery<{ vendors: ApiVendor[] }>(VENDORS_QUERY),
+        graphqlQuery<{ suggestions: ApiSuggestion[] }>(SUGGESTIONS_QUERY, {}),
       ]);
 
       if (cancelled) return;
@@ -103,10 +104,10 @@ export function useApiData(): ApiState {
         .filter(t => t.category === 'maintenance')
         .map(apiTaskToTicket);
 
-      // Suggestions: status=suggested tasks
-      const suggestions: Suggestion[] = allTasks
-        .filter(t => t.taskStatus === 'suggested')
-        .map(apiTaskToSuggestion);
+      // Suggestions: fetched from dedicated suggestions query
+      const suggestions: Suggestion[] = suggestionsResult.status === 'fulfilled'
+        ? (suggestionsResult.value.suggestions || []).map(apiSuggestionToSuggestion)
+        : [];
 
       const vendors: Vendor[] = vendorsResult.status === 'fulfilled'
         ? (vendorsResult.value.vendors || []).map(v => ({
@@ -118,6 +119,8 @@ export function useApiData(): ApiState {
             email: v.email,
             notes: v.notes,
             contactMethod: v.contactMethod ?? 'rentmate',
+            inviteToken: v.inviteToken,
+            inviteStatus: v.inviteStatus,
           }))
         : [];
 
@@ -167,6 +170,12 @@ function apiTaskParticipants(t: ApiTask): TaskParticipant[] {
   participants.push({ type: 'agent', name: 'RentMate AI' });
   seen.add('RentMate AI');
 
+  // Add assigned vendor directly — don't require them to have sent a message yet
+  if (t.assignedVendorName) {
+    participants.push({ type: 'vendor', name: t.assignedVendorName, id: t.assignedVendorId ?? undefined });
+    seen.add(t.assignedVendorName);
+  }
+
   // Add unique non-AI senders from messages
   for (const m of t.messages ?? []) {
     if (m.isAi || !m.senderName || seen.has(m.senderName)) continue;
@@ -174,7 +183,7 @@ function apiTaskParticipants(t: ApiTask): TaskParticipant[] {
     // Try to infer type from context
     if (t.tenantName && m.senderName.includes(t.tenantName.split(' ')[0])) {
       participants.push({ type: 'tenant', name: m.senderName });
-    } else if (t.vendorAssigned && m.senderName.includes(t.vendorAssigned.split(' ')[0])) {
+    } else {
       participants.push({ type: 'vendor', name: m.senderName });
     }
   }
@@ -186,6 +195,7 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
   const last = thread[thread.length - 1];
   return {
     id: t.uid,
+    taskNumber: t.taskNumber ?? null,
     title: t.title ?? '(untitled)',
     mode: (t.taskMode as ActionDeskTask['mode']) ?? 'manual',
     status: (t.taskStatus === 'suggested' ? 'active' : (t.taskStatus as ActionDeskTask['status'])) ?? 'active',
@@ -202,6 +212,10 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
     requireVendorType: t.requireVendorType,
     assignedVendorId: t.assignedVendorId,
     assignedVendorName: t.assignedVendorName,
+    suggestionOptions: t.suggestionOptions ?? undefined,
+    aiConversationId: t.aiConversationId ?? null,
+    externalConversationId: t.externalConversationId ?? null,
+    parentConversationId: t.externalConversationId ?? t.parentConversationId ?? null,
   };
 }
 
@@ -228,20 +242,23 @@ function ticketStatusFromTaskStatus(s: string | undefined): MaintenanceTicket['s
   return 'open';
 }
 
-function apiTaskToSuggestion(t: ApiTask): Suggestion {
+function apiSuggestionToSuggestion(s: ApiSuggestion): Suggestion {
   return {
-    id: t.uid,
-    category: (t.category as Suggestion['category']) ?? 'maintenance',
-    urgency: (t.urgency as Suggestion['urgency']) ?? 'low',
-    title: t.title ?? '',
-    description: '',
-    recommendedAction: '',
-    confidence: 0.8,
-    autonomyLevel: 'suggest',
-    status: 'pending',
-    propertyId: t.propertyId ?? undefined,
-    createdAt: new Date(t.createdAt),
-    chatThread: apiMessagesToChatThread(t.messages ?? []),
+    id: s.uid,
+    title: s.title ?? '',
+    body: s.body ?? undefined,
+    category: (s.category as Suggestion['category']) ?? 'maintenance',
+    urgency: (s.urgency as Suggestion['urgency']) ?? 'low',
+    status: s.status === 'pending' ? 'pending' : s.status === 'accepted' ? 'accepted' : 'dismissed',
+    source: s.source ?? undefined,
+    automationKey: s.automationKey ?? undefined,
+    options: s.options ?? undefined,
+    actionTaken: s.actionTaken ?? undefined,
+    propertyId: s.propertyId ?? undefined,
+    unitId: s.unitId ?? undefined,
+    taskId: s.taskId ?? undefined,
+    createdAt: new Date(s.createdAt),
+    chatThread: apiMessagesToChatThread(s.messages ?? []),
   };
 }
 
@@ -303,8 +320,8 @@ interface ApiTaskMessage {
 
 interface ApiTask {
   uid: string;
+  taskNumber?: number | null;
   title?: string;
-  isTask: boolean;
   taskStatus?: string;
   taskMode?: string;
   source?: string;
@@ -324,4 +341,26 @@ interface ApiTask {
   requireVendorType?: string;
   assignedVendorId?: string;
   assignedVendorName?: string;
+  suggestionOptions?: { key: string; label: string; action: string; variant: string }[];
+  aiConversationId?: string | null;
+  parentConversationId?: string | null;
+  externalConversationId?: string | null;
+}
+
+interface ApiSuggestion {
+  uid: string;
+  title?: string;
+  body?: string;
+  category?: string;
+  urgency?: string;
+  status: string;
+  source?: string;
+  automationKey?: string;
+  options?: { key: string; label: string; action: string; variant: string }[];
+  actionTaken?: string;
+  propertyId?: string;
+  unitId?: string;
+  taskId?: string;
+  createdAt: string;
+  messages?: ApiTaskMessage[];
 }

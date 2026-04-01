@@ -1,0 +1,29 @@
+{
+  "id": "vendor_outreach_locksmith",
+  "automation": "vendor_outreach",
+  "description": "Outreach to a locksmith for a lock rekey should inquire about availability and cost with appropriate urgency.",
+  "task": {
+    "title": "Rekey locks for Unit 7A",
+    "category": "maintenance",
+    "urgency": "high",
+    "body": "Previous tenant moved out of Unit 7A at Hilltop Residences. All exterior locks need to be rekeyed before the new tenant moves in next week."
+  },
+  "context": "Property: Hilltop Residences, 1200 Summit Blvd, Tacoma, WA 98402\nUnit: 7A\nVendor: SecureLock Services",
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "{{generated}}"
+    }
+  ],
+  "expected": {
+    "resolution": "active",
+    "criteria": [
+      "Message asks about vendor availability rather than assigning a time",
+      "Message asks for pricing or a quote",
+      "Message describes the work needed (lock rekey) and mentions the property/unit",
+      "Message conveys the time sensitivity without being demanding",
+      "Message is an inquiry, not a work order",
+      "Message is 2-3 sentences max, professional and friendly"
+    ]
+  }
+}

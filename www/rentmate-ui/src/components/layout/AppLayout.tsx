@@ -10,11 +10,11 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
-import { formatDistanceToNow } from 'date-fns';
+
 
 function usePageContext() {
   const location = useLocation();
-  const { properties, tenants, actionDeskTasks } = useApp();
+  const { properties, tenants, actionDeskTasks, suggestions } = useApp();
   const path = location.pathname;
 
   const propMatch = path.match(/^\/properties\/([^/]+)$/);
@@ -62,14 +62,14 @@ function usePageContext() {
   }
 
   if (path === '/action-desk') {
-    const needs = actionDeskTasks.filter(t => t.status === 'active' && (t.mode === 'waiting_approval' || t.mode === 'manual'));
+    const pending = suggestions.filter(s => s.status === 'pending');
     return {
-      label: 'Action Desk',
-      contextKey: 'page:action-desk',
-      sessionTitle: 'Ask about Action Desk',
-      context: needs.length
-        ? `Action Desk — ${needs.length} task${needs.length !== 1 ? 's' : ''} need attention:\n${needs.map(t => `• ${t.title} (${t.mode === 'waiting_approval' ? 'needs approval' : 'manual'})`).join('\n')}`
-        : 'Action Desk — all tasks are running autonomously.',
+      label: 'Suggestions',
+      contextKey: 'page:suggestions',
+      sessionTitle: 'Ask about Suggestions',
+      context: pending.length
+        ? `Suggestions — ${pending.length} pending:\n${pending.map(s => `• ${s.title} (${s.category})`).join('\n')}`
+        : 'Suggestions — no pending suggestions.',
     };
   }
 
@@ -86,15 +86,13 @@ function usePageContext() {
 }
 
 export function AppLayout({ children }: {children: React.ReactNode;}) {
-  const { chatPanel, openChat, closeChat, actionDeskTasks, chatSessions } = useApp();
+  const { chatPanel, openChat, closeChat, actionDeskTasks, suggestions, chatSessions } = useApp();
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const pageCtx = usePageContext();
 
-  const attentionTasks = actionDeskTasks.filter(
-    t => t.status === 'active' && (t.mode === 'waiting_approval' || t.mode === 'manual')
-  );
-  const attentionCount = attentionTasks.length;
+  const pendingSuggestions = suggestions.filter(s => s.status === 'pending');
+  const attentionCount = pendingSuggestions.length;
 
   const close = () => setOpen(false);
 
@@ -144,7 +142,7 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
                 <PopoverTrigger asChild>
                   <button
                     className="relative flex items-center justify-center h-7 w-7 rounded-md hover:bg-muted transition-colors"
-                    aria-label={`${attentionCount} task${attentionCount === 1 ? '' : 's'} need attention`}
+                    aria-label={`${attentionCount} pending suggestion${attentionCount === 1 ? '' : 's'}`}
                   >
                     <Bell className="h-4 w-4 text-muted-foreground" />
                     <span className="absolute -top-0.5 -right-0.5 h-4 min-w-4 px-1 flex items-center justify-center rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold leading-none">
@@ -154,7 +152,7 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
                 </PopoverTrigger>
                 <PopoverContent align="end" sideOffset={8} className="w-80 p-0">
                   <div className="flex items-center justify-between px-3 py-2 border-b">
-                    <span className="text-sm font-semibold">Needs Attention</span>
+                    <span className="text-sm font-semibold">Pending Suggestions</span>
                     <button
                       onClick={() => { close(); navigate('/action-desk'); }}
                       className="text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -163,27 +161,16 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
                     </button>
                   </div>
                   <ul className="divide-y max-h-96 overflow-y-auto">
-                    {attentionTasks.map(task => (
-                      <li key={task.id}>
+                    {pendingSuggestions.map(s => (
+                      <li key={s.id}>
                         <button
-                          onClick={() => { close(); navigate(`/action-desk?task=${task.id}`); }}
+                          onClick={() => { close(); navigate('/action-desk'); }}
                           className="w-full text-left flex flex-col gap-1 px-3 py-2.5 hover:bg-muted/50 transition-colors"
                         >
-                          <div className="flex items-start justify-between gap-2">
-                            <span className="text-sm font-medium leading-tight line-clamp-1">{task.title}</span>
-                            {task.mode === 'waiting_approval'
-                              ? <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-amber-500 mt-0.5" />
-                              : <Hand className="h-3.5 w-3.5 shrink-0 text-muted-foreground mt-0.5" />
-                            }
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <Badge variant="secondary" className={cn('text-[10px] py-0 px-1.5 h-4 rounded', categoryColors[task.category])}>
-                              {categoryLabels[task.category]}
-                            </Badge>
-                            <span className="text-[10px] text-muted-foreground">
-                              {formatDistanceToNow(task.lastMessageAt, { addSuffix: true })}
-                            </span>
-                          </div>
+                          <span className="text-sm font-medium leading-tight line-clamp-1">{s.title}</span>
+                          <Badge variant="secondary" className={cn('text-[10px] py-0 px-1.5 h-4 rounded', categoryColors[s.category])}>
+                            {categoryLabels[s.category]}
+                          </Badge>
                         </button>
                       </li>
                     ))}

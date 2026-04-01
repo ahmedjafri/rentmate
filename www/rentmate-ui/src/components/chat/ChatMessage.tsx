@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Bot, User, Eye, ShieldAlert, Check, X, Pencil, ChevronDown, ChevronUp, CheckCircle2, XCircle, Zap, Building2, Wrench, BookOpen, ArrowUpRight } from 'lucide-react';
+import { Bot, User, Eye, ShieldAlert, Check, X, Send, Pencil, ChevronDown, ChevronUp, CheckCircle2, XCircle, Zap, Building2, Wrench, BookOpen, ArrowUpRight, Loader2 } from 'lucide-react';
 
 function ThinkingChain({ steps, isChain }: { steps: string[]; isChain: boolean }) {
   const [expanded, setExpanded] = useState(false);
@@ -67,13 +67,18 @@ interface Props {
   onApprove?: (messageId: string) => void;
   onReject?: (messageId: string) => void;
   onEdit?: (messageId: string) => void;
+  onApprovalAction?: (messageId: string, action: string, editedBody?: string) => Promise<void> | void;
 }
 
-export function ChatMessageBubble({ message, onApprove, onReject, onEdit }: Props) {
+export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onApprovalAction }: Props) {
   const isAssistant = message.role === 'assistant';
   const msgType = message.messageType || 'message';
   const senderType = message.senderType || (isAssistant ? 'ai' : 'manager');
   const [draftExpanded, setDraftExpanded] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [editText, setEditText] = useState('');
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const editRef = useRef<HTMLTextAreaElement>(null);
   const [detailsExpanded, setDetailsExpanded] = useState(
     !message.approvalStatus || message.approvalStatus === 'pending'
   );
@@ -178,43 +183,89 @@ export function ChatMessageBubble({ message, onApprove, onReject, onEdit }: Prop
         {/* Summary */}
         <p className="text-sm text-foreground">{message.content}</p>
 
-        {/* Expandable draft reply */}
+        {/* Draft reply (always visible when pending, toggleable when resolved) */}
         {message.draftReply && (
           <div>
-            <button
-              onClick={() => setDraftExpanded(!draftExpanded)}
-              className="flex items-center gap-1 text-[11px] font-medium text-primary hover:text-primary/80 transition-colors"
-            >
-              {draftExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-              {draftExpanded ? 'Hide draft reply' : 'View draft reply'}
-            </button>
-            {draftExpanded && (
-              <div className="mt-2 rounded-lg bg-card border p-3 text-xs text-foreground whitespace-pre-wrap leading-relaxed">
+            {!isPending && (
+              <button
+                onClick={() => setDraftExpanded(!draftExpanded)}
+                className="flex items-center gap-1 text-[11px] font-medium text-primary hover:text-primary/80 transition-colors"
+              >
+                {draftExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                {draftExpanded ? 'Hide draft reply' : 'View draft reply'}
+              </button>
+            )}
+            {(isPending || draftExpanded) && !editMode && (
+              <div className={cn('rounded-lg bg-card border p-3 text-xs text-foreground whitespace-pre-wrap leading-relaxed', !isPending && 'mt-2')}>
                 {message.draftReply}
+              </div>
+            )}
+            {editMode && (
+              <div className="mt-1 space-y-2">
+                <textarea
+                  ref={editRef}
+                  className="w-full rounded-lg border bg-card p-3 text-xs text-foreground leading-relaxed resize-none min-h-[80px] focus:outline-none focus:ring-1 focus:ring-ring"
+                  value={editText}
+                  onChange={e => setEditText(e.target.value)}
+                  rows={4}
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    className="h-7 rounded-lg gap-1.5 text-xs"
+                    disabled={!editText.trim() || actionLoading !== null}
+                    onClick={async () => {
+                      setActionLoading('edit_send');
+                      try { await onApprovalAction?.(message.id, 'approve_draft', editText.trim()); } finally { setActionLoading(null); }
+                    }}
+                  >
+                    {actionLoading === 'edit_send' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                    Send
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditMode(false)}>Cancel</Button>
+                </div>
               </div>
             )}
           </div>
         )}
 
         {/* Action buttons */}
-        {isPending && (
+        {isPending && !editMode && (
           <div className="flex items-center gap-2 pt-1">
             <Button
               size="sm"
-              className="h-7 rounded-lg gap-1.5 text-xs bg-primary hover:bg-primary/90 text-primary-foreground"
-              onClick={() => onApprove?.(message.id)}
+              className="h-7 rounded-lg gap-1.5 text-xs"
+              disabled={actionLoading !== null}
+              onClick={async () => {
+                setActionLoading('send');
+                try { await onApprovalAction?.(message.id, 'approve_draft'); } finally { setActionLoading(null); }
+              }}
             >
-              <Pencil className="h-3 w-3" />
-              Insert
+              {actionLoading === 'send' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+              Send Message
             </Button>
             <Button
               size="sm"
               variant="outline"
-              className="h-7 rounded-lg gap-1.5 text-xs hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30"
-              onClick={() => onReject?.(message.id)}
+              className="h-7 rounded-lg gap-1.5 text-xs"
+              disabled={actionLoading !== null}
+              onClick={() => { setEditText(message.draftReply || ''); setEditMode(true); setDraftExpanded(false); }}
             >
-              <X className="h-3 w-3" />
-              Reject
+              <Pencil className="h-3 w-3" />
+              Edit Message
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 rounded-lg gap-1.5 text-xs"
+              disabled={actionLoading !== null}
+              onClick={async () => {
+                setActionLoading('reject');
+                try { await onApprovalAction?.(message.id, 'reject_task'); } finally { setActionLoading(null); }
+              }}
+            >
+              {actionLoading === 'reject' ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+              Do not send
             </Button>
           </div>
         )}

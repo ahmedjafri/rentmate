@@ -18,7 +18,7 @@ Idempotent — re-running is safe (checks for existing dummy documents first).
 import os
 import sys
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -49,7 +49,7 @@ Session = sessionmaker(bind=engine)
 db = Session()
 
 print("Seeding dummy data…\n")
-now = datetime.utcnow()
+now = datetime.now(UTC)
 
 
 # ── Existing properties ───────────────────────────────────────────────────────

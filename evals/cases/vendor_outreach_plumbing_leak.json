@@ -1,0 +1,29 @@
+{
+  "id": "vendor_outreach_plumbing_leak",
+  "automation": "vendor_outreach",
+  "description": "Outreach to a plumber about a leak should inquire about availability and cost, conveying urgency without commanding.",
+  "task": {
+    "title": "Kitchen sink leak in Unit 2B",
+    "category": "maintenance",
+    "urgency": "high",
+    "body": "Tenant Maria Lopez reported a leak under the kitchen sink in Unit 2B at Maple Ridge Apartments. Water is pooling on the floor. Needs prompt attention."
+  },
+  "context": "Property: Maple Ridge Apartments, 450 Elm St, Seattle, WA 98101\nUnit: 2B\nTenant: Maria Lopez\nVendor: Ace Plumbing",
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "{{generated}}"
+    }
+  ],
+  "expected": {
+    "resolution": "active",
+    "criteria": [
+      "Message asks the vendor about their availability, not schedules them directly",
+      "Message asks for a quote or estimate",
+      "Message describes the issue (kitchen sink leak) and mentions the property/unit",
+      "Message conveys urgency appropriately without being demanding",
+      "Message does NOT disclose tenant personal details beyond what the vendor needs to know",
+      "Message is 2-3 sentences max, professional and friendly"
+    ]
+  }
+}

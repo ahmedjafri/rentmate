@@ -3,7 +3,7 @@ import { Plus, X, Zap, Wrench, FileText, ShieldCheck, Loader2 } from 'lucide-rea
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { graphqlQuery, CREATE_TASK_MUTATION, ADD_TASK_MESSAGE_MUTATION } from '@/data/api';
+import { graphqlQuery, CREATE_TASK_MUTATION, SEND_MESSAGE_MUTATION } from '@/data/api';
 import { useApp } from '@/context/AppContext';
 import { ActionDeskTask } from '@/data/mockData';
 import { toast } from 'sonner';
@@ -64,10 +64,10 @@ export function AgentTaskProposal({ proposal, onDismiss }: Props) {
 
       // Seed the task thread with context if the agent provided a description
       const contextBody = proposal.description?.trim();
-      if (contextBody) {
-        await graphqlQuery(ADD_TASK_MESSAGE_MUTATION, {
+      if (contextBody && t.aiConversationId) {
+        await graphqlQuery(SEND_MESSAGE_MUTATION, {
           input: {
-            taskId: t.uid,
+            conversationId: t.aiConversationId,
             body: contextBody,
             messageType: 'context',
             senderName: 'RentMate',

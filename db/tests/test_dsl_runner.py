@@ -1099,8 +1099,8 @@ class TestAuditIntegration:
                 key: {"enabled": enabled, "interval_hours": 1},
                 # disable all built-ins so they don't pollute task counts
                 **{k: {"enabled": False} for k in [
-                    "vacant_units", "expiring_leases", "overdue_rent",
-                    "incomplete_properties", "missing_contact", "expired_leases",
+                    "lease_status",
+                    "incomplete_properties", "missing_contact",
                 ]},
             },
             "custom_meta": {
@@ -1147,8 +1147,8 @@ class TestAuditIntegration:
                 "check_a": {"enabled": True},
                 "check_b": {"enabled": True},
                 **{k: {"enabled": False} for k in [
-                    "vacant_units", "expiring_leases", "overdue_rent",
-                    "incomplete_properties", "missing_contact", "expired_leases",
+                    "lease_status",
+                    "incomplete_properties", "missing_contact",
                 ]},
             },
             "custom_meta": {
@@ -1196,8 +1196,8 @@ class TestAuditIntegration:
                 "check_a": {"enabled": True},
                 "check_b": {"enabled": True},
                 **{k: {"enabled": False} for k in [
-                    "vacant_units", "expiring_leases", "overdue_rent",
-                    "incomplete_properties", "missing_contact", "expired_leases",
+                    "lease_status",
+                    "incomplete_properties", "missing_contact",
                 ]},
             },
             "custom_meta": {

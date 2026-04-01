@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Bot, MessageCircle, Building2, Plus } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
@@ -14,6 +15,11 @@ const CONVERSATIONS_QUERY = `
       title
       lastMessageAt
       updatedAt
+      lastMessageBody
+      lastMessageSenderName
+      propertyName
+      participantCount
+      unreadCount
     }
   }
 `;
@@ -24,6 +30,11 @@ interface ConvSummary {
   title: string | null;
   lastMessageAt: string | null;
   updatedAt: string;
+  lastMessageBody: string | null;
+  lastMessageSenderName: string | null;
+  propertyName: string | null;
+  participantCount: number;
+  unreadCount: number;
 }
 
 type TabKey = 'user_ai' | 'tenant' | 'vendor';
@@ -34,26 +45,55 @@ const TAB_CONFIG: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: 'vendor', label: 'Vendors', icon: Building2 },
 ];
 
+const typeLabels: Record<string, string> = {
+  user_ai: 'RentMate',
+  tenant: 'Tenant',
+  vendor: 'Vendor',
+};
+
+const typeColors: Record<string, string> = {
+  user_ai: 'bg-primary/10 text-primary',
+  tenant: 'bg-green-800/15 text-green-700 dark:text-green-400',
+  vendor: 'bg-orange-100 text-orange-700 dark:bg-orange-900/20 dark:text-orange-400',
+};
+
 function ConvRow({ conv, onClick }: { conv: ConvSummary; onClick: () => void }) {
   const TabIcon = TAB_CONFIG.find(t => t.key === conv.conversationType)?.icon ?? MessageCircle;
   const at = conv.lastMessageAt ?? conv.updatedAt;
   const relTime = at ? formatDistanceToNow(new Date(at), { addSuffix: true }) : null;
 
   return (
-    <Card className="p-4 rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={onClick}>
-      <div className="flex items-start gap-3">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
-          <TabIcon className="h-4 w-4 text-primary" />
+    <Card className="px-3 py-2.5 rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={onClick}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+          <Badge variant="secondary" className={`text-[10px] rounded-lg gap-1 shrink-0 ${typeColors[conv.conversationType] ?? ''}`}>
+            <TabIcon className="h-3 w-3" />
+            {typeLabels[conv.conversationType] ?? conv.conversationType}
+          </Badge>
+          {conv.unreadCount > 0 && (
+            <Badge className="h-4 px-1.5 text-[10px] bg-primary text-primary-foreground shrink-0">
+              {conv.unreadCount} new
+            </Badge>
+          )}
         </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-2">
-            <p className="text-sm font-semibold truncate">{conv.title ?? 'Conversation'}</p>
-            {relTime && (
-              <span className="text-[10px] text-muted-foreground shrink-0 mt-0.5">{relTime}</span>
-            )}
-          </div>
-        </div>
+        {relTime && (
+          <span className="text-[10px] text-muted-foreground shrink-0">{relTime}</span>
+        )}
       </div>
+
+      <div className="flex items-center justify-between gap-2 mt-1.5">
+        <h3 className="font-medium text-sm truncate">{conv.title ?? 'Conversation'}</h3>
+        {conv.propertyName && (
+          <span className="text-[10px] text-muted-foreground shrink-0">{conv.propertyName}</span>
+        )}
+      </div>
+
+      {conv.lastMessageBody && (
+        <p className="text-xs text-muted-foreground mt-1 truncate">
+          {conv.lastMessageSenderName && <span className="font-medium">{conv.lastMessageSenderName}: </span>}
+          {conv.lastMessageBody}
+        </p>
+      )}
     </Card>
   );
 }
@@ -69,30 +109,12 @@ const Chats = () => {
     setLoading(true);
     setConversations([]);
 
-    if (activeTab === 'user_ai') {
-      fetch('/chat/conversations', { headers: { 'Content-Type': 'application/json' } })
-        .then(r => r.json())
-        .then((data: Array<{ id: string; title: string; updated_at: string | null; last_message: string | null }>) => {
-          if (!cancelled) {
-            setConversations(data.map(d => ({
-              uid: d.id,
-              conversationType: 'user_ai',
-              title: d.title,
-              lastMessageAt: d.updated_at,
-              updatedAt: d.updated_at ?? '',
-            })));
-          }
-        })
-        .catch(() => { if (!cancelled) setConversations([]); })
-        .finally(() => { if (!cancelled) setLoading(false); });
-    } else {
-      graphqlQuery<{ conversations: ConvSummary[] }>(CONVERSATIONS_QUERY, { conversationType: activeTab, limit: 50 })
-        .then((data) => {
-          if (!cancelled) setConversations(data.conversations ?? []);
-        })
-        .catch(() => { if (!cancelled) setConversations([]); })
-        .finally(() => { if (!cancelled) setLoading(false); });
-    }
+    graphqlQuery<{ conversations: ConvSummary[] }>(CONVERSATIONS_QUERY, { conversationType: activeTab, limit: 50 })
+      .then((data) => {
+        if (!cancelled) setConversations(data.conversations ?? []);
+      })
+      .catch(() => { if (!cancelled) setConversations([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
   }, [activeTab]);

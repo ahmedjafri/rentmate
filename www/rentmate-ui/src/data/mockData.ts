@@ -1,6 +1,6 @@
 export type SuggestionCategory = 'rent' | 'maintenance' | 'leasing' | 'compliance';
 export type SuggestionUrgency = 'low' | 'medium' | 'high' | 'critical';
-export type SuggestionStatus = 'pending' | 'approved' | 'dismissed' | 'modified';
+export type SuggestionStatus = 'pending' | 'accepted' | 'dismissed' | 'expired';
 export type AutonomyLevel = 'manual' | 'suggest' | 'autonomous';
 export type TicketPriority = 'low' | 'routine' | 'urgent' | 'emergency';
 export type TicketStatus = 'open' | 'in_progress' | 'resolved' | 'closed';
@@ -17,6 +17,7 @@ export interface TaskParticipant {
 
 export interface ActionDeskTask {
   id: string;
+  taskNumber?: number | null;
   title: string;
   mode: TaskMode;
   status: TaskStatus;
@@ -30,11 +31,14 @@ export interface ActionDeskTask {
   urgency: SuggestionUrgency;
   chatThread: ChatMessage[];
   confidential?: boolean;
+  aiConversationId?: string | null;
+  externalConversationId?: string | null;
   parentConversationId?: string | null;
   ancestorIds?: string[];
   requireVendorType?: string;
   assignedVendorId?: string;
   assignedVendorName?: string;
+  suggestionOptions?: { key: string; label: string; action: string; variant: string }[];
 }
 
 export type ChatMessageType = 'message' | 'internal' | 'approval' | 'context';
@@ -59,18 +63,27 @@ export interface ChatMessage {
   relatedTasks?: ChatMessageRelatedTask[];
 }
 
+export interface SuggestionOption {
+  key: string;
+  label: string;
+  action: string;
+  variant: string;
+}
+
 export interface Suggestion {
   id: string;
+  title: string;
+  body?: string;
   category: SuggestionCategory;
   urgency: SuggestionUrgency;
-  title: string;
-  description: string;
-  recommendedAction: string;
-  confidence: number;
-  autonomyLevel: AutonomyLevel;
   status: SuggestionStatus;
+  source?: string;
+  automationKey?: string;
+  options?: SuggestionOption[];
+  actionTaken?: string;
   propertyId?: string;
-  tenantId?: string;
+  unitId?: string;
+  taskId?: string;
   createdAt: Date;
   chatThread: ChatMessage[];
 }
@@ -145,6 +158,8 @@ export interface Vendor {
   email?: string;
   notes?: string;
   contactMethod: string;
+  inviteToken?: string;
+  inviteStatus?: string;
 }
 
 export interface ManagedDocument {

@@ -17,13 +17,14 @@ from db.queries import (
 from db.lib import spawn_task_from_conversation as _spawn_task
 from .auth_mutations import Mutation as AuthMutation
 from .types import (
-    UserType, HouseType, TenantType, LeaseType, TaskType,
-    TaskChatMessageType, DocumentTagType, ConversationSummaryType, SpawnTaskInput,
-    CreateTaskInput, AddDocumentTagInput, AddTaskMessageInput, UpdateTaskInput,
+    UserType, HouseType, TenantType, LeaseType, TaskType, SuggestionType,
+    ChatMessageType, DocumentTagType, ConversationSummaryType, SpawnTaskInput,
+    CreateTaskInput, AddDocumentTagInput, SendMessageInput, UpdateTaskInput,
     CreatePropertyInput, UpdatePropertyInput, CreateTenantWithLeaseInput, AddLeaseForTenantInput,
     VendorType, CreateVendorInput, UpdateVendorInput, VENDOR_TYPES,
 )
 from .services.task_service import TaskService
+from .services import chat_service, suggestion_service
 from .services.property_service import PropertyService
 from .services.tenant_service import TenantService
 from .services.document_service import DocumentService
@@ -99,9 +100,9 @@ class Query:
         return [LeaseType.from_sql(l) for l in fetch_leases(_session(info))]
 
     @strawberry.field(description="Returns messages for a conversation by uid")
-    def conversation_messages(self, info, uid: str) -> typing.List[TaskChatMessageType]:
+    def conversation_messages(self, info, uid: str) -> typing.List[ChatMessageType]:
         _current_user(info)
-        return [TaskChatMessageType.from_sql(m) for m in fetch_messages(_session(info), uid)]
+        return [ChatMessageType.from_sql(m) for m in fetch_messages(_session(info), uid)]
 
     @strawberry.field(description="Returns all vendors")
     def vendors(self, info) -> typing.List[VendorType]:
@@ -113,7 +114,27 @@ class Query:
         _current_user(info)
         return VENDOR_TYPES
 
-    @strawberry.field(description="Returns conversations by type (tenant/vendor/user_ai/task)")
+    @strawberry.field(description="Returns suggestions, optionally filtered by status")
+    def suggestions(
+        self,
+        info,
+        status: typing.Optional[str] = None,
+        limit: int = 50,
+    ) -> typing.List[SuggestionType]:
+        _current_user(info)
+        from sqlalchemy.orm import joinedload, selectinload
+        from db.models import Suggestion, Conversation, Message
+        from sqlalchemy import select as sa_select
+        db = _session(info)
+        q = sa_select(Suggestion).options(
+            joinedload(Suggestion.ai_conversation).selectinload(Conversation.messages),
+        ).order_by(Suggestion.created_at.desc()).limit(limit)
+        if status:
+            q = q.where(Suggestion.status == status)
+        rows = db.execute(q).unique().scalars().all()
+        return [SuggestionType.from_sql(s) for s in rows]
+
+    @strawberry.field(description="Returns conversations by type (tenant/vendor/user_ai/task_ai)")
     def conversations(
         self,
         info,
@@ -140,32 +161,80 @@ class Mutation(AuthMutation):
     @strawberry.mutation(description="Create a new task")
     def create_task(self, info, input: CreateTaskInput) -> TaskType:
         _current_user(info)
-        return TaskType.from_sql(TaskService.create_task(_session(info), input))
+        db = _session(info)
+        from db.models import ConversationType
+        task = TaskService.create_task(db, input)
+        ext_convo = chat_service.get_or_create_external_conversation(
+            db,
+            conversation_type=ConversationType.TENANT,
+            subject=input.title,
+            property_id=input.property_id,
+            unit_id=input.unit_id,
+        )
+        task.external_conversation_id = ext_convo.id
+        db.commit()
+        db.refresh(task)
+        return TaskType.from_sql(task)
 
     @strawberry.mutation(description="Transition task_status (e.g. suggested→active, active→resolved)")
     def update_task_status(self, info, uid: str, status: str) -> TaskType:
         _current_user(info)
-        return TaskType.from_sql(TaskService.update_task_status(_session(info), uid, status))
+        db = _session(info)
+        task = TaskService.update_task_status(db, uid, status)
+        db.commit()
+        db.refresh(task)
+        return TaskType.from_sql(task)
 
     @strawberry.mutation(description="Tag a document to a property, unit, or tenant")
     def add_document_tag(self, info, input: AddDocumentTagInput) -> DocumentTagType:
         _current_user(info)
         return DocumentTagType.from_sql(DocumentService.add_document_tag(_session(info), input))
 
-    @strawberry.mutation(description="Add a manager message to a task's chat thread")
-    def add_task_message(self, info, input: AddTaskMessageInput) -> TaskChatMessageType:
+    @strawberry.mutation(description="Add a message to any conversation")
+    def send_message(self, info, input: SendMessageInput) -> ChatMessageType:
         _current_user(info)
-        return TaskChatMessageType.from_sql(TaskService.add_task_message(_session(info), input))
+        db = _session(info)
+        msg = chat_service.send_message(
+            db,
+            conversation_id=input.conversation_id,
+            body=input.body,
+            message_type=input.message_type,
+            sender_name=input.sender_name,
+            is_ai=input.is_ai,
+            draft_reply=input.draft_reply,
+        )
+        # Bump last_message_at on the linked task if any
+        from sqlalchemy import select as _sel, or_
+        from db.models import Task
+        task = db.execute(
+            _sel(Task).where(or_(
+                Task.ai_conversation_id == input.conversation_id,
+                Task.external_conversation_id == input.conversation_id,
+            ))
+        ).scalar_one_or_none()
+        if task:
+            from datetime import UTC, datetime
+            task.last_message_at = datetime.now(UTC)
+        db.commit()
+        db.refresh(msg)
+        return ChatMessageType.from_sql(msg)
 
     @strawberry.mutation(description="Permanently delete a task and all its messages")
     def delete_task(self, info, uid: str) -> bool:
         _current_user(info)
-        return TaskService.delete_task(_session(info), uid)
+        db = _session(info)
+        result = TaskService.delete_task(db, uid)
+        db.commit()
+        return result
 
     @strawberry.mutation(description="Update task mode and/or status")
     def update_task(self, info, input: UpdateTaskInput) -> TaskType:
         _current_user(info)
-        return TaskType.from_sql(TaskService.update_task(_session(info), input))
+        db = _session(info)
+        task = TaskService.update_task(db, input)
+        db.commit()
+        db.refresh(task)
+        return TaskType.from_sql(task)
 
     @strawberry.mutation(description="Manually create a property with optional units")
     def create_property(self, info, input: CreatePropertyInput) -> HouseType:
@@ -206,7 +275,27 @@ class Mutation(AuthMutation):
     @strawberry.mutation(description="Assign a vendor to a task")
     def assign_vendor_to_task(self, info, task_id: str, vendor_id: str) -> TaskType:
         _current_user(info)
-        return TaskType.from_sql(TaskService.assign_vendor_to_task(_session(info), task_id, vendor_id))
+        db = _session(info)
+        from sqlalchemy import select as sa_select
+        from db.models import Task as TaskModel, ConversationType
+        task = db.execute(
+            sa_select(TaskModel).where(TaskModel.id == task_id)
+        ).scalar_one_or_none()
+        if not task:
+            raise ValueError(f"Task {task_id} not found")
+        ext_convo = chat_service.get_or_create_external_conversation(
+            db,
+            conversation_type=ConversationType.VENDOR,
+            subject=task.title,
+            property_id=task.property_id,
+            unit_id=task.unit_id,
+            vendor_id=vendor_id,
+        )
+        task.external_conversation_id = ext_convo.id
+        task = TaskService.assign_vendor_to_task(db, task_id, vendor_id)
+        db.commit()
+        db.refresh(task)
+        return TaskType.from_sql(task)
 
     @strawberry.mutation(description="Create a new vendor contact")
     def create_vendor(self, info, input: CreateVendorInput) -> VendorType:
@@ -222,6 +311,27 @@ class Mutation(AuthMutation):
     def delete_vendor(self, info, uid: str) -> bool:
         _current_user(info)
         return VendorService.delete_vendor(_session(info), uid)
+
+    @strawberry.mutation(description="Act on a suggestion (accept, reject, approve draft, etc.)")
+    def act_on_suggestion(
+        self,
+        info,
+        uid: str,
+        action: str,
+        edited_body: typing.Optional[str] = None,
+    ) -> SuggestionType:
+        _current_user(info)
+        db = _session(info)
+        from handlers.task_suggestions import SuggestionExecutor
+        executor = SuggestionExecutor.for_suggestion(db, uid)
+        suggestion, _task = executor.execute(uid, action, edited_body=edited_body)
+        db.commit()
+        return SuggestionType.from_sql(suggestion)
+
+    @strawberry.mutation(description="Accept a vendor invite (no auth required)")
+    def accept_vendor_invite(self, info, token: str) -> bool:
+        VendorService.accept_invite(_session(info), token)
+        return True
 
     @strawberry.mutation(description="Spawn a Task from an existing conversation, linking lineage")
     def spawn_task(self, info, input: SpawnTaskInput) -> TaskType:

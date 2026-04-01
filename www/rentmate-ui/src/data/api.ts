@@ -111,8 +111,8 @@ export const TENANTS_QUERY = `
 
 const TASK_FIELDS = `
   uid
+  taskNumber
   title
-  isTask
   taskStatus
   taskMode
   source
@@ -131,6 +131,10 @@ const TASK_FIELDS = `
   requireVendorType
   assignedVendorId
   assignedVendorName
+  aiConversationId
+  parentConversationId
+  externalConversationId
+  suggestionOptions
   messages {
     uid
     body
@@ -162,16 +166,51 @@ export const TASK_QUERY = `
 `;
 
 export const SUGGESTIONS_QUERY = `
-  query {
-    tasks(status: "suggested", source: "ai_suggestion") {
-      ${TASK_FIELDS}
+  query Suggestions($status: String) {
+    suggestions(status: $status) {
+      uid
+      title
+      body
+      category
+      urgency
+      status
+      source
+      automationKey
+      options
+      actionTaken
+      propertyId
+      unitId
+      taskId
+      createdAt
+      messages {
+        uid
+        body
+        messageType
+        senderName
+        isAi
+        isSystem
+        sentAt
+        draftReply
+        approvalStatus
+      }
     }
   }
 `;
 
-export const ADD_TASK_MESSAGE_MUTATION = `
-  mutation AddTaskMessage($input: AddTaskMessageInput!) {
-    addTaskMessage(input: $input) {
+export const ACT_ON_SUGGESTION_MUTATION = `
+  mutation ActOnSuggestion($uid: String!, $action: String!, $editedBody: String) {
+    actOnSuggestion(uid: $uid, action: $action, editedBody: $editedBody) {
+      uid
+      status
+      actionTaken
+      taskId
+    }
+  }
+`;
+
+export const SEND_MESSAGE_MUTATION = `
+  mutation SendMessage($input: SendMessageInput!) {
+    sendMessage(input: $input) {
       uid
       body
       messageType
@@ -255,6 +294,7 @@ export const CONVERSATION_MESSAGES_QUERY = `
       body
       messageType
       senderName
+      senderType
       isAi
       isSystem
       sentAt
@@ -274,13 +314,14 @@ export const CREATE_TASK_MUTATION = `
       source
       propertyId
       unitId
+      aiConversationId
       createdAt
     }
   }
 `;
 
 export const VENDORS_QUERY = `
-  query { vendors { uid name company vendorType phone email notes contactMethod createdAt } }
+  query { vendors { uid name company vendorType phone email notes contactMethod inviteToken inviteStatus createdAt } }
 `;
 
 export const VENDOR_TYPES_QUERY = `
@@ -289,13 +330,13 @@ export const VENDOR_TYPES_QUERY = `
 
 export const CREATE_VENDOR_MUTATION = `
   mutation CreateVendor($input: CreateVendorInput!) {
-    createVendor(input: $input) { uid name company vendorType phone email notes contactMethod }
+    createVendor(input: $input) { uid name company vendorType phone email notes contactMethod inviteToken inviteStatus }
   }
 `;
 
 export const UPDATE_VENDOR_MUTATION = `
   mutation UpdateVendor($input: UpdateVendorInput!) {
-    updateVendor(input: $input) { uid name company vendorType phone email notes contactMethod }
+    updateVendor(input: $input) { uid name company vendorType phone email notes contactMethod inviteToken inviteStatus }
   }
 `;
 

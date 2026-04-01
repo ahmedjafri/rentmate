@@ -1,0 +1,29 @@
+{
+  "id": "vendor_outreach_hvac_inspection",
+  "automation": "vendor_outreach",
+  "description": "Outreach to an HVAC vendor for a routine inspection should ask about scheduling and cost.",
+  "task": {
+    "title": "Annual HVAC inspection",
+    "category": "maintenance",
+    "urgency": "low",
+    "body": "Schedule the annual HVAC system inspection for all units at Sunset Terrace. Last inspection was over 12 months ago."
+  },
+  "context": "Property: Sunset Terrace, 920 Pine Ave, Portland, OR 97201\nUnits: 1A, 1B, 2A, 2B\nVendor: Northwest Heating & Air",
+  "dialog": [
+    {
+      "role": "agent",
+      "content": "{{generated}}"
+    }
+  ],
+  "expected": {
+    "resolution": "active",
+    "criteria": [
+      "Message asks when the vendor is available, not assigns a date",
+      "Message asks for pricing or a quote for the inspection",
+      "Message mentions the scope of work (HVAC inspection, multiple units)",
+      "Message mentions the property name or address",
+      "Message is an inquiry, not a work order or confirmation",
+      "Message is 2-3 sentences max, professional and friendly"
+    ]
+  }
+}

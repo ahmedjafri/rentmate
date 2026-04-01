@@ -48,7 +48,22 @@ interface SimulatedTask {
   property_id: string | null;
   unit_id: string | null;
   description: string;
+  assigned_vendor_id?: string | null;
+  assigned_vendor_name?: string | null;
+  autonomy?: string;
 }
+
+const AUTONOMY_LABELS: Record<string, string> = {
+  manual: "Notify only",
+  suggest: "Suggest & wait",
+  autonomous: "Fully autonomous",
+};
+
+const AUTONOMY_COLORS: Record<string, string> = {
+  manual: "bg-slate-100 text-slate-700",
+  suggest: "bg-amber-100 text-amber-800",
+  autonomous: "bg-green-100 text-green-800",
+};
 
 // ─── colors ──────────────────────────────────────────────────────────────────
 
@@ -337,11 +352,11 @@ useEffect(() => {
   const taskKey = (t: SimulatedTask) =>
     `${t.subject}::${t.property_id ?? ''}::${t.unit_id ?? ''}`;
 
-  const handleCreateTask = async (t: SimulatedTask) => {
+  const handleSimulatedAction = async (t: SimulatedTask, endpoint: string, successMsg: string) => {
     const key = taskKey(t);
     setCreatingTask(key);
     try {
-      const res = await fetch("/automations/simulate/create-task", {
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({
@@ -351,14 +366,15 @@ useEffect(() => {
           body: t.description,
           property_id: t.property_id,
           unit_id: t.unit_id,
+          automation_key: automation?.key,
         }),
       });
-      if (res.status === 409) { toast.info("Task already exists"); return; }
+      if (res.status === 409) { toast.info("Already exists"); return; }
       if (!res.ok) throw new Error();
       setCreatedTasks(prev => new Set(prev).add(key));
-      toast.success("Task added");
+      toast.success(successMsg);
     } catch {
-      toast.error("Failed to create task");
+      toast.error("Action failed");
     } finally {
       setCreatingTask(null);
     }
@@ -649,6 +665,8 @@ useEffect(() => {
                     const key = taskKey(t);
                     const done = createdTasks.has(key);
                     const loading = creatingTask === key;
+                    const autonomy = t.autonomy ?? "suggest";
+                    const isAutonomous = autonomy === "autonomous";
                     return (
                       <div key={i} className={`rounded border bg-background p-3 space-y-1.5 ${done ? "opacity-60" : ""}`}>
                         <div className="flex items-start justify-between gap-2">
@@ -659,22 +677,34 @@ useEffect(() => {
                             <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${URGENCY_COLORS[t.urgency] ?? "bg-slate-100 text-slate-700"}`}>
                               {t.urgency}
                             </span>
+                            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${AUTONOMY_COLORS[autonomy] ?? "bg-slate-100 text-slate-700"}`}>
+                              {AUTONOMY_LABELS[autonomy] ?? autonomy}
+                            </span>
                             <span className="text-sm font-medium">{t.subject}</span>
                           </div>
                           {done ? (
                             <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0 mt-0.5" />
+                          ) : isAutonomous ? (
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="gap-1 h-7 text-xs shrink-0"
+                              disabled={loading}
+                              onClick={() => handleSimulatedAction(t, "/automations/simulate/create-task", "Task created")}
+                            >
+                              {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <PlusCircle className="h-3 w-3" />}
+                              Create task
+                            </Button>
                           ) : (
                             <Button
                               size="sm"
                               variant="outline"
-                              className="shrink-0 gap-1 h-7 text-xs"
+                              className="gap-1 h-7 text-xs shrink-0"
                               disabled={loading}
-                              onClick={() => handleCreateTask(t)}
+                              onClick={() => handleSimulatedAction(t, "/automations/simulate/create-suggestion", "Suggestion added")}
                             >
-                              {loading
-                                ? <Loader2 className="h-3 w-3 animate-spin" />
-                                : <PlusCircle className="h-3 w-3" />}
-                              Add task
+                              {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Star className="h-3 w-3" />}
+                              Suggest
                             </Button>
                           )}
                         </div>

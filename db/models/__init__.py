@@ -1,10 +1,11 @@
 from .base import Base
 from .rental import Property, Unit, Tenant, Lease
+from .tasks import Task
 from .messaging import (
     ParticipantType,
     ConversationType,
+    MessageType,
     ExternalContact,
-    Task,
     Conversation,
     ConversationParticipant,
     Message,
@@ -12,6 +13,12 @@ from .messaging import (
 )
 from .documents import Document, DocumentTask, DocumentTag
 from .automation import AutomationRevision
+from .suggestions import Suggestion
+from db.enums import (
+    TaskCategory, Urgency, TaskSource,
+    AutomationSource, AgentSource, SuggestionSource,
+    SuggestionOption,
+)
 
 __all__ = [
     "Base",
@@ -21,8 +28,10 @@ __all__ = [
     "Lease",
     "ParticipantType",
     "ConversationType",
+    "MessageType",
     "ExternalContact",
     "Task",
+    "Suggestion",
     "Conversation",
     "ConversationParticipant",
     "Message",
@@ -31,4 +40,11 @@ __all__ = [
     "DocumentTask",
     "DocumentTag",
     "AutomationRevision",
+    "TaskCategory",
+    "Urgency",
+    "TaskSource",
+    "AutomationSource",
+    "AgentSource",
+    "SuggestionSource",
+    "SuggestionOption",
 ]
