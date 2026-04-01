@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger("rentmate.audit")
 
+from .enums import TaskCategory, Urgency, TaskSource
 from .models import (
     Task,
     Conversation,
@@ -65,7 +66,7 @@ def _task_exists(
     q = (
         db.query(Task)
         .filter(
-            Task.source == "ai_suggestion",
+            Task.source == TaskSource.AI_SUGGESTION,
             Task.task_status.in_(_OPEN_STATUSES),
             Task.title == subject,
         )
@@ -99,8 +100,8 @@ def _create_task(
     db: Session,
     subject: str,
     context_body: str,
-    category: str,
-    urgency: str,
+    category: TaskCategory,
+    urgency: Urgency,
     property_id: Optional[str] = None,
     unit_id: Optional[str] = None,
     autonomy_level: Optional[str] = None,
@@ -117,7 +118,7 @@ def _create_task(
         title=subject,
         task_status=task_status,
         task_mode=task_mode,
-        source="ai_suggestion",
+        source=TaskSource.AI_SUGGESTION,
         category=category,
         urgency=urgency,
         priority="routine",
@@ -224,8 +225,8 @@ def _check_incomplete_properties(db: Session, dry_run: bool = False, autonomy_le
                 f'Property "{_addr_summary(p)}" is missing {fields}. '
                 "Complete the address so leases and documents are accurate."
             ),
-            category="compliance",
-            urgency="low",
+            category=TaskCategory.COMPLIANCE,
+            urgency=Urgency.LOW,
             property_id=p.id,
             autonomy_level=autonomy_level,
         )
@@ -257,8 +258,8 @@ def _check_tenants_missing_contact(db: Session, dry_run: bool = False, autonomy_
                 f"Tenant {name!r} has no phone number or email address on file. "
                 "Add contact details so they can be reached."
             ),
-            category="compliance",
-            urgency="low",
+            category=TaskCategory.COMPLIANCE,
+            urgency=Urgency.LOW,
             property_id=prop_id,
             autonomy_level=autonomy_level,
         )
@@ -299,8 +300,8 @@ def _check_lease_status(db: Session, warn_days: int = EXPIRY_WARN_DAYS, dry_run:
                 f"expires on {lease.end_date} ({days_left} days). "
                 "Reach out about renewal or move-out logistics."
             ),
-            category="leasing",
-            urgency="medium" if days_left > 30 else "high",
+            category=TaskCategory.LEASING,
+            urgency=Urgency.MEDIUM if days_left > 30 else Urgency.HIGH,
             property_id=lease.property_id,
             unit_id=lease.unit_id,
             autonomy_level=autonomy_level,
@@ -342,8 +343,8 @@ def _check_lease_status(db: Session, warn_days: int = EXPIRY_WARN_DAYS, dry_run:
                 f"expired on {lease.end_date} and has not been renewed. "
                 "Confirm move-out status or start a renewal conversation."
             ),
-            category="leasing",
-            urgency="high",
+            category=TaskCategory.LEASING,
+            urgency=Urgency.HIGH,
             property_id=lease.property_id,
             unit_id=lease.unit_id,
             autonomy_level=autonomy_level,

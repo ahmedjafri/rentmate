@@ -10,7 +10,7 @@ Covers:
 - createTask mutation
 - updateTaskStatus mutation
 - updateTask mutation (mode + status)
-- addTaskMessage mutation
+- sendMessage mutation
 - addDocumentTag mutation
 - confirmDocument mutation
 - DocumentTask model (create, unique constraint)
@@ -20,7 +20,7 @@ Covers:
 
 import pytest
 from datetime import date, timedelta
-from sqlalchemy import create_engine, text, inspect
+from sqlalchemy import create_engine, select, text, inspect
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import IntegrityError
 
@@ -325,14 +325,18 @@ class TestTasksQuery:
         assert create_result.errors is None
         task_uid = create_result.data["createTask"]["uid"]
 
-        # 2. Add context message via mutation
+        # 2. Get the task's AI conversation ID
+        task_obj = db.execute(select(Task).where(Task.id == task_uid)).scalar_one()
+        ai_convo_id = task_obj.ai_conversation_id
+
+        # 3. Add context message via mutation
         msg_result = schema.execute_sync(
-            """mutation AddMsg($input: AddTaskMessageInput!) {
-                addTaskMessage(input: $input) { uid body messageType }
+            """mutation SendMsg($input: SendMessageInput!) {
+                sendMessage(input: $input) { uid body messageType }
             }""",
             context_value=_gql_context(db),
             variable_values={"input": {
-                "taskId": task_uid,
+                "conversationId": ai_convo_id,
                 "body": "Gutters need cleaning before winter.",
                 "messageType": "context",
                 "senderName": "RentMate",
@@ -340,7 +344,7 @@ class TestTasksQuery:
             }},
         )
         assert msg_result.errors is None
-        assert msg_result.data["addTaskMessage"]["messageType"] == "context"
+        assert msg_result.data["sendMessage"]["messageType"] == "context"
 
         # 3. Re-query via tasks query — message must be present
         query_result = schema.execute_sync(
@@ -767,35 +771,35 @@ class TestUpdateTaskMutation:
 
 
 # ---------------------------------------------------------------------------
-# addTaskMessage mutation
+# sendMessage mutation
 # ---------------------------------------------------------------------------
 
-class TestAddTaskMessageMutation:
+class TestSendMessageMutation:
 
-    ADD_MSG_MUTATION = """
-    mutation AddMsg($input: AddTaskMessageInput!) {
-        addTaskMessage(input: $input) {
+    SEND_MSG_MUTATION = """
+    mutation SendMsg($input: SendMessageInput!) {
+        sendMessage(input: $input) {
             uid body messageType senderName isAi isSystem sentAt
         }
     }
     """
 
-    def test_add_task_message_basic(self, db):
+    def test_send_message_basic(self, db):
         task = _mk_task(db)
 
         result = schema.execute_sync(
-            self.ADD_MSG_MUTATION,
+            self.SEND_MSG_MUTATION,
             context_value=_gql_context(db),
             variable_values={
                 "input": {
-                    "taskId": task.id,
+                    "conversationId": task.ai_conversation_id,
                     "body": "Looking into this now.",
                     "senderName": "Manager",
                 }
             },
         )
         assert result.errors is None
-        msg = result.data["addTaskMessage"]
+        msg = result.data["sendMessage"]
         assert msg["uid"] is not None
         assert msg["body"] == "Looking into this now."
         assert msg["senderName"] == "Manager"
@@ -803,15 +807,15 @@ class TestAddTaskMessageMutation:
         assert msg["isSystem"] is False
         assert msg["sentAt"] != ""
 
-    def test_add_task_message_ai_flag(self, db):
+    def test_send_message_ai_flag(self, db):
         task = _mk_task(db)
 
         result = schema.execute_sync(
-            self.ADD_MSG_MUTATION,
+            self.SEND_MSG_MUTATION,
             context_value=_gql_context(db),
             variable_values={
                 "input": {
-                    "taskId": task.id,
+                    "conversationId": task.ai_conversation_id,
                     "body": "I've scheduled a contractor.",
                     "senderName": "RentMate AI",
                     "isAi": True,
@@ -820,21 +824,21 @@ class TestAddTaskMessageMutation:
             },
         )
         assert result.errors is None
-        msg = result.data["addTaskMessage"]
+        msg = result.data["sendMessage"]
         assert msg["isAi"] is True
         assert msg["messageType"] == "internal"
         assert msg["senderName"] == "RentMate AI"
 
-    def test_add_task_message_updates_last_message_at(self, db):
+    def test_send_message_updates_last_message_at(self, db):
         task = _mk_task(db)
         assert task.last_message_at is None
 
         schema.execute_sync(
-            self.ADD_MSG_MUTATION,
+            self.SEND_MSG_MUTATION,
             context_value=_gql_context(db),
             variable_values={
                 "input": {
-                    "taskId": task.id,
+                    "conversationId": task.ai_conversation_id,
                     "body": "Updating the task.",
                 }
             },
@@ -845,22 +849,22 @@ class TestAddTaskMessageMutation:
         fetched = db.execute(select(Task).where(Task.id == task.id)).scalar_one()
         assert fetched.last_message_at is not None
 
-    def test_add_task_message_persists_to_db(self, db):
+    def test_send_message_persists_to_db(self, db):
         task = _mk_task(db)
 
         result = schema.execute_sync(
-            self.ADD_MSG_MUTATION,
+            self.SEND_MSG_MUTATION,
             context_value=_gql_context(db),
             variable_values={
                 "input": {
-                    "taskId": task.id,
+                    "conversationId": task.ai_conversation_id,
                     "body": "Persisted message",
                     "senderName": "Test User",
                 }
             },
         )
         assert result.errors is None
-        msg_uid = result.data["addTaskMessage"]["uid"]
+        msg_uid = result.data["sendMessage"]["uid"]
 
         db.expire_all()
         from sqlalchemy import select
@@ -871,44 +875,28 @@ class TestAddTaskMessageMutation:
         fetched_task = db.execute(select(Task).where(Task.id == task.id)).scalar_one()
         assert msg.conversation_id == fetched_task.ai_conversation_id
 
-    def test_add_task_message_task_not_found_raises_error(self, db):
+    def test_send_message_to_nonexistent_conversation(self, db):
         result = schema.execute_sync(
-            self.ADD_MSG_MUTATION,
+            self.SEND_MSG_MUTATION,
             context_value=_gql_context(db),
             variable_values={
                 "input": {
-                    "taskId": "bad-task-id",
-                    "body": "This should fail",
+                    "conversationId": "bad-convo-id",
+                    "body": "This should still work (creates message row)",
                 }
             },
         )
-        assert result.errors is not None
+        # send_message doesn't validate conversation existence — it just inserts
+        assert result.errors is None
 
-    def test_add_task_message_on_non_task_conversation_fails(self, db):
-        conv = Conversation(subject="Not a task")
-        db.add(conv)
-        db.flush()
-
-        result = schema.execute_sync(
-            self.ADD_MSG_MUTATION,
-            context_value=_gql_context(db),
-            variable_values={
-                "input": {
-                    "taskId": conv.id,
-                    "body": "Should not work",
-                }
-            },
-        )
-        assert result.errors is not None
-
-    def test_add_multiple_messages_shows_in_tasks_query(self, db):
+    def test_send_multiple_messages_shows_in_tasks_query(self, db):
         task = _mk_task(db, subject="Multi-message task")
 
         for body in ["First", "Second", "Third"]:
             schema.execute_sync(
-                self.ADD_MSG_MUTATION,
+                self.SEND_MSG_MUTATION,
                 context_value=_gql_context(db),
-                variable_values={"input": {"taskId": task.id, "body": body}},
+                variable_values={"input": {"conversationId": task.ai_conversation_id, "body": body}},
             )
 
         # Expire the session identity map so the subsequent query fetches fresh

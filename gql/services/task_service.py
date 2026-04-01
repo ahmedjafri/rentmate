@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from db.models import Task, Conversation, ExternalContact, Message, ParticipantType as PT, ConversationType
-from gql.types import CreateTaskInput, AddTaskMessageInput, UpdateTaskInput
+from gql.types import CreateTaskInput, UpdateTaskInput
 
 
 def _get_account_id(sess: Session, property_id: str | None, unit_id: str | None) -> str:
@@ -147,53 +147,3 @@ class TaskService:
         sess.flush()
         return task
 
-    @staticmethod
-    def add_message_to_ai_chat(sess: Session, input: AddTaskMessageInput) -> Message:
-        task = sess.execute(
-            select(Task).where(Task.id == input.task_id)
-        ).scalar_one_or_none()
-        if not task:
-            raise ValueError(f"Task {input.task_id} not found")
-        convo = sess.get(Conversation, task.ai_conversation_id) if task.ai_conversation_id else None
-        if not convo:
-            raise ValueError(f"No AI conversation found for task {input.task_id}")
-        msg = Message(
-            conversation_id=convo.id,
-            sender_type=PT.ACCOUNT_USER,
-            body=input.body,
-            message_type=input.message_type,
-            sender_name=input.sender_name,
-            is_ai=input.is_ai,
-            is_system=False,
-            draft_reply=input.draft_reply,
-            sent_at=datetime.now(UTC),
-        )
-        sess.add(msg)
-        task.last_message_at = datetime.now(UTC)
-        sess.flush()
-        return msg
-
-    @staticmethod
-    def add_message_to_external_chat(sess: Session, input: AddTaskMessageInput) -> Message:
-        task = sess.execute(
-            select(Task).where(Task.id == input.task_id)
-        ).scalar_one_or_none()
-        if not task:
-            raise ValueError(f"Task {input.task_id} not found")
-        convo = sess.get(Conversation, task.external_conversation_id) if task.external_conversation_id else None
-        if not convo:
-            raise ValueError(f"No external conversation found for task {input.task_id}")
-        msg = Message(
-            conversation_id=convo.id,
-            sender_type=PT.ACCOUNT_USER,
-            body=input.body,
-            message_type=input.message_type,
-            sender_name=input.sender_name,
-            is_ai=input.is_ai,
-            is_system=False,
-            sent_at=datetime.now(UTC),
-        )
-        sess.add(msg)
-        task.last_message_at = datetime.now(UTC)
-        sess.flush()
-        return msg

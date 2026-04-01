@@ -213,6 +213,8 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
     assignedVendorId: t.assignedVendorId,
     assignedVendorName: t.assignedVendorName,
     suggestionOptions: t.suggestionOptions ?? undefined,
+    aiConversationId: t.aiConversationId ?? null,
+    externalConversationId: t.externalConversationId ?? null,
     parentConversationId: t.externalConversationId ?? t.parentConversationId ?? null,
   };
 }
@@ -340,6 +342,7 @@ interface ApiTask {
   assignedVendorId?: string;
   assignedVendorName?: string;
   suggestionOptions?: { key: string; label: string; action: string; variant: string }[];
+  aiConversationId?: string | null;
   parentConversationId?: string | null;
   externalConversationId?: string | null;
 }

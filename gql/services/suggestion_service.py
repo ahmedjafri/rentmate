@@ -1,12 +1,15 @@
 """Service for creating and acting on Suggestions."""
 from datetime import UTC, datetime
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from db.enums import (
+    TaskCategory, Urgency,
+    AutomationSource, AgentSource, SuggestionSource, SuggestionOption,
+)
 from db.models import (
-    Suggestion, Task, Conversation, ConversationType,
+    Suggestion, Conversation, ConversationType,
     Message, MessageType, ParticipantType as PT,
 )
 
@@ -31,19 +34,49 @@ def create_suggestion(
     sess: Session,
     *,
     title: str,
-    body: str,
-    category: str | None = None,
-    urgency: str | None = None,
-    source: str = "automation",
-    automation_key: str | None = None,
-    options: list[dict] | None = None,
+    ai_context: str,
+    category: TaskCategory | None = None,
+    urgency: Urgency | None = None,
+    source: SuggestionSource = AutomationSource(automation_key=""),
+    options: list[SuggestionOption] | None = None,
     action_payload: dict | None = None,
     property_id: str | None = None,
     unit_id: str | None = None,
 ) -> Suggestion:
-    """Create a Suggestion with its own AI conversation thread."""
+    """Create a Suggestion with its own AI conversation thread.
+
+    Args:
+        title: Short headline shown in the action desk (e.g. "Lease expiring: Jane – Unit 4B").
+        ai_context: Longer context that seeds the suggestion's AI conversation thread.
+        category: Task category used for autonomy-level lookup and routing.
+        urgency: How urgent the proposed action is.
+        source: What created this suggestion. Pass ``AutomationSource(automation_key=...)``
+            for automation-generated suggestions or ``AgentSource()`` for AI agent ones.
+            The automation key is used for per-check config lookup and deduplication.
+        options: Action buttons rendered in the suggestion UI.
+            Built by ``settings_service.build_suggestion_options()``.
+        action_payload: Arbitrary context needed to execute the chosen action.  Common
+            keys: ``vendor_id``, ``vendor_name`` (to wire up a vendor conversation on
+            accept), ``draft_message`` (pre-written outreach text for approve_draft).
+        property_id: Scoping FK — the property this suggestion relates to.
+        unit_id: Scoping FK — the unit this suggestion relates to.
+    """
     now = datetime.now(UTC)
     account_id = _get_account_id(sess, property_id, unit_id)
+
+    # Decompose source union into DB columns
+    if isinstance(source, AutomationSource):
+        source_str = "automation"
+        automation_key = source.automation_key or None
+    else:
+        source_str = "agent"
+        automation_key = None
+
+    # Serialize options to dicts for JSON storage
+    options_dicts = [
+        {"key": o.key, "label": o.label, "action": o.action, "variant": o.variant}
+        for o in options
+    ] if options else None
 
     # Create AI conversation for this suggestion
     ai_convo = Conversation(
@@ -62,13 +95,13 @@ def create_suggestion(
     suggestion = Suggestion(
         account_id=account_id,
         title=title,
-        body=body,
+        body=ai_context,
         category=category,
         urgency=urgency,
-        source=source,
+        source=source_str,
         automation_key=automation_key,
         status="pending",
-        options=options,
+        options=options_dicts,
         action_payload=action_payload,
         property_id=property_id,
         unit_id=unit_id,
@@ -80,11 +113,11 @@ def create_suggestion(
     sess.flush()
 
     # Add context message to AI conversation
-    if body:
+    if ai_context:
         sess.add(Message(
             conversation_id=ai_convo.id,
             sender_type=PT.ACCOUNT_USER,
-            body=body,
+            body=ai_context,
             message_type=MessageType.CONTEXT,
             sender_name="RentMate",
             is_ai=True,
@@ -96,55 +129,23 @@ def create_suggestion(
     return suggestion
 
 
-def add_message(
-    sess: Session,
-    suggestion_id: str,
-    body: str,
-    message_type: str = MessageType.MESSAGE,
-    sender_name: str = "RentMate",
-    is_ai: bool = True,
-    draft_reply: str | None = None,
-) -> Message:
-    """Add a message to a suggestion's AI conversation."""
-    suggestion = sess.execute(
-        select(Suggestion).where(Suggestion.id == suggestion_id)
-    ).scalar_one_or_none()
-    if not suggestion:
-        raise ValueError(f"Suggestion {suggestion_id} not found")
-    if not suggestion.ai_conversation_id:
-        raise ValueError(f"No AI conversation for suggestion {suggestion_id}")
-
-    now = datetime.now(UTC)
-    msg = Message(
-        conversation_id=suggestion.ai_conversation_id,
-        sender_type=PT.ACCOUNT_USER,
-        body=body,
-        message_type=message_type,
-        sender_name=sender_name,
-        is_ai=is_ai,
-        is_system=False,
-        draft_reply=draft_reply,
-        sent_at=now,
-    )
-    sess.add(msg)
-    sess.flush()
-    return msg
-
-
 def act_on_suggestion(
     sess: Session,
     suggestion_id: str,
     action: str,
-    edited_body: str | None = None,
-) -> tuple[Suggestion, Optional[Task]]:
-    """Execute the chosen action on a suggestion.
+    *,
+    task_id: str | None = None,
+) -> Suggestion:
+    """Mark a suggestion as accepted or dismissed.
 
-    Returns the updated Suggestion and optionally the created Task.
+    The caller (handler layer) is responsible for task creation,
+    conversation wiring, and message sending before calling this.
+
+    Args:
+        suggestion_id: The suggestion to act on.
+        action: One of "accept_task", "approve_draft", "reject_task".
+        task_id: Optional task ID to link to the suggestion on accept.
     """
-    from gql.services.task_service import TaskService
-    from gql.services import chat_service
-    from gql.types import CreateTaskInput
-
     suggestion = sess.execute(
         select(Suggestion).where(Suggestion.id == suggestion_id)
     ).scalar_one_or_none()
@@ -154,69 +155,13 @@ def act_on_suggestion(
         raise ValueError(f"Suggestion {suggestion_id} is already {suggestion.status}")
 
     now = datetime.now(UTC)
-    payload = suggestion.action_payload or {}
-    task = None
 
     if action in ("accept_task", "approve_draft"):
-        # Create a real Task from this suggestion
-        task = TaskService.create_task(sess, CreateTaskInput(
-            title=suggestion.title or "",
-            source=suggestion.source or "automation",
-            task_status="active",
-            task_mode="manual",
-            category=suggestion.category,
-            urgency=suggestion.urgency,
-            priority="routine",
-            property_id=suggestion.property_id,
-            unit_id=suggestion.unit_id,
-        ))
-
-        # Reassign the AI conversation from suggestion to task
-        if suggestion.ai_conversation_id:
-            ai_convo = sess.get(Conversation, suggestion.ai_conversation_id)
-            if ai_convo:
-                ai_convo.conversation_type = ConversationType.TASK_AI
-            task.ai_conversation_id = suggestion.ai_conversation_id
-            suggestion.ai_conversation_id = None
-
-        # Wire up vendor conversation if applicable
-        vendor_id = payload.get("vendor_id")
-        if vendor_id:
-            ext_convo = chat_service.get_or_create_external_conversation(
-                sess,
-                conversation_type=ConversationType.VENDOR,
-                subject=suggestion.title or "",
-                property_id=suggestion.property_id,
-                unit_id=suggestion.unit_id,
-                vendor_id=vendor_id,
-            )
-            task.external_conversation_id = ext_convo.id
-            TaskService.assign_vendor_to_task(sess, task.id, vendor_id)
-
-        # Handle draft message actions
-        draft = edited_body or payload.get("draft_message")
-        if action == "approve_draft" and draft and task.external_conversation_id:
-            chat_service.send_autonomous_message(
-                sess, task.external_conversation_id, draft, task_id=task.id,
-            )
-            # Mark any approval messages in the AI conversation as approved
-            # so they don't appear as pending in the task's AI tab
-            if task.ai_conversation_id:
-                approval_msgs = sess.execute(
-                    select(Message).where(
-                        Message.conversation_id == task.ai_conversation_id,
-                        Message.message_type == MessageType.APPROVAL,
-                    )
-                ).scalars().all()
-                for m in approval_msgs:
-                    m.approval_status = "approved"
-
-        suggestion.task_id = task.id
         suggestion.status = "accepted"
-
+        if task_id:
+            suggestion.task_id = task_id
     elif action == "reject_task":
         suggestion.status = "dismissed"
-
     else:
         raise ValueError(f"Unknown action: {action}")
 
@@ -225,7 +170,7 @@ def act_on_suggestion(
     suggestion.updated_at = now
     sess.flush()
 
-    return suggestion, task
+    return suggestion
 
 
 def get_suggestions(

@@ -14,7 +14,7 @@ import { toast } from 'sonner';
 import { AgentTaskProposal, AgentProposedTask } from './AgentTaskProposal';
 import { AgentActionConfirm, AgentProposedAction } from './AgentActionConfirm';
 import { SuggestionOptions } from './SuggestionOptions';
-import { graphqlQuery, TASK_QUERY, ADD_TASK_MESSAGE_MUTATION, ADD_EXTERNAL_TASK_MESSAGE_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
+import { graphqlQuery, TASK_QUERY, SEND_MESSAGE_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
 import { apiMessagesToChatThread } from '@/hooks/useApiData';
 
 function authHeaders() {
@@ -60,9 +60,11 @@ export function ChatPanel() {
     setDismissing(true);
     try {
       await graphqlQuery<unknown>(`mutation { updateTaskStatus(uid: "${taskId}", status: "dismissed") { uid } }`);
-      await graphqlQuery(ADD_TASK_MESSAGE_MUTATION, {
-        input: { taskId, body: 'Task dismissed — this item will not be re-created by automations.', messageType: 'internal', senderName: 'RentMate', isAi: true },
-      });
+      if (activeTask?.aiConversationId) {
+        await graphqlQuery(SEND_MESSAGE_MUTATION, {
+          input: { conversationId: activeTask.aiConversationId, body: 'Task dismissed — this item will not be re-created by automations.', messageType: 'internal', senderName: 'RentMate', isAi: true },
+        });
+      }
       addChatMessage({ taskId }, { id: `dismiss-${Date.now()}`, role: 'assistant', content: 'Task dismissed — this item will not be re-created by automations.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' });
       updateTask(taskId, { status: 'cancelled' });
     } finally {
@@ -550,9 +552,11 @@ export function ChatPanel() {
         messageType: 'context',
       };
       addChatMessage({ taskId }, contextMsg);
-      await graphqlQuery(ADD_TASK_MESSAGE_MUTATION, {
-        input: { taskId, body: msgContent, messageType: 'context', senderName: 'You', isAi: false },
-      });
+      if (activeTask?.aiConversationId) {
+        await graphqlQuery(SEND_MESSAGE_MUTATION, {
+          input: { conversationId: activeTask.aiConversationId, body: msgContent, messageType: 'context', senderName: 'You', isAi: false },
+        });
+      }
     } catch {
       removeDocument(tempId);
       toast.error('Failed to upload file. Please try again.');
@@ -807,23 +811,6 @@ export function ChatPanel() {
                     <ChatMessageBubble
                       key={item.msg.id}
                       message={item.msg}
-                      onApprovalAction={async (messageId, action, editedBody) => {
-                        const taskId = chatPanel.taskId;
-                        if (!taskId) return;
-
-                        if (action === 'approve_draft') {
-                          const found = messages.find(m => m.id === messageId);
-                          const body = editedBody || found?.draftReply;
-                          if (body) {
-                            await graphqlQuery(ADD_EXTERNAL_TASK_MESSAGE_MUTATION, {
-                              input: { taskId, body },
-                            });
-                          }
-                          updateTaskMessage(taskId, messageId, { approvalStatus: 'approved' });
-                        } else if (action === 'reject_task') {
-                          updateTaskMessage(taskId, messageId, { approvalStatus: 'rejected' });
-                        }
-                      }}
                     />
                   )
                 )}
@@ -892,8 +879,8 @@ export function ChatPanel() {
                   onClick={async () => {
                     const taskId = chatPanel.taskId!;
                     await graphqlQuery<unknown>(`mutation { updateTaskStatus(uid: "${taskId}", status: "active") { uid } }`);
-                    await graphqlQuery(ADD_TASK_MESSAGE_MUTATION, {
-                      input: { taskId, body: 'Task re-opened.', messageType: 'internal', senderName: 'RentMate', isAi: true },
+                    if (activeTask?.aiConversationId) await graphqlQuery(SEND_MESSAGE_MUTATION, {
+                      input: { conversationId: activeTask.aiConversationId, body: 'Task re-opened.', messageType: 'internal', senderName: 'RentMate', isAi: true },
                     });
                     updateTask(taskId, { status: 'active' });
                     addChatMessage({ taskId }, { id: `msg-${Date.now()}`, role: 'assistant', content: 'Task re-opened.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' });
@@ -987,8 +974,8 @@ export function ChatPanel() {
                       };
                       setParticipantMessages(prev => [...prev, msg]);
                       try {
-                        await graphqlQuery(ADD_EXTERNAL_TASK_MESSAGE_MUTATION, {
-                          input: { taskId, body: content },
+                        await graphqlQuery(SEND_MESSAGE_MUTATION, {
+                          input: { conversationId: activeTask!.externalConversationId!, body: content },
                         });
                       } catch {
                         toast.error('Failed to send message');
@@ -1037,13 +1024,15 @@ export function ChatPanel() {
                   <ChatMessageBubble
                     key={item.msg.id}
                     message={item.msg}
-                    onApprove={(messageId) => {
-                      const found = messages.find(m => m.id === messageId);
-                      if (found?.draftReply) {
-                        chatInputRef.current?.insertText(found.draftReply, messageId);
-                      }
-                    }}
-                    onReject={() => {}}
+                    onApprovalAction={activeSuggestion ? async (_messageId, action, editedBody) => {
+                      const { graphqlQuery: gql, ACT_ON_SUGGESTION_MUTATION } = await import('@/data/api');
+                      const result = await gql<{ actOnSuggestion: { uid: string; status: string } }>(
+                        ACT_ON_SUGGESTION_MUTATION,
+                        { uid: activeSuggestion.id, action, editedBody: editedBody ?? null },
+                      );
+                      updateSuggestionStatus(activeSuggestion.id, result.actOnSuggestion.status as 'accepted' | 'dismissed');
+                      closeChat();
+                    } : undefined}
                   />
                 )
               )}

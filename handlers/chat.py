@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from db.enums import TaskSource
 from db.lib import get_conversation_with_messages, record_sms_from_dialpad, route_inbound_to_tenant_chat
 from db.models import Conversation, Message, MessageType, ParticipantType, Task
 from handlers.deps import get_db, require_user
@@ -369,7 +370,7 @@ class SpawnTaskRequest(BaseModel):
     urgency: Optional[str] = None
     priority: Optional[str] = None
     task_mode: str = "autonomous"
-    source: str = "manual"
+    source: str = TaskSource.MANUAL
 
 
 @router.post("/chat/task/spawn")

@@ -3,6 +3,10 @@ import strawberry
 import typing
 from datetime import date as _date, datetime as _datetime
 from db.models import MessageType
+from db.enums import (  # noqa: F401 — re-exported
+    TaskCategory, Urgency, TaskSource,
+    AutomationSource, AgentSource, SuggestionSource, SuggestionOption,
+)
 
 
 def _utc_iso(dt: _datetime | None) -> str:
@@ -88,8 +92,8 @@ class AddDocumentTagInput:
     tenant_id: typing.Optional[str] = None
 
 @strawberry.input
-class AddTaskMessageInput:
-    task_id: str
+class SendMessageInput:
+    conversation_id: str
     body: str
     message_type: str = MessageType.MESSAGE
     sender_name: str = "You"
@@ -318,7 +322,7 @@ class LeaseType:
 
 
 @strawberry.type
-class TaskChatMessageType:
+class ChatMessageType:
     uid: str
     body: typing.Optional[str] = None
     message_type: typing.Optional[str] = None
@@ -332,7 +336,7 @@ class TaskChatMessageType:
     sent_at: str = ""
 
     @classmethod
-    def from_sql(cls, msg: typing.Any) -> "TaskChatMessageType":
+    def from_sql(cls, msg: typing.Any) -> "ChatMessageType":
         raw_st = getattr(msg, "sender_type", None)
         st_value = raw_st.value if hasattr(raw_st, "value") else str(raw_st) if raw_st else None
         return cls(
@@ -366,11 +370,12 @@ class TaskType:
     property_id: typing.Optional[str] = None
     unit_id: typing.Optional[str] = None
     created_at: str = ""
-    messages: typing.List[TaskChatMessageType] = strawberry.field(default_factory=list)
+    messages: typing.List[ChatMessageType] = strawberry.field(default_factory=list)
     tenant_name: typing.Optional[str] = None
     unit_label: typing.Optional[str] = None
     ai_triage_suggestion: typing.Optional[str] = None
     vendor_assigned: typing.Optional[str] = None
+    ai_conversation_id: typing.Optional[str] = None
     parent_conversation_id: typing.Optional[str] = None
     ancestor_ids: typing.Optional[typing.List[str]] = None
     require_vendor_type: typing.Optional[str] = None
@@ -387,7 +392,7 @@ class TaskType:
         all_msgs = list(getattr(ai_convo, "messages", [])) if ai_convo else []
         all_msgs.sort(key=lambda m: m.sent_at)
 
-        messages = [TaskChatMessageType.from_sql(m) for m in all_msgs]
+        messages = [ChatMessageType.from_sql(m) for m in all_msgs]
 
         tenant_name = None
         if getattr(t, "lease", None) and t.lease.tenant:
@@ -429,6 +434,7 @@ class TaskType:
             unit_label=unit_label,
             ai_triage_suggestion=ai_triage_suggestion,
             vendor_assigned=vendor_assigned,
+            ai_conversation_id=str(t.ai_conversation_id) if t.ai_conversation_id else None,
             parent_conversation_id=str(t.parent_conversation_id) if t.parent_conversation_id else None,
             ancestor_ids=[],
             require_vendor_type=extra.get('require_vendor_type'),
@@ -454,7 +460,7 @@ class SuggestionType:
     property_id: typing.Optional[str] = None
     unit_id: typing.Optional[str] = None
     task_id: typing.Optional[str] = None
-    messages: typing.List[TaskChatMessageType] = strawberry.field(default_factory=list)
+    messages: typing.List[ChatMessageType] = strawberry.field(default_factory=list)
     created_at: str = ""
 
     @classmethod
@@ -462,7 +468,7 @@ class SuggestionType:
         ai_convo = getattr(s, "ai_conversation", None)
         all_msgs = list(getattr(ai_convo, "messages", [])) if ai_convo else []
         all_msgs.sort(key=lambda m: m.sent_at)
-        messages = [TaskChatMessageType.from_sql(m) for m in all_msgs]
+        messages = [ChatMessageType.from_sql(m) for m in all_msgs]
 
         return cls(
             uid=str(s.id),

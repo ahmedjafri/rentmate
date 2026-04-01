@@ -18,8 +18,8 @@ from db.lib import spawn_task_from_conversation as _spawn_task
 from .auth_mutations import Mutation as AuthMutation
 from .types import (
     UserType, HouseType, TenantType, LeaseType, TaskType, SuggestionType,
-    TaskChatMessageType, DocumentTagType, ConversationSummaryType, SpawnTaskInput,
-    CreateTaskInput, AddDocumentTagInput, AddTaskMessageInput, UpdateTaskInput,
+    ChatMessageType, DocumentTagType, ConversationSummaryType, SpawnTaskInput,
+    CreateTaskInput, AddDocumentTagInput, SendMessageInput, UpdateTaskInput,
     CreatePropertyInput, UpdatePropertyInput, CreateTenantWithLeaseInput, AddLeaseForTenantInput,
     VendorType, CreateVendorInput, UpdateVendorInput, VENDOR_TYPES,
 )
@@ -100,9 +100,9 @@ class Query:
         return [LeaseType.from_sql(l) for l in fetch_leases(_session(info))]
 
     @strawberry.field(description="Returns messages for a conversation by uid")
-    def conversation_messages(self, info, uid: str) -> typing.List[TaskChatMessageType]:
+    def conversation_messages(self, info, uid: str) -> typing.List[ChatMessageType]:
         _current_user(info)
-        return [TaskChatMessageType.from_sql(m) for m in fetch_messages(_session(info), uid)]
+        return [ChatMessageType.from_sql(m) for m in fetch_messages(_session(info), uid)]
 
     @strawberry.field(description="Returns all vendors")
     def vendors(self, info) -> typing.List[VendorType]:
@@ -190,23 +190,34 @@ class Mutation(AuthMutation):
         _current_user(info)
         return DocumentTagType.from_sql(DocumentService.add_document_tag(_session(info), input))
 
-    @strawberry.mutation(description="Add a manager message to a task's AI chat thread")
-    def add_task_message(self, info, input: AddTaskMessageInput) -> TaskChatMessageType:
+    @strawberry.mutation(description="Add a message to any conversation")
+    def send_message(self, info, input: SendMessageInput) -> ChatMessageType:
         _current_user(info)
         db = _session(info)
-        msg = TaskService.add_message_to_ai_chat(db, input)
+        msg = chat_service.send_message(
+            db,
+            conversation_id=input.conversation_id,
+            body=input.body,
+            message_type=input.message_type,
+            sender_name=input.sender_name,
+            is_ai=input.is_ai,
+            draft_reply=input.draft_reply,
+        )
+        # Bump last_message_at on the linked task if any
+        from sqlalchemy import select as _sel, or_
+        from db.models import Task
+        task = db.execute(
+            _sel(Task).where(or_(
+                Task.ai_conversation_id == input.conversation_id,
+                Task.external_conversation_id == input.conversation_id,
+            ))
+        ).scalar_one_or_none()
+        if task:
+            from datetime import UTC, datetime
+            task.last_message_at = datetime.now(UTC)
         db.commit()
         db.refresh(msg)
-        return TaskChatMessageType.from_sql(msg)
-
-    @strawberry.mutation(description="Add a message to a task's external (vendor/tenant) chat thread")
-    def add_external_task_message(self, info, input: AddTaskMessageInput) -> TaskChatMessageType:
-        _current_user(info)
-        db = _session(info)
-        msg = TaskService.add_message_to_external_chat(db, input)
-        db.commit()
-        db.refresh(msg)
-        return TaskChatMessageType.from_sql(msg)
+        return ChatMessageType.from_sql(msg)
 
     @strawberry.mutation(description="Permanently delete a task and all its messages")
     def delete_task(self, info, uid: str) -> bool:
@@ -311,7 +322,9 @@ class Mutation(AuthMutation):
     ) -> SuggestionType:
         _current_user(info)
         db = _session(info)
-        suggestion, _task = suggestion_service.act_on_suggestion(db, uid, action, edited_body=edited_body)
+        from handlers.task_suggestions import SuggestionExecutor
+        executor = SuggestionExecutor.for_suggestion(db, uid)
+        suggestion, _task = executor.execute(uid, action, edited_body=edited_body)
         db.commit()
         return SuggestionType.from_sql(suggestion)
 

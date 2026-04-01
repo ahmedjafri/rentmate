@@ -2,6 +2,7 @@
 
 Keeps the handler layer from reaching into settings internals directly.
 """
+from db.enums import TaskCategory, SuggestionOption
 
 _AUTONOMY_MODES: dict[str, tuple[str, str]] = {
     "manual":     ("manual",           "suggested"),
@@ -11,7 +12,7 @@ _AUTONOMY_MODES: dict[str, tuple[str, str]] = {
 _DEFAULT_MODE = _AUTONOMY_MODES["suggest"]
 
 
-def get_autonomy_for_category(category: str | None) -> str:
+def get_autonomy_for_category(category: TaskCategory | str | None) -> str:
     """Return the autonomy level ('manual', 'suggest', or 'autonomous') for a category."""
     from handlers.settings import get_autonomy_settings
     settings = get_autonomy_settings()
@@ -25,21 +26,21 @@ def get_task_mode_for_category(category: str | None) -> tuple[str, str]:
 
 
 _DEFAULT_OPTIONS = [
-    {"key": "accept", "label": "Accept", "action": "accept_task", "variant": "default"},
-    {"key": "reject", "label": "Reject", "action": "reject_task", "variant": "ghost"},
+    SuggestionOption(key="accept", label="Accept", action="accept_task", variant="default"),
+    SuggestionOption(key="reject", label="Reject", action="reject_task", variant="ghost"),
 ]
 
 _VENDOR_DRAFT_OPTIONS = [
-    {"key": "send", "label": "Send Message", "action": "approve_draft", "variant": "default"},
-    {"key": "edit", "label": "Edit Message", "action": "edit_draft", "variant": "outline"},
-    {"key": "skip", "label": "Do not send", "action": "reject_task", "variant": "ghost"},
+    SuggestionOption(key="send", label="Send Message", action="approve_draft", variant="default"),
+    SuggestionOption(key="edit", label="Edit Message", action="edit_draft", variant="outline"),
+    SuggestionOption(key="skip", label="Do not send", action="reject_task", variant="ghost"),
 ]
 
 
 def build_suggestion_options(
     autonomy: str,
     has_vendor_draft: bool = False,
-) -> list[dict]:
+) -> list[SuggestionOption]:
     """Return the action options for a suggested task based on context."""
     if has_vendor_draft and autonomy == "suggest":
         return list(_VENDOR_DRAFT_OPTIONS)

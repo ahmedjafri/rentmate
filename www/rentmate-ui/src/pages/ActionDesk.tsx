@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Lightbulb, CheckCircle2, XCircle, Loader2, MessageCircle, Send, X } from 'lucide-react';
+import { formatMessageTime } from '@/components/chat/ChatMessage';
 import { PageLoader } from '@/components/ui/page-loader';
 
 import { graphqlQuery, ACT_ON_SUGGESTION_MUTATION } from '@/data/api';
@@ -52,15 +53,18 @@ function SuggestionCard({ suggestion, onAction }: {
 
   return (
     <Card className="px-4 py-3 rounded-xl hover:shadow-md transition-shadow space-y-2">
-      <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-        <Badge variant="secondary" className={cn('text-[10px] rounded-lg shrink-0', categoryColors[suggestion.category])}>
-          {categoryLabels[suggestion.category] ?? suggestion.category}
-        </Badge>
-        {suggestion.urgency && (
-          <span className={cn('text-[10px] font-medium', urgencyColors[suggestion.urgency])}>
-            {suggestion.urgency}
-          </span>
-        )}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+          <Badge variant="secondary" className={cn('text-[10px] rounded-lg shrink-0', categoryColors[suggestion.category])}>
+            {categoryLabels[suggestion.category] ?? suggestion.category}
+          </Badge>
+          {suggestion.urgency && (
+            <span className={cn('text-[10px] font-medium', urgencyColors[suggestion.urgency])}>
+              {suggestion.urgency}
+            </span>
+          )}
+        </div>
+        <span className="text-[10px] text-muted-foreground shrink-0">{formatMessageTime(suggestion.createdAt instanceof Date ? suggestion.createdAt : new Date(suggestion.createdAt))}</span>
       </div>
 
       <div className="flex items-start justify-between gap-3">

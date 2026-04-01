@@ -17,6 +17,7 @@ from pathlib import Path
 _root = Path(__file__).parent.parent
 sys.path.insert(0, str(_root))
 
+from db.enums import TaskCategory, Urgency
 
 
 def _queue_action(action: dict):
@@ -36,9 +37,9 @@ def main():
     p_propose = sub.add_parser("propose_task")
     p_propose.add_argument("--title", required=True)
     p_propose.add_argument("--category", required=True,
-                           choices=["maintenance", "lease", "leasing", "compliance", "other"])
-    p_propose.add_argument("--urgency", default="medium",
-                           choices=["low", "medium", "high", "critical"])
+                           choices=[c.value for c in TaskCategory])
+    p_propose.add_argument("--urgency", default=Urgency.MEDIUM.value,
+                           choices=[u.value for u in Urgency])
     p_propose.add_argument("--description", default="")
     p_propose.add_argument("--property-id", default=None)
     p_propose.add_argument("--task-id", default=None, help="ID of the task originating this proposal")

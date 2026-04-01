@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from db.enums import TaskCategory
 from handlers.deps import require_user
 
 router = APIRouter()
@@ -14,12 +15,7 @@ _ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 _DATA_DIR = Path(os.environ.get("RENTMATE_DATA_DIR", str(Path(__file__).parent.parent / "data")))
 _SETTINGS_FILE = _DATA_DIR / "settings.json"
 
-_DEFAULT_AUTONOMY = {
-    "rent": "suggest",
-    "maintenance": "suggest",
-    "leasing": "suggest",
-    "compliance": "suggest",
-}
+_DEFAULT_AUTONOMY = {c.value: "suggest" for c in TaskCategory}
 
 
 def read_env_file() -> dict:

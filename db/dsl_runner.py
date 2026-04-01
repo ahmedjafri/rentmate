@@ -14,6 +14,8 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from db.enums import TaskCategory, TaskSource, Urgency
+
 import yaml
 from sqlalchemy.orm import Session
 
@@ -263,7 +265,7 @@ def _eval_filter(record: Any, f: Dict[str, Any], ctx: Dict[str, Any]) -> bool:
 
 _COND_RE  = re.compile(r"(\w[\w.]*)\s*(<=|>=|<|>|==|!=)\s*(.+)")
 _OP_MAP   = {"<=": "lte", ">=": "gte", "<": "lt", ">": "gt", "==": "equals", "!=": "not_equals"}
-_LEVELS   = {"low", "medium", "high", "critical"}
+_LEVELS   = {u.value for u in Urgency}
 
 
 def _eval_urgency(urgency: Any, ctx: Dict[str, Any]) -> str:
@@ -416,7 +418,7 @@ def _task_exists(db: Session, subject: str,
     q = (
         db.query(Task)
         .filter(
-            Task.source == "ai_suggestion",
+            Task.source == TaskSource.AI_SUGGESTION,
             Task.task_status.in_(_OPEN_STATUSES),
             Task.title == subject,
         )
@@ -468,7 +470,7 @@ def _do_create_task(db: Session, subject: str, body: str, category: str,
         title=subject,
         task_status="suggested",
         task_mode="waiting_approval",
-        source="ai_suggestion",
+        source=TaskSource.AI_SUGGESTION,
         category=category,
         urgency=urgency,
         priority="routine",

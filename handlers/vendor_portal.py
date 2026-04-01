@@ -1,18 +1,15 @@
 """Vendor-facing REST endpoints. All require a vendor JWT."""
-import logging
 from datetime import UTC, datetime
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from db.models import Conversation, ConversationParticipant, ExternalContact, Message, MessageType, ParticipantType, Task
 from gql.services.vendor_service import VendorService
 from handlers.deps import get_db
 
-_logger = logging.getLogger("rentmate.vendor_portal")
 router = APIRouter(prefix="/api/vendor")
 
 
@@ -25,42 +22,6 @@ def _require_vendor(request: Request) -> dict:
         return VendorService.validate_vendor_token(token)
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
-
-
-def _generate_reply_suggestion(db: Session, task: Task, vendor_name: str, vendor_message: str) -> None:
-    """If autonomy is 'suggest', generate a draft reply and add it as an APPROVAL message."""
-    try:
-        from gql.services import settings_service
-        autonomy = settings_service.get_autonomy_for_category(task.category)
-        if autonomy != "suggest":
-            return
-        if not task.ai_conversation_id:
-            return
-
-        from llm.suggest import generate_task_suggestion
-        draft = generate_task_suggestion(
-            subject=task.title,
-            context_body=f"Vendor {vendor_name} replied: \"{vendor_message}\"",
-            category=task.category or "maintenance",
-        )
-        if not draft:
-            return
-
-        now = datetime.now(UTC)
-        db.add(Message(
-            id=str(uuid.uuid4()),
-            conversation_id=task.ai_conversation_id,
-            sender_type=ParticipantType.ACCOUNT_USER,
-            body=f"{vendor_name} replied. Here's a suggested response:",
-            message_type=MessageType.APPROVAL,
-            sender_name="RentMate",
-            is_ai=True,
-            draft_reply=draft,
-            sent_at=now,
-        ))
-        db.commit()
-    except Exception as exc:
-        _logger.warning("Failed to generate reply suggestion: %s", exc)
 
 
 @router.get("/me")
@@ -217,9 +178,6 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
     db.add(msg)
     task.last_message_at = now
     db.commit()
-
-    # Generate a suggested reply in the AI conversation when autonomy is suggest
-    _generate_reply_suggestion(db, task, vendor.name, body.body.strip())
 
     return {
         "id": str(msg.id),

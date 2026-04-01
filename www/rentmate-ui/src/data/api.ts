@@ -131,6 +131,7 @@ const TASK_FIELDS = `
   requireVendorType
   assignedVendorId
   assignedVendorName
+  aiConversationId
   parentConversationId
   externalConversationId
   suggestionOptions
@@ -207,9 +208,9 @@ export const ACT_ON_SUGGESTION_MUTATION = `
   }
 `;
 
-export const ADD_TASK_MESSAGE_MUTATION = `
-  mutation AddTaskMessage($input: AddTaskMessageInput!) {
-    addTaskMessage(input: $input) {
+export const SEND_MESSAGE_MUTATION = `
+  mutation SendMessage($input: SendMessageInput!) {
+    sendMessage(input: $input) {
       uid
       body
       messageType
@@ -217,15 +218,6 @@ export const ADD_TASK_MESSAGE_MUTATION = `
       isAi
       isSystem
       sentAt
-    }
-  }
-`;
-
-export const ADD_EXTERNAL_TASK_MESSAGE_MUTATION = `
-  mutation AddExternalTaskMessage($input: AddTaskMessageInput!) {
-    addExternalTaskMessage(input: $input) {
-      uid
-      body
     }
   }
 `;
@@ -322,6 +314,7 @@ export const CREATE_TASK_MUTATION = `
       source
       propertyId
       unitId
+      aiConversationId
       createdAt
     }
   }

@@ -5,6 +5,8 @@ Returns the suggested message text, or None if generation fails or is unavailabl
 import logging
 import os
 
+from db.enums import TaskCategory
+
 logger = logging.getLogger("rentmate.suggest")
 
 
@@ -18,10 +20,10 @@ _SYSTEM = (
 )
 
 _CATEGORY_HINTS = {
-    "maintenance": "This is a maintenance task. Draft a message to a vendor or contractor to schedule the work.",
-    "rent": "This is a rent/payment task. Draft a polite but firm message to the tenant about the outstanding payment.",
-    "leasing": "This is a leasing task. Draft a message to the tenant about lease renewal or move-out logistics.",
-    "compliance": "This is a compliance task. Draft a message to the relevant party (tenant or internally) requesting the needed action.",
+    TaskCategory.MAINTENANCE: "This is a maintenance task. Draft a message to a vendor or contractor to schedule the work.",
+    TaskCategory.RENT: "This is a rent/payment task. Draft a polite but firm message to the tenant about the outstanding payment.",
+    TaskCategory.LEASING: "This is a leasing task. Draft a message to the tenant about lease renewal or move-out logistics.",
+    TaskCategory.COMPLIANCE: "This is a compliance task. Draft a message to the relevant party (tenant or internally) requesting the needed action.",
 }
 
 

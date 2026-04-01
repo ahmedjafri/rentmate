@@ -14,6 +14,11 @@ from .messaging import (
 from .documents import Document, DocumentTask, DocumentTag
 from .automation import AutomationRevision
 from .suggestions import Suggestion
+from db.enums import (
+    TaskCategory, Urgency, TaskSource,
+    AutomationSource, AgentSource, SuggestionSource,
+    SuggestionOption,
+)
 
 __all__ = [
     "Base",
@@ -35,4 +40,11 @@ __all__ = [
     "DocumentTask",
     "DocumentTag",
     "AutomationRevision",
+    "TaskCategory",
+    "Urgency",
+    "TaskSource",
+    "AutomationSource",
+    "AgentSource",
+    "SuggestionSource",
+    "SuggestionOption",
 ]

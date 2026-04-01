@@ -31,6 +31,8 @@ export interface ActionDeskTask {
   urgency: SuggestionUrgency;
   chatThread: ChatMessage[];
   confidential?: boolean;
+  aiConversationId?: string | null;
+  externalConversationId?: string | null;
   parentConversationId?: string | null;
   ancestorIds?: string[];
   requireVendorType?: string;

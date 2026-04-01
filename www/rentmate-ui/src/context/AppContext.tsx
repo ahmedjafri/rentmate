@@ -7,7 +7,7 @@ import {
   SuggestionStatus, ActionDeskTask as ADT,
 } from '@/data/mockData';
 import { useApiData } from '@/hooks/useApiData';
-import { graphqlQuery, ADD_TASK_MESSAGE_MUTATION, UPDATE_TASK_MUTATION } from '@/data/api';
+import { graphqlQuery, SEND_MESSAGE_MUTATION, UPDATE_TASK_MUTATION } from '@/data/api';
 import { toast } from 'sonner';
 
 /** UUID v4 that works in both secure and non-secure contexts (HTTP on LAN IPs). */
@@ -207,17 +207,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addChatMessage = useCallback((context: { suggestionId?: string | null; taskId?: string | null; sessionId?: string | null }, message: ChatMessage) => {
     // Persist manager messages on tasks to backend (fire-and-forget)
     if (context.taskId && message.role === 'user') {
-      graphqlQuery(ADD_TASK_MESSAGE_MUTATION, {
-        input: {
-          taskId: context.taskId,
-          body: message.content,
-          // 'message' type goes to the AI thread — store as 'thread' so the Chat tab
-          // (which shows participant messages) doesn't surface these.
-          messageType: message.messageType === 'message' ? 'thread' : (message.messageType ?? 'thread'),
-          senderName: message.senderName ?? 'You',
-          isAi: false,
-        }
-      }).catch((err: Error) => console.warn('Failed to persist task message:', err));
+      const task = actionDeskTasks.find(t => t.id === context.taskId);
+      if (task?.aiConversationId) {
+        graphqlQuery(SEND_MESSAGE_MUTATION, {
+          input: {
+            conversationId: task.aiConversationId,
+            body: message.content,
+            // 'message' type goes to the AI thread — store as 'thread' so the Chat tab
+            // (which shows participant messages) doesn't surface these.
+            messageType: message.messageType === 'message' ? 'thread' : (message.messageType ?? 'thread'),
+            senderName: message.senderName ?? 'You',
+            isAi: false,
+          }
+        }).catch((err: Error) => console.warn('Failed to persist task message:', err));
+      }
     }
 
     if (context.taskId) {
@@ -250,7 +253,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }];
       });
     }
-  }, []);
+  }, [actionDeskTasks]);
 
   const updateTaskMessage = useCallback((taskId: string, messageId: string, updates: Partial<ChatMessage>) => {
     setActionDeskTasks(prev => prev.map(t =>

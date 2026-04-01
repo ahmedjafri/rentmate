@@ -3,16 +3,34 @@ import hashlib
 import json
 import logging
 import os
+import re
 from collections import deque
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
+import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
-from handlers.deps import SessionLocal, extract_json, get_db, require_user
+from db.audit import run_data_audit
+from db.enums import TaskCategory, TaskSource, AutomationSource, AgentSource
+from db.models import (
+    AutomationRevision, Conversation, ConversationType, ExternalContact,
+    Message, MessageType, ParticipantType, Suggestion, Task,
+)
+from gql.services import chat_service, settings_service, suggestion_service
+from gql.services.task_service import TaskService
+from gql.types import CreateTaskInput
 from handlers.default_automations import _DEFAULT_AUTOMATION_CONFIG, _CHECK_META
+from handlers.deps import SessionLocal, extract_json, get_db, require_user
+from handlers.settings import get_autonomy_settings
+from handlers.task_suggestions import (
+    CreateTaskSuggestionExecutor, ReplyInTaskSuggestionExecutor, SuggestionExecutor,
+)
 
 router = APIRouter()
 _logger = logging.getLogger("rentmate.audit")
@@ -57,7 +75,6 @@ def _merge_automation_config(stored: Dict[str, Any]) -> Dict[str, Any]:
 
 def _load_automation_config() -> Dict[str, Any]:
     """Return the latest revision's config, or defaults if no revisions exist."""
-    from db.models import AutomationRevision
     db = SessionLocal.session_factory()
     try:
         row = db.query(AutomationRevision).order_by(AutomationRevision.created_at.desc()).first()
@@ -77,12 +94,10 @@ def _save_automation_config(
 ) -> str:
     """Persist a config. If versioned=False, update the latest revision in-place
     (no new history entry). Returns the revision id."""
-    from db.models import AutomationRevision
     db = SessionLocal.session_factory()
     try:
         latest = db.query(AutomationRevision).order_by(AutomationRevision.created_at.desc()).first()
         if not versioned and latest:
-            from sqlalchemy.orm.attributes import flag_modified
             latest.config = cfg
             flag_modified(latest, "config")
             db.commit()
@@ -105,7 +120,6 @@ def _save_automation_config(
 
 
 def _get_automation_history() -> List[Dict[str, Any]]:
-    from db.models import AutomationRevision
     db = SessionLocal.session_factory()
     try:
         rows = db.query(AutomationRevision).order_by(AutomationRevision.created_at.desc()).all()
@@ -120,7 +134,6 @@ def _get_automation_history() -> List[Dict[str, Any]]:
 
 def _revert_automation_config(sha: str) -> Dict[str, Any]:
     """Create a new revision with the content of an older one (non-destructive)."""
-    from db.models import AutomationRevision
     db = SessionLocal.session_factory()
     try:
         target = db.query(AutomationRevision).filter_by(id=sha).one_or_none()
@@ -137,8 +150,7 @@ def _parse_require_vendor_type(script: Optional[str]) -> Optional[str]:
     if not script:
         return None
     try:
-        import yaml as _yaml
-        parsed = _yaml.safe_load(script) or {}
+        parsed = yaml.safe_load(script) or {}
         for action in parsed.get("actions", []):
             if action.get("type") == "create_task" and action.get("require_vendor_type"):
                 return str(action["require_vendor_type"])
@@ -182,7 +194,6 @@ def _build_automations_response() -> Dict[str, Any]:
 def _add_custom_automation(
     label: str, description: str, interval_hours: int, script: Optional[str] = None
 ) -> None:
-    import re
     base_key = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_") or "automation"
     cfg = _load_automation_config()
     custom_meta = dict(cfg.get("custom_meta", {}))
@@ -245,7 +256,6 @@ def _update_custom_script(key: str, script: str) -> None:
     Syncs schedule.interval / schedule.interval_hours to checks[key].interval_hours
     so the scheduler picks it up without a separate save.
     """
-    import yaml as _yaml
     cfg = _load_automation_config()
     custom_meta = dict(cfg.get("custom_meta", {}))
     if key not in custom_meta:
@@ -253,7 +263,7 @@ def _update_custom_script(key: str, script: str) -> None:
     custom_meta[key] = {**custom_meta[key], "script": script}
     checks = dict(cfg.get("checks", {}))
     try:
-        parsed = _yaml.safe_load(script) or {}
+        parsed = yaml.safe_load(script) or {}
         interval = _resolve_interval_hours(parsed.get("schedule", {}))
         if interval:
             checks[key] = {**checks.get(key, {}), "interval_hours": interval}
@@ -279,7 +289,6 @@ def _delete_custom_automation(key: str) -> None:
 def seed_automations() -> None:
     """Seed the default automation config if no revisions exist yet."""
     try:
-        from db.models import AutomationRevision
         db = SessionLocal.session_factory()
         try:
             exists = db.query(AutomationRevision).first() is not None
@@ -295,8 +304,6 @@ def seed_automations() -> None:
 
 async def audit_loop():
     """Background loop: run each enabled check on its own interval (polls every 60 s)."""
-    from db.audit import run_data_audit
-    from handlers.settings import get_autonomy_settings
     _POLL_SECONDS = 60
     last_run: Dict[str, float] = {}
 
@@ -330,6 +337,83 @@ async def audit_loop():
             last_run[check_key] = now
 
         await asyncio.sleep(_POLL_SECONDS)
+
+
+def _scan_for_reply_suggestions(db) -> int:
+    """Find tasks with unread external messages and create Suggestions for them."""
+    PT = ParticipantType
+
+    created = 0
+    # Find active tasks with external conversations
+    tasks = db.execute(
+        sa_select(Task).where(
+            Task.task_status.in_(["active", "paused"]),
+            Task.external_conversation_id.isnot(None),
+        )
+    ).scalars().all()
+
+    for task in tasks:
+        # Check autonomy
+        autonomy = settings_service.get_autonomy_for_category(task.category)
+        if autonomy != "suggest":
+            continue
+
+        # Get the last message in the external conversation
+        last_msg = db.execute(
+            sa_select(Message)
+            .where(Message.conversation_id == task.external_conversation_id)
+            .order_by(Message.sent_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if not last_msg:
+            continue
+        # Skip if last message is from the PM or AI (already replied)
+        if last_msg.sender_type == PT.ACCOUNT_USER:
+            continue
+
+        # Skip if a pending suggestion already exists for this task
+        existing = db.execute(
+            sa_select(Suggestion).where(
+                Suggestion.task_id == task.id,
+                Suggestion.status == "pending",
+            )
+        ).scalar_one_or_none()
+        if existing:
+            continue
+
+        # Get vendor name from AI conversation extra
+        vendor_name = "Vendor"
+        if task.ai_conversation_id:
+            ai_convo = db.get(Conversation, task.ai_conversation_id)
+            if ai_convo:
+                vendor_name = (ai_convo.extra or {}).get("assigned_vendor_name", "Vendor")
+
+        executor = ReplyInTaskSuggestionExecutor(
+            db, task=task, last_msg=last_msg,
+            vendor_name=vendor_name, autonomy=autonomy,
+        )
+        if executor.generate():
+            created += 1
+
+    return created
+
+
+async def reply_scanner_loop():
+    """Background loop: scan for unread external messages and create reply Suggestions."""
+    _POLL_SECONDS = 60
+    while True:
+        await asyncio.sleep(_POLL_SECONDS)
+        db = SessionLocal.session_factory()
+        try:
+            n = _scan_for_reply_suggestions(db)
+            if n:
+                db.commit()
+                _logger.info("Reply scanner: created %d suggestion(s)", n)
+        except Exception as exc:
+            db.rollback()
+            _logger.exception("Reply scanner error: %s", exc)
+        finally:
+            db.close()
 
 
 # ─── pydantic models ──────────────────────────────────────────────────────────
@@ -433,8 +517,6 @@ async def revert_automation(request: Request):
 @router.post("/automations/simulate")
 async def simulate_automations(request: Request):
     await require_user(request)
-    from db.audit import run_data_audit
-    from db.models import Task
 
     check_name: Optional[str] = None
     if request.headers.get("content-type", "").startswith("application/json"):
@@ -444,7 +526,6 @@ async def simulate_automations(request: Request):
         except Exception:
             pass
 
-    from handlers.settings import get_autonomy_settings
     autonomy_settings = get_autonomy_settings()
     cfg = {**_load_automation_config(), "autonomy": autonomy_settings}
     _logger.info("simulate: check_name=%r  custom_meta_keys=%r",
@@ -475,8 +556,7 @@ async def simulate_automations(request: Request):
                 ai_convo = t.ai_conversation
                 ctx_msg = None
                 if ai_convo:
-                    from db.models import MessageType as _MT
-                    ctx_msg = next((m for m in ai_convo.messages if m.message_type == _MT.CONTEXT), None)
+                    ctx_msg = next((m for m in ai_convo.messages if m.message_type == MessageType.CONTEXT), None)
                 vendor_name = None
                 vendor_id = None
                 try:
@@ -514,11 +594,6 @@ async def simulate_automations(request: Request):
 @router.post("/automations/simulate/create-suggestion")
 async def create_suggestion(body: CreateSimulatedTaskBody, request: Request):
     await require_user(request)
-    from sqlalchemy import select as sa_select
-    from db.models import Suggestion, Task, ExternalContact, MessageType
-    from gql.services import suggestion_service, settings_service
-    from llm.vendor_outreach import generate_vendor_outreach
-
     # Resolve autonomy level for this category
     autonomy = settings_service.get_autonomy_for_category(body.category)
 
@@ -555,7 +630,7 @@ async def create_suggestion(body: CreateSimulatedTaskBody, request: Request):
             raise HTTPException(status_code=409, detail="Suggestion already exists")
 
         existing_task = db.query(Task).filter(
-            Task.source.in_(["ai_suggestion", "automation"]),
+            Task.source.in_([TaskSource.AI_SUGGESTION, TaskSource.AUTOMATION]),
             Task.task_status.in_(["active", "paused"]),
             Task.title == body.subject,
         )
@@ -566,57 +641,20 @@ async def create_suggestion(body: CreateSimulatedTaskBody, request: Request):
         if existing_task.first():
             raise HTTPException(status_code=409, detail="Task already exists in action desk")
 
-        # Build action payload with vendor info for later execution
-        action_payload: dict = {}
-        if vendor_id:
-            action_payload["vendor_id"] = vendor_id
-            action_payload["vendor_name"] = vendor_name
-
-        # Generate vendor draft if in suggest mode
-        has_vendor_draft = False
-        if vendor_id and autonomy == "suggest":
-            try:
-                draft = generate_vendor_outreach(
-                    task_title=body.subject,
-                    task_body=body.body,
-                    category=body.category,
-                    vendor_name=vendor_name,
-                )
-                if draft:
-                    action_payload["draft_message"] = draft
-                    has_vendor_draft = True
-            except Exception:
-                pass
-
-        # Build suggestion options based on autonomy + context
-        options = settings_service.build_suggestion_options(
-            autonomy, has_vendor_draft=has_vendor_draft,
-        )
-
-        # Create the suggestion
-        suggestion = suggestion_service.create_suggestion(
+        executor = CreateTaskSuggestionExecutor(
             db,
             title=body.subject,
-            body=body.body,
+            ai_context=body.body,
             category=body.category,
             urgency=body.urgency,
-            source="automation",
-            automation_key=body.automation_key,
-            options=options,
-            action_payload=action_payload or None,
+            source=AutomationSource(automation_key=body.automation_key or ""),
+            autonomy=autonomy,
             property_id=body.property_id,
             unit_id=body.unit_id,
+            vendor_id=vendor_id,
+            vendor_name=vendor_name,
         )
-
-        # Add approval message with draft if available
-        if has_vendor_draft:
-            suggestion_service.add_message(
-                db,
-                suggestion.id,
-                body="Here's a suggested message you can send to the vendor:",
-                message_type=MessageType.APPROVAL,
-                draft_reply=action_payload["draft_message"],
-            )
+        suggestion = executor.generate()
 
         suggestion_id = suggestion.id
         db.commit()
@@ -637,12 +675,12 @@ class ActOnSuggestionBody(BaseModel):
 @router.post("/suggestions/{suggestion_id}/act")
 async def act_on_suggestion_endpoint(suggestion_id: str, body: ActOnSuggestionBody, request: Request):
     await require_user(request)
-    from gql.services import suggestion_service
 
     db = SessionLocal.session_factory()
     try:
-        suggestion, task = suggestion_service.act_on_suggestion(
-            db, suggestion_id, body.action, edited_body=body.edited_body,
+        executor = SuggestionExecutor.for_suggestion(db, suggestion_id)
+        suggestion, task = executor.execute(
+            suggestion_id, body.action, edited_body=body.edited_body,
         )
         db.commit()
         return {
@@ -662,11 +700,6 @@ async def act_on_suggestion_endpoint(suggestion_id: str, body: ActOnSuggestionBo
 async def create_task_directly(body: CreateSimulatedTaskBody, request: Request):
     """Create a Task directly from a simulation result (skipping the suggestion stage)."""
     await require_user(request)
-    from sqlalchemy import select as sa_select
-    from db.models import Task, Conversation, MessageType, ConversationType, ExternalContact
-    from gql.services.task_service import TaskService
-    from gql.services import chat_service, settings_service
-    from gql.types import CreateTaskInput, AddTaskMessageInput
 
     # Resolve vendor from automation config
     vendor_id = None
@@ -689,7 +722,7 @@ async def create_task_directly(body: CreateSimulatedTaskBody, request: Request):
 
         # Dedup
         existing = db.query(Task).filter(
-            Task.source.in_(["ai_suggestion", "automation"]),
+            Task.source.in_([TaskSource.AI_SUGGESTION, TaskSource.AUTOMATION]),
             Task.task_status.in_(["active", "paused"]),
             Task.title == body.subject,
         )
@@ -702,7 +735,7 @@ async def create_task_directly(body: CreateSimulatedTaskBody, request: Request):
 
         task = TaskService.create_task(db, CreateTaskInput(
             title=body.subject,
-            source="automation",
+            source=TaskSource.AUTOMATION,
             task_status="active",
             task_mode="manual",
             category=body.category,
@@ -726,13 +759,13 @@ async def create_task_directly(body: CreateSimulatedTaskBody, request: Request):
             task.external_conversation_id = ext_convo.id
             TaskService.assign_vendor_to_task(db, task.id, vendor_id)
 
-        TaskService.add_message_to_ai_chat(db, AddTaskMessageInput(
-            task_id=task.id,
+        chat_service.send_message(
+            db, task.ai_conversation_id,
             body=body.body,
             message_type=MessageType.CONTEXT,
             sender_name="RentMate",
             is_ai=True,
-        ))
+        )
 
         task_id = task.id
         db.commit()
@@ -961,9 +994,6 @@ Description: {description}\
 @router.post("/automations/generate-script")
 async def generate_script(body: GenerateScriptBody, request: Request):
     import litellm
-    import json as _json
-    import re as _re
-    from fastapi.responses import StreamingResponse as _SR
     await require_user(request)
 
     kwargs: Dict[str, Any] = dict(
@@ -990,7 +1020,7 @@ async def generate_script(body: GenerateScriptBody, request: Request):
                 reasoning = getattr(delta, "reasoning_content", None)
                 if reasoning:
                     has_native_reasoning = True
-                    yield f"data: {_json.dumps({'type': 'thinking', 'text': reasoning})}\n\n"
+                    yield f"data: {json.dumps({'type': 'thinking', 'text': reasoning})}\n\n"
                 content = getattr(delta, "content", None) or ""
                 if content:
                     raw_buf.append(content)
@@ -1000,11 +1030,11 @@ async def generate_script(body: GenerateScriptBody, request: Request):
             # Fallback: extract <thinking>…</thinking> from content for models
             # that don't expose reasoning_content but follow text instructions
             if not has_native_reasoning:
-                thinking_match = _re.search(r"<thinking>(.*?)</thinking>", raw, _re.DOTALL)
+                thinking_match = re.search(r"<thinking>(.*?)</thinking>", raw, re.DOTALL)
                 if thinking_match:
                     for line in thinking_match.group(1).strip().splitlines():
                         if line.strip():
-                            yield f"data: {_json.dumps({'type': 'thinking', 'text': line})}\n\n"
+                            yield f"data: {json.dumps({'type': 'thinking', 'text': line})}\n\n"
                     raw = raw[thinking_match.end():].strip()
 
             # Strip residual markdown fences
@@ -1013,11 +1043,11 @@ async def generate_script(body: GenerateScriptBody, request: Request):
                 end = len(lines) - 1 if lines[-1].strip() == "```" else len(lines)
                 raw = "\n".join(lines[1:end]).strip()
 
-            yield f"data: {_json.dumps({'type': 'done', 'script': raw})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'script': raw})}\n\n"
         except Exception as exc:
-            yield f"data: {_json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
-    return _SR(
+    return StreamingResponse(
         _stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -1043,9 +1073,8 @@ class ValidateScriptBody(BaseModel):
 @router.post("/automations/validate")
 async def validate_script(body: ValidateScriptBody, request: Request):
     await require_user(request)
-    import yaml
     _VALID_RESOURCES = {"property", "unit", "lease", "tenant"}
-    _VALID_CATEGORIES = {"rent", "leasing", "compliance", "maintenance"}
+    _VALID_CATEGORIES = {c.value for c in TaskCategory}
     errors: list[str] = []
     try:
         parsed = yaml.safe_load(body.script)

@@ -251,6 +251,34 @@ def send_autonomous_message(
     return msg
 
 
+def send_message(
+    db: Session,
+    conversation_id: str,
+    body: str,
+    message_type: str = MessageType.MESSAGE,
+    sender_name: str = "You",
+    is_ai: bool = False,
+    draft_reply: str | None = None,
+) -> Message:
+    """Add a message to any conversation by conversation_id."""
+    now = datetime.now(UTC)
+    msg = Message(
+        id=str(uuid.uuid4()),
+        conversation_id=conversation_id,
+        sender_type=ParticipantType.ACCOUNT_USER,
+        body=body,
+        message_type=message_type,
+        sender_name=sender_name,
+        is_ai=is_ai,
+        is_system=False,
+        draft_reply=draft_reply,
+        sent_at=now,
+    )
+    db.add(msg)
+    db.flush()
+    return msg
+
+
 def clear_typing_indicator(db: Session, conversation_id: str) -> None:
     """Remove the ai_typing flag from a conversation (e.g. when generation fails)."""
     convo = db.query(Conversation).filter_by(id=conversation_id).first()
