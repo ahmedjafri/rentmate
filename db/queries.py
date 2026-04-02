@@ -10,7 +10,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from db.models import Conversation, ConversationParticipant, ExternalContact, Lease, Message, MessageType, Property, Task, Tenant
+from db.models import Conversation, ConversationParticipant, ExternalContact, Lease, Message, Property, Task, Tenant
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +148,6 @@ def fetch_messages(db: Session, conversation_id: str) -> list[Message]:
         db.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)
-            .where(Message.message_type != MessageType.THREAD)
             .order_by(Message.sent_at)
         )
         .scalars()

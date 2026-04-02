@@ -333,12 +333,14 @@ class ChatMessageType:
     draft_reply: typing.Optional[str] = None
     approval_status: typing.Optional[str] = None
     related_task_ids: typing.Optional[strawberry.scalars.JSON] = None
+    suggestion_id: typing.Optional[str] = None
     sent_at: str = ""
 
     @classmethod
     def from_sql(cls, msg: typing.Any) -> "ChatMessageType":
         raw_st = getattr(msg, "sender_type", None)
         st_value = raw_st.value if hasattr(raw_st, "value") else str(raw_st) if raw_st else None
+        related = getattr(msg, "related_task_ids", None) or {}
         return cls(
             uid=str(msg.id),
             body=msg.body,
@@ -349,7 +351,8 @@ class ChatMessageType:
             is_system=msg.is_system,
             draft_reply=getattr(msg, "draft_reply", None),
             approval_status=getattr(msg, "approval_status", None),
-            related_task_ids=getattr(msg, "related_task_ids", None),
+            related_task_ids=related if related else None,
+            suggestion_id=related.get("suggestion_id") if isinstance(related, dict) else None,
             sent_at=_utc_iso(msg.sent_at),
         )
 
@@ -460,6 +463,9 @@ class SuggestionType:
     property_id: typing.Optional[str] = None
     unit_id: typing.Optional[str] = None
     task_id: typing.Optional[str] = None
+    vendor_name: typing.Optional[str] = None
+    property_name: typing.Optional[str] = None
+    draft_message: typing.Optional[str] = None
     messages: typing.List[ChatMessageType] = strawberry.field(default_factory=list)
     created_at: str = ""
 
@@ -469,6 +475,11 @@ class SuggestionType:
         all_msgs = list(getattr(ai_convo, "messages", [])) if ai_convo else []
         all_msgs.sort(key=lambda m: m.sent_at)
         messages = [ChatMessageType.from_sql(m) for m in all_msgs]
+
+        payload = s.action_payload or {}
+        prop_name = None
+        if s.property_id and hasattr(s, "property") and s.property:
+            prop_name = getattr(s.property, "name", None) or getattr(s.property, "address_line1", None)
 
         return cls(
             uid=str(s.id),
@@ -484,6 +495,9 @@ class SuggestionType:
             property_id=str(s.property_id) if s.property_id else None,
             unit_id=str(s.unit_id) if s.unit_id else None,
             task_id=str(s.task_id) if s.task_id else None,
+            vendor_name=payload.get("vendor_name"),
+            property_name=prop_name,
+            draft_message=payload.get("draft_message"),
             messages=messages,
             created_at=_utc_iso(s.created_at),
         )

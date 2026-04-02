@@ -84,6 +84,9 @@ export interface Suggestion {
   propertyId?: string;
   unitId?: string;
   taskId?: string;
+  vendorName?: string;
+  propertyName?: string;
+  draftMessage?: string;
   createdAt: Date;
   chatThread: ChatMessage[];
 }

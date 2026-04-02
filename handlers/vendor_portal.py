@@ -93,7 +93,7 @@ def _task_messages_for_vendor(db, task: Task) -> list:
             "sent_at": m.sent_at.isoformat() + "Z",
         }
         for m in msgs
-        if m.message_type not in (MessageType.INTERNAL, MessageType.APPROVAL, MessageType.CONTEXT)
+        if m.message_type not in (MessageType.INTERNAL, MessageType.APPROVAL, MessageType.SUGGESTION, MessageType.CONTEXT)
     ]
 
 

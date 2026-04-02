@@ -3,9 +3,10 @@ import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Bot, MessageCircle, Building2, Plus } from 'lucide-react';
+import { Bot, MessageCircle, Building2, Plus, Trash2 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { graphqlQuery } from '@/data/api';
+import { graphqlQuery, DELETE_CONVERSATION_MUTATION } from '@/data/api';
+import { toast } from 'sonner';
 
 const CONVERSATIONS_QUERY = `
   query GetConversations($conversationType: String!, $limit: Int) {
@@ -57,14 +58,22 @@ const typeColors: Record<string, string> = {
   vendor: 'bg-orange-100 text-orange-700 dark:bg-orange-900/20 dark:text-orange-400',
 };
 
-function ConvRow({ conv, onClick }: { conv: ConvSummary; onClick: () => void }) {
+function ConvRow({ conv, onClick, onDelete }: { conv: ConvSummary; onClick: () => void; onDelete: () => void }) {
   const TabIcon = TAB_CONFIG.find(t => t.key === conv.conversationType)?.icon ?? MessageCircle;
   const at = conv.lastMessageAt ?? conv.updatedAt;
   const relTime = at ? formatDistanceToNow(new Date(at), { addSuffix: true }) : null;
 
   return (
-    <Card className="px-3 py-2.5 rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={onClick}>
-      <div className="flex items-center justify-between gap-2">
+    <Card className="px-3 py-2.5 rounded-xl hover:shadow-md transition-shadow cursor-pointer relative group" onClick={onClick}>
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        className="absolute top-2 right-2 h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors hidden group-hover:flex"
+        title="Delete conversation"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+
+      <div className="flex items-center justify-between gap-2 pr-6">
         <div className="flex items-center gap-1.5 flex-wrap min-w-0">
           <Badge variant="secondary" className={`text-[10px] rounded-lg gap-1 shrink-0 ${typeColors[conv.conversationType] ?? ''}`}>
             <TabIcon className="h-3 w-3" />
@@ -163,6 +172,15 @@ const Chats = () => {
             key={conv.uid}
             conv={conv}
             onClick={() => openChat({ conversationId: conv.uid, conversationType: conv.conversationType as TabKey })}
+            onDelete={async () => {
+              try {
+                await graphqlQuery(DELETE_CONVERSATION_MUTATION, { uid: conv.uid });
+                setConversations(prev => prev.filter(c => c.uid !== conv.uid));
+                toast.success('Conversation deleted');
+              } catch {
+                toast.error('Failed to delete conversation');
+              }
+            }}
           />
         ))}
       </div>

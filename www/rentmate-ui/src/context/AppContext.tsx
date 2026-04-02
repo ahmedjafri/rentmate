@@ -7,7 +7,8 @@ import {
   SuggestionStatus, ActionDeskTask as ADT,
 } from '@/data/mockData';
 import { useApiData } from '@/hooks/useApiData';
-import { graphqlQuery, SEND_MESSAGE_MUTATION, UPDATE_TASK_MUTATION } from '@/data/api';
+import { graphqlQuery, UPDATE_TASK_MUTATION } from '@/data/api';
+import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 
 /** UUID v4 that works in both secure and non-secure contexts (HTTP on LAN IPs). */
@@ -21,21 +22,11 @@ function generateSessionId(): string {
   return `${hex.slice(0,4).join('')}-${hex.slice(4,6).join('')}-${hex.slice(6,8).join('')}-${hex.slice(8,10).join('')}-${hex.slice(10).join('')}`;
 }
 
-export interface ChatSession {
-  id: string;           // 'general' for the default session, uuid for context sessions
-  title: string;        // displayed name in the Chats list
-  contextKey: string | null;  // e.g. 'property:abc123' — used for deduplication
-  pageContext: string | null; // full context block sent to the AI
-  messages: ChatMessage[];
-  lastMessageAt: Date | null;
-}
-
 interface ChatPanelState {
   isOpen: boolean;
   suggestionId: string | null;
   taskId: string | null;
-  sessionId: string | null;
-  conversationId: string | null;  // DB-backed conversation ID
+  conversationId: string | null;
   pageContext: string | null;
 }
 
@@ -50,13 +41,12 @@ interface AppContextType {
   documents: ManagedDocument[];
   autonomySettings: AutonomySettings;
   chatPanel: ChatPanelState;
-  chatSessions: ChatSession[];
   entityContext: Record<string, string>;
   getEntityContext: (entityId: string) => string;
   setEntityContext: (entityId: string, context: string) => void;
   updateSuggestionStatus: (id: string, status: SuggestionStatus) => void;
   updateSuggestion: (id: string, updates: Partial<Suggestion>) => void;
-  addChatMessage: (context: { suggestionId?: string | null; taskId?: string | null; sessionId?: string | null }, message: ChatMessage) => void;
+  addChatMessage: (context: { suggestionId?: string | null; taskId?: string | null }, message: ChatMessage) => void;
   updateTaskMessage: (taskId: string, messageId: string, updates: Partial<ChatMessage>) => void;
   setTaskMessages: (taskId: string, messages: ChatMessage[]) => void;
   updateTask: (taskId: string, updates: Partial<ActionDeskTask>) => void;
@@ -73,7 +63,7 @@ interface AppContextType {
   updateDocument: (id: string, updates: Partial<ManagedDocument>) => void;
   replaceDocument: (oldId: string, doc: ManagedDocument) => void;
   removeDocument: (id: string) => void;
-  openChat: (opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; contextKey?: string | null; sessionTitle?: string | null; conversationId?: string | null; conversationType?: string | null }) => void;
+  openChat: (opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; conversationId?: string | null }) => void;
   closeChat: () => void;
   setAutonomySettings: (settings: AutonomySettings) => void;
   refreshData: () => void;
@@ -157,30 +147,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [documents, setDocuments] = useState<ManagedDocument[]>([]);
   const [autonomySettings, setAutonomySettings] = useState<AutonomySettings>(() => loadFromStorage('rm_autonomy', defaultAutonomySettings));
-  const [chatPanel, setChatPanel] = useState<ChatPanelState>({ isOpen: false, suggestionId: null, taskId: null, sessionId: null, conversationId: null, pageContext: null });
-
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>(() => {
-    const stored = loadFromStorage('rm_chat_sessions', null) as ChatSession[] | null;
-    if (stored && Array.isArray(stored) && stored.length > 0) {
-      return stored.map(s => ({
-        ...s,
-        messages: (s.messages ?? []).map(m => ({
-          ...m,
-          timestamp: m.timestamp instanceof Date ? m.timestamp : new Date(m.timestamp as unknown as string),
-        })),
-        lastMessageAt: s.lastMessageAt ? new Date(s.lastMessageAt as unknown as string) : null,
-      }));
-    }
-    // Migrate legacy single global thread to a 'general' session
-    const legacy = loadFromStorage('rm_global_chat', []) as ChatMessage[];
-    if (legacy.length > 0) {
-      const msgs = legacy.map(m => ({ ...m, timestamp: m.timestamp instanceof Date ? m.timestamp : new Date(m.timestamp as unknown as string) }));
-      return [{ id: 'general', title: 'Ask RentMate', contextKey: null, pageContext: null, messages: msgs, lastMessageAt: msgs[msgs.length - 1].timestamp }];
-    }
-    return [];
-  });
-  const chatSessionsRef = useRef(chatSessions);
-  useEffect(() => { chatSessionsRef.current = chatSessions; }, [chatSessions]);
+  const [chatPanel, setChatPanel] = useState<ChatPanelState>({ isOpen: false, suggestionId: null, taskId: null, conversationId: null, pageContext: null });
 
   const [entityContext, setEntityContextState] = useState<Record<string, string>>(() => loadFromStorage('rm_entity_context', {}));
 
@@ -188,7 +155,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // API-backed state (properties/tenants/tasks/tickets/suggestions) is NOT persisted here —
   // the DB is the source of truth for those.
   useEffect(() => { localStorage.setItem('rm_autonomy', JSON.stringify(autonomySettings)); }, [autonomySettings]);
-  useEffect(() => { localStorage.setItem('rm_chat_sessions', JSON.stringify(chatSessions)); }, [chatSessions]);
   useEffect(() => { localStorage.setItem('rm_entity_context', JSON.stringify(entityContext)); }, [entityContext]);
 
   const getEntityContext = useCallback((entityId: string) => entityContext[entityId] || '', [entityContext]);
@@ -204,25 +170,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSuggestions(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
   }, []);
 
-  const addChatMessage = useCallback((context: { suggestionId?: string | null; taskId?: string | null; sessionId?: string | null }, message: ChatMessage) => {
-    // Persist manager messages on tasks to backend (fire-and-forget)
-    if (context.taskId && message.role === 'user') {
-      const task = actionDeskTasks.find(t => t.id === context.taskId);
-      if (task?.aiConversationId) {
-        graphqlQuery(SEND_MESSAGE_MUTATION, {
-          input: {
-            conversationId: task.aiConversationId,
-            body: message.content,
-            // 'message' type goes to the AI thread — store as 'thread' so the Chat tab
-            // (which shows participant messages) doesn't surface these.
-            messageType: message.messageType === 'message' ? 'thread' : (message.messageType ?? 'thread'),
-            senderName: message.senderName ?? 'You',
-            isAi: false,
-          }
-        }).catch((err: Error) => console.warn('Failed to persist task message:', err));
-      }
-    }
-
+  const addChatMessage = useCallback((context: { suggestionId?: string | null; taskId?: string | null }, message: ChatMessage) => {
     if (context.taskId) {
       setActionDeskTasks(prev => prev.map(t =>
         t.id === context.taskId ? { ...t, chatThread: [...t.chatThread, message] } : t
@@ -231,29 +179,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSuggestions(prev => prev.map(s =>
         s.id === context.suggestionId ? { ...s, chatThread: [...s.chatThread, message] } : s
       ));
-    } else {
-      // Add to the named session (or 'general' if no sessionId)
-      const targetId = context.sessionId ?? 'general';
-      setChatSessions(prev => {
-        const exists = prev.find(s => s.id === targetId);
-        if (exists) {
-          return prev.map(s => s.id === targetId
-            ? { ...s, messages: [...s.messages, message], lastMessageAt: message.timestamp }
-            : s
-          );
-        }
-        // Shouldn't happen, but create a fallback general session
-        return [...prev, {
-          id: targetId,
-          title: 'Ask RentMate',
-          contextKey: null,
-          pageContext: null,
-          messages: [message],
-          lastMessageAt: message.timestamp,
-        }];
-      });
     }
-  }, [actionDeskTasks]);
+  }, []);
 
   const updateTaskMessage = useCallback((taskId: string, messageId: string, updates: Partial<ChatMessage>) => {
     setActionDeskTasks(prev => prev.map(t =>
@@ -339,71 +266,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActionDeskTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...updates } : t));
   }, []);
 
-  const openChat = useCallback((opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; contextKey?: string | null; sessionTitle?: string | null; conversationId?: string | null; conversationType?: string | null }) => {
-    // Task/suggestion threads don't use the session system
+  const openChat = useCallback((opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; conversationId?: string | null }) => {
     if (opts?.taskId || opts?.suggestionId) {
       setChatPanel({
         isOpen: true,
         taskId: opts?.taskId ?? null,
         suggestionId: opts?.suggestionId ?? null,
-        sessionId: null,
         conversationId: null,
         pageContext: opts?.pageContext ?? null,
       });
       return;
     }
 
-    // DB-backed conversation (from Chats page or tenant chat)
     if (opts?.conversationId) {
       setChatPanel({
         isOpen: true,
         taskId: null,
         suggestionId: null,
-        sessionId: null,
         conversationId: opts.conversationId,
-        pageContext: null,
+        pageContext: opts?.pageContext ?? null,
       });
       return;
     }
 
-    const contextKey = opts?.contextKey ?? null;
-    const sessions = chatSessionsRef.current;
-
-    // Find existing session by contextKey (or 'general' for null contextKey)
-    const existing = contextKey !== null
-      ? sessions.find(s => s.contextKey === contextKey)
-      : sessions.find(s => s.id === 'general');
-
-    if (existing) {
-      setChatPanel({ isOpen: true, taskId: null, suggestionId: null, sessionId: existing.id, conversationId: null, pageContext: existing.pageContext });
-      return;
-    }
-
-    // Create a new session
-    // crypto.randomUUID() requires a secure context (HTTPS / localhost).
-    // Fall back to getRandomValues-based generation so the app works over
-    // plain HTTP on a LAN IP address as well.
-    const newId = contextKey ?? 'general';
-    const newSession: ChatSession = {
-      id: newId === 'general' ? 'general' : generateSessionId(),
-      title: opts?.sessionTitle ?? 'Ask RentMate',
-      contextKey,
-      pageContext: opts?.pageContext ?? null,
-      messages: [],
-      lastMessageAt: null,
-    };
-    setChatSessions(prev => [...prev, newSession]);
-    setChatPanel({ isOpen: true, taskId: null, suggestionId: null, sessionId: newSession.id, conversationId: null, pageContext: newSession.pageContext });
+    // No conversation specified — create a new DB conversation
+    const t = getToken();
+    fetch('/chat/new', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+    })
+      .then(r => r.json())
+      .then(data => {
+        setChatPanel({
+          isOpen: true,
+          taskId: null,
+          suggestionId: null,
+          conversationId: data.id,
+          pageContext: opts?.pageContext ?? null,
+        });
+      })
+      .catch(() => {});
   }, []);
 
   const closeChat = useCallback(() => {
-    setChatPanel({ isOpen: false, suggestionId: null, taskId: null, sessionId: null, conversationId: null, pageContext: null });
+    setChatPanel({ isOpen: false, suggestionId: null, taskId: null, conversationId: null, pageContext: null });
   }, []);
 
   return (
     <AppContext.Provider value={{
       properties, tenants, vendors, suggestions, tickets, actionDeskTasks, isLoading: apiLoading && actionDeskTasks.length === 0 && properties.length === 0, documents, autonomySettings,
-      chatPanel, chatSessions, entityContext, getEntityContext, setEntityContext,
+      chatPanel, entityContext, getEntityContext, setEntityContext,
       updateSuggestionStatus, updateSuggestion, addChatMessage, updateTaskMessage, setTaskMessages, updateTask,
       addTask, removeTask,
       addProperty, updateProperty, removeProperty, addTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, closeChat, setAutonomySettings, refreshData,

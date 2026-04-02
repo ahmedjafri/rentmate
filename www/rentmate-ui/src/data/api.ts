@@ -145,6 +145,7 @@ const TASK_FIELDS = `
     draftReply
     approvalStatus
     relatedTaskIds
+    suggestionId
     sentAt
   }
 `;
@@ -181,6 +182,9 @@ export const SUGGESTIONS_QUERY = `
       propertyId
       unitId
       taskId
+      vendorName
+      propertyName
+      draftMessage
       createdAt
       messages {
         uid
@@ -219,6 +223,12 @@ export const SEND_MESSAGE_MUTATION = `
       isSystem
       sentAt
     }
+  }
+`;
+
+export const DELETE_CONVERSATION_MUTATION = `
+  mutation DeleteConversation($uid: String!) {
+    deleteConversation(uid: $uid)
   }
 `;
 
@@ -297,6 +307,8 @@ export const CONVERSATION_MESSAGES_QUERY = `
       senderType
       isAi
       isSystem
+      draftReply
+      suggestionId
       sentAt
     }
   }

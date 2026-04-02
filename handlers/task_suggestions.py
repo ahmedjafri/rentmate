@@ -45,6 +45,8 @@ class SuggestionExecutor:
             cls = CloseTaskSuggestionExecutor
         elif action_type == "set_mode":
             cls = SetModeSuggestionExecutor
+        elif action_type == "attach_vendor":
+            cls = AttachVendorSuggestionExecutor
         elif suggestion.task_id:
             cls = ReplyInTaskSuggestionExecutor
         else:
@@ -104,12 +106,12 @@ class SuggestionExecutor:
             task.ai_conversation_id = ai_convo_id
             suggestion.ai_conversation_id = None
 
-        # Mark approval messages as approved
+        # Mark suggestion/approval messages as approved
         if ai_convo_id:
             approval_msgs = self.db.execute(
                 select(Message).where(
                     Message.conversation_id == ai_convo_id,
-                    Message.message_type == MessageType.APPROVAL,
+                    Message.message_type.in_([MessageType.APPROVAL, MessageType.SUGGESTION]),
                 )
             ).scalars().all()
             for m in approval_msgs:
@@ -227,10 +229,11 @@ class CreateTaskSuggestionExecutor(SuggestionExecutor):
                 self.db,
                 suggestion.ai_conversation_id,
                 body="Here's a suggested message you can send to the vendor:",
-                message_type=MessageType.APPROVAL,
+                message_type=MessageType.SUGGESTION,
                 sender_name="RentMate",
                 is_ai=True,
                 draft_reply=action_payload["draft_message"],
+                related_task_ids={"suggestion_id": suggestion.id},
             )
 
         return suggestion
@@ -331,10 +334,11 @@ class ReplyInTaskSuggestionExecutor(SuggestionExecutor):
         chat_service.send_message(
             self.db, suggestion.ai_conversation_id,
             body=f"{self.vendor_name} replied. Here's a suggested response:",
-            message_type=MessageType.APPROVAL,
+            message_type=MessageType.SUGGESTION,
             sender_name="RentMate",
             is_ai=True,
             draft_reply=draft,
+            related_task_ids={"suggestion_id": suggestion.id},
         )
 
         return suggestion
@@ -412,6 +416,43 @@ class SetModeSuggestionExecutor(SuggestionExecutor):
             ).scalar_one_or_none()
             if task and new_mode:
                 task.task_mode = new_mode
+
+        suggestion = self._resolve_suggestion(suggestion_id, action, task)
+        return suggestion, task
+
+
+class AttachVendorSuggestionExecutor(SuggestionExecutor):
+    """Execute a suggestion to attach a vendor conversation to a task.
+
+    Handles two accept actions:
+    - ``attach_vendor`` — wire the vendor conversation without sending a message
+    - ``attach_vendor_send`` — wire the conversation and send the draft message
+    """
+
+    def execute(
+        self,
+        suggestion_id: str,
+        action: str,
+        edited_body: str | None = None,
+    ) -> tuple[Suggestion, Task | None]:
+        suggestion = self._fetch_suggestion(suggestion_id)
+        task = None
+
+        if action in ("attach_vendor", "attach_vendor_send") and suggestion.task_id:
+            payload = suggestion.action_payload or {}
+            vendor_id = payload.get("vendor_id")
+
+            task = self.db.execute(
+                select(Task).where(Task.id == suggestion.task_id)
+            ).scalar_one_or_none()
+
+            if task and vendor_id:
+                self._wire_vendor_conversation(task, suggestion, vendor_id)
+
+                if action == "attach_vendor_send":
+                    draft = edited_body or payload.get("draft_message")
+                    if draft:
+                        self._send_draft_message(task, draft)
 
         suggestion = self._resolve_suggestion(suggestion_id, action, task)
         return suggestion, task

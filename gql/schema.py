@@ -128,6 +128,7 @@ class Query:
         db = _session(info)
         q = sa_select(Suggestion).options(
             joinedload(Suggestion.ai_conversation).selectinload(Conversation.messages),
+            joinedload(Suggestion.property),
         ).order_by(Suggestion.created_at.desc()).limit(limit)
         if status:
             q = q.where(Suggestion.status == status)
@@ -235,6 +236,18 @@ class Mutation(AuthMutation):
         db.commit()
         db.refresh(task)
         return TaskType.from_sql(task)
+
+    @strawberry.mutation(description="Archive (soft-delete) a conversation")
+    def delete_conversation(self, info, uid: str) -> bool:
+        _current_user(info)
+        db = _session(info)
+        from db.models import Conversation
+        conv = db.query(Conversation).filter_by(id=uid).first()
+        if not conv:
+            raise ValueError(f"Conversation {uid} not found")
+        conv.is_archived = True
+        db.commit()
+        return True
 
     @strawberry.mutation(description="Manually create a property with optional units")
     def create_property(self, info, input: CreatePropertyInput) -> HouseType:

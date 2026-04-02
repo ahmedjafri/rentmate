@@ -3,7 +3,7 @@ import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { AutonomySlider } from '@/components/suggestions/AutonomySlider';
 import { SuggestionCategory, AutonomyLevel } from '@/data/mockData';
-import { Shield, Bot, Terminal, MessageSquare, Lock } from 'lucide-react';
+import { Shield, Bot, Terminal, MessageSquare, Lock, Puzzle, Globe } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -62,6 +62,9 @@ const SettingsPage = () => {
     telegram: emptyChannel(),
     whatsapp: emptyChannel(),
   });
+  const [agentIntegrations, setAgentIntegrations] = useState<{ braveApiKey: string; webSearchEnabled: boolean }>({
+    braveApiKey: '', webSearchEnabled: false,
+  });
   const [agentFiles, setAgentFiles] = useState<AgentFile[]>([]);
   const [agentFileContents, setAgentFileContents] = useState<Record<string, string>>({});
   const [savingFile, setSavingFile] = useState<string | null>(null);
@@ -102,6 +105,17 @@ const SettingsPage = () => {
               appToken: '',
               allowFrom: (data.whatsapp?.allow_from ?? []).join('\n'),
             },
+          });
+        }
+      })
+      .catch(() => {});
+    fetch('/settings/agent/integrations', { headers })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data) {
+          setAgentIntegrations({
+            braveApiKey: '',
+            webSearchEnabled: data.web_search_enabled ?? false,
           });
         }
       })
@@ -189,6 +203,26 @@ const SettingsPage = () => {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       toast.success('LLM configuration saved');
+    } catch (err) {
+      toast.error(`Failed to save: ${(err as Error).message}`);
+    }
+  };
+
+  const handleSaveAgentIntegrations = async () => {
+    try {
+      const res = await fetch('/settings/agent/integrations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${getToken()}`,
+        },
+        body: JSON.stringify({
+          brave_api_key: agentIntegrations.braveApiKey || null,
+          web_search_enabled: agentIntegrations.webSearchEnabled,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      toast.success('Agent integrations saved — agent restarted');
     } catch (err) {
       toast.error(`Failed to save: ${(err as Error).message}`);
     }
@@ -391,6 +425,57 @@ const SettingsPage = () => {
         </div>
 
         <Button onClick={handleSaveIntegrations} className="w-full mt-6">Save Chat Integrations</Button>
+      </Card>
+
+      {/* Agent Integrations */}
+      <Card className="p-6 rounded-xl">
+        <div className="flex items-center gap-2 mb-1">
+          <Puzzle className="h-5 w-5 text-primary" />
+          <h2 className="text-lg font-bold">Agent Integrations</h2>
+        </div>
+        <p className="text-sm text-muted-foreground mb-6">
+          Enable tools and capabilities for the AI agent.
+        </p>
+
+        <div className="space-y-4">
+          {/* Web Search */}
+          <div className="flex items-start gap-3 p-3 rounded-lg border">
+            <Checkbox
+              id="web-search"
+              checked={agentIntegrations.webSearchEnabled}
+              onCheckedChange={(checked) =>
+                setAgentIntegrations(prev => ({ ...prev, webSearchEnabled: !!checked }))
+              }
+            />
+            <div className="flex-1 space-y-2">
+              <div className="flex items-center gap-2">
+                <Globe className="h-4 w-4 text-muted-foreground" />
+                <Label htmlFor="web-search" className="font-medium cursor-pointer">Web Search</Label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Allow the agent to search the web using Brave Search API.
+              </p>
+              {agentIntegrations.webSearchEnabled && (
+                <div className="pt-1">
+                  <Label htmlFor="brave-key" className="text-xs">Brave API Key</Label>
+                  <Input
+                    id="brave-key"
+                    type="password"
+                    placeholder="Leave blank to keep existing key"
+                    value={agentIntegrations.braveApiKey}
+                    onChange={e => setAgentIntegrations(prev => ({ ...prev, braveApiKey: e.target.value }))}
+                    className="mt-1"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Get a key at api.search.brave.com
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <Button onClick={handleSaveAgentIntegrations} className="w-full mt-6">Save Agent Integrations</Button>
       </Card>
 
       {/* AI Agent workspace */}

@@ -39,7 +39,7 @@ function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }
 }
 
 export function ChatPanel() {
-  const { chatPanel, closeChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, chatSessions, addDocument, replaceDocument, removeDocument } = useApp();
+  const { chatPanel, closeChat, openChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, addDocument, replaceDocument, removeDocument, refreshData } = useApp();
   const [dismissConfirm, setDismissConfirm] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -115,18 +115,13 @@ export function ChatPanel() {
     [chatPanel.taskId, actionDeskTasks]
   );
 
-  const activeSession = useMemo(() =>
-    chatPanel.sessionId ? chatSessions.find(s => s.id === chatPanel.sessionId) : null,
-    [chatPanel.sessionId, chatSessions]
-  );
-
   // DB-backed conversation messages (for conversationId-based chats)
   const [convMessages, setConvMessages] = useState<ChatMessage[]>([]);
   const activeConversationId = chatPanel.conversationId;
 
   useEffect(() => {
     if (!activeConversationId || activeTask || activeSuggestion) { setConvMessages([]); return; }
-    graphqlQuery<{ conversationMessages: Array<{ uid: string; body: string; messageType: string; senderName: string; senderType: string | null; isAi: boolean; isSystem: boolean; sentAt: string }> }>(
+    graphqlQuery<{ conversationMessages: Array<{ uid: string; body: string; messageType: string; senderName: string; senderType: string | null; isAi: boolean; isSystem: boolean; draftReply?: string; suggestionId?: string; sentAt: string }> }>(
       CONVERSATION_MESSAGES_QUERY, { uid: activeConversationId }
     ).then(result => {
       setConvMessages((result.conversationMessages ?? []).map(m => ({
@@ -137,6 +132,8 @@ export function ChatPanel() {
         senderName: m.senderName,
         senderType: m.isAi ? 'ai' as const : 'manager' as const,
         messageType: m.messageType as ChatMessage['messageType'],
+        draftReply: m.draftReply ?? undefined,
+        suggestionId: m.suggestionId ?? undefined,
       })));
     }).catch(() => {});
   }, [activeConversationId, activeTask, activeSuggestion]);
@@ -145,9 +142,7 @@ export function ChatPanel() {
     ? activeTask.chatThread
     : activeSuggestion
       ? activeSuggestion.chatThread
-      : activeConversationId
-        ? convMessages
-        : (activeSession?.messages ?? []);
+      : convMessages;
 
   const isAutonomous = activeTask?.mode === 'autonomous';
 
@@ -320,7 +315,7 @@ export function ChatPanel() {
     return () => controller.abort();
   }, [chatPanel.taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const addAiMessage = (content: string, context: { taskId?: string | null; suggestionId?: string | null; sessionId?: string | null }) => {
+  const addAiMessage = (content: string, context: { taskId?: string | null; suggestionId?: string | null }) => {
     const msg: ChatMessage = {
       id: `msg-${Date.now()}`,
       role: 'assistant',
@@ -340,7 +335,6 @@ export function ChatPanel() {
   const callAI = async (userMessage: string) => {
     const taskId = chatPanel.taskId;
     const suggestionId = chatPanel.suggestionId;
-    const sessionId = chatPanel.sessionId;
 
     setIsTyping(true);
     setProgressLog([]);
@@ -349,7 +343,7 @@ export function ChatPanel() {
       const suggestionHint = !taskId && activeSuggestion
         ? `Discussing suggestion: "${activeSuggestion.title}". ${activeSuggestion.body ?? ''}`
         : '';
-      const contextPrefix = !taskId ? (suggestionHint || activeSession?.pageContext || chatPanel.pageContext || '') : '';
+      const contextPrefix = !taskId ? (suggestionHint || chatPanel.pageContext || '') : '';
       const messageText = contextPrefix ? `[${contextPrefix}]\n\n${userMessage}` : userMessage;
 
       const payload: Record<string, unknown> = { message: messageText };
@@ -411,10 +405,12 @@ export function ChatPanel() {
               } else if (activeConversationId && !suggestionId) {
                 setConvMessages(prev => [...prev, thinkingMsg]);
               } else {
-                addChatMessage({ suggestionId, sessionId }, thinkingMsg);
+                addChatMessage({ suggestionId }, thinkingMsg);
               }
             }
-            addAiMessage(event.reply!, { taskId, suggestionId, sessionId });
+            addAiMessage(event.reply!, { taskId, suggestionId });
+            // Refresh data so new suggestions created by agent tools appear
+            refreshData();
           } else if (event.type === 'error') {
             activeStreamIdRef.current = null;
             sseError = new Error(event.message ?? 'AI unavailable');
@@ -438,7 +434,7 @@ export function ChatPanel() {
       activeStreamIdRef.current = null;
       console.error('Chat error:', e);
       const errorMsg = e instanceof Error ? e.message : "I'm having trouble connecting right now.";
-      addAiMessage(errorMsg, { taskId, suggestionId, sessionId });
+      addAiMessage(errorMsg, { taskId, suggestionId });
       toast.error('RentMate is unavailable right now.');
     } finally {
       setIsTyping(false);
@@ -511,7 +507,7 @@ export function ChatPanel() {
       setConvMessages(prev => [...prev, userMsg]);
     } else {
       addChatMessage(
-        { taskId: chatPanel.taskId, suggestionId: chatPanel.suggestionId, sessionId: chatPanel.sessionId },
+        { taskId: chatPanel.taskId, suggestionId: chatPanel.suggestionId },
         userMsg
       );
     }
@@ -549,7 +545,7 @@ export function ChatPanel() {
     ? activeTask.title
     : activeSuggestion
       ? 'Discuss Suggestion'
-      : (activeSession?.title ?? 'Ask RentMate');
+      : ('Ask RentMate');
 
   const placeholder = activeTask
     ? 'Reply in this thread...'
@@ -749,6 +745,7 @@ export function ChatPanel() {
                     <ChatMessageBubble
                       key={item.msg.id}
                       message={item.msg}
+                      onSuggestionClick={(sid) => openChat({ suggestionId: sid })}
                     />
                   )
                 )}
@@ -770,7 +767,7 @@ export function ChatPanel() {
                             <p
                               key={i}
                               data-testid="progress-line"
-                              className={`text-[11px] font-mono break-all overflow-hidden ${
+                              className={`text-[11px] font-mono truncate ${
                                 i === arr.length - 1
                                   ? 'text-foreground/80'
                                   : 'text-muted-foreground/50'
@@ -857,7 +854,7 @@ export function ChatPanel() {
                   </div>
                 )}
                 {participantMessages.map(msg => (
-                  <ChatMessageBubble key={msg.id} message={msg} />
+                  <ChatMessageBubble key={msg.id} message={msg} onSuggestionClick={(sid) => openChat({ suggestionId: sid })} />
                 ))}
               </div>
             </ScrollArea>
@@ -944,15 +941,7 @@ export function ChatPanel() {
                   <ChatMessageBubble
                     key={item.msg.id}
                     message={item.msg}
-                    onApprovalAction={activeSuggestion ? async (_messageId, action, editedBody) => {
-                      const { graphqlQuery: gql, ACT_ON_SUGGESTION_MUTATION } = await import('@/data/api');
-                      const result = await gql<{ actOnSuggestion: { uid: string; status: string } }>(
-                        ACT_ON_SUGGESTION_MUTATION,
-                        { uid: activeSuggestion.id, action, editedBody: editedBody ?? null },
-                      );
-                      updateSuggestionStatus(activeSuggestion.id, result.actOnSuggestion.status as 'accepted' | 'dismissed');
-                      closeChat();
-                    } : undefined}
+                    onSuggestionClick={(sid) => openChat({ suggestionId: sid })}
                   />
                 )
               )}

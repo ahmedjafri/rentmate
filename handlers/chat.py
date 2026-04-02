@@ -63,13 +63,17 @@ async def chat_with_agent(
     if sys_content:
         user_content = f"<context>\n{sys_content}\n</context>\n\n{user_content}"
 
-    return await loop.process_direct(
+    result = await loop.process_direct(
         content=user_content,
         session_key=session_key,
         channel="rentmate",
         chat_id=session_key,
         on_progress=on_progress,
     )
+    # nanobot may return an OutboundMessage object or a plain string
+    if hasattr(result, 'content'):
+        return result.content
+    return str(result)
 
 
 async def send_sms_reply(from_num: str, to_num: str, text: str):
@@ -283,7 +287,7 @@ async def chat_endpoint(
     if task_obj:
         all_msgs = [
             m for m in (conv.messages or [])
-            if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)
+            if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)  # include legacy THREAD
         ]
         msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
         messages_payload = [{"role": "system", "content": context}]
@@ -308,15 +312,37 @@ async def chat_endpoint(
         running.subscribers.append(queue)
         _active_chats[stream_id] = running
 
-        async def on_progress(text: str):
-            running.progress_log.append(text)
+        async def on_progress(text: str, tool_hint: str | None = None, **_kwargs):
+            entry = f"[{tool_hint}] {text}" if tool_hint else text
+            running.progress_log.append(entry)
             for sub in list(running.subscribers):
-                await sub.put(text)
+                await sub.put(entry)
 
         async def run_and_persist() -> tuple[str, str]:
             from llm.tools import active_conversation_id
             token = active_conversation_id.set(conv_id)
             try:
+                # Persist user message BEFORE running the agent so it gets an
+                # earlier timestamp than any messages the agent creates (e.g.
+                # suggestion messages from tool calls).
+                pre_db = _SL()
+                try:
+                    pre_db.add(Message(
+                        id=str(_uuid.uuid4()),
+                        conversation_id=conv_id,
+                        sender_type=ParticipantType.ACCOUNT_USER,
+                        body=user_message,
+                        message_type=MessageType.MESSAGE,
+                        sender_name="You",
+                        is_ai=False,
+                        sent_at=datetime.now(UTC),
+                    ))
+                    pre_db.commit()
+                except Exception:
+                    pre_db.rollback()
+                finally:
+                    pre_db.close()
+
                 await on_progress("Thinking\u2026")
                 reply = await chat_with_agent(agent_id, session_key, messages_payload, on_progress)
 
@@ -343,31 +369,23 @@ async def chat_endpoint(
                         conversation_id=conv_id,
                         sender_type=ParticipantType.ACCOUNT_USER,
                         body=reply,
-                        message_type=MessageType.THREAD,
+                        message_type=MessageType.MESSAGE,
                         sender_name="RentMate",
                         is_ai=True,
                         sent_at=now,
                     )
                     write_db.add(ai_msg)
-                    # Persist user message
-                    write_db.add(Message(
-                        id=str(_uuid.uuid4()),
-                        conversation_id=conv_id,
-                        sender_type=ParticipantType.ACCOUNT_USER,
-                        body=user_message,
-                        message_type=MessageType.MESSAGE,
-                        sender_name="You",
-                        is_ai=False,
-                        sent_at=now,
-                    ))
                     db_conv = write_db.query(Conversation).filter_by(id=conv_id).first()
                     if db_conv:
                         db_conv.updated_at = now
                     write_db.commit()
+                    print(f"[chat] Persisted AI reply ({len(reply)} chars) to {conv_id}")
                     return reply, ai_msg.id
                 except Exception as e:
                     write_db.rollback()
                     print(f"[chat] DB write failed: {e}")
+                    import traceback
+                    traceback.print_exc()
                     return reply, str(_uuid.uuid4())
                 finally:
                     write_db.close()
@@ -394,11 +412,13 @@ async def chat_endpoint(
 
             try:
                 reply, msg_id = running.task.result()
-            except Exception:
+            except Exception as exc:
+                print(f"[chat] SSE task failed: {exc!r}")
                 yield f"data: {_json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
                 return
 
             done_payload: dict = {'type': 'done', 'reply': reply, 'message_id': msg_id, 'conversation_id': conv_id}
+            print(f"[chat] SSE done: reply={len(reply or '')} chars, msg_id={msg_id}")
             yield f"data: {_json.dumps(done_payload)}\n\n"
         finally:
             if queue in running.subscribers:

@@ -34,11 +34,12 @@ class ConversationType(str, Enum):
 
 
 class MessageType(str, Enum):
-    MESSAGE  = "message"
-    INTERNAL = "internal"
-    APPROVAL = "approval"
-    CONTEXT  = "context"
-    THREAD   = "thread"
+    MESSAGE    = "message"
+    INTERNAL   = "internal"
+    APPROVAL   = "approval"      # legacy — use SUGGESTION for new code
+    SUGGESTION = "suggestion"    # links to a Suggestion via related_task_ids.suggestion_id
+    CONTEXT    = "context"
+    THREAD     = "thread"    # deprecated — use MESSAGE
 
 
 class ExternalContact(Base):

@@ -5,7 +5,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Lightbulb, CheckCircle2, XCircle, Loader2, MessageCircle, Send, X } from 'lucide-react';
+import { Lightbulb, CheckCircle2, XCircle, Loader2, MessageCircle, Send, X, Building2, Wrench } from 'lucide-react';
 import { formatMessageTime } from '@/components/chat/ChatMessage';
 import { PageLoader } from '@/components/ui/page-loader';
 
@@ -32,15 +32,15 @@ function SuggestionCard({ suggestion, onAction }: {
   const [editing, setEditing] = useState(false);
   const { openChat } = useApp();
 
-  // Find draft message if there's an approval message in the thread
-  const approvalMsg = suggestion.chatThread.find(m => m.messageType === 'approval');
-  const draftText = approvalMsg?.draftReply ?? approvalMsg?.content ?? '';
+  const draftText = suggestion.draftMessage ?? '';
   const [editedDraft, setEditedDraft] = useState(draftText);
 
   const opts = suggestion.options ?? [
     { key: 'accept', label: 'Accept', action: 'accept_task', variant: 'default' },
     { key: 'reject', label: 'Reject', action: 'reject_task', variant: 'ghost' },
   ];
+
+  const sendAction = opts.some(o => o.action === 'attach_vendor_send') ? 'attach_vendor_send' : 'approve_draft';
 
   const handleAction = async (action: string, body?: string) => {
     setLoading(action);
@@ -75,8 +75,21 @@ function SuggestionCard({ suggestion, onAction }: {
           >
             {suggestion.title}
           </h3>
-          {suggestion.body && (
-            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{suggestion.body}</p>
+          {(suggestion.vendorName || suggestion.propertyName) && (
+            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+              {suggestion.vendorName && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <Wrench className="h-2.5 w-2.5" />
+                  {suggestion.vendorName}
+                </span>
+              )}
+              {suggestion.propertyName && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <Building2 className="h-2.5 w-2.5" />
+                  {suggestion.propertyName}
+                </span>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -96,9 +109,9 @@ function SuggestionCard({ suggestion, onAction }: {
               variant="default"
               className="h-7 text-xs rounded-lg gap-1"
               disabled={!editedDraft.trim() || loading !== null}
-              onClick={() => handleAction('approve_draft', editedDraft.trim())}
+              onClick={() => handleAction(sendAction, editedDraft.trim())}
             >
-              {loading === 'approve_draft' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+              {loading === sendAction ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
               Send
             </Button>
             <Button

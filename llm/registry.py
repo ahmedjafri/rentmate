@@ -61,7 +61,7 @@ class _DbSessionManager:
                 .filter(
                     Message.conversation_id == conv_id,
                     Message.message_type.in_([
-                        MessageType.MESSAGE, MessageType.THREAD,
+                        MessageType.MESSAGE, MessageType.THREAD,  # include legacy THREAD
                     ]),
                 )
                 .order_by(Message.sent_at)
@@ -159,59 +159,80 @@ class AgentRegistry:
     def _make_loop(self):
         from nanobot.agent import AgentLoop
         from nanobot.bus import MessageBus
-        from nanobot.providers import LiteLLMProvider
+        from nanobot.config.schema import WebSearchConfig
+        from nanobot.providers.openai_compat_provider import OpenAICompatProvider
 
         model = os.environ.get("LLM_MODEL", "anthropic/claude-haiku-4-5-20251001")
         api_key = os.environ.get("LLM_API_KEY", "")
         api_base = os.environ.get("LLM_BASE_URL") or None
 
-        provider = LiteLLMProvider(
+        # Map LiteLLM-style provider/model names to direct API endpoints
+        actual_model = model
+        if "/" in model and not api_base:
+            provider_prefix, _, model_name = model.partition("/")
+            _PROVIDER_BASES = {
+                "deepseek": "https://api.deepseek.com/v1",
+                "anthropic": "https://api.anthropic.com/v1",
+            }
+            if provider_prefix in _PROVIDER_BASES:
+                api_base = _PROVIDER_BASES[provider_prefix]
+                actual_model = model_name
+
+        provider = OpenAICompatProvider(
             api_key=api_key,
             api_base=api_base,
-            default_model=model,
+            default_model=actual_model,
         )
 
         workspace = DATA_DIR / DEFAULT_USER_ID
         workspace.mkdir(parents=True, exist_ok=True)
+
+        # Web search: use Brave if a key is configured, otherwise DuckDuckGo
+        brave_key = os.environ.get("BRAVE_API_KEY") or None
 
         self._bus = MessageBus()
         loop = AgentLoop(
             bus=self._bus,
             provider=provider,
             workspace=workspace,
-            model=model,
+            model=actual_model,
             max_iterations=40,
             restrict_to_workspace=False,
             session_manager=_DbSessionManager(),
+            web_search_config=WebSearchConfig(
+                provider="brave" if brave_key else "duckduckgo",
+                api_key=brave_key or "",
+            ),
         )
 
         # Register RentMate-specific tools (write actions → Suggestions)
-        from llm.tools import ProposeTaskTool, CloseTaskTool, SetModeTool
+        from llm.tools import ProposeTaskTool, CloseTaskTool, SetModeTool, AttachVendorTool, LookupVendorsTool
         loop.tools.register(ProposeTaskTool())
         loop.tools.register(CloseTaskTool())
         loop.tools.register(SetModeTool())
+        loop.tools.register(AttachVendorTool())
+        loop.tools.register(LookupVendorsTool())
 
         return loop
 
     @staticmethod
     def _build_nanobot_config(integrations: dict):
-        from nanobot.config.schema import (
-            Config, ChannelsConfig, TelegramConfig, WhatsAppConfig,
-        )
+        from nanobot.config.schema import Config, ChannelsConfig
+
         tg = integrations.get("telegram", {})
         wa = integrations.get("whatsapp", {})
         channels = ChannelsConfig(
-            telegram=TelegramConfig(
-                enabled=tg.get("enabled", False),
-                token=tg.get("token", ""),
-                allow_from=tg.get("allow_from", []),
-            ),
-            whatsapp=WhatsAppConfig(
-                enabled=wa.get("enabled", False),
-                bridge_url=wa.get("bridge_url", "ws://localhost:3001"),
-                bridge_token=wa.get("bridge_token", ""),
-                allow_from=wa.get("allow_from", []),
-            ),
+            telegram={
+                "enabled": tg.get("enabled", False),
+                "token": tg.get("token", ""),
+                "allow_from": tg.get("allow_from", []),
+            },
+            whatsapp={
+                "enabled": wa.get("enabled", False),
+                "bridge_url": wa.get("bridge_url", "ws://localhost:3001"),
+                "bridge_token": wa.get("bridge_token", ""),
+                "allow_from": wa.get("allow_from", []),
+            },
         )
         return Config(channels=channels)
 
@@ -229,10 +250,9 @@ class AgentRegistry:
             self._channel_task = None
 
         config = self._build_nanobot_config(integrations)
-        any_enabled = (
-            config.channels.telegram.enabled
-            or config.channels.whatsapp.enabled
-        )
+        tg = integrations.get("telegram", {})
+        wa = integrations.get("whatsapp", {})
+        any_enabled = tg.get("enabled", False) or wa.get("enabled", False)
         if not any_enabled:
             print("[nanobot] No chat channels configured — skipping channel manager")
             return

@@ -181,7 +181,7 @@ def _create_task(
                 conversation_id=convo.id,
                 sender_type=ParticipantType.ACCOUNT_USER,
                 body="Here's a suggested message you can send:",
-                message_type=MessageType.APPROVAL,
+                message_type=MessageType.SUGGESTION,
                 sender_name="RentMate",
                 is_ai=True,
                 draft_reply=draft,

@@ -86,7 +86,7 @@ function usePageContext() {
 }
 
 export function AppLayout({ children }: {children: React.ReactNode;}) {
-  const { chatPanel, openChat, closeChat, actionDeskTasks, suggestions, chatSessions } = useApp();
+  const { chatPanel, openChat, closeChat, actionDeskTasks, suggestions } = useApp();
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const pageCtx = usePageContext();
@@ -97,21 +97,11 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
   const close = () => setOpen(false);
 
   const handleRentMateClick = () => {
-    const targetContextKey = pageCtx?.contextKey ?? null;
-    if (chatPanel.isOpen && !chatPanel.taskId) {
-      // Only toggle closed when the current session is already showing this context.
-      // If the user navigated to a different page, switch context instead of closing.
-      const currentSession = chatSessions.find(s => s.id === chatPanel.sessionId);
-      if ((currentSession?.contextKey ?? null) === targetContextKey) {
-        closeChat();
-        return;
-      }
+    if (chatPanel.isOpen && !chatPanel.taskId && !chatPanel.suggestionId) {
+      closeChat();
+      return;
     }
-    openChat({
-      pageContext: pageCtx?.context ?? null,
-      contextKey: targetContextKey,
-      sessionTitle: pageCtx?.sessionTitle ?? null,
-    });
+    openChat({ pageContext: pageCtx?.context ?? null });
   };
 
   return (

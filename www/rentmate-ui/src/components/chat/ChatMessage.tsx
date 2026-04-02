@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
-import { Bot, User, Eye, ShieldAlert, Check, X, Send, Pencil, ChevronDown, ChevronUp, CheckCircle2, XCircle, Zap, Building2, Wrench, BookOpen, ArrowUpRight, Loader2 } from 'lucide-react';
+import { Bot, User, Eye, Lightbulb, Check, X, Send, Pencil, ChevronDown, ChevronUp, CheckCircle2, XCircle, Zap, Building2, Wrench, BookOpen, ArrowUpRight, Loader2 } from 'lucide-react';
 
 function ThinkingChain({ steps, isChain }: { steps: string[]; isChain: boolean }) {
   const [expanded, setExpanded] = useState(false);
@@ -8,7 +9,7 @@ function ThinkingChain({ steps, isChain }: { steps: string[]; isChain: boolean }
     return (
       <div className="flex items-start gap-2 py-1">
         <Eye className="h-3 w-3 text-muted-foreground mt-0.5 shrink-0" />
-        <p className="text-[11px] text-muted-foreground italic leading-relaxed">{steps[0]}</p>
+        <p className="text-[11px] text-muted-foreground italic leading-relaxed truncate max-w-[280px]" title={steps[0]}>{steps[0]}</p>
       </div>
     );
   }
@@ -25,7 +26,7 @@ function ThinkingChain({ steps, isChain }: { steps: string[]; isChain: boolean }
       {expanded && (
         <ol className="mt-1.5 ml-5 space-y-0.5 list-decimal">
           {steps.map((step, i) => (
-            <li key={i} className="text-[11px] text-muted-foreground italic leading-relaxed">{step}</li>
+            <li key={i} className="text-[11px] text-muted-foreground italic leading-relaxed truncate max-w-[280px]" title={step}>{step}</li>
           ))}
         </ol>
       )}
@@ -68,9 +69,11 @@ interface Props {
   onReject?: (messageId: string) => void;
   onEdit?: (messageId: string) => void;
   onApprovalAction?: (messageId: string, action: string, editedBody?: string) => Promise<void> | void;
+  onSuggestionClick?: (suggestionId: string) => void;
 }
 
-export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onApprovalAction }: Props) {
+export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onApprovalAction, onSuggestionClick }: Props) {
+  const navigate = useNavigate();
   const isAssistant = message.role === 'assistant';
   const msgType = message.messageType || 'message';
   const senderType = message.senderType || (isAssistant ? 'ai' : 'manager');
@@ -119,155 +122,47 @@ export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onAppr
     );
   }
 
-  // Approval requests — highlighted card style with draft + actions
-  if (isAssistant && msgType === 'approval') {
+  // Suggestion / approval messages — card with link to the suggestion
+  if (isAssistant && (msgType === 'suggestion' || msgType === 'approval')) {
     const status = message.approvalStatus || 'pending';
-    const isPending = status === 'pending';
     const isApproved = status === 'approved';
     const isRejected = status === 'rejected';
 
-    // Collapsed view for approved/rejected
-    if (!isPending && !detailsExpanded) {
-      return (
-        <div className={cn(
-          'rounded-xl border px-3 py-2 transition-colors',
-          isApproved && 'border-accent/30 bg-accent/5',
-          isRejected && 'border-destructive/20 bg-destructive/5',
-        )}>
-          <button
-            onClick={() => setDetailsExpanded(true)}
-            className="flex items-center gap-1.5 w-full"
-          >
-            {isApproved && <CheckCircle2 className="h-3.5 w-3.5 text-accent shrink-0" />}
-            {isRejected && <XCircle className="h-3.5 w-3.5 text-destructive shrink-0" />}
-            <span className={cn(
-              'text-[10px] font-semibold uppercase tracking-wide',
-              isApproved && 'text-accent',
-              isRejected && 'text-destructive',
-            )}>
-              {isApproved ? 'Approved' : 'Rejected'}
-            </span>
-            <ChevronDown className="h-3 w-3 text-muted-foreground ml-auto" />
-          </button>
-        </div>
-      );
-    }
-
     return (
       <div className={cn(
-        'rounded-xl border p-3 space-y-2 transition-colors',
-        isPending && 'border-warning/30 bg-warning/5',
+        'rounded-xl border p-3 space-y-1.5 transition-colors',
         isApproved && 'border-accent/30 bg-accent/5',
         isRejected && 'border-destructive/20 bg-destructive/5',
+        !isApproved && !isRejected && 'border-primary/20 bg-primary/5',
       )}>
-        {/* Header */}
         <div className="flex items-center gap-1.5">
-          {isPending && <ShieldAlert className="h-3.5 w-3.5 text-warning-foreground" />}
-          {isApproved && <CheckCircle2 className="h-3.5 w-3.5 text-accent" />}
-          {isRejected && <XCircle className="h-3.5 w-3.5 text-destructive" />}
+          {isApproved && <CheckCircle2 className="h-3.5 w-3.5 text-accent shrink-0" />}
+          {isRejected && <XCircle className="h-3.5 w-3.5 text-destructive shrink-0" />}
+          {!isApproved && !isRejected && <Lightbulb className="h-3.5 w-3.5 text-primary shrink-0" />}
           <span className={cn(
             'text-[10px] font-semibold uppercase tracking-wide',
-            isPending && 'text-warning-foreground',
             isApproved && 'text-accent',
             isRejected && 'text-destructive',
+            !isApproved && !isRejected && 'text-primary',
           )}>
-            {isPending ? 'Approval needed' : isApproved ? 'Approved' : 'Rejected'}
+            {isApproved ? 'Accepted' : isRejected ? 'Dismissed' : 'Suggestion'}
           </span>
-          {!isPending && (
-            <button onClick={() => setDetailsExpanded(false)} className="ml-auto">
-              <ChevronUp className="h-3 w-3 text-muted-foreground" />
-            </button>
-          )}
+          <span className="text-[10px] text-muted-foreground ml-auto">{formatMessageTime(message.timestamp)}</span>
         </div>
-
-        {/* Summary */}
-        <p className="text-sm text-foreground">{message.content}</p>
-
-        {/* Draft reply (always visible when pending, toggleable when resolved) */}
+        <p className="text-sm text-foreground whitespace-pre-line">{message.content}</p>
         {message.draftReply && (
-          <div>
-            {!isPending && (
-              <button
-                onClick={() => setDraftExpanded(!draftExpanded)}
-                className="flex items-center gap-1 text-[11px] font-medium text-primary hover:text-primary/80 transition-colors"
-              >
-                {draftExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                {draftExpanded ? 'Hide draft reply' : 'View draft reply'}
-              </button>
-            )}
-            {(isPending || draftExpanded) && !editMode && (
-              <div className={cn('rounded-lg bg-card border p-3 text-xs text-foreground whitespace-pre-wrap leading-relaxed', !isPending && 'mt-2')}>
-                {message.draftReply}
-              </div>
-            )}
-            {editMode && (
-              <div className="mt-1 space-y-2">
-                <textarea
-                  ref={editRef}
-                  className="w-full rounded-lg border bg-card p-3 text-xs text-foreground leading-relaxed resize-none min-h-[80px] focus:outline-none focus:ring-1 focus:ring-ring"
-                  value={editText}
-                  onChange={e => setEditText(e.target.value)}
-                  rows={4}
-                />
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    className="h-7 rounded-lg gap-1.5 text-xs"
-                    disabled={!editText.trim() || actionLoading !== null}
-                    onClick={async () => {
-                      setActionLoading('edit_send');
-                      try { await onApprovalAction?.(message.id, 'approve_draft', editText.trim()); } finally { setActionLoading(null); }
-                    }}
-                  >
-                    {actionLoading === 'edit_send' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-                    Send
-                  </Button>
-                  <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditMode(false)}>Cancel</Button>
-                </div>
-              </div>
-            )}
+          <div className="rounded-lg bg-card border p-2.5 text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed">
+            {message.draftReply}
           </div>
         )}
-
-        {/* Action buttons */}
-        {isPending && !editMode && (
-          <div className="flex items-center gap-2 pt-1">
-            <Button
-              size="sm"
-              className="h-7 rounded-lg gap-1.5 text-xs"
-              disabled={actionLoading !== null}
-              onClick={async () => {
-                setActionLoading('send');
-                try { await onApprovalAction?.(message.id, 'approve_draft'); } finally { setActionLoading(null); }
-              }}
-            >
-              {actionLoading === 'send' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-              Send Message
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 rounded-lg gap-1.5 text-xs"
-              disabled={actionLoading !== null}
-              onClick={() => { setEditText(message.draftReply || ''); setEditMode(true); setDraftExpanded(false); }}
-            >
-              <Pencil className="h-3 w-3" />
-              Edit Message
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 rounded-lg gap-1.5 text-xs"
-              disabled={actionLoading !== null}
-              onClick={async () => {
-                setActionLoading('reject');
-                try { await onApprovalAction?.(message.id, 'reject_task'); } finally { setActionLoading(null); }
-              }}
-            >
-              {actionLoading === 'reject' ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
-              Do not send
-            </Button>
-          </div>
+        {message.suggestionId && (
+          <button
+            onClick={() => navigate(`/action-desk?suggestion=${message.suggestionId}`)}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 bg-primary/10 hover:bg-primary/15 rounded-md px-2.5 py-1 transition-colors"
+          >
+            <ArrowUpRight className="h-3.5 w-3.5" />
+            Open suggestion
+          </button>
         )}
       </div>
     );

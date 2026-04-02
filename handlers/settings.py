@@ -205,6 +205,50 @@ async def update_integrations(body: IntegrationsBody, request: Request):
     return {"ok": True}
 
 
+# ─── Agent integrations (tools & capabilities) ──────────────────────────────
+
+class AgentIntegrationsBody(BaseModel):
+    brave_api_key: Optional[str] = None
+    web_search_enabled: bool = False
+
+
+@router.get("/settings/agent/integrations")
+async def get_agent_integrations(request: Request):
+    await require_user(request)
+    stored = load_app_settings()
+    agent_int = stored.get("agent_integrations", {})
+    return {
+        "brave_api_key": "",  # never echo the key back
+        "web_search_enabled": agent_int.get("web_search_enabled", False),
+    }
+
+
+@router.post("/settings/agent/integrations")
+async def update_agent_integrations(body: AgentIntegrationsBody, request: Request):
+    await require_user(request)
+
+    env_updates = {}
+    if body.brave_api_key:
+        os.environ["BRAVE_API_KEY"] = body.brave_api_key
+        env_updates["BRAVE_API_KEY"] = body.brave_api_key
+
+    stored = load_app_settings()
+    agent_int = stored.get("agent_integrations", {})
+    agent_int["web_search_enabled"] = body.web_search_enabled
+    stored["agent_integrations"] = agent_int
+    _save_app_settings(stored)
+
+    if env_updates:
+        write_env_file(env_updates)
+
+    # Restart the agent loop so it picks up the new config
+    from llm.registry import agent_registry
+    agent_registry.stop_gateway()
+    agent_registry.start_gateway()
+
+    return {"ok": True}
+
+
 # ─── Agent workspace files ────────────────────────────────────────────────────
 
 _AGENT_FILES = [

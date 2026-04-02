@@ -149,17 +149,24 @@ function parseUtc(iso: string): Date {
 }
 
 export function apiMessagesToChatThread(messages: ApiTaskMessage[]): ChatMessage[] {
-  return messages.map(m => ({
+  const mapped = messages.map(m => ({
     id: m.uid,
-    role: m.isAi || m.isSystem ? 'assistant' as const : 'user' as const,
+    role: (m.isAi || m.isSystem ? 'assistant' : 'user') as 'assistant' | 'user',
     content: m.body ?? '',
     timestamp: parseUtc(m.sentAt),
     senderName: m.senderName ?? undefined,
     messageType: (m.messageType as ChatMessage['messageType']) ?? 'message',
     draftReply: m.draftReply ?? undefined,
     approvalStatus: (m.approvalStatus as ChatMessage['approvalStatus']) ?? undefined,
+    suggestionId: m.suggestionId ?? undefined,
     relatedTasks: m.relatedTaskIds ?? undefined,
   }));
+  // Pending approval messages should appear after other messages so they
+  // don't sit at the top of the thread above the actual conversation.
+  const isPendingSuggestion = (m: ChatMessage) => (m.messageType === 'approval' || m.messageType === 'suggestion') && (!m.approvalStatus || m.approvalStatus === 'pending');
+  const regular = mapped.filter(m => !isPendingSuggestion(m));
+  const pendingApprovals = mapped.filter(isPendingSuggestion);
+  return [...regular, ...pendingApprovals];
 }
 
 function apiTaskParticipants(t: ApiTask): TaskParticipant[] {
@@ -257,6 +264,9 @@ function apiSuggestionToSuggestion(s: ApiSuggestion): Suggestion {
     propertyId: s.propertyId ?? undefined,
     unitId: s.unitId ?? undefined,
     taskId: s.taskId ?? undefined,
+    vendorName: s.vendorName ?? undefined,
+    propertyName: s.propertyName ?? undefined,
+    draftMessage: s.draftMessage ?? undefined,
     createdAt: new Date(s.createdAt),
     chatThread: apiMessagesToChatThread(s.messages ?? []),
   };
@@ -315,6 +325,7 @@ interface ApiTaskMessage {
   draftReply?: string;
   approvalStatus?: string;
   relatedTaskIds?: { taskId: string; label: string }[];
+  suggestionId?: string;
   sentAt: string;
 }
 
@@ -361,6 +372,9 @@ interface ApiSuggestion {
   propertyId?: string;
   unitId?: string;
   taskId?: string;
+  vendorName?: string;
+  propertyName?: string;
+  draftMessage?: string;
   createdAt: string;
   messages?: ApiTaskMessage[];
 }

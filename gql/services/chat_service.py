@@ -259,6 +259,7 @@ def send_message(
     sender_name: str = "You",
     is_ai: bool = False,
     draft_reply: str | None = None,
+    related_task_ids: dict | None = None,
 ) -> Message:
     """Add a message to any conversation by conversation_id."""
     now = datetime.now(UTC)
@@ -272,6 +273,7 @@ def send_message(
         is_ai=is_ai,
         is_system=False,
         draft_reply=draft_reply,
+        related_task_ids=related_task_ids,
         sent_at=now,
     )
     db.add(msg)

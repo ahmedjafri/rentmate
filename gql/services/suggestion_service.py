@@ -157,7 +157,7 @@ def act_on_suggestion(
 
     now = datetime.now(UTC)
 
-    if action in ("accept_task", "approve_draft", "close_task", "set_mode"):
+    if action in ("accept_task", "approve_draft", "close_task", "set_mode", "attach_vendor", "attach_vendor_send"):
         suggestion.status = "accepted"
         if task_id:
             suggestion.task_id = task_id
