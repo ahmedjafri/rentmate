@@ -314,6 +314,8 @@ async def chat_endpoint(
                 await sub.put(text)
 
         async def run_and_persist() -> tuple[str, str]:
+            from llm.tools import active_conversation_id
+            token = active_conversation_id.set(conv_id)
             try:
                 await on_progress("Thinking\u2026")
                 reply = await chat_with_agent(agent_id, session_key, messages_payload, on_progress)
@@ -370,6 +372,7 @@ async def chat_endpoint(
                 finally:
                     write_db.close()
             finally:
+                active_conversation_id.reset(token)
                 _active_chats.pop(stream_id, None)
 
         running.task = asyncio.create_task(run_and_persist())

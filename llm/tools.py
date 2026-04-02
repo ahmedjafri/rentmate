@@ -2,13 +2,26 @@
 
 Each tool maps an agent action to a Suggestion row so the manager can
 approve or dismiss it via the action desk UI.
+
+When a tool creates a suggestion during a chat, it also posts an APPROVAL
+message to the originating conversation so the suggestion appears inline.
+The conversation_id is communicated via the ``active_conversation_id``
+context variable, set by the chat handler before the agent runs.
 """
+import contextvars
 import json
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
 
 from db.enums import AgentSource, SuggestionOption, TaskCategory, Urgency
+from db.models import MessageType
+
+# Set by the chat handler before calling the agent so tools can link
+# suggestions back to the originating conversation.
+active_conversation_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "active_conversation_id", default=None,
+)
 
 
 def _create_suggestion(
@@ -22,9 +35,13 @@ def _create_suggestion(
     task_id: str | None = None,
     property_id: str | None = None,
 ) -> str:
-    """Write a Suggestion row and return its ID."""
+    """Write a Suggestion row and return its ID.
+
+    If ``active_conversation_id`` is set, also adds an APPROVAL message to
+    that conversation so the suggestion appears inline in the chat.
+    """
     from handlers.deps import SessionLocal
-    from gql.services import suggestion_service
+    from gql.services import suggestion_service, chat_service
 
     db = SessionLocal()
     try:
@@ -41,6 +58,18 @@ def _create_suggestion(
         )
         if task_id:
             suggestion.task_id = task_id
+
+        # Post an inline message to the originating conversation
+        conv_id = active_conversation_id.get()
+        if conv_id:
+            chat_service.send_message(
+                db, conv_id,
+                body=title,
+                message_type=MessageType.APPROVAL,
+                sender_name="RentMate",
+                is_ai=True,
+            )
+
         db.commit()
         return suggestion.id
     finally:
