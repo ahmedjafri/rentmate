@@ -11,8 +11,6 @@ import { ActionDeskTask, ChatMessage, ManagedDocument, categoryLabels, TaskMode 
 import { getToken, authFetch } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-import { AgentTaskProposal, AgentProposedTask } from './AgentTaskProposal';
-import { AgentActionConfirm, AgentProposedAction } from './AgentActionConfirm';
 import { SuggestionOptions } from './SuggestionOptions';
 import { graphqlQuery, TASK_QUERY, SEND_MESSAGE_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
 import { apiMessagesToChatThread } from '@/hooks/useApiData';
@@ -102,16 +100,10 @@ export function ChatPanel() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChatInputHandle>(null);
+  // Track in-flight stream IDs so we can reconnect on panel reopen
+  const activeStreamIdRef = useRef<string | null>(null);
   const [isTyping, setIsTyping] = useState(false);
   const [progressLog, setProgressLog] = useState<string[]>([]);
-  const [proposals, setProposals] = useState<AgentProposedTask[]>([]);
-  const [actionProposals, setActionProposals] = useState<AgentProposedAction[]>([]);
-
-  // Clear proposals when switching tasks so follow-ups from other tasks don't bleed through
-  useEffect(() => {
-    setProposals([]);
-    setActionProposals([]);
-  }, [chatPanel.taskId]);
 
   const activeSuggestion = useMemo(() =>
     chatPanel.suggestionId ? suggestions.find(s => s.id === chatPanel.suggestionId) : null,
@@ -128,11 +120,34 @@ export function ChatPanel() {
     [chatPanel.sessionId, chatSessions]
   );
 
+  // DB-backed conversation messages (for conversationId-based chats)
+  const [convMessages, setConvMessages] = useState<ChatMessage[]>([]);
+  const activeConversationId = chatPanel.conversationId;
+
+  useEffect(() => {
+    if (!activeConversationId || activeTask || activeSuggestion) { setConvMessages([]); return; }
+    graphqlQuery<{ conversationMessages: Array<{ uid: string; body: string; messageType: string; senderName: string; senderType: string | null; isAi: boolean; isSystem: boolean; sentAt: string }> }>(
+      CONVERSATION_MESSAGES_QUERY, { uid: activeConversationId }
+    ).then(result => {
+      setConvMessages((result.conversationMessages ?? []).map(m => ({
+        id: m.uid,
+        role: m.isAi ? 'assistant' as const : 'user' as const,
+        content: m.body,
+        timestamp: new Date(m.sentAt),
+        senderName: m.senderName,
+        senderType: m.isAi ? 'ai' as const : 'manager' as const,
+        messageType: m.messageType as ChatMessage['messageType'],
+      })));
+    }).catch(() => {});
+  }, [activeConversationId, activeTask, activeSuggestion]);
+
   const messages = activeTask
     ? activeTask.chatThread
     : activeSuggestion
       ? activeSuggestion.chatThread
-      : (activeSession?.messages ?? []);
+      : activeConversationId
+        ? convMessages
+        : (activeSession?.messages ?? []);
 
   const isAutonomous = activeTask?.mode === 'autonomous';
 
@@ -227,17 +242,18 @@ export function ChatPanel() {
     return () => clearInterval(interval);
   }, [activeTaskTab, activeTask?.parentConversationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Reconnect to an in-flight agent task when the chat panel opens.
+  // Reconnect to an in-flight chat when the panel opens.
   // If the agent is still running, stream its remaining progress so the user
   // sees the thinking indicator and receives the reply when it finishes.
   useEffect(() => {
-    if (!chatPanel.taskId) return;
+    const streamId = activeStreamIdRef.current;
+    if (!streamId) return;
     const taskId = chatPanel.taskId;
     const controller = new AbortController();
 
     (async () => {
       try {
-        const res = await fetch(`/chat/task/${taskId}/stream`, {
+        const res = await fetch(`/chat/stream/${streamId}`, {
           headers: authHeaders(),
           signal: controller.signal,
         });
@@ -269,10 +285,11 @@ export function ChatPanel() {
                 setProgressLog(prev => [...prev, event.text as string]);
               } else if (event.type === 'done') {
                 reconnectDone = true;
+                activeStreamIdRef.current = null;
                 addAiMessage(event.reply, { taskId });
-                handleAgentActions(event.actions ?? [], taskId);
                 setIsTyping(false);
               } else if (event.type === 'error') {
+                activeStreamIdRef.current = null;
                 toast.error('Agent encountered an error');
                 setIsTyping(false);
               }
@@ -280,9 +297,9 @@ export function ChatPanel() {
           }
         }
 
-        // Stream ended without `done` — agent may have finished after a reconnect
-        // gap; pull the latest messages from DB to show any persisted reply.
-        if (active && !reconnectDone) {
+        // Stream ended without `done` — pull latest from DB
+        if (active && !reconnectDone && taskId) {
+          activeStreamIdRef.current = null;
           setTimeout(() => {
             graphqlQuery<{ task: { messages: Parameters<typeof apiMessagesToChatThread>[0] } | null }>(
               TASK_QUERY, { uid: taskId }
@@ -304,7 +321,7 @@ export function ChatPanel() {
   }, [chatPanel.taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addAiMessage = (content: string, context: { taskId?: string | null; suggestionId?: string | null; sessionId?: string | null }) => {
-    addChatMessage(context, {
+    const msg: ChatMessage = {
       id: `msg-${Date.now()}`,
       role: 'assistant',
       content,
@@ -312,46 +329,15 @@ export function ChatPanel() {
       senderName: 'RentMate',
       senderType: 'ai',
       messageType: 'message',
-    });
-  };
-
-  const handleAgentActions = (actions: Array<{ action: string; [key: string]: unknown }>, taskId?: string | null) => {
-    for (const act of actions) {
-      if (act.action === 'propose_task') {
-        setProposals(prev => [...prev, {
-          _proposalId: `${Date.now()}-${Math.random()}`,
-          title: act.title as string,
-          category: act.category as string,
-          urgency: (act.urgency as string) ?? 'medium',
-          description: (act.description as string) || undefined,
-          propertyId: (act.property_id as string) || undefined,
-        }]);
-      } else if (act.action === 'close_task_proposed') {
-        const tid = (act.task_id as string) || taskId;
-        if (tid) {
-          setActionProposals(prev => [...prev, {
-            _proposalId: `${Date.now()}-${Math.random()}`,
-            action: 'close_task',
-            taskId: tid,
-          }]);
-        }
-      } else if (act.action === 'set_mode_proposed') {
-        const tid = (act.task_id as string) || taskId;
-        if (tid) {
-          setActionProposals(prev => [...prev, {
-            _proposalId: `${Date.now()}-${Math.random()}`,
-            action: 'set_mode',
-            taskId: tid,
-            mode: act.mode as 'autonomous' | 'manual' | 'waiting_approval',
-          }]);
-        }
-      }
-      // task_closed and mode_changed are no longer sent — writes now go through HITL above
+    };
+    if (activeConversationId && !context.taskId && !context.suggestionId) {
+      setConvMessages(prev => [...prev, msg]);
+    } else {
+      addChatMessage(context, msg);
     }
   };
 
   const callAI = async (userMessage: string) => {
-    // Capture IDs immediately — async operations below must not use stale closures
     const taskId = chatPanel.taskId;
     const suggestionId = chatPanel.suggestionId;
     const sessionId = chatPanel.sessionId;
@@ -359,149 +345,97 @@ export function ChatPanel() {
     setIsTyping(true);
     setProgressLog([]);
     try {
-      if (taskId) {
-        // Task thread — SSE stream with live progress.
-        // progressLines accumulates the full trace so we can persist it as an
-        // internal message when done — needed on iOS Safari where the browser
-        // buffers the entire SSE response and delivers it all at once, making
-        // live state updates invisible (they're batched with the cleanup).
-        const progressLines: string[] = [];
+      // Build the request — unified endpoint handles both task and session chats
+      const suggestionHint = !taskId && activeSuggestion
+        ? `Discussing suggestion: "${activeSuggestion.title}". ${activeSuggestion.body ?? ''}`
+        : '';
+      const contextPrefix = !taskId ? (suggestionHint || activeSession?.pageContext || chatPanel.pageContext || '') : '';
+      const messageText = contextPrefix ? `[${contextPrefix}]\n\n${userMessage}` : userMessage;
 
-        const res = await fetch('/chat/task', {
-          method: 'POST',
-          headers: authHeaders(),
-          body: JSON.stringify({ task_id: taskId, message: userMessage }),
-        });
-        if (!res.ok) {
-          let detail = `Service unavailable (${res.status})`;
-          try { const d = await res.json(); if (d.detail) detail = String(d.detail); } catch { /* ignore */ }
-          throw new Error(detail);
-        }
+      const payload: Record<string, unknown> = { message: messageText };
+      if (taskId) payload.task_id = taskId;
+      else if (activeConversationId) payload.conversation_id = activeConversationId;
 
-        const reader = res.body!.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let receivedDone = false;
+      const res = await fetch('/chat/send', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        let detail = `Service unavailable (${res.status})`;
+        try { const d = await res.json(); if (d.detail) detail = String(d.detail); } catch { /* ignore */ }
+        throw new Error(detail);
+      }
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          let sseError: Error | null = null;
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            let event: { type: string; text?: string; reply?: string; actions?: Array<Record<string, unknown>>; message?: string };
-            try {
-              event = JSON.parse(line.slice(6));
-            } catch {
-              continue; // ignore malformed lines
-            }
-            if (event.type === 'progress') {
-              progressLines.push(event.text as string);
-              setProgressLog(prev => [...prev, event.text as string]);
-            } else if (event.type === 'done') {
-              receivedDone = true;
-              // Persist reasoning trace as an internal message so it's visible
-              // even when the live indicator was never rendered (iOS Safari).
-              if (progressLines.length > 0) {
-                addChatMessage({ taskId }, {
-                  id: `thinking-${Date.now()}`,
-                  role: 'assistant',
-                  content: progressLines.join('\n'),
-                  timestamp: new Date(),
-                  senderName: 'RentMate',
-                  senderType: 'ai',
-                  messageType: 'internal',
-                });
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let receivedDone = false;
+      const progressLines: string[] = [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        let sseError: Error | null = null;
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          let event: { type: string; text?: string; reply?: string; stream_id?: string; message?: string; conversation_id?: string };
+          try { event = JSON.parse(line.slice(6)); } catch { continue; }
+
+          if (event.type === 'stream_id') {
+            activeStreamIdRef.current = event.stream_id!;
+          } else if (event.type === 'progress') {
+            progressLines.push(event.text as string);
+            setProgressLog(prev => [...prev, event.text as string]);
+          } else if (event.type === 'done') {
+            receivedDone = true;
+            activeStreamIdRef.current = null;
+            // Only persist the thinking trace if there were actual tool-call
+            // steps beyond the initial "Thinking…" placeholder.
+            const traceLines = progressLines.filter(l => l !== 'Thinking\u2026');
+            if (traceLines.length > 0) {
+              const thinkingMsg: ChatMessage = {
+                id: `thinking-${Date.now()}`,
+                role: 'assistant',
+                content: traceLines.join('\n'),
+                timestamp: new Date(),
+                senderName: 'RentMate',
+                senderType: 'ai',
+                messageType: 'internal',
+              };
+              if (taskId) {
+                addChatMessage({ taskId }, thinkingMsg);
+              } else if (activeConversationId && !suggestionId) {
+                setConvMessages(prev => [...prev, thinkingMsg]);
+              } else {
+                addChatMessage({ suggestionId, sessionId }, thinkingMsg);
               }
-              addAiMessage(event.reply!, { taskId });
-              handleAgentActions(event.actions ?? [], taskId);
-            } else if (event.type === 'error') {
-              // Capture and throw after the loop so it reaches the outer catch
-              sseError = new Error(event.message ?? 'AI unavailable');
             }
+            addAiMessage(event.reply!, { taskId, suggestionId, sessionId });
+          } else if (event.type === 'error') {
+            activeStreamIdRef.current = null;
+            sseError = new Error(event.message ?? 'AI unavailable');
           }
-          if (sseError) throw sseError;
         }
+        if (sseError) throw sseError;
+      }
 
-        // If the stream closed without a `done` event (e.g. proxy timeout while
-        // run_and_persist was still running), reload messages from the DB so the
-        // response that was written server-side becomes visible.
-        if (!receivedDone) {
-          setTimeout(() => {
-            graphqlQuery<{ task: { messages: Parameters<typeof apiMessagesToChatThread>[0] } | null }>(
-              TASK_QUERY, { uid: taskId }
-            ).then(result => {
-              if (result.task) setTaskMessages(taskId, apiMessagesToChatThread(result.task.messages ?? []));
-            }).catch(() => {});
-          }, 2000);
-        }
-      } else {
-        // Session chat or suggestion discussion — same SSE stream as task chat
-        const progressLines: string[] = [];
-        const history = messages
-          .filter(m => m.messageType === 'message' || !m.messageType)
-          .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content }));
-
-        const suggestionHint = activeSuggestion
-          ? `Discussing suggestion: "${activeSuggestion.title}". ${activeSuggestion.body ?? ''}`
-          : '';
-        const contextPrefix = suggestionHint || activeSession?.pageContext || chatPanel.pageContext || '';
-
-        const res = await fetch('/chat', {
-          method: 'POST',
-          headers: authHeaders(),
-          body: JSON.stringify({
-            message: contextPrefix ? `[${contextPrefix}]\n\n${userMessage}` : userMessage,
-            conversation_history: history,
-          }),
-        });
-        if (!res.ok) {
-          let detail = `Service unavailable (${res.status})`;
-          try { const d = await res.json(); if (d.detail) detail = String(d.detail); } catch { /* ignore */ }
-          throw new Error(detail);
-        }
-
-        const reader = res.body!.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          let sseError: Error | null = null;
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            let event: { type: string; text?: string; reply?: string; message?: string };
-            try { event = JSON.parse(line.slice(6)); } catch { continue; }
-            if (event.type === 'progress') {
-              progressLines.push(event.text as string);
-              setProgressLog(prev => [...prev, event.text as string]);
-            } else if (event.type === 'done') {
-              if (progressLines.length > 0) {
-                addChatMessage({ suggestionId, sessionId }, {
-                  id: `thinking-${Date.now()}`,
-                  role: 'assistant',
-                  content: progressLines.join('\n'),
-                  timestamp: new Date(),
-                  senderName: 'RentMate',
-                  senderType: 'ai',
-                  messageType: 'internal',
-                });
-              }
-              addAiMessage(event.reply!, { taskId, suggestionId, sessionId });
-            } else if (event.type === 'error') {
-              sseError = new Error(event.message ?? 'AI unavailable');
-            }
-          }
-          if (sseError) throw sseError;
-        }
+      // Stream closed without done — reload from DB if task chat
+      if (!receivedDone && taskId) {
+        activeStreamIdRef.current = null;
+        setTimeout(() => {
+          graphqlQuery<{ task: { messages: Parameters<typeof apiMessagesToChatThread>[0] } | null }>(
+            TASK_QUERY, { uid: taskId }
+          ).then(result => {
+            if (result.task) setTaskMessages(taskId, apiMessagesToChatThread(result.task.messages ?? []));
+          }).catch(() => {});
+        }, 2000);
       }
     } catch (e) {
+      activeStreamIdRef.current = null;
       console.error('Chat error:', e);
       const errorMsg = e instanceof Error ? e.message : "I'm having trouble connecting right now.";
       addAiMessage(errorMsg, { taskId, suggestionId, sessionId });
@@ -573,10 +507,14 @@ export function ChatPanel() {
       senderType: 'manager',
       messageType: 'message',
     };
-    addChatMessage(
-      { taskId: chatPanel.taskId, suggestionId: chatPanel.suggestionId, sessionId: chatPanel.sessionId },
-      userMsg
-    );
+    if (activeConversationId && !chatPanel.taskId && !chatPanel.suggestionId) {
+      setConvMessages(prev => [...prev, userMsg]);
+    } else {
+      addChatMessage(
+        { taskId: chatPanel.taskId, suggestionId: chatPanel.suggestionId, sessionId: chatPanel.sessionId },
+        userMsg
+      );
+    }
 
     // Approval workflow: mark approved + switch to autonomous
     if (insertedFromMessageId && chatPanel.taskId) {
@@ -848,24 +786,6 @@ export function ChatPanel() {
                 )}
               </div>
             </ScrollArea>
-            {(proposals.length > 0 || actionProposals.length > 0) && (
-              <div className="p-3 border-t space-y-2 shrink-0">
-                {actionProposals.map(p => (
-                  <AgentActionConfirm
-                    key={p._proposalId}
-                    proposal={p}
-                    onDismiss={(id) => setActionProposals(prev => prev.filter(x => x._proposalId !== id))}
-                  />
-                ))}
-                {proposals.map(p => (
-                  <AgentTaskProposal
-                    key={p._proposalId}
-                    proposal={p}
-                    onDismiss={(id) => setProposals(prev => prev.filter(x => x._proposalId !== id))}
-                  />
-                ))}
-              </div>
-            )}
             {/* AI tab input */}
             {activeTask.status === 'cancelled' || activeTask.status === 'resolved' ? (
               <div className="flex items-center gap-2 px-4 py-3 border-t bg-muted/30 shrink-0">
@@ -1070,24 +990,6 @@ export function ChatPanel() {
               )}
             </div>
           </ScrollArea>
-          {(proposals.length > 0 || actionProposals.length > 0) && (
-            <div className="p-3 border-t space-y-2 shrink-0">
-              {actionProposals.map(p => (
-                <AgentActionConfirm
-                  key={p._proposalId}
-                  proposal={p}
-                  onDismiss={(id) => setActionProposals(prev => prev.filter(x => x._proposalId !== id))}
-                />
-              ))}
-              {proposals.map(p => (
-                <AgentTaskProposal
-                  key={p._proposalId}
-                  proposal={p}
-                  onDismiss={(id) => setProposals(prev => prev.filter(x => x._proposalId !== id))}
-                />
-              ))}
-            </div>
-          )}
           {activeSuggestion && activeSuggestion.status === 'pending' ? (
             <SuggestionOptions
               options={activeSuggestion.options}

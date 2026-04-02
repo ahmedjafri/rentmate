@@ -1,5 +1,5 @@
 """
-Integration tests for the /chat and /chat/task SSE endpoints.
+Integration tests for the /chat/send SSE endpoint.
 
 The real FastAPI app is exercised end-to-end against an in-memory SQLite
 database.  Only two things are mocked:
@@ -154,12 +154,14 @@ class TestGenericChat:
                 ):
                     async with client.stream(
                         "POST",
-                        "/chat",
-                        json={"message": "Hi there", "conversation_id": None, "conversation_history": []},
+                        "/chat/send",
+                        json={"message": "Hi there"},
                     ) as resp:
                         events = await _collect_sse(resp)
 
-            assert events[0] == {"type": "progress", "text": "Thinking\u2026"}
+            assert events[0]["type"] == "stream_id"
+            progress = [e for e in events if e["type"] == "progress"]
+            assert progress[0] == {"type": "progress", "text": "Thinking\u2026"}
             done = next(e for e in events if e["type"] == "done")
             assert done["reply"] == "Hello from RentMate!"
             assert "conversation_id" in done
@@ -179,8 +181,8 @@ class TestGenericChat:
                 ):
                     async with client.stream(
                         "POST",
-                        "/chat",
-                        json={"message": "Follow-up", "conversation_id": conv_id, "conversation_history": []},
+                        "/chat/send",
+                        json={"message": "Follow-up", "conversation_id": conv_id},
                     ) as resp:
                         events = await _collect_sse(resp)
 
@@ -193,8 +195,8 @@ class TestGenericChat:
 # ─── Task chat SSE tests ──────────────────────────────────────────────────────
 
 class TestTaskChatSSE:
-    def test_first_event_is_thinking(self, session_factory, task_id):
-        """The very first SSE event is always {type: progress, text: 'Thinking…'}."""
+    def test_first_event_is_stream_id(self, session_factory, task_id):
+        """The very first SSE event is always {type: stream_id, stream_id: ...}."""
 
         async def _run():
             async with _test_app(session_factory) as client:
@@ -204,12 +206,16 @@ class TestTaskChatSSE:
                 ):
                     async with client.stream(
                         "POST",
-                        "/chat/task",
+                        "/chat/send",
                         json={"task_id": task_id, "message": "Status?"},
                     ) as resp:
                         events = await _collect_sse(resp)
 
-            assert events[0] == {"type": "progress", "text": "Thinking\u2026"}
+            assert events[0]["type"] == "stream_id"
+            assert "stream_id" in events[0]
+            # Second event is the thinking progress
+            progress_events = [e for e in events if e["type"] == "progress"]
+            assert progress_events[0] == {"type": "progress", "text": "Thinking\u2026"}
 
         asyncio.run(_run())
 
@@ -226,7 +232,7 @@ class TestTaskChatSSE:
                 ):
                     async with client.stream(
                         "POST",
-                        "/chat/task",
+                        "/chat/send",
                         json={"task_id": task_id, "message": "What is the HVAC status?"},
                     ) as resp:
                         events = await _collect_sse(resp)
@@ -235,7 +241,7 @@ class TestTaskChatSSE:
             done = events[-1]
             assert done["reply"] == reply_text
             assert "message_id" in done
-            assert isinstance(done["actions"], list)
+            assert "conversation_id" in done
 
         asyncio.run(_run())
 
@@ -258,7 +264,7 @@ class TestTaskChatSSE:
                 with patch("handlers.chat.chat_with_agent", side_effect=fake_agent):
                     async with client.stream(
                         "POST",
-                        "/chat/task",
+                        "/chat/send",
                         json={"task_id": task_id, "message": "Any updates?"},
                     ) as resp:
                         events = await _collect_sse(resp)
@@ -286,7 +292,7 @@ class TestTaskChatSSE:
                 ):
                     async with client.stream(
                         "POST",
-                        "/chat/task",
+                        "/chat/send",
                         json={"task_id": task_id, "message": "Hello?"},
                     ) as resp:
                         events = await _collect_sse(resp)
@@ -308,7 +314,7 @@ class TestTaskChatSSE:
                 ):
                     async with client.stream(
                         "POST",
-                        "/chat/task",
+                        "/chat/send",
                         json={"task_id": task_id, "message": "When is rent due?"},
                     ) as resp:
                         await _collect_sse(resp)
@@ -335,7 +341,7 @@ class TestTaskChatSSE:
         assert ai_msgs[0].sender_name == "RentMate"
 
     def test_404_for_unknown_task(self, session_factory):
-        """POST /chat/task with a nonexistent task_id returns 404."""
+        """POST /chat/send with a nonexistent task_id returns 404."""
 
         async def _run():
             async with _test_app(session_factory) as client:
@@ -344,7 +350,7 @@ class TestTaskChatSSE:
                     AsyncMock(return_value="irrelevant"),
                 ):
                     resp = await client.post(
-                        "/chat/task",
+                        "/chat/send",
                         json={"task_id": str(uuid.uuid4()), "message": "Hello?"},
                     )
             assert resp.status_code == 404

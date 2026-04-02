@@ -22,17 +22,17 @@ from gql.services import chat_service
 
 router = APIRouter()
 
-# ─── In-flight task registry ──────────────────────────────────────────────────
-# Tracks agent tasks that are still running so reconnecting clients can pick up
-# the live progress stream.  Keyed by task_id (conversation UUID).
+# ─── In-flight chat registry ─────────────────────────────────────────────────
+# Tracks agent chats that are still running so reconnecting clients can pick up
+# the live progress stream.  Keyed by a request-scoped stream_id.
 
 @dataclass
-class _RunningTask:
+class _RunningChat:
     task: asyncio.Task
     subscribers: list = field(default_factory=list)   # list[asyncio.Queue]
     progress_log: list = field(default_factory=list)   # list[str] — replay buffer
 
-_active_tasks: Dict[str, _RunningTask] = {}
+_active_chats: Dict[str, _RunningChat] = {}
 
 DIALPAD_API_KEY = os.getenv("DIALPAD_API_KEY", "")
 PHONE_WHITELIST = [p.strip() for p in os.getenv("PHONE_WHITELIST", "").split(",") if p.strip()]
@@ -42,27 +42,6 @@ def is_in_whitelist(number: str) -> bool:
     return any(allowed in number for allowed in PHONE_WHITELIST)
 
 
-def _read_and_clear_actions(task_id: str) -> list:
-    """Read and remove pending actions for a specific task from the shared queue file."""
-    from backends.local_auth import DEFAULT_USER_ID
-    actions_file = DATA_DIR / DEFAULT_USER_ID / "pending_actions.jsonl"
-    if not actions_file.exists():
-        return []
-    matched, remaining_lines = [], []
-    for line in actions_file.read_text().strip().splitlines():
-        try:
-            action = _json.loads(line)
-            if action.get("task_id") == task_id:
-                matched.append(action)
-            else:
-                remaining_lines.append(line)
-        except Exception:
-            pass
-    if remaining_lines:
-        actions_file.write_text("\n".join(remaining_lines) + "\n")
-    else:
-        actions_file.unlink(missing_ok=True)
-    return matched
 
 
 async def chat_with_agent(
@@ -150,12 +129,7 @@ async def send_via_channel(conv, reply: str, inbound_meta: dict):
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = None
-    conversation_history: List[Dict[str, Any]] = Field(default_factory=list)
-
-
-class TaskChatRequest(BaseModel):
-    task_id: str
-    message: str
+    task_id: Optional[str] = None
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -248,29 +222,45 @@ async def handle_message(
 
 
 
-@router.post("/chat")
+@router.post("/chat/send")
 async def chat_endpoint(
     body: ChatRequest,
     request: Request,
     db: Session = Depends(get_db),
 ):
+    """Unified chat endpoint.  Works for both session chats and task chats.
+
+    Pass ``task_id`` to chat in the context of a task (uses the task's AI
+    conversation).  Otherwise provide ``conversation_id`` for a session chat,
+    or omit both to auto-create a user_ai conversation.
+    """
     await require_user(request)
-    from db.lib import get_or_create_user_ai_conversation
+    from backends.local_auth import DEFAULT_USER_ID
+    from handlers.deps import SessionLocal as _SL
 
-    context = load_account_context(db)
-
-    # Look up or create DB-backed user_ai conversation.
-    if body.conversation_id:
-        conv = chat_service.get_or_create_conversation(db, body.conversation_id)
+    # ── Resolve conversation + context ────────────────────────────────────
+    task_obj: Task | None = None
+    if body.task_id:
+        task_obj = db.query(Task).filter_by(id=body.task_id).first()
+        if not task_obj:
+            raise HTTPException(status_code=404, detail="Task not found")
+        conv = task_obj.ai_conversation
+        if not conv:
+            raise HTTPException(status_code=404, detail="Task has no AI conversation")
+        context = build_task_context(db, body.task_id)
     else:
-        conv = get_or_create_user_ai_conversation(db, account_id="default", user_id="default")
+        from db.lib import get_or_create_user_ai_conversation
+        context = load_account_context(db)
+        if body.conversation_id:
+            conv = chat_service.get_or_create_conversation(db, body.conversation_id)
+        else:
+            conv = get_or_create_user_ai_conversation(db, account_id="default", user_id="default")
+
     conv_id = conv.id
-    db.commit()  # persist conv before streaming
+    db.commit()
 
     # If this conversation has human participants (tenant/external), stay silent.
     if not chat_service.should_ai_respond(conv):
-        from handlers.deps import SessionLocal as _SL
-
         async def _no_ai():
             write_db = _SL()
             try:
@@ -289,25 +279,109 @@ async def chat_endpoint(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    messages_payload = chat_service.build_agent_message_history(db, conv_id, body.message, context)
+    # ── Build message history ─────────────────────────────────────────────
+    if task_obj:
+        all_msgs = [
+            m for m in (conv.messages or [])
+            if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)
+        ]
+        msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
+        messages_payload = [{"role": "system", "content": context}]
+        messages_payload += [
+            {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
+            for m in msg_rows
+        ]
+        messages_payload.append({"role": "user", "content": body.message})
+    else:
+        messages_payload = chat_service.build_agent_message_history(db, conv_id, body.message, context)
 
-    from backends.local_auth import DEFAULT_USER_ID
     agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
-    session_key_agent = f"chat:{conv_id}"
+    session_key = f"task:{body.task_id}" if body.task_id else f"chat:{conv_id}"
+    stream_id = str(_uuid.uuid4())
+    user_message = body.message
 
+    # ── SSE generator ─────────────────────────────────────────────────────
     async def generate():
         queue: asyncio.Queue = asyncio.Queue()
 
+        running = _RunningChat(task=None)
+        running.subscribers.append(queue)
+        _active_chats[stream_id] = running
+
         async def on_progress(text: str):
-            await queue.put(text)
+            running.progress_log.append(text)
+            for sub in list(running.subscribers):
+                await sub.put(text)
 
-        async def run():
-            await on_progress("Thinking\u2026")
-            return await chat_with_agent(agent_id, session_key_agent, messages_payload, on_progress)
+        async def run_and_persist() -> tuple[str, str]:
+            from llm.tools import active_conversation_id
+            token = active_conversation_id.set(conv_id)
+            try:
+                await on_progress("Thinking\u2026")
+                reply = await chat_with_agent(agent_id, session_key, messages_payload, on_progress)
 
-        task = asyncio.create_task(run())
+                write_db = _SL()
+                try:
+                    now = datetime.now(UTC)
+                    # Persist thinking chain as an internal message (only if
+                    # there are actual tool-call traces beyond "Thinking…")
+                    trace_lines = [l for l in running.progress_log if l != "Thinking\u2026"]
+                    if trace_lines:
+                        write_db.add(Message(
+                            id=str(_uuid.uuid4()),
+                            conversation_id=conv_id,
+                            sender_type=ParticipantType.ACCOUNT_USER,
+                            body="\n".join(trace_lines),
+                            message_type=MessageType.INTERNAL,
+                            sender_name="RentMate",
+                            is_ai=True,
+                            sent_at=now,
+                        ))
+                    # Persist AI reply
+                    ai_msg = Message(
+                        id=str(_uuid.uuid4()),
+                        conversation_id=conv_id,
+                        sender_type=ParticipantType.ACCOUNT_USER,
+                        body=reply,
+                        message_type=MessageType.THREAD,
+                        sender_name="RentMate",
+                        is_ai=True,
+                        sent_at=now,
+                    )
+                    write_db.add(ai_msg)
+                    # Persist user message
+                    write_db.add(Message(
+                        id=str(_uuid.uuid4()),
+                        conversation_id=conv_id,
+                        sender_type=ParticipantType.ACCOUNT_USER,
+                        body=user_message,
+                        message_type=MessageType.MESSAGE,
+                        sender_name="You",
+                        is_ai=False,
+                        sent_at=now,
+                    ))
+                    db_conv = write_db.query(Conversation).filter_by(id=conv_id).first()
+                    if db_conv:
+                        db_conv.updated_at = now
+                    write_db.commit()
+                    return reply, ai_msg.id
+                except Exception as e:
+                    write_db.rollback()
+                    print(f"[chat] DB write failed: {e}")
+                    return reply, str(_uuid.uuid4())
+                finally:
+                    write_db.close()
+            finally:
+                active_conversation_id.reset(token)
+                _active_chats.pop(stream_id, None)
+
+        running.task = asyncio.create_task(run_and_persist())
+
         try:
-            while not task.done():
+            # Emit stream_id so the client can reconnect
+            yield f"data: {_json.dumps({'type': 'stream_id', 'stream_id': stream_id})}\n\n"
+
+            while not running.task.done():
                 try:
                     text = await asyncio.wait_for(queue.get(), timeout=0.1)
                     yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
@@ -315,28 +389,20 @@ async def chat_endpoint(
                     pass
 
             while not queue.empty():
-                yield f"data: {_json.dumps({'type': 'progress', 'text': queue.get_nowait()})}\n\n"
+                text = queue.get_nowait()
+                yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
 
             try:
-                reply = task.result()
+                reply, msg_id = running.task.result()
             except Exception:
                 yield f"data: {_json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
                 return
 
-            # Persist user message + AI reply to DB
-            from handlers.deps import SessionLocal as _SL
-            write_db = _SL()
-            try:
-                chat_service.persist_user_ai_messages(write_db, conv_id, body.message, reply)
-            except Exception as e:
-                write_db.rollback()
-                print(f"[chat] DB write failed: {e}")
-            finally:
-                write_db.close()
-
-            yield f"data: {_json.dumps({'type': 'done', 'reply': reply, 'conversation_id': conv_id})}\n\n"
+            done_payload: dict = {'type': 'done', 'reply': reply, 'message_id': msg_id, 'conversation_id': conv_id}
+            yield f"data: {_json.dumps(done_payload)}\n\n"
         finally:
-            pass  # no subscriber cleanup needed for session chats
+            if queue in running.subscribers:
+                running.subscribers.remove(queue)
 
     return StreamingResponse(
         generate(),
@@ -361,6 +427,18 @@ async def list_chat_conversations(
         }
         for c in convs
     ]
+
+
+@router.post("/chat/new")
+async def create_new_chat(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    await require_user(request)
+    from db.lib import get_or_create_user_ai_conversation
+    conv = get_or_create_user_ai_conversation(db, account_id="default", user_id="default", session_key=None)
+    db.commit()
+    return {"id": conv.id, "title": conv.subject}
 
 
 class SpawnTaskRequest(BaseModel):
@@ -403,153 +481,16 @@ async def spawn_task_endpoint(
     }
 
 
-@router.post("/chat/task")
-async def task_chat_endpoint(
-    body: TaskChatRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    await require_user(request)
+@router.get("/chat/stream/{stream_id}")
+async def chat_stream_reconnect(stream_id: str, request: Request):
+    """Reconnect to an in-flight chat and receive its remaining SSE events.
 
-    task = db.query(Task).filter_by(id=body.task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    # Use the task's AI conversation as the primary thread
-    primary_convo = task.ai_conversation
-
-    context = build_task_context(db, body.task_id)
-    ai_convo = task.ai_conversation
-    all_msgs = [m for m in (ai_convo.messages if ai_convo else []) if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)]
-    msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
-    history = [
-        {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
-        for m in msg_rows
-    ]
-    history.append({"role": "user", "content": body.message})
-
-    from backends.local_auth import DEFAULT_USER_ID
-    from handlers.deps import SessionLocal as _SessionLocal
-    agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
-    session_key = f"task:{body.task_id}"
-    messages_payload = [{"role": "system", "content": context}] + history
-    task_id = body.task_id
-    convo_id = primary_convo.id if primary_convo else body.task_id
-
-    async def generate():
-        queue: asyncio.Queue = asyncio.Queue()
-
-        # Register in the active-task registry before starting so reconnects work
-        # immediately.  Subscribe our queue first, then snapshot progress_log so
-        # there are no gaps (asyncio is single-threaded; no await between these).
-        running = _RunningTask(task=None)  # task set below
-        running.subscribers.append(queue)
-        _active_tasks[task_id] = running
-
-        async def on_progress(text: str):
-            running.progress_log.append(text)
-            for sub in list(running.subscribers):
-                await sub.put(text)
-
-        async def run_and_persist() -> tuple[str, str]:
-            """Run agent and persist result to DB.
-
-            Runs as an independent asyncio task so the DB write completes even
-            if the SSE generator is cancelled (client navigates away).
-            """
-            try:
-                # Always emit at least one progress event so the UI shows a
-                # status line (nanobot only calls on_progress for tool-call
-                # responses, not direct replies).  Emitting via on_progress
-                # also adds it to progress_log so reconnecting clients see it.
-                await on_progress("Thinking\u2026")
-                reply = await chat_with_agent(agent_id, session_key, messages_payload, on_progress)
-
-                write_db = _SessionLocal()
-                try:
-                    now = datetime.now(UTC)
-                    # Persist thinking chain as an internal message before the reply
-                    if running.progress_log:
-                        thinking_body = "\n".join(running.progress_log)
-                        write_db.add(Message(
-                            id=str(_uuid.uuid4()),
-                            conversation_id=convo_id,
-                            sender_type=ParticipantType.ACCOUNT_USER,
-                            body=thinking_body,
-                            message_type=MessageType.INTERNAL,
-                            sender_name="RentMate",
-                            is_ai=True,
-                            sent_at=now,
-                        ))
-                    ai_msg = Message(
-                        id=str(_uuid.uuid4()),
-                        conversation_id=convo_id,
-                        sender_type=ParticipantType.ACCOUNT_USER,
-                        body=reply,
-                        message_type=MessageType.THREAD,
-                        sender_name="RentMate",
-                        is_ai=True,
-                        sent_at=now,
-                    )
-                    write_db.add(ai_msg)
-                    conv = write_db.query(Conversation).filter_by(id=convo_id).first()
-                    if conv:
-                        conv.updated_at = now
-                    write_db.commit()
-                    actions = _read_and_clear_actions(task_id)
-                    return reply, ai_msg.id, actions
-                except Exception as e:
-                    write_db.rollback()
-                    print(f"[task-chat] DB write failed: {e}")
-                    return reply, str(_uuid.uuid4()), []
-                finally:
-                    write_db.close()
-            finally:
-                _active_tasks.pop(task_id, None)
-
-        running.task = asyncio.create_task(run_and_persist())
-
-        try:
-            # Stream progress while the agent runs
-            while not running.task.done():
-                try:
-                    text = await asyncio.wait_for(queue.get(), timeout=0.1)
-                    yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
-                except asyncio.TimeoutError:
-                    pass
-
-            # Drain remaining progress events
-            while not queue.empty():
-                text = queue.get_nowait()
-                yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
-
-            try:
-                reply, msg_id, actions = running.task.result()
-            except Exception:
-                yield f"data: {_json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
-                return
-
-            yield f"data: {_json.dumps({'type': 'done', 'reply': reply, 'message_id': msg_id, 'actions': actions})}\n\n"
-        finally:
-            if queue in running.subscribers:
-                running.subscribers.remove(queue)
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.get("/chat/task/{task_id}/stream")
-async def task_stream_reconnect(task_id: str, request: Request):
-    """Reconnect to an in-flight agent task and receive its remaining SSE events.
-
-    Returns an SSE stream.  If the task is not currently running the first event
+    Returns an SSE stream.  If the chat is not currently running the first event
     is ``{"type": "idle"}`` and the stream closes immediately.
     """
     await require_user(request)
 
-    running = _active_tasks.get(task_id)
+    running = _active_chats.get(stream_id)
 
     if not running:
         async def idle():
@@ -561,17 +502,14 @@ async def task_stream_reconnect(task_id: str, request: Request):
         )
 
     sub: asyncio.Queue = asyncio.Queue()
-    # Subscribe before snapshotting the buffer so there are no gaps.
     running.subscribers.append(sub)
     buffered = list(running.progress_log)
 
     async def generate():
         try:
-            # Replay everything the client missed
             for text in buffered:
                 yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
 
-            # Stream live progress until the task finishes
             while not running.task.done():
                 try:
                     text = await asyncio.wait_for(sub.get(), timeout=0.1)
@@ -579,14 +517,16 @@ async def task_stream_reconnect(task_id: str, request: Request):
                 except asyncio.TimeoutError:
                     pass
 
-            # Drain any final events that arrived just as the task completed
             while not sub.empty():
                 text = sub.get_nowait()
                 yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
 
             try:
-                reply, msg_id, actions = running.task.result()
-                yield f"data: {_json.dumps({'type': 'done', 'reply': reply, 'message_id': msg_id, 'actions': actions})}\n\n"
+                reply, msg_id = running.task.result()
+                done_payload: dict = {'type': 'done', 'reply': reply, 'message_id': msg_id}
+                if actions:
+                    done_payload['actions'] = actions
+                yield f"data: {_json.dumps(done_payload)}\n\n"
             except Exception:
                 yield f"data: {_json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
         finally:
