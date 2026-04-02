@@ -143,7 +143,8 @@ def act_on_suggestion(
 
     Args:
         suggestion_id: The suggestion to act on.
-        action: One of "accept_task", "approve_draft", "reject_task".
+        action: The action key from the suggestion's options (e.g. "accept_task",
+            "approve_draft", "reject_task", "close_task", "set_mode").
         task_id: Optional task ID to link to the suggestion on accept.
     """
     suggestion = sess.execute(
@@ -156,7 +157,7 @@ def act_on_suggestion(
 
     now = datetime.now(UTC)
 
-    if action in ("accept_task", "approve_draft"):
+    if action in ("accept_task", "approve_draft", "close_task", "set_mode"):
         suggestion.status = "accepted"
         if task_id:
             suggestion.task_id = task_id

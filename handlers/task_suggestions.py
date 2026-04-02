@@ -39,10 +39,17 @@ class SuggestionExecutor:
         ).scalar_one_or_none()
         if not suggestion:
             raise ValueError(f"Suggestion {suggestion_id} not found")
-        if suggestion.task_id:
-            executor = ReplyInTaskSuggestionExecutor.__new__(ReplyInTaskSuggestionExecutor)
+        payload = suggestion.action_payload or {}
+        action_type = payload.get("action")
+        if action_type == "close_task":
+            cls = CloseTaskSuggestionExecutor
+        elif action_type == "set_mode":
+            cls = SetModeSuggestionExecutor
+        elif suggestion.task_id:
+            cls = ReplyInTaskSuggestionExecutor
         else:
-            executor = CreateTaskSuggestionExecutor.__new__(CreateTaskSuggestionExecutor)
+            cls = CreateTaskSuggestionExecutor
+        executor = cls.__new__(cls)
         executor.db = db
         return executor
 
@@ -357,6 +364,54 @@ class ReplyInTaskSuggestionExecutor(SuggestionExecutor):
                 draft = edited_body or payload.get("draft_message")
                 if action == "approve_draft" and draft:
                     self._send_draft_message(task, draft)
+
+        suggestion = self._resolve_suggestion(suggestion_id, action, task)
+        return suggestion, task
+
+
+class CloseTaskSuggestionExecutor(SuggestionExecutor):
+    """Execute a suggestion to close an existing task."""
+
+    def execute(
+        self,
+        suggestion_id: str,
+        action: str,
+        edited_body: str | None = None,
+    ) -> tuple[Suggestion, Task | None]:
+        suggestion = self._fetch_suggestion(suggestion_id)
+        task = None
+
+        if action == "close_task" and suggestion.task_id:
+            task = self.db.execute(
+                select(Task).where(Task.id == suggestion.task_id)
+            ).scalar_one_or_none()
+            if task:
+                task.task_status = "dismissed"
+
+        suggestion = self._resolve_suggestion(suggestion_id, action, task)
+        return suggestion, task
+
+
+class SetModeSuggestionExecutor(SuggestionExecutor):
+    """Execute a suggestion to change a task's operating mode."""
+
+    def execute(
+        self,
+        suggestion_id: str,
+        action: str,
+        edited_body: str | None = None,
+    ) -> tuple[Suggestion, Task | None]:
+        suggestion = self._fetch_suggestion(suggestion_id)
+        task = None
+
+        if action == "set_mode" and suggestion.task_id:
+            payload = suggestion.action_payload or {}
+            new_mode = payload.get("mode")
+            task = self.db.execute(
+                select(Task).where(Task.id == suggestion.task_id)
+            ).scalar_one_or_none()
+            if task and new_mode:
+                task.task_mode = new_mode
 
         suggestion = self._resolve_suggestion(suggestion_id, action, task)
         return suggestion, task

@@ -56,7 +56,7 @@ class TestChatEndpoint(unittest.TestCase):
         app.dependency_overrides = {}
 
     def test_requires_auth(self):
-        response = self.client.post("/chat", json={"message": "hello"})
+        response = self.client.post("/chat/send", json={"message": "hello"})
         assert response.status_code == 401
 
     def test_returns_reply(self):
@@ -65,7 +65,7 @@ class TestChatEndpoint(unittest.TestCase):
             patch("handlers.chat.chat_with_agent", new_callable=AsyncMock, return_value="Hi there!"),
         ):
             response = self.client.post(
-                "/chat",
+                "/chat/send",
                 json={"message": "Hello", "conversation_history": []},
                 headers=AUTH,
             )
@@ -81,7 +81,7 @@ class TestChatEndpoint(unittest.TestCase):
             patch("handlers.chat.chat_with_agent", new_callable=AsyncMock, return_value="reply"),
         ):
             response = self.client.post(
-                "/chat",
+                "/chat/send",
                 json={"message": "Hey", "conversation_id": "conv-abc", "conversation_history": []},
                 headers=AUTH,
             )
@@ -95,7 +95,7 @@ class TestChatEndpoint(unittest.TestCase):
             patch("handlers.chat.chat_with_agent", new_callable=AsyncMock, side_effect=RuntimeError("boom")),
         ):
             response = self.client.post(
-                "/chat",
+                "/chat/send",
                 json={"message": "fail", "conversation_history": []},
                 headers=AUTH,
             )
@@ -117,7 +117,7 @@ class TestChatEndpoint(unittest.TestCase):
             patch("handlers.chat.chat_with_agent", side_effect=_fake_chat),
         ):
             self.client.post(
-                "/chat",
+                "/chat/send",
                 json={
                     "message": "follow-up",
                     "conversation_history": [

@@ -10,6 +10,92 @@ from sqlalchemy.orm import Session
 
 from backends.local_auth import DEFAULT_USER_ID
 
+
+class _DbSessionManager:
+    """SessionManager backed by RentMate's messages table.
+
+    Nanobot's default SessionManager persists chat history to JSONL files,
+    duplicating what RentMate already stores in the database.  This adapter
+    reads/writes from the DB so there is a single source of truth.
+
+    Session keys follow the pattern ``task:{task_id}`` or ``chat:{conv_id}``.
+    """
+
+    def __init__(self):
+        from nanobot.session.manager import Session as NanobotSession
+        self._NanobotSession = NanobotSession
+        self._cache: dict[str, object] = {}
+
+    # ── helpers ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _resolve_conversation_id(key: str) -> str | None:
+        """Map a nanobot session key to a RentMate conversation_id."""
+        from handlers.deps import SessionLocal
+        prefix, _, id_part = key.partition(":")
+        if not id_part:
+            return None
+        if prefix == "task":
+            db = SessionLocal()
+            try:
+                from db.models import Task
+                task = db.query(Task).filter_by(id=id_part).first()
+                return task.ai_conversation_id if task else None
+            finally:
+                db.close()
+        # chat: / sms: keys already contain the conversation_id
+        return id_part
+
+    def _load_from_db(self, key: str):
+        """Load messages from the DB into a nanobot Session."""
+        conv_id = self._resolve_conversation_id(key)
+        session = self._NanobotSession(key=key)
+        if not conv_id:
+            return session
+        from handlers.deps import SessionLocal
+        from db.models import Message, MessageType
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(Message)
+                .filter(
+                    Message.conversation_id == conv_id,
+                    Message.message_type.in_([
+                        MessageType.MESSAGE, MessageType.THREAD,
+                    ]),
+                )
+                .order_by(Message.sent_at)
+                .all()
+            )
+            for m in rows:
+                role = "assistant" if m.is_ai else "user"
+                session.messages.append({
+                    "role": role,
+                    "content": m.body or "",
+                    "timestamp": m.sent_at.isoformat() if m.sent_at else "",
+                })
+        finally:
+            db.close()
+        return session
+
+    # ── SessionManager interface ──────────────────────────────────────────
+
+    def get_or_create(self, key: str):
+        if key not in self._cache:
+            self._cache[key] = self._load_from_db(key)
+        return self._cache[key]
+
+    def save(self, session) -> None:
+        # Messages are persisted by the chat handler after the agent finishes,
+        # so save is a no-op — we just keep the in-memory cache current.
+        self._cache[session.key] = session
+
+    def invalidate(self, key: str) -> None:
+        self._cache.pop(key, None)
+
+    def list_sessions(self) -> list:
+        return []
+
 # Paths
 AGENTS_DIR = Path(__file__).parent.parent / "agents"
 TEMPLATE_DIR = AGENTS_DIR / "template"
@@ -89,14 +175,23 @@ class AgentRegistry:
         workspace.mkdir(parents=True, exist_ok=True)
 
         self._bus = MessageBus()
-        return AgentLoop(
+        loop = AgentLoop(
             bus=self._bus,
             provider=provider,
             workspace=workspace,
             model=model,
             max_iterations=40,
             restrict_to_workspace=False,
+            session_manager=_DbSessionManager(),
         )
+
+        # Register RentMate-specific tools (write actions → Suggestions)
+        from llm.tools import ProposeTaskTool, CloseTaskTool, SetModeTool
+        loop.tools.register(ProposeTaskTool())
+        loop.tools.register(CloseTaskTool())
+        loop.tools.register(SetModeTool())
+
+        return loop
 
     @staticmethod
     def _build_nanobot_config(integrations: dict):
