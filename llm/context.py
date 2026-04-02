@@ -108,3 +108,40 @@ def build_task_context(db: Session, task_id: str) -> str:
     lines.append("")
     lines.append(load_account_context(db))
     return "\n".join(lines)
+
+
+def build_vendor_safe_context(db: Session, task_id: str) -> str:
+    """Build context for vendor-facing communications with tenant PII stripped.
+
+    Includes only: property address, unit label, task details, category, urgency.
+    Excludes: tenant names, emails, phones, lease dates, rent, payment status.
+    """
+    task = db.query(Task).filter_by(id=task_id).first()
+    if not task:
+        return ""
+
+    lines = [
+        f"Task: {task.title}",
+        f"Category: {task.category or 'general'}",
+        f"Urgency: {task.urgency or 'normal'}",
+    ]
+
+    ai_convo = task.ai_conversation
+    all_msgs = list(ai_convo.messages) if ai_convo else []
+    context_msgs = [m for m in all_msgs if m.message_type == MessageType.CONTEXT]
+    if context_msgs:
+        lines.append(f"Description: {context_msgs[0].body}")
+
+    if task.property_id:
+        prop = db.query(Property).filter_by(id=task.property_id).first()
+        if prop:
+            parts = [prop.address_line1, prop.city, prop.state, prop.postal_code]
+            addr = ", ".join(p for p in parts if p)
+            lines.append(f"Property: {addr}")
+
+    if task.unit_id:
+        unit = db.query(Unit).filter_by(id=task.unit_id).first()
+        if unit:
+            lines.append(f"Unit: {unit.label}")
+
+    return "\n".join(lines)

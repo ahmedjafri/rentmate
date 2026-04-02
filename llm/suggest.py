@@ -16,7 +16,11 @@ _SYSTEM = (
     "that the property manager could send to the relevant party (tenant, vendor, or contractor) "
     "to address it. Be concise — 2–4 sentences. Do not include a subject line. "
     "Do not add placeholders like [Name] — use the actual names if provided, "
-    "or write generically if not. Do not explain what you are doing; just write the message."
+    "or write generically if not. Do not explain what you are doing; just write the message.\n\n"
+    "PRIVACY: When drafting messages to vendors or contractors, never include tenant "
+    "personal information such as email addresses, phone numbers, or full names. "
+    "Refer to tenants generically as 'the tenant'. Tell vendors to coordinate "
+    "access through the property manager."
 )
 
 _CATEGORY_HINTS = {

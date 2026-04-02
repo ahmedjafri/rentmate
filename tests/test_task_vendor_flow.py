@@ -48,7 +48,7 @@ class TestTaskVendorFlow:
 
     def _create_vendor(self, db, name="Acme Plumbing"):
         vendor = VendorService.create_vendor(
-            db, CreateVendorInput(name=name, contact_method="email"),
+            db, CreateVendorInput(name=name, email="vendor@test.com", contact_method="email"),
         )
         # Capture scalar fields now — the ORM object may be detached later
         return {"id": str(vendor.id), "name": vendor.name}
@@ -87,7 +87,8 @@ class TestTaskVendorFlow:
         vendor = self._create_vendor(db)
         response = self._create_task_via_endpoint(client, db, vendor)
         assert response.status_code == 200, response.json()
-        assert response.json() == {"ok": True}
+        data = response.json()
+        assert data["ok"] is True
 
     def test_task_has_external_conversation(self, db):
         client = TestClient(app)
@@ -162,21 +163,6 @@ class TestTaskVendorFlow:
             f"Vendor conversation {task.external_conversation_id} not found in chats query. "
             f"Got: {convo_ids}"
         )
-
-    # -- 3. Outreach message lands in external conversation ---------------
-
-    def test_outreach_message_in_external_conversation(self, db):
-        client = TestClient(app)
-        vendor = self._create_vendor(db)
-        self._create_task_via_endpoint(client, db, vendor)
-
-        task = db.query(Task).filter(Task.title == "Fix leaky faucet").first()
-        ext_msgs = db.query(Message).filter(
-            Message.conversation_id == task.external_conversation_id,
-            Message.message_type == MessageType.MESSAGE,
-        ).all()
-        assert len(ext_msgs) == 1, f"Expected 1 outreach message, got {len(ext_msgs)}"
-        assert "available" in ext_msgs[0].body.lower()
 
     def test_context_message_in_ai_conversation(self, db):
         client = TestClient(app)

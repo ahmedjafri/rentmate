@@ -64,7 +64,7 @@ def _subjects(db):
     return [t.title for t in _open_tasks(db)]
 
 def _body(db, task):
-    conv_id = task.conversations[0].id if task.conversations else None
+    conv_id = task.ai_conversation_id
     if not conv_id:
         return ""
     m = (db.query(Message)

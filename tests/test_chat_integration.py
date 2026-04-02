@@ -332,7 +332,7 @@ class TestTaskChatSSE:
             .filter_by(
                 conversation_id=conv_id,
                 is_ai=True,
-                message_type="thread",
+                message_type="message",
             )
             .all()
         )

@@ -17,7 +17,11 @@ _SYSTEM = (
     "Be succinct — 2-3 sentences max. Be professional and friendly. "
     "Do not include a subject line. Do not add placeholders like [Name] — use the "
     "actual names if provided, or write generically if not. "
-    "Do not explain what you are doing; just write the message."
+    "Do not explain what you are doing; just write the message.\n\n"
+    "PRIVACY: Never include tenant personal information in vendor messages. "
+    "Do not share tenant names, email addresses, phone numbers, lease details, "
+    "or rent amounts with vendors. Refer to tenants generically as 'the tenant'. "
+    "Tell the vendor to coordinate access through the property manager, not directly with the tenant."
 )
 
 
@@ -44,7 +48,7 @@ def generate_vendor_outreach(
         if vendor_name:
             parts.append(f"Vendor: {vendor_name}")
         if context:
-            parts.append(f"Property & tenant context:\n{context}")
+            parts.append(f"Property context:\n{context}")
 
         response = litellm.completion(
             model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),

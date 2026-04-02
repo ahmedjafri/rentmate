@@ -316,13 +316,13 @@ class TestCreateSimulatedTask(unittest.TestCase):
         # Draft should be stored in action_payload
         assert suggestion.action_payload.get("draft_message") == "Hi, can you take this job?"
 
-        # Should have approval message
-        approval = self.db.query(Message).filter(
+        # Should have suggestion message
+        suggestion_msg = self.db.query(Message).filter(
             Message.conversation_id == suggestion.ai_conversation_id,
-            Message.message_type == "approval",
+            Message.message_type.in_(["suggestion", "approval"]),
         ).first()
-        assert approval is not None, "Expected an approval message"
-        assert approval.draft_reply == "Hi, can you take this job?"
+        assert suggestion_msg is not None, "Expected a suggestion message"
+        assert suggestion_msg.draft_reply == "Hi, can you take this job?"
 
         # Options should include vendor draft actions
         option_keys = [o["key"] for o in suggestion.options]

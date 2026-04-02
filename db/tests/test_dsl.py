@@ -103,7 +103,7 @@ def _subjects(db):
 
 
 def _context_body(db, task):
-    conv_id = task.conversations[0].id if task.conversations else None
+    conv_id = task.ai_conversation_id
     if not conv_id:
         return ""
     msg = (
@@ -462,7 +462,7 @@ class TestMissingContact:
         _tenant(db)
         _audit(db, "missing_contact")
         task = _open_tasks(db)[0]
-        conv_id = task.conversations[0].id
+        conv_id = task.ai_conversation_id
         msg = (
             db.query(Message)
             .filter(Message.conversation_id == conv_id)
@@ -781,7 +781,7 @@ class TestContextMessages:
         _prop(db, city=None)
         _audit(db, "incomplete_properties")
         task = next(t for t in _open_tasks(db) if "Incomplete address" in t.title)
-        conv_id = task.conversations[0].id
+        conv_id = task.ai_conversation_id
         msgs = db.query(Message).filter(Message.conversation_id == conv_id).all()
         assert len(msgs) == 1
         assert msgs[0].message_type == "context"
@@ -794,7 +794,7 @@ class TestContextMessages:
         _lease(db, p, u, t, end=TODAY + timedelta(days=20))
         _audit(db, "lease_status", warn_days=60)
         task = next(t for t in _open_tasks(db) if "Lease expiring" in t.title)
-        conv_id = task.conversations[0].id
+        conv_id = task.ai_conversation_id
         msgs = db.query(Message).filter(Message.conversation_id == conv_id).all()
         assert len(msgs) == 1
         assert msgs[0].message_type == "context"
@@ -806,7 +806,7 @@ class TestContextMessages:
         _lease(db, p, u, t, end=TODAY - timedelta(days=5))
         _audit(db, "lease_status")
         task = next(t for t in _open_tasks(db) if "Expired lease" in t.title)
-        conv_id = task.conversations[0].id
+        conv_id = task.ai_conversation_id
         msgs = db.query(Message).filter(Message.conversation_id == conv_id).all()
         assert len(msgs) == 1
 
@@ -814,7 +814,7 @@ class TestContextMessages:
         _tenant(db, first="Lone", last="Wolf")
         _audit(db, "missing_contact")
         task = next(t for t in _open_tasks(db) if "Missing contact info" in t.title)
-        conv_id = task.conversations[0].id
+        conv_id = task.ai_conversation_id
         msgs = db.query(Message).filter(Message.conversation_id == conv_id).all()
         assert len(msgs) == 1
         assert msgs[0].sender_name == "RentMate"
