@@ -50,7 +50,7 @@ async def chat_with_agent(
     messages: list[dict],
     on_progress: Optional[Callable] = None,
 ) -> str:
-    loop = agent_registry.get_loop()
+    loop = agent_registry.get_loop(agent_id)
     if loop is None:
         raise RuntimeError("NanoBot agent not ready")
 
@@ -197,8 +197,8 @@ async def handle_message(
     context = build_task_context(db, conv.id)
     messages = chat_service.build_agent_message_history(db, conv.id, body, context, exclude_last=True)
 
-    from backends.local_auth import DEFAULT_USER_ID
-    agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
+    from backends.local_auth import resolve_account_id
+    agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
     session_key = f"sms:{conv.id}"
 
     response_text = await chat_with_agent(agent_id, session_key, messages)
@@ -239,7 +239,6 @@ async def chat_endpoint(
     or omit both to auto-create a user_ai conversation.
     """
     await require_user(request)
-    from backends.local_auth import DEFAULT_USER_ID
     from handlers.deps import SessionLocal as _SL
 
     # ── Resolve conversation + context ────────────────────────────────────
@@ -299,7 +298,8 @@ async def chat_endpoint(
     else:
         messages_payload = chat_service.build_agent_message_history(db, conv_id, body.message, context)
 
-    agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
+    from backends.local_auth import resolve_account_id
+    agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
     session_key = f"task:{body.task_id}" if body.task_id else f"chat:{conv_id}"
     stream_id = str(_uuid.uuid4())
     user_message = body.message

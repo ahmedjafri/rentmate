@@ -180,10 +180,13 @@ export function ChatPanel() {
   );
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages, isTyping]);
+    // ScrollArea renders a viewport child — scroll that instead of the wrapper
+    const el = scrollRef.current;
+    if (!el) return;
+    const viewport = el.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement | null;
+    const target = viewport ?? el;
+    setTimeout(() => { target.scrollTop = target.scrollHeight; }, 50);
+  }, [messages, convMessages, participantMessages, isTyping, progressLog]);
 
   // Refresh task messages from DB whenever a task is opened + poll for new ones
   const loadTaskMessages = (taskId: string) => {

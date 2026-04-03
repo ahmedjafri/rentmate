@@ -117,50 +117,61 @@ def _soul_version(text: str) -> int:
 class AgentRegistry:
     def __init__(self):
         self._lock = threading.Lock()
-        self._loop = None
-        self._bus = None
+        self._loops: dict[str, object] = {}   # account_id → AgentLoop
+        self._buses: dict[str, object] = {}   # account_id → MessageBus
         self._channel_task: asyncio.Task | None = None
         DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     # ─── Public lifecycle ─────────────────────────────────────────────────────
 
     def populate_all_agents(self, db: Session):
+        """Write workspace files for the default account (others are lazy-initialized)."""
         agent_dir = DATA_DIR / DEFAULT_USER_ID
-        self._write_workspace(agent_dir, db)
+        self._write_workspace(agent_dir, db, DEFAULT_USER_ID)
         print("[nanobot] Workspace populated")
 
-    def start_gateway(self):
+    def start_gateway(self, account_id: str | None = None):
+        """Start (or ensure) the agent loop for an account. Defaults to DEFAULT_USER_ID."""
+        aid = account_id or DEFAULT_USER_ID
         with self._lock:
-            if self._loop is not None:
+            if aid in self._loops:
                 return
             try:
-                self._loop = self._make_loop()
-                print("[nanobot] Agent loop ready")
+                self._loops[aid] = self._make_loop(aid)
+                print(f"[nanobot] Agent loop ready for account {aid[:8]}…")
             except Exception as e:
-                print(f"[nanobot] Failed to start agent: {e}")
+                print(f"[nanobot] Failed to start agent for {aid[:8]}…: {e}")
 
-    def stop_gateway(self):
+    def stop_gateway(self, account_id: str | None = None):
+        aid = account_id or DEFAULT_USER_ID
         with self._lock:
-            self._loop = None
-        print("[nanobot] Agent stopped")
+            self._loops.pop(aid, None)
+            self._buses.pop(aid, None)
+        print(f"[nanobot] Agent stopped for account {aid[:8]}…")
 
-    def is_healthy(self) -> bool:
-        return self._loop is not None
+    def is_healthy(self, account_id: str | None = None) -> bool:
+        aid = account_id or DEFAULT_USER_ID
+        return aid in self._loops
 
-    def ensure_agent(self, user_id: str, db: Session) -> str:
-        if self._loop is None:
-            self.start_gateway()
-        return DEFAULT_USER_ID
+    def ensure_agent(self, account_id: str, db: Session) -> str:
+        """Ensure an agent loop exists for the given account. Returns the account_id."""
+        if account_id not in self._loops:
+            # Write workspace files (lazy init for new accounts)
+            agent_dir = DATA_DIR / account_id
+            self._write_workspace(agent_dir, db, account_id)
+            self.start_gateway(account_id)
+        return account_id
 
-    def get_loop(self):
-        return self._loop
+    def get_loop(self, account_id: str | None = None):
+        aid = account_id or DEFAULT_USER_ID
+        return self._loops.get(aid)
 
     # ─── Internal ─────────────────────────────────────────────────────────────
 
-    def _make_loop(self):
+    def _make_loop(self, account_id: str):
         from nanobot.agent import AgentLoop
         from nanobot.bus import MessageBus
-        from nanobot.config.schema import WebSearchConfig
+        from nanobot.config.schema import ExecToolConfig, WebSearchConfig
         from nanobot.providers.openai_compat_provider import OpenAICompatProvider
 
         model = os.environ.get("LLM_MODEL", "anthropic/claude-haiku-4-5-20251001")
@@ -185,26 +196,33 @@ class AgentRegistry:
             default_model=actual_model,
         )
 
-        workspace = DATA_DIR / DEFAULT_USER_ID
+        workspace = DATA_DIR / account_id
         workspace.mkdir(parents=True, exist_ok=True)
 
         # Web search: use Brave if a key is configured, otherwise DuckDuckGo
         brave_key = os.environ.get("BRAVE_API_KEY") or None
 
-        self._bus = MessageBus()
+        bus = MessageBus()
+        self._buses[account_id] = bus
         loop = AgentLoop(
-            bus=self._bus,
+            bus=bus,
             provider=provider,
             workspace=workspace,
             model=actual_model,
             max_iterations=40,
             restrict_to_workspace=False,
+            exec_config=ExecToolConfig(enable=False),
             session_manager=_DbSessionManager(),
             web_search_config=WebSearchConfig(
                 provider="brave" if brave_key else "duckduckgo",
                 api_key=brave_key or "",
             ),
         )
+
+        # Remove tools the agent should not use — file I/O, shell, subagents
+        for tool_name in ("read_file", "write_file", "edit_file", "list_dir", "spawn_agent", "send_message"):
+            if loop.tools.has(tool_name):
+                loop.tools.unregister(tool_name)
 
         # Register RentMate-specific tools (write actions → Suggestions)
         from llm.tools import ProposeTaskTool, CloseTaskTool, SetModeTool, AttachVendorTool, LookupVendorsTool
@@ -216,7 +234,7 @@ class AgentRegistry:
 
         # Replace file-based memory with DB-backed memory
         from llm.memory_store import DbMemoryStore
-        loop.memory_consolidator.store = DbMemoryStore(workspace, DEFAULT_USER_ID)
+        loop.memory_consolidator.store = DbMemoryStore(workspace, account_id)
 
         return loop
 
@@ -241,9 +259,10 @@ class AgentRegistry:
         )
         return Config(channels=channels)
 
-    async def restart_channels_async(self, integrations: dict):
+    async def restart_channels_async(self, integrations: dict, account_id: str = DEFAULT_USER_ID):
         """(Re)start the nanobot ChannelManager from updated integration config."""
-        if self._bus is None:
+        bus = self._buses.get(account_id)
+        if bus is None:
             return
 
         if self._channel_task and not self._channel_task.done():
@@ -263,7 +282,7 @@ class AgentRegistry:
             return
 
         from nanobot.channels.manager import ChannelManager
-        cm = ChannelManager(config, self._bus)
+        cm = ChannelManager(config, bus)
         self._channel_task = asyncio.create_task(cm.start_all())
         print(f"[nanobot] Chat channels starting: {cm.enabled_channels}")
 
@@ -297,9 +316,9 @@ class AgentRegistry:
                 updated_at=now,
             ))
 
-    def _write_workspace(self, agent_dir: Path, db: Session):
+    def _write_workspace(self, agent_dir: Path, db: Session, account_id: str = DEFAULT_USER_ID):
         agent_dir.mkdir(parents=True, exist_ok=True)
-        agent_id = DEFAULT_USER_ID
+        agent_id = account_id
 
         for filename in _STATIC_TEMPLATE_FILES:
             dest = agent_dir / filename

@@ -6,7 +6,17 @@ JWT_SECRET = os.getenv("JWT_SECRET", "rentmate-local-secret")
 RENTMATE_PASSWORD = os.getenv("RENTMATE_PASSWORD", "rentmate")
 
 DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
+DEFAULT_ACCOUNT_ID = DEFAULT_USER_ID  # In local auth, user == account
 DEFAULT_USER_EMAIL = os.getenv("RENTMATE_ADMIN_EMAIL", "admin@localhost")
+
+
+def resolve_account_id(user: dict | None = None) -> str:
+    """Resolve the account_id from a user token payload.
+
+    For local auth this always returns DEFAULT_ACCOUNT_ID.
+    For Supabase auth, this would look up the AccountUser table.
+    """
+    return DEFAULT_ACCOUNT_ID
 
 
 class LocalAuthBackend:

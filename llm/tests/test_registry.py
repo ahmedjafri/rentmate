@@ -15,35 +15,39 @@ from backends.local_auth import DEFAULT_USER_ID
 class TestAgentRegistry(unittest.TestCase):
 
     def _make_registry(self):
-        """Return a fresh AgentRegistry with _loop=None (no real nanobot started)."""
+        """Return a fresh AgentRegistry with no loops running."""
         from llm.registry import AgentRegistry
         registry = AgentRegistry.__new__(AgentRegistry)
         registry._lock = threading.Lock()
-        registry._loop = None
+        registry._loops = {}
+        registry._buses = {}
+        registry._channel_task = None
         return registry
 
     # ------------------------------------------------------------------
     # ensure_agent
     # ------------------------------------------------------------------
 
-    def test_ensure_agent_returns_default_user_id(self):
-        """ensure_agent always returns DEFAULT_USER_ID."""
+    def test_ensure_agent_returns_account_id(self):
+        """ensure_agent returns the account_id it was given."""
         registry = self._make_registry()
-        with patch.object(registry, "start_gateway"):
+        with patch.object(registry, "start_gateway"), \
+             patch.object(registry, "_write_workspace"):
             agent_id = registry.ensure_agent(DEFAULT_USER_ID, self.db)
         self.assertEqual(agent_id, DEFAULT_USER_ID)
 
-    def test_ensure_agent_starts_gateway_when_loop_is_none(self):
-        """ensure_agent calls start_gateway when no loop is running."""
+    def test_ensure_agent_starts_gateway_when_no_loop(self):
+        """ensure_agent calls start_gateway when no loop exists for that account."""
         registry = self._make_registry()
-        with patch.object(registry, "start_gateway") as mock_start:
+        with patch.object(registry, "start_gateway") as mock_start, \
+             patch.object(registry, "_write_workspace"):
             registry.ensure_agent(DEFAULT_USER_ID, self.db)
-        mock_start.assert_called_once()
+        mock_start.assert_called_once_with(DEFAULT_USER_ID)
 
     def test_ensure_agent_skips_start_when_loop_exists(self):
-        """ensure_agent does not restart the gateway if already running."""
+        """ensure_agent does not restart the gateway if already running for that account."""
         registry = self._make_registry()
-        registry._loop = MagicMock()  # simulate running loop
+        registry._loops[DEFAULT_USER_ID] = MagicMock()
         with patch.object(registry, "start_gateway") as mock_start:
             registry.ensure_agent(DEFAULT_USER_ID, self.db)
         mock_start.assert_not_called()
@@ -58,12 +62,13 @@ class TestAgentRegistry(unittest.TestCase):
 
     def test_is_healthy_true_when_loop_present(self):
         registry = self._make_registry()
-        registry._loop = MagicMock()
+        registry._loops[DEFAULT_USER_ID] = MagicMock()
         self.assertTrue(registry.is_healthy())
 
     def test_stop_gateway_clears_loop(self):
         registry = self._make_registry()
-        registry._loop = MagicMock()
+        registry._loops[DEFAULT_USER_ID] = MagicMock()
+        registry._buses[DEFAULT_USER_ID] = MagicMock()
         registry.stop_gateway()
         self.assertIsNone(registry.get_loop())
 
@@ -87,7 +92,3 @@ class TestAgentRegistry(unittest.TestCase):
             tools_md = data_dir / DEFAULT_USER_ID / "TOOLS.md"
             self.assertTrue(tools_md.exists(), "TOOLS.md should be created")
             self.assertIn("agent_data.py", tools_md.read_text())
-
-
-if __name__ == "__main__":
-    unittest.main()
