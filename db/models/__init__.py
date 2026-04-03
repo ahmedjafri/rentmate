@@ -14,6 +14,7 @@ from .messaging import (
 from .documents import Document, DocumentTask, DocumentTag
 from .automation import AutomationRevision
 from .suggestions import Suggestion
+from .agent_memory import AgentMemory
 from db.enums import (
     TaskCategory, Urgency, TaskSource,
     AutomationSource, AgentSource, SuggestionSource,
@@ -39,6 +40,7 @@ __all__ = [
     "Document",
     "DocumentTask",
     "DocumentTag",
+    "AgentMemory",
     "AutomationRevision",
     "TaskCategory",
     "Urgency",

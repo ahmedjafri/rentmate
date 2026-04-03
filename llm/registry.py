@@ -4,6 +4,7 @@ import re
 import shutil
 import sys
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -213,6 +214,10 @@ class AgentRegistry:
         loop.tools.register(AttachVendorTool())
         loop.tools.register(LookupVendorsTool())
 
+        # Replace file-based memory with DB-backed memory
+        from llm.memory_store import DbMemoryStore
+        loop.memory_consolidator.store = DbMemoryStore(workspace, DEFAULT_USER_ID)
+
         return loop
 
     @staticmethod
@@ -262,32 +267,73 @@ class AgentRegistry:
         self._channel_task = asyncio.create_task(cm.start_all())
         print(f"[nanobot] Chat channels starting: {cm.enabled_channels}")
 
+    @staticmethod
+    def _db_read_file(db: Session, agent_id: str, filename: str) -> str | None:
+        """Read a bootstrap file from the agent_memory table."""
+        from db.models import AgentMemory
+        row = db.query(AgentMemory).filter_by(
+            agent_id=agent_id, memory_type=f"file:{filename}"
+        ).first()
+        return row.content if row else None
+
+    @staticmethod
+    def _db_write_file(db: Session, agent_id: str, filename: str, content: str):
+        """Persist a bootstrap file to the agent_memory table."""
+        import uuid as _uuid
+        from db.models import AgentMemory
+        row = db.query(AgentMemory).filter_by(
+            agent_id=agent_id, memory_type=f"file:{filename}"
+        ).first()
+        now = datetime.now(UTC)
+        if row:
+            row.content = content
+            row.updated_at = now
+        else:
+            db.add(AgentMemory(
+                id=str(_uuid.uuid4()),
+                agent_id=agent_id,
+                memory_type=f"file:{filename}",
+                content=content,
+                updated_at=now,
+            ))
+
     def _write_workspace(self, agent_dir: Path, db: Session):
         agent_dir.mkdir(parents=True, exist_ok=True)
+        agent_id = DEFAULT_USER_ID
 
         for filename in _STATIC_TEMPLATE_FILES:
-            src = TEMPLATE_DIR / filename
-            if not src.exists():
-                continue
             dest = agent_dir / filename
-            if dest.exists():
+            # 1. Try DB first (source of truth for existing agents)
+            db_content = self._db_read_file(db, agent_id, filename)
+            if db_content is not None:
                 if filename == "SOUL.md":
-                    old_v = _soul_version(dest.read_text())
-                    new_v = _soul_version(src.read_text())
-                    if new_v == old_v:
-                        continue  # no change, skip overwrite
-                    direction = "upgraded" if new_v > old_v else "reverted"
-                    print(f"[nanobot] SOUL.md {direction}: v{old_v} → v{new_v}")
-                else:
-                    continue  # preserve user edits to other static files
-            shutil.copy2(src, dest)
+                    # Check if template has a newer version
+                    src = TEMPLATE_DIR / filename
+                    if src.exists():
+                        new_v = _soul_version(src.read_text())
+                        old_v = _soul_version(db_content)
+                        if new_v > old_v:
+                            db_content = src.read_text()
+                            self._db_write_file(db, agent_id, filename, db_content)
+                            print(f"[nanobot] SOUL.md upgraded: v{old_v} → v{new_v}")
+                dest.write_text(db_content)
+                continue
+            # 2. Fall back to template (first boot)
+            src = TEMPLATE_DIR / filename
+            if src.exists():
+                content = src.read_text()
+                shutil.copy2(src, dest)
+                self._db_write_file(db, agent_id, filename, content)
 
         admin_email = os.environ.get("RENTMATE_ADMIN_EMAIL", "admin@localhost")
         account_name = os.environ.get("RENTMATE_ACCOUNT_NAME", "RentMate")
 
         user_md = agent_dir / "USER.md"
-        if not user_md.exists():
-            user_md.write_text(
+        db_user = self._db_read_file(db, agent_id, "USER.md")
+        if db_user is not None:
+            user_md.write_text(db_user)
+        elif not user_md.exists():
+            content = (
                 f"# USER.md - About Your Manager\n\n"
                 f"- **Name:** {admin_email}\n"
                 f"- **Pronouns:** Unknown — use neutral language (they/them) until told otherwise\n"
@@ -295,6 +341,8 @@ class AgentRegistry:
                 f"- **Role:** admin\n\n"
                 f"_(Update this as you learn more about how they prefer to work.)_\n"
             )
+            user_md.write_text(content)
+            self._db_write_file(db, agent_id, "USER.md", content)
 
         data_script = Path(__file__).parent / "agent_data.py"
         action_script = Path(__file__).parent / "agent_action.py"
@@ -363,6 +411,11 @@ class AgentRegistry:
             f"## Vendor Notes\n\n"
             f"_(Add vendor contacts here as you learn them.)_\n"
         )
+        # Persist TOOLS.md to DB (regenerated each startup with current paths)
+        tools_content = (agent_dir / "TOOLS.md").read_text()
+        self._db_write_file(db, agent_id, "TOOLS.md", tools_content)
+
+        db.commit()
 
 
 agent_registry = AgentRegistry()

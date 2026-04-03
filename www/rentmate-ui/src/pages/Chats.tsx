@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -58,13 +58,13 @@ const typeColors: Record<string, string> = {
   vendor: 'bg-orange-100 text-orange-700 dark:bg-orange-900/20 dark:text-orange-400',
 };
 
-function ConvRow({ conv, onClick, onDelete }: { conv: ConvSummary; onClick: () => void; onDelete: () => void }) {
+function ConvRow({ conv, onClick, onDelete, isActive }: { conv: ConvSummary; onClick: () => void; onDelete: () => void; isActive?: boolean }) {
   const TabIcon = TAB_CONFIG.find(t => t.key === conv.conversationType)?.icon ?? MessageCircle;
   const at = conv.lastMessageAt ?? conv.updatedAt;
   const relTime = at ? formatDistanceToNow(new Date(at), { addSuffix: true }) : null;
 
   return (
-    <Card className="px-3 py-2.5 rounded-xl hover:shadow-md transition-shadow cursor-pointer relative group" onClick={onClick}>
+    <Card className={`px-3 py-2.5 rounded-xl hover:shadow-md transition-shadow cursor-pointer relative group ${isActive ? 'ring-2 ring-primary/40' : ''}`} onClick={onClick}>
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
         className="absolute top-2 right-2 h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors hidden group-hover:flex"
@@ -108,15 +108,15 @@ function ConvRow({ conv, onClick, onDelete }: { conv: ConvSummary; onClick: () =
 }
 
 const Chats = () => {
-  const { openChat } = useApp();
+  const { openChat, chatPanel } = useApp();
   const [activeTab, setActiveTab] = useState<TabKey>('user_ai');
   const [conversations, setConversations] = useState<ConvSummary[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setConversations([]);
 
     graphqlQuery<{ conversations: ConvSummary[] }>(CONVERSATIONS_QUERY, { conversationType: activeTab, limit: 50 })
       .then((data) => {
@@ -126,14 +126,27 @@ const Chats = () => {
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [activeTab]);
+  }, [activeTab, refreshKey]);
+
+  // Re-fetch when chat panel closes (new conversation may have been created)
+  const prevOpen = useRef(chatPanel.isOpen);
+  useEffect(() => {
+    if (prevOpen.current && !chatPanel.isOpen) {
+      setRefreshKey(k => k + 1);
+    }
+    prevOpen.current = chatPanel.isOpen;
+  }, [chatPanel.isOpen]);
 
   return (
     <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-4">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-bold">Chats</h1>
         {activeTab === 'user_ai' && (
-          <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={() => openChat()}>
+          <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={() => {
+            openChat();
+            // Refresh list after a short delay to pick up the new conversation
+            setTimeout(() => setRefreshKey(k => k + 1), 500);
+          }}>
             <Plus className="h-3.5 w-3.5" />
             New Chat
           </Button>
@@ -171,7 +184,8 @@ const Chats = () => {
           <ConvRow
             key={conv.uid}
             conv={conv}
-            onClick={() => openChat({ conversationId: conv.uid, conversationType: conv.conversationType as TabKey })}
+            isActive={chatPanel.isOpen && chatPanel.conversationId === conv.uid}
+            onClick={() => openChat({ conversationId: conv.uid })}
             onDelete={async () => {
               try {
                 await graphqlQuery(DELETE_CONVERSATION_MUTATION, { uid: conv.uid });

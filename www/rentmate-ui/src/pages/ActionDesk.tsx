@@ -24,9 +24,10 @@ const urgencyColors: Record<string, string> = {
 
 // ─── SuggestionCard ──────────────────────────────────────────────────────────
 
-function SuggestionCard({ suggestion, onAction }: {
+function SuggestionCard({ suggestion, onAction, isActive }: {
   suggestion: Suggestion;
   onAction: (id: string, action: string, editedBody?: string) => Promise<void>;
+  isActive?: boolean;
 }) {
   const [loading, setLoading] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -52,7 +53,7 @@ function SuggestionCard({ suggestion, onAction }: {
   };
 
   return (
-    <Card className="px-4 py-3 rounded-xl hover:shadow-md transition-shadow space-y-2">
+    <Card className={cn("px-4 py-3 rounded-xl hover:shadow-md transition-shadow space-y-2", isActive && "ring-2 ring-primary/40")}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 flex-wrap min-w-0">
           <Badge variant="secondary" className={cn('text-[10px] rounded-lg shrink-0', categoryColors[suggestion.category])}>
@@ -166,7 +167,7 @@ function SuggestionCard({ suggestion, onAction }: {
 // ─── ActionDesk (Suggestions) ────────────────────────────────────────────────
 
 const ActionDesk = () => {
-  const { suggestions, updateSuggestionStatus, isLoading } = useApp();
+  const { suggestions, updateSuggestionStatus, isLoading, chatPanel } = useApp();
   const [categoryFilter, setCategoryFilter] = useState<SuggestionCategory | null>(null);
 
   const pending = suggestions
@@ -239,7 +240,7 @@ const ActionDesk = () => {
             Pending Suggestions
           </h2>
           {pending.map(s => (
-            <SuggestionCard key={s.id} suggestion={s} onAction={handleAction} />
+            <SuggestionCard key={s.id} suggestion={s} onAction={handleAction} isActive={chatPanel.isOpen && chatPanel.suggestionId === s.id} />
           ))}
         </div>
       ) : (
