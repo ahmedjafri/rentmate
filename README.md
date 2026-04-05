@@ -1,8 +1,23 @@
 # RentMate
 
+[![Tests](https://github.com/ahmedjafri/rentmate/actions/workflows/test.yml/badge.svg)](https://github.com/ahmedjafri/rentmate/actions/workflows/test.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
 > **Pre-alpha software** — This project is under active development and is not ready for production use. APIs, database schemas, and features may change without notice.
 
-An open source AI-powered property management assistant. Chat with your properties, tenants, and leases using natural language.
+An open-source, agent-first property management platform.
+
+## Why RentMate
+
+Most PropTech software was built a decade ago and is now bolting AI onto existing workflows — a chatbot here, a copilot there. The core is still rigid forms, manual steps, and rule-based automation. AI is an afterthought.
+
+RentMate flips this. The AI agent is the foundation, not a feature. Tenant messages, maintenance coordination, vendor outreach, lease monitoring — the agent handles these end-to-end, and the software exists to give it structure: data models, approval workflows, and a UI for when you want to stay in the loop.
+
+The difference matters in practice. When AI is a layer on top, every new capability requires new screens, new buttons, new integrations. When AI is the core, new capabilities are just new context and tools the agent can use. You describe what you want, and it figures out the how.
+
+**For small landlords:** RentMate replaces the patchwork of spreadsheets, texts, and property management apps with a single agent that actually manages.
+
+**For property managers:** RentMate handles the repetitive coordination — tenant follow-ups, vendor scheduling, lease tracking — so you focus on decisions, not data entry.
 
 ## Features
 
@@ -83,4 +98,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+AGPL-3.0 — see [LICENSE](LICENSE).

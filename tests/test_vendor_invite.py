@@ -53,7 +53,7 @@ class MockRequest:
 class TestVendorServiceCreate:
 
     def test_create_rentmate_vendor_generates_token(self, db):
-        inp = CreateVendorInput(name="Alice Plumber", phone="555-0001", contact_method="rentmate")
+        inp = CreateVendorInput(name="Alice Plumber", phone="555-0001", vendor_type="Plumber", contact_method="rentmate")
         vendor = VendorService.create_vendor(db, inp)
         extra = vendor.extra or {}
         assert extra.get("contact_method") == "rentmate"
@@ -62,41 +62,41 @@ class TestVendorServiceCreate:
         assert extra.get("invite_status") == "pending"
 
     def test_create_email_vendor_has_no_token(self, db):
-        inp = CreateVendorInput(name="Bob Email", email="bob@test.com", contact_method="email")
+        inp = CreateVendorInput(name="Bob Email", email="bob@test.com", vendor_type="Plumber", contact_method="email")
         vendor = VendorService.create_vendor(db, inp)
         extra = vendor.extra or {}
         assert extra.get("invite_token") is None
         assert extra.get("invite_status") == "n/a"
 
     def test_create_phone_vendor_has_no_token(self, db):
-        inp = CreateVendorInput(name="Carol SMS", phone="555-0002", contact_method="phone")
+        inp = CreateVendorInput(name="Carol SMS", phone="555-0002", vendor_type="Plumber", contact_method="phone")
         vendor = VendorService.create_vendor(db, inp)
         extra = vendor.extra or {}
         assert extra.get("invite_token") is None
         assert extra.get("invite_status") == "n/a"
 
     def test_each_rentmate_vendor_gets_unique_token(self, db):
-        a = VendorService.create_vendor(db, CreateVendorInput(name="A", phone="555-0003", contact_method="rentmate"))
-        b = VendorService.create_vendor(db, CreateVendorInput(name="B", phone="555-0004", contact_method="rentmate"))
+        a = VendorService.create_vendor(db, CreateVendorInput(name="A", phone="555-0003", vendor_type="Plumber", contact_method="rentmate"))
+        b = VendorService.create_vendor(db, CreateVendorInput(name="B", phone="555-0004", vendor_type="Plumber", contact_method="rentmate"))
         assert a.extra["invite_token"] != b.extra["invite_token"]
 
     def test_create_vendor_without_phone_or_email_raises(self, db):
         with pytest.raises(ValueError, match="phone or email"):
-            VendorService.create_vendor(db, CreateVendorInput(name="No Contact", contact_method="rentmate"))
+            VendorService.create_vendor(db, CreateVendorInput(name="No Contact", vendor_type="Plumber", contact_method="rentmate"))
 
     def test_create_vendor_with_only_email_succeeds(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Email Only", email="e@t.com", contact_method="rentmate"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Email Only", email="e@t.com", vendor_type="Plumber", contact_method="rentmate"))
         assert vendor.email == "e@t.com"
 
     def test_create_vendor_with_only_phone_succeeds(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Phone Only", phone="555-9999", contact_method="rentmate"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Phone Only", phone="555-9999", vendor_type="Plumber", contact_method="rentmate"))
         assert vendor.phone == "555-9999"
 
 
 class TestFindByInviteToken:
 
     def test_finds_vendor_by_token(self, db):
-        inp = CreateVendorInput(name="Dave", phone="555-0010", contact_method="rentmate")
+        inp = CreateVendorInput(name="Dave", phone="555-0010", vendor_type="Plumber", contact_method="rentmate")
         vendor = VendorService.create_vendor(db, inp)
         token = vendor.extra["invite_token"]
 
@@ -109,7 +109,7 @@ class TestFindByInviteToken:
         assert result is None
 
     def test_does_not_find_email_vendor_by_bogus_token(self, db):
-        VendorService.create_vendor(db, CreateVendorInput(name="Eve", email="eve@t.com", contact_method="email"))
+        VendorService.create_vendor(db, CreateVendorInput(name="Eve", email="eve@t.com", vendor_type="Plumber", contact_method="email"))
         result = VendorService._find_by_invite_token(db, "no-token")
         assert result is None
 
@@ -117,7 +117,7 @@ class TestFindByInviteToken:
 class TestAcceptInvite:
 
     def test_accept_transitions_status_and_returns_jwt(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Frank", phone="555-0020", contact_method="rentmate"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Frank", phone="555-0020", vendor_type="Plumber", contact_method="rentmate"))
         token = vendor.extra["invite_token"]
 
         returned_vendor, jwt_token = VendorService.accept_invite(db, token)
@@ -133,7 +133,7 @@ class TestAcceptInvite:
         assert info["type"] == "vendor"
 
     def test_accept_is_idempotent(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Grace", phone="555-0021", contact_method="rentmate"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Grace", phone="555-0021", vendor_type="Plumber", contact_method="rentmate"))
         token = vendor.extra["invite_token"]
         VendorService.accept_invite(db, token)
         # Second call should not raise
@@ -150,7 +150,7 @@ class TestAcceptInvite:
 class TestGetJwtForToken:
 
     def test_returns_jwt_for_accepted_vendor(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Hank", phone="555-0030", contact_method="rentmate"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Hank", phone="555-0030", vendor_type="Plumber", contact_method="rentmate"))
         token = vendor.extra["invite_token"]
         VendorService.accept_invite(db, token)
 
@@ -166,13 +166,13 @@ class TestGetJwtForToken:
 class TestVendorTypeFromSql:
 
     def test_rentmate_vendor_exposes_token_and_pending(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Henry", phone="555-0040", contact_method="rentmate"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Henry", phone="555-0040", vendor_type="Plumber", contact_method="rentmate"))
         vt = VendorType.from_sql(vendor)
         assert vt.invite_token == vendor.extra["invite_token"]
         assert vt.invite_status == "pending"
 
     def test_accepted_vendor_shows_accepted(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Iris", phone="555-0041", contact_method="rentmate"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Iris", phone="555-0041", vendor_type="Plumber", contact_method="rentmate"))
         VendorService.accept_invite(db, vendor.extra["invite_token"])
         db.expire(vendor)
         vt = VendorType.from_sql(vendor)
@@ -180,7 +180,7 @@ class TestVendorTypeFromSql:
         assert vt.invite_token is not None
 
     def test_email_vendor_has_no_token_and_na_status(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Jack", email="jack@t.com", contact_method="email"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Jack", email="jack@t.com", vendor_type="Plumber", contact_method="email"))
         vt = VendorType.from_sql(vendor)
         assert vt.invite_token is None
         assert vt.invite_status == "n/a"
@@ -212,7 +212,7 @@ class TestGetInviteInfoEndpoint:
         assert exc_info.value.status_code == 404
 
     def test_returns_jwt_for_accepted_vendor(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Leo", phone="555-0051", contact_method="rentmate"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Leo", phone="555-0051", vendor_type="Plumber", contact_method="rentmate"))
         token = vendor.extra["invite_token"]
         VendorService.accept_invite(db, token)
         db.expire(vendor)
@@ -227,7 +227,7 @@ class TestGetInviteInfoEndpoint:
 class TestAcceptInviteEndpoint:
 
     def test_accept_returns_ok_and_jwt(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Mia", phone="555-0060", contact_method="rentmate"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Mia", phone="555-0060", vendor_type="Plumber", contact_method="rentmate"))
         token = vendor.extra["invite_token"]
 
         result = accept_invite(token, MockRequest(db))
@@ -236,7 +236,7 @@ class TestAcceptInviteEndpoint:
         assert result["name"] == "Mia"
 
     def test_accept_updates_status_in_db(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Ned", phone="555-0061", contact_method="rentmate"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Ned", phone="555-0061", vendor_type="Plumber", contact_method="rentmate"))
         token = vendor.extra["invite_token"]
 
         accept_invite(token, MockRequest(db))
@@ -261,13 +261,13 @@ class TestAssignVendorToTask:
         return task
 
     def test_pending_rentmate_vendor_cannot_be_assigned(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Oscar", phone="555-0070", contact_method="rentmate"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Oscar", phone="555-0070", vendor_type="Plumber", contact_method="rentmate"))
         task = self._mk_task(db)
         with pytest.raises(ValueError, match="has not accepted their invite"):
             TaskService.assign_vendor_to_task(db, str(task.id), str(vendor.id))
 
     def test_accepted_rentmate_vendor_can_be_assigned(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Pam", phone="555-0071", contact_method="rentmate"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Pam", phone="555-0071", vendor_type="Plumber", contact_method="rentmate"))
         VendorService.accept_invite(db, vendor.extra["invite_token"])
         db.expire(vendor)
         task = self._mk_task(db)
@@ -278,7 +278,7 @@ class TestAssignVendorToTask:
         assert (ai_convo.extra or {}).get("assigned_vendor_name") == "Pam"
 
     def test_email_vendor_can_always_be_assigned(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Quinn", email="quinn@t.com", contact_method="email"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Quinn", email="quinn@t.com", vendor_type="Plumber", contact_method="email"))
         task = self._mk_task(db)
         result = TaskService.assign_vendor_to_task(db, str(task.id), str(vendor.id))
         ai_convo = db.get(Conversation, result.ai_conversation_id)
@@ -295,7 +295,7 @@ class TestCreateVendorMutation:
         result = schema.execute_sync(
             """
             mutation {
-              createVendor(input: {name: "Rita", phone: "555-0080", contactMethod: "rentmate"}) {
+              createVendor(input: {name: "Rita", phone: "555-0080", vendorType: "Plumber", contactMethod: "rentmate"}) {
                 uid name contactMethod inviteToken inviteStatus
               }
             }
@@ -312,7 +312,7 @@ class TestCreateVendorMutation:
         result = schema.execute_sync(
             """
             mutation {
-              createVendor(input: {name: "Sam", email: "sam@t.com", contactMethod: "email"}) {
+              createVendor(input: {name: "Sam", email: "sam@t.com", vendorType: "Electrician", contactMethod: "email"}) {
                 uid contactMethod inviteToken inviteStatus
               }
             }
@@ -328,7 +328,7 @@ class TestCreateVendorMutation:
 class TestAcceptVendorInviteMutation:
 
     def test_accept_via_gql_no_auth_needed(self, db):
-        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Tara", phone="555-0090", contact_method="rentmate"))
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Tara", phone="555-0090", vendor_type="Plumber", contact_method="rentmate"))
         token = vendor.extra["invite_token"]
 
         result = schema.execute_sync(

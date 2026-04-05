@@ -220,6 +220,61 @@ class Mutation(AuthMutation):
         db.refresh(msg)
         return ChatMessageType.from_sql(msg)
 
+    @strawberry.mutation(description="Send an SMS message to a vendor via Dialpad")
+    def send_sms(self, info, vendor_id: str, body: str, task_id: typing.Optional[str] = None) -> ChatMessageType:
+        _current_user(info)
+        db = _session(info)
+        from db.models import ExternalContact, ConversationType, Task
+
+        vendor = db.query(ExternalContact).filter_by(id=vendor_id).first()
+        if not vendor:
+            raise ValueError(f"Vendor {vendor_id} not found")
+        if not vendor.phone:
+            raise ValueError(f"Vendor {vendor.name} has no phone number")
+
+        # Find or create the vendor conversation
+        conv = None
+        if task_id:
+            task = db.query(Task).filter_by(id=task_id).first()
+            if task and task.external_conversation_id:
+                conv = db.get(Conversation, task.external_conversation_id)
+        if not conv:
+            conv = chat_service.get_or_create_external_conversation(
+                db,
+                conversation_type=ConversationType.VENDOR,
+                subject=f"SMS with {vendor.name}",
+                vendor_id=vendor_id,
+            )
+            if task_id:
+                task = db.query(Task).filter_by(id=task_id).first()
+                if task:
+                    task.external_conversation_id = conv.id
+
+        # Persist the message
+        msg = chat_service.send_message(
+            db, conv.id,
+            body=body,
+            sender_name="You",
+            is_ai=False,
+        )
+        db.commit()
+        db.refresh(msg)
+
+        # Dispatch SMS via Dialpad
+        from handlers.chat import send_sms_reply, _get_dialpad_api_key, _get_dialpad_from_number
+        api_key = _get_dialpad_api_key()
+        from_num = _get_dialpad_from_number()
+        if api_key:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(send_sms_reply(from_num, vendor.phone, body, api_key))
+            except RuntimeError:
+                # No running event loop (shouldn't happen in FastAPI, but be safe)
+                pass
+
+        return ChatMessageType.from_sql(msg)
+
     @strawberry.mutation(description="Permanently delete a task and all its messages")
     def delete_task(self, info, uid: str) -> bool:
         _current_user(info)

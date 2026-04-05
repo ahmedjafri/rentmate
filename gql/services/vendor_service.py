@@ -28,6 +28,8 @@ def _validate_contact_method(method: str | None) -> None:
 class VendorService:
     @staticmethod
     def create_vendor(sess: Session, input: CreateVendorInput) -> ExternalContact:
+        if not input.vendor_type:
+            raise ValueError("Vendor type is required")
         _validate_vendor_type(input.vendor_type)
         _validate_contact_method(input.contact_method)
         if not (input.phone or input.email):

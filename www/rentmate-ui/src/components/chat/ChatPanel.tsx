@@ -1,5 +1,5 @@
 import { useRef, useEffect, useMemo, useState } from 'react';
-import { X, Bot, Sparkles, Users, Zap, ShieldCheck, Hand, Lock, MessageSquare, RotateCcw, Loader2, Trash2 } from 'lucide-react';
+import { X, Bot, Sparkles, Users, Zap, ShieldCheck, Hand, Lock, MessageSquare, RotateCcw, Loader2, Trash2, Phone as PhoneIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -12,7 +12,7 @@ import { getToken, authFetch } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SuggestionOptions } from './SuggestionOptions';
-import { graphqlQuery, TASK_QUERY, SEND_MESSAGE_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
+import { graphqlQuery, TASK_QUERY, SEND_MESSAGE_MUTATION, SEND_SMS_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
 import { apiMessagesToChatThread } from '@/hooks/useApiData';
 
 function authHeaders() {
@@ -47,6 +47,7 @@ export function ChatPanel() {
   const [activeTaskTab, setActiveTaskTab] = useState<'chat' | 'ai'>('chat');
   const [participantMessages, setParticipantMessages] = useState<ChatMessage[]>([]);
   const [participantLoading, setParticipantLoading] = useState(false);
+  const [sendViaSms, setSendViaSms] = useState(false);
 
   const handleDismiss = async () => {
     if (!chatPanel.taskId) return;
@@ -285,6 +286,16 @@ export function ChatPanel() {
                 reconnectDone = true;
                 activeStreamIdRef.current = null;
                 addAiMessage(event.reply, { taskId });
+                if (event.suggestion_messages) {
+                  for (const sm of event.suggestion_messages as Array<{ id: string; body: string; suggestion_id?: string }>) {
+                    addChatMessage({ taskId }, {
+                      id: sm.id, role: 'assistant', content: sm.body,
+                      timestamp: new Date(), senderName: 'RentMate',
+                      senderType: 'ai', messageType: 'suggestion',
+                      suggestionId: sm.suggestion_id,
+                    });
+                  }
+                }
                 setIsTyping(false);
               } else if (event.type === 'error') {
                 activeStreamIdRef.current = null;
@@ -379,7 +390,7 @@ export function ChatPanel() {
         let sseError: Error | null = null;
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
-          let event: { type: string; text?: string; reply?: string; stream_id?: string; message?: string; conversation_id?: string };
+          let event: { type: string; text?: string; reply?: string; stream_id?: string; message?: string; conversation_id?: string; suggestion_messages?: Array<{ id: string; body: string; suggestion_id?: string }> };
           try { event = JSON.parse(line.slice(6)); } catch { continue; }
 
           if (event.type === 'stream_id') {
@@ -412,6 +423,27 @@ export function ChatPanel() {
               }
             }
             addAiMessage(event.reply!, { taskId, suggestionId });
+            // Append any suggestion messages the agent created (flushed
+            // after the AI reply so they appear below it).
+            if (event.suggestion_messages) {
+              for (const sm of event.suggestion_messages as Array<{ id: string; body: string; suggestion_id?: string }>) {
+                const sugMsg: ChatMessage = {
+                  id: sm.id,
+                  role: 'assistant',
+                  content: sm.body,
+                  timestamp: new Date(),
+                  senderName: 'RentMate',
+                  senderType: 'ai',
+                  messageType: 'suggestion',
+                  suggestionId: sm.suggestion_id,
+                };
+                if (activeConversationId && !taskId && !suggestionId) {
+                  setConvMessages(prev => [...prev, sugMsg]);
+                } else {
+                  addChatMessage({ taskId, suggestionId }, sugMsg);
+                }
+              }
+            }
             // Refresh data so new suggestions created by agent tools appear
             refreshData();
           } else if (event.type === 'error') {
@@ -880,6 +912,21 @@ export function ChatPanel() {
                 </div>
               ) : (
                 <div className="border-t shrink-0">
+                  {activeTask.assignedVendorId && (
+                    <div className="flex items-center gap-1.5 px-3 pt-2">
+                      <input
+                        type="checkbox"
+                        id="sms-toggle"
+                        checked={sendViaSms}
+                        onChange={e => setSendViaSms(e.target.checked)}
+                        className="h-3.5 w-3.5 rounded border-input accent-primary cursor-pointer"
+                      />
+                      <label htmlFor="sms-toggle" className="text-[11px] text-muted-foreground cursor-pointer flex items-center gap-1">
+                        <PhoneIcon className="h-3 w-3" />
+                        Send as SMS
+                      </label>
+                    </div>
+                  )}
                   <ChatInput
                     onSend={async (content) => {
                       const taskId = chatPanel.taskId!;
@@ -894,14 +941,22 @@ export function ChatPanel() {
                       };
                       setParticipantMessages(prev => [...prev, msg]);
                       try {
-                        await graphqlQuery(SEND_MESSAGE_MUTATION, {
-                          input: { conversationId: activeTask!.externalConversationId!, body: content },
-                        });
+                        if (sendViaSms && activeTask.assignedVendorId) {
+                          await graphqlQuery(SEND_SMS_MUTATION, {
+                            vendorId: activeTask.assignedVendorId,
+                            body: content,
+                            taskId,
+                          });
+                        } else {
+                          await graphqlQuery(SEND_MESSAGE_MUTATION, {
+                            input: { conversationId: activeTask!.externalConversationId!, body: content },
+                          });
+                        }
                       } catch {
                         toast.error('Failed to send message');
                       }
                     }}
-                    placeholder="Reply to participant…"
+                    placeholder={sendViaSms ? "Send SMS to vendor…" : "Reply to participant…"}
                   />
                 </div>
               )

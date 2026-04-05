@@ -76,10 +76,29 @@ async def chat_with_agent(
     return str(result)
 
 
-async def send_sms_reply(from_num: str, to_num: str, text: str):
+def _normalize_phone(num: str) -> str:
+    """Ensure phone number has +1 prefix for US numbers."""
+    digits = ''.join(c for c in num if c.isdigit())
+    if digits.startswith('1') and len(digits) == 11:
+        return f"+{digits}"
+    if len(digits) == 10:
+        return f"+1{digits}"
+    if num.startswith('+'):
+        return num
+    return f"+{digits}"
+
+
+async def send_sms_reply(from_num: str, to_num: str, text: str, api_key: str | None = None):
+    key = api_key or _get_dialpad_api_key()
+    if not key:
+        print("[sms] No Dialpad API key configured — skipping SMS")
+        return
+    to_num = _normalize_phone(to_num)
+    if from_num:
+        from_num = _normalize_phone(from_num)
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            f"https://dialpad.com/api/v2/sms?apikey={DIALPAD_API_KEY}",
+            f"https://dialpad.com/api/v2/sms?apikey={key}",
             headers={"accept": "application/json", "content-type": "application/json"},
             json={
                 "infer_country_code": False,
@@ -93,7 +112,21 @@ async def send_sms_reply(from_num: str, to_num: str, text: str):
                 "user_id": None,
             },
         )
-        print(response.text)
+        print(f"[sms] Dialpad response: {response.status_code} {response.text[:200]}")
+
+
+def _get_dialpad_api_key() -> str:
+    """Get Dialpad API key from integrations config or env var."""
+    from handlers.settings import load_integrations
+    cfg = load_integrations().get("dialpad", {})
+    return cfg.get("api_key") or DIALPAD_API_KEY
+
+
+def _get_dialpad_from_number() -> str:
+    """Get the outbound phone number from Dialpad config."""
+    from handlers.settings import load_integrations
+    cfg = load_integrations().get("dialpad", {})
+    return cfg.get("from_number") or ""
 
 
 async def send_email_reply(conv, body: str, inbound_meta: dict):
@@ -155,17 +188,53 @@ async def handle_message(
     to_number: str = data["to_number"][0]
     body = data["text"]
 
-    # Resolve tenant + direction
+    # Resolve sender (tenant or vendor) + direction
     from backends.wire import sms_router
     resolved = sms_router.resolve(db, from_number, to_number)
     if not resolved:
-        print(f"[Dialpad] Tenant not resolved for from={from_number} to={to_number}")
+        print(f"[Dialpad] Sender not resolved for from={from_number} to={to_number}")
         return {"status": "ok"}
 
-    _account_id, tenant, direction = resolved
+    _account_id, entity, direction, entity_type = resolved
 
     if direction != "inbound":
         return {"status": "ok"}
+
+    # ── Vendor inbound SMS ────────────────────────────────────────────
+    if entity_type == "vendor":
+        from db.models import ConversationType, ParticipantType as PT, Message as MsgModel, ExternalContact
+        import uuid as _uuid2
+        from datetime import UTC as _UTC2, datetime as _dt2
+
+        vendor = entity
+        # Find an existing vendor conversation for this vendor
+        conv = chat_service.get_or_create_external_conversation(
+            db,
+            conversation_type=ConversationType.VENDOR,
+            subject=f"SMS with {vendor.name}",
+            vendor_id=str(vendor.id),
+        )
+        # Persist the vendor's inbound message
+        now = _dt2.now(_UTC2)
+        db.add(MsgModel(
+            id=str(_uuid2.uuid4()),
+            conversation_id=conv.id,
+            sender_type=PT.EXTERNAL_CONTACT,
+            sender_external_contact_id=str(vendor.id),
+            body=body,
+            message_type=MessageType.MESSAGE,
+            sender_name=vendor.name,
+            is_ai=False,
+            is_system=False,
+            sent_at=now,
+        ))
+        conv.updated_at = now
+        db.commit()
+        print(f"[Dialpad] Vendor SMS from {vendor.name}: {body[:80]}")
+        return {"status": "ok"}
+
+    # ── Tenant inbound SMS ────────────────────────────────────────────
+    tenant = entity
 
     if not is_in_whitelist(from_number):
         print(
@@ -194,6 +263,8 @@ async def handle_message(
 
     # Build agent context and history
     from llm.context import build_task_context
+    from llm.client import call_agent
+    from llm.side_effects import process_side_effects
     context = build_task_context(db, conv.id)
     messages = chat_service.build_agent_message_history(db, conv.id, body, context, exclude_last=True)
 
@@ -201,26 +272,25 @@ async def handle_message(
     agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
     session_key = f"sms:{conv.id}"
 
-    response_text = await chat_with_agent(agent_id, session_key, messages)
+    agent_resp = await call_agent(agent_id, session_key, messages)
 
     # Persist AI reply
-    from db.lib import add_message as _add_message
-    from db.models import ParticipantType as _PT
-    import uuid as _uuid2
+    now = datetime.now(UTC)
     ai_msg = Message(
-        id=str(_uuid2.uuid4()),
+        id=str(_uuid.uuid4()),
         conversation_id=conv.id,
-        sender_type=_PT.ACCOUNT_USER,
-        body=response_text,
+        sender_type=ParticipantType.ACCOUNT_USER,
+        body=agent_resp.reply,
         message_type=MessageType.MESSAGE,
         sender_name="RentMate",
         is_ai=True,
-        sent_at=datetime.now(UTC),
+        sent_at=now,
     )
     db.add(ai_msg)
+    process_side_effects(db, agent_resp.side_effects, conv.id, now)
     db.commit()
 
-    await send_via_channel(conv, response_text, inbound_meta=sender_meta)
+    await send_via_channel(conv, agent_resp.reply, inbound_meta=sender_meta)
 
     return {"status": "ok"}
 
@@ -318,13 +388,14 @@ async def chat_endpoint(
             for sub in list(running.subscribers):
                 await sub.put(entry)
 
-        async def run_and_persist() -> tuple[str, str]:
+        async def run_and_persist() -> tuple[str, str, list[dict]]:
             from llm.tools import active_conversation_id
+            from llm.client import call_agent
+            from llm.side_effects import process_side_effects
             token = active_conversation_id.set(conv_id)
             try:
                 # Persist user message BEFORE running the agent so it gets an
-                # earlier timestamp than any messages the agent creates (e.g.
-                # suggestion messages from tool calls).
+                # earlier timestamp than any messages the agent creates.
                 pre_db = _SL()
                 try:
                     pre_db.add(Message(
@@ -344,7 +415,7 @@ async def chat_endpoint(
                     pre_db.close()
 
                 await on_progress("Thinking\u2026")
-                reply = await chat_with_agent(agent_id, session_key, messages_payload, on_progress)
+                agent_resp = await call_agent(agent_id, session_key, messages_payload, on_progress)
 
                 write_db = _SL()
                 try:
@@ -368,25 +439,30 @@ async def chat_endpoint(
                         id=str(_uuid.uuid4()),
                         conversation_id=conv_id,
                         sender_type=ParticipantType.ACCOUNT_USER,
-                        body=reply,
+                        body=agent_resp.reply,
                         message_type=MessageType.MESSAGE,
                         sender_name="RentMate",
                         is_ai=True,
                         sent_at=now,
                     )
                     write_db.add(ai_msg)
+                    # Materialize side-effects (suggestions, vendor creation)
+                    # after the AI reply so they appear below it.
+                    flushed_suggestions = process_side_effects(
+                        write_db, agent_resp.side_effects, conv_id, now,
+                    )
                     db_conv = write_db.query(Conversation).filter_by(id=conv_id).first()
                     if db_conv:
                         db_conv.updated_at = now
                     write_db.commit()
-                    print(f"[chat] Persisted AI reply ({len(reply)} chars) to {conv_id}")
-                    return reply, ai_msg.id
+                    print(f"[chat] Persisted AI reply ({len(agent_resp.reply)} chars) to {conv_id}")
+                    return agent_resp.reply, ai_msg.id, flushed_suggestions
                 except Exception as e:
                     write_db.rollback()
                     print(f"[chat] DB write failed: {e}")
                     import traceback
                     traceback.print_exc()
-                    return reply, str(_uuid.uuid4())
+                    return agent_resp.reply, str(_uuid.uuid4()), []
                 finally:
                     write_db.close()
             finally:
@@ -411,13 +487,15 @@ async def chat_endpoint(
                 yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
 
             try:
-                reply, msg_id = running.task.result()
+                reply, msg_id, suggestion_msgs = running.task.result()
             except Exception as exc:
                 print(f"[chat] SSE task failed: {exc!r}")
                 yield f"data: {_json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
                 return
 
             done_payload: dict = {'type': 'done', 'reply': reply, 'message_id': msg_id, 'conversation_id': conv_id}
+            if suggestion_msgs:
+                done_payload['suggestion_messages'] = suggestion_msgs
             print(f"[chat] SSE done: reply={len(reply or '')} chars, msg_id={msg_id}")
             yield f"data: {_json.dumps(done_payload)}\n\n"
         finally:

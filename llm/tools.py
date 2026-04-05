@@ -2,10 +2,12 @@
 
 Includes suggestion tools (propose_task, close_task, set_mode, attach_vendor).
 
-When a tool creates a suggestion during a chat, it also posts an APPROVAL
-message to the originating conversation so the suggestion appears inline.
-The conversation_id is communicated via the ``active_conversation_id``
-context variable, set by the chat handler before the agent runs.
+When a tool creates a suggestion during a chat, it queues a SUGGESTION message
+via ``pending_suggestion_messages``.  The chat handler flushes these *after*
+persisting the AI reply so they appear below the agent response in the
+conversation timeline.  The conversation_id is communicated via the
+``active_conversation_id`` context variable, set by the chat handler before
+the agent runs.
 """
 import contextvars
 import json
@@ -20,6 +22,13 @@ from db.models import MessageType
 # suggestions back to the originating conversation.
 active_conversation_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "active_conversation_id", default=None,
+)
+
+# Suggestion messages are collected here during tool execution and flushed
+# by the chat handler *after* the AI reply is persisted, so they appear
+# below the agent response in the conversation.
+pending_suggestion_messages: contextvars.ContextVar[list[dict]] = contextvars.ContextVar(
+    "pending_suggestion_messages", default=None,
 )
 
 
@@ -58,26 +67,29 @@ def _create_suggestion(
         if task_id:
             suggestion.task_id = task_id
 
-        # Post a suggestion link message to the originating conversation
+        # Queue a suggestion message to be flushed after the AI reply so it
+        # appears below the agent response in the conversation timeline.
         conv_id = active_conversation_id.get()
         if conv_id:
-            from gql.services.chat_service import send_message
-            # Build a rich body with details from action_payload
             body_parts = [title]
             if action_payload:
                 if action_payload.get("vendor_name"):
                     body_parts.append(f"Vendor: {action_payload['vendor_name']}")
                 if action_payload.get("draft_message"):
                     body_parts.append(f"Draft: {action_payload['draft_message'][:200]}")
-            send_message(
-                db, conv_id,
-                body="\n".join(body_parts),
-                message_type=MessageType.SUGGESTION,
-                sender_name="RentMate",
-                is_ai=True,
-                draft_reply=action_payload.get("draft_message") if action_payload else None,
-                related_task_ids={"suggestion_id": suggestion.id},
-            )
+            pending = pending_suggestion_messages.get()
+            if pending is None:
+                pending = []
+                pending_suggestion_messages.set(pending)
+            pending.append({
+                "conversation_id": conv_id,
+                "body": "\n".join(body_parts),
+                "message_type": MessageType.SUGGESTION,
+                "sender_name": "RentMate",
+                "is_ai": True,
+                "draft_reply": action_payload.get("draft_message") if action_payload else None,
+                "related_task_ids": {"suggestion_id": suggestion.id},
+            })
 
         db.commit()
         return suggestion.id
@@ -408,5 +420,62 @@ class LookupVendorsTool(Tool):
             if not results:
                 return json.dumps({"vendors": [], "message": "No vendors found matching the criteria."})
             return json.dumps({"vendors": results, "count": len(results)})
+        finally:
+            db.close()
+
+
+class CreateVendorTool(Tool):
+    """Create a new vendor/contractor in the system."""
+
+    @property
+    def name(self) -> str:
+        return "create_vendor"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Create a new vendor or contractor. Requires a name and phone number. "
+            "Optionally include company, vendor_type (e.g. 'Plumber', 'Electrician', "
+            "'HVAC', 'General Contractor', 'Handyman', 'Landscaper', 'Locksmith', "
+            "'Roofer', 'Painter', 'Inspector'), and email."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["name", "phone", "vendor_type"],
+            "properties": {
+                "name": {"type": "string", "description": "Vendor's full name"},
+                "phone": {"type": "string", "description": "Vendor's phone number"},
+                "vendor_type": {"type": "string", "description": "Type of vendor (e.g. 'Plumber', 'Electrician', 'HVAC', 'General Contractor', 'Handyman', 'Landscaper', 'Locksmith', 'Roofer', 'Painter', 'Inspector')"},
+                "company": {"type": "string", "description": "Company name (optional)"},
+                "email": {"type": "string", "description": "Vendor's email address (optional)"},
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        from handlers.deps import SessionLocal
+        from gql.services.vendor_service import VendorService
+        from gql.types import CreateVendorInput
+
+        db = SessionLocal()
+        try:
+            vendor = VendorService.create_vendor(db, CreateVendorInput(
+                name=kwargs["name"],
+                phone=kwargs["phone"],
+                company=kwargs.get("company"),
+                vendor_type=kwargs.get("vendor_type"),
+                email=kwargs.get("email"),
+                contact_method="rentmate",
+            ))
+            return json.dumps({
+                "status": "ok",
+                "vendor_id": str(vendor.id),
+                "name": vendor.name,
+                "message": f"Vendor '{vendor.name}' created successfully.",
+            })
+        except Exception as e:
+            return json.dumps({"status": "error", "message": str(e)})
         finally:
             db.close()

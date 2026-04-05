@@ -3,7 +3,7 @@ import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { AutonomySlider } from '@/components/suggestions/AutonomySlider';
 import { SuggestionCategory, AutonomyLevel } from '@/data/mockData';
-import { Shield, Bot, Terminal, MessageSquare, Lock, Puzzle, Globe } from 'lucide-react';
+import { Shield, Bot, Terminal, MessageSquare, Lock, Puzzle, Globe, Phone } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -34,7 +34,18 @@ const emptyChannel = (): ChannelConfig => ({
   enabled: false, token: '', botToken: '', appToken: '', allowFrom: '',
 });
 
+interface DialpadConfig {
+  enabled: boolean;
+  apiKey: string;
+  fromNumber: string;
+  phoneWhitelist: string;
+  webhookUrl?: string;
+  webhookCanRegister?: boolean;
+  webhookReason?: string;
+}
+
 interface IntegrationsState {
+  dialpad: DialpadConfig;
   telegram: ChannelConfig;
   whatsapp: ChannelConfig;
 }
@@ -59,6 +70,7 @@ const SettingsPage = () => {
   const { autonomySettings, setAutonomySettings } = useApp();
   const [llmConfig, setLlmConfig] = useState<LlmConfig>({ apiKey: '', model: '', baseUrl: '' });
   const [integrations, setIntegrations] = useState<IntegrationsState>({
+    dialpad: { enabled: false, apiKey: '', fromNumber: '', phoneWhitelist: '' },
     telegram: emptyChannel(),
     whatsapp: emptyChannel(),
   });
@@ -90,10 +102,18 @@ const SettingsPage = () => {
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data) {
-          setIntegrations({
+          setIntegrations(prev => ({
+            ...prev,
+            dialpad: {
+              enabled: data.dialpad?.enabled ?? false,
+              apiKey: data.dialpad?.api_key ?? '',
+              fromNumber: data.dialpad?.from_number ?? '',
+              phoneWhitelist: (data.dialpad?.phone_whitelist ?? []).join(', '),
+              webhookUrl: data.dialpad?.webhook_url ?? '',
+            },
             telegram: {
               enabled: data.telegram?.enabled ?? false,
-              token: '',
+              token: data.telegram?.token ?? '',
               botToken: '',
               appToken: '',
               allowFrom: (data.telegram?.allow_from ?? []).join('\n'),
@@ -105,7 +125,7 @@ const SettingsPage = () => {
               appToken: '',
               allowFrom: (data.whatsapp?.allow_from ?? []).join('\n'),
             },
-          });
+          }));
         }
       })
       .catch(() => {});
@@ -117,6 +137,22 @@ const SettingsPage = () => {
             braveApiKey: '',
             webSearchEnabled: data.web_search_enabled ?? false,
           });
+        }
+      })
+      .catch(() => {});
+    fetch('/settings/integrations/dialpad/webhook', { headers })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data) {
+          setIntegrations(prev => ({
+            ...prev,
+            dialpad: {
+              ...prev.dialpad,
+              webhookUrl: data.webhook_url ?? prev.dialpad.webhookUrl,
+              webhookCanRegister: data.can_register ?? true,
+              webhookReason: data.reason ?? undefined,
+            },
+          }));
         }
       })
       .catch(() => {});
@@ -161,21 +197,31 @@ const SettingsPage = () => {
   const parseAllowFrom = (text: string) =>
     text.split('\n').map(s => s.trim()).filter(Boolean);
 
+  // Don't send the masked placeholder back as a real secret value
+  const secretOrNull = (val: string) => val && !val.match(/^\u2022+$/) ? val : null;
+
   const handleSaveIntegrations = async () => {
     try {
       const res = await fetch('/settings/integrations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
         body: JSON.stringify({
+          dialpad: {
+            enabled: integrations.dialpad.enabled,
+            api_key: secretOrNull(integrations.dialpad.apiKey),
+            from_number: integrations.dialpad.fromNumber || null,
+            phone_whitelist: integrations.dialpad.phoneWhitelist
+              .split(',').map(s => s.trim()).filter(Boolean),
+          },
           telegram: {
             enabled: integrations.telegram.enabled,
-            token: integrations.telegram.token || null,
+            token: secretOrNull(integrations.telegram.token),
             allow_from: parseAllowFrom(integrations.telegram.allowFrom),
           },
           whatsapp: {
             enabled: integrations.whatsapp.enabled,
             bridge_url: integrations.whatsapp.token || null,
-            bridge_token: integrations.whatsapp.botToken || null,
+            bridge_token: secretOrNull(integrations.whatsapp.botToken),
             allow_from: parseAllowFrom(integrations.whatsapp.allowFrom),
           },
         }),
@@ -196,7 +242,7 @@ const SettingsPage = () => {
           Authorization: `Bearer ${getToken()}`,
         },
         body: JSON.stringify({
-          api_key: llmConfig.apiKey || null,
+          api_key: secretOrNull(llmConfig.apiKey),
           model: llmConfig.model,
           base_url: llmConfig.baseUrl,
         }),
@@ -333,6 +379,128 @@ const SettingsPage = () => {
         </p>
 
         <div className="space-y-6">
+          {/* Dialpad */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="dp-enabled"
+                checked={integrations.dialpad.enabled}
+                onCheckedChange={v => setIntegrations(prev => ({ ...prev, dialpad: { ...prev.dialpad, enabled: !!v } }))}
+              />
+              <Phone className="h-4 w-4 text-muted-foreground" />
+              <Label htmlFor="dp-enabled" className="font-semibold cursor-pointer">Dialpad SMS</Label>
+            </div>
+            {integrations.dialpad.enabled && (
+              <div className="pl-6 space-y-3">
+                <div className="space-y-2">
+                  <Label htmlFor="dp-key">API Key</Label>
+                  <Input
+                    id="dp-key"
+                    type="password"
+                    placeholder="Leave blank to keep existing key"
+                    value={integrations.dialpad.apiKey}
+                    onChange={e => setIntegrations(prev => ({ ...prev, dialpad: { ...prev.dialpad, apiKey: e.target.value } }))}
+                  />
+                  <p className="text-xs text-muted-foreground">Found in Dialpad Admin &gt; Company Settings &gt; API Keys</p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs gap-1.5"
+                    onClick={async () => {
+                      try {
+                        const res = await fetch('/settings/integrations/dialpad/test', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+                          body: JSON.stringify({ api_key: integrations.dialpad.apiKey || null }),
+                        });
+                        const data = await res.json();
+                        if (data.ok) {
+                          toast.success(`Connected to ${data.company} (${data.status})`);
+                        } else {
+                          toast.error(data.error || 'Connection failed');
+                        }
+                      } catch {
+                        toast.error('Connection test failed');
+                      }
+                    }}
+                  >
+                    Test Connection
+                  </Button>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="dp-from">Outbound Phone Number</Label>
+                  <Input
+                    id="dp-from"
+                    placeholder="+12065551234"
+                    value={integrations.dialpad.fromNumber}
+                    onChange={e => setIntegrations(prev => ({ ...prev, dialpad: { ...prev.dialpad, fromNumber: e.target.value } }))}
+                  />
+                  <p className="text-xs text-muted-foreground">Your Dialpad number used to send outbound SMS</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="dp-whitelist">Phone Whitelist <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                  <Input
+                    id="dp-whitelist"
+                    placeholder="+12065551234, +12065555678"
+                    value={integrations.dialpad.phoneWhitelist}
+                    onChange={e => setIntegrations(prev => ({ ...prev, dialpad: { ...prev.dialpad, phoneWhitelist: e.target.value } }))}
+                  />
+                  <p className="text-xs text-muted-foreground">Comma-separated phone numbers RentMate should respond to. Leave empty for all.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Webhook</Label>
+                  {integrations.dialpad.webhookUrl ? (
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 text-[11px] bg-muted px-2.5 py-1.5 rounded truncate select-all">
+                        {integrations.dialpad.webhookUrl}
+                      </code>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No webhook registered yet.</p>
+                  )}
+                  {integrations.dialpad.webhookCanRegister === false ? (
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      {integrations.dialpad.webhookReason || 'Webhook registration not available in this environment.'}
+                    </p>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs gap-1.5"
+                      onClick={async () => {
+                        try {
+                          const res = await fetch('/settings/integrations/dialpad/webhook', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+                            body: JSON.stringify({}),
+                          });
+                          const data = await res.json();
+                          if (data.ok) {
+                            setIntegrations(prev => ({ ...prev, dialpad: { ...prev.dialpad, webhookUrl: data.webhook_url } }));
+                            toast.success('Webhook registered with Dialpad');
+                          } else {
+                            toast.error(data.error || 'Failed to register webhook');
+                          }
+                        } catch {
+                          toast.error('Failed to register webhook');
+                        }
+                      }}
+                    >
+                      Register Webhook
+                    </Button>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Registers this server's URL with Dialpad for inbound SMS delivery.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="border-t" />
+
           {/* Telegram */}
           <div className="space-y-3">
             <div className="flex items-center gap-2">

@@ -74,7 +74,7 @@ def get_autonomy_settings() -> dict:
 
 _INTEGRATIONS_FILE = _DATA_DIR / "integrations.json"
 
-_SECRET_FIELDS = {"token", "bridge_token"}
+_SECRET_FIELDS = {"token", "bridge_token", "api_key"}
 
 
 def load_integrations() -> dict:
@@ -91,16 +91,27 @@ def _save_integrations(data: dict):
     _INTEGRATIONS_FILE.write_text(json.dumps(data, indent=2))
 
 
+_SECRET_MASK = "\u2022" * 8  # ••••••••
+
 def _mask_integrations(stored: dict) -> dict:
-    """Return integration config with secrets replaced by empty string."""
+    """Return integration config with secrets masked (non-empty if set)."""
     result = {}
-    for ch in ("telegram", "whatsapp"):
+    for ch in ("dialpad", "telegram", "whatsapp"):
         ch_cfg = dict(stored.get(ch, {}))
         for f in _SECRET_FIELDS:
-            if f in ch_cfg:
+            if f in ch_cfg and ch_cfg[f]:
+                ch_cfg[f] = _SECRET_MASK
+            elif f in ch_cfg:
                 ch_cfg[f] = ""
         result[ch] = ch_cfg
     return result
+
+
+class DialpadIntegration(BaseModel):
+    enabled: bool = False
+    api_key: Optional[str] = None
+    from_number: Optional[str] = None
+    phone_whitelist: Optional[List[str]] = None
 
 
 class TelegramIntegration(BaseModel):
@@ -117,6 +128,7 @@ class WhatsAppIntegration(BaseModel):
 
 
 class IntegrationsBody(BaseModel):
+    dialpad: Optional[DialpadIntegration] = None
     telegram: Optional[TelegramIntegration] = None
     whatsapp: Optional[WhatsAppIntegration] = None
 
@@ -133,7 +145,7 @@ async def get_settings(request: Request):
     await require_user(request)
     stored = load_app_settings()
     return {
-        "api_key": "",  # never echo the key back
+        "api_key": _SECRET_MASK if os.getenv("LLM_API_KEY") else "",
         "model": os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
         "base_url": os.getenv("LLM_BASE_URL", ""),
         "autonomy": stored.get("autonomy", _DEFAULT_AUTONOMY),
@@ -176,12 +188,125 @@ async def get_integrations(request: Request):
     return _mask_integrations(stored)
 
 
+@router.post("/settings/integrations/dialpad/test")
+async def test_dialpad(request: Request):
+    """Test a Dialpad API key by calling /api/v2/company."""
+    await require_user(request)
+    import httpx
+    body = await request.json()
+    api_key = body.get("api_key") or ""
+    if not api_key:
+        # Fall back to stored key
+        stored = load_integrations().get("dialpad", {})
+        api_key = stored.get("api_key", "")
+    if not api_key:
+        return {"ok": False, "error": "No API key provided"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"https://dialpad.com/api/v2/company?apikey={api_key}")
+        if r.status_code == 200:
+            data = r.json()
+            return {"ok": True, "company": data.get("name"), "status": data.get("state")}
+        return {"ok": False, "error": f"Dialpad returned {r.status_code}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _can_register_webhook() -> bool:
+    """Return True only when explicitly configured for production."""
+    return bool(os.environ.get("RENTMATE_PUBLIC_URL"))
+
+
+@router.get("/settings/integrations/dialpad/webhook")
+async def get_dialpad_webhook_status(request: Request):
+    """Return the current webhook status and whether registration is allowed."""
+    await require_user(request)
+    stored = load_integrations()
+    dp = stored.get("dialpad", {})
+    can_register = _can_register_webhook()
+    return {
+        "webhook_url": dp.get("webhook_url"),
+        "can_register": can_register,
+        "reason": "Webhook registration requires a public URL. Set RENTMATE_PUBLIC_URL or deploy to a public server." if not can_register else None,
+    }
+
+
+@router.post("/settings/integrations/dialpad/webhook")
+async def register_dialpad_webhook(request: Request):
+    """Register this server's webhook URL with Dialpad for inbound SMS."""
+    await require_user(request)
+    import httpx
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+
+    # Auto-generate webhook URL from the request's host or a provided override
+    webhook_url = body.get("webhook_url", "").strip()
+    if not webhook_url:
+        # Derive from the incoming request
+        public_url = os.environ.get("RENTMATE_PUBLIC_URL", "").rstrip("/")
+        if not public_url:
+            # Fall back to request host
+            scheme = request.headers.get("x-forwarded-proto", "https")
+            host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+            public_url = f"{scheme}://{host}"
+        webhook_url = f"{public_url}/dialpad-webhook"
+
+    if not _can_register_webhook():
+        return {"ok": False, "error": "Webhook registration requires a public URL. Set RENTMATE_PUBLIC_URL or deploy to a public server."}
+
+    stored = load_integrations()
+    api_key = stored.get("dialpad", {}).get("api_key", "")
+    if not api_key:
+        return {"ok": False, "error": "No Dialpad API key configured"}
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # List existing webhooks
+            r = await client.get(f"https://dialpad.com/api/v2/webhooks?apikey={api_key}")
+            existing = r.json().get("items", []) if r.status_code == 200 else []
+
+            # Delete old webhooks that point elsewhere
+            for hook in existing:
+                if hook.get("hook_url") != webhook_url:
+                    hook_id = hook.get("id")
+                    if hook_id:
+                        await client.delete(f"https://dialpad.com/api/v2/webhooks/{hook_id}?apikey={api_key}")
+
+            # Check if webhook already registered
+            already = any(h.get("hook_url") == webhook_url for h in existing)
+            if already:
+                hook_id = next(h["id"] for h in existing if h.get("hook_url") == webhook_url)
+                # Save URL in config
+                dp = stored.get("dialpad", {})
+                dp["webhook_url"] = webhook_url
+                stored["dialpad"] = dp
+                _save_integrations(stored)
+                return {"ok": True, "webhook_id": hook_id, "webhook_url": webhook_url, "message": "Webhook already registered"}
+
+            # Register new webhook
+            r = await client.post(
+                f"https://dialpad.com/api/v2/webhooks?apikey={api_key}",
+                json={"hook_url": webhook_url},
+            )
+            if r.status_code in (200, 201):
+                data = r.json()
+                # Save URL in config
+                dp = stored.get("dialpad", {})
+                dp["webhook_url"] = webhook_url
+                stored["dialpad"] = dp
+                _save_integrations(stored)
+                return {"ok": True, "webhook_id": data.get("id"), "webhook_url": webhook_url, "message": "Webhook registered"}
+            return {"ok": False, "error": f"Dialpad returned {r.status_code}: {r.text[:200]}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @router.post("/settings/integrations")
 async def update_integrations(body: IntegrationsBody, request: Request):
     await require_user(request)
     stored = load_integrations()
 
     channel_map = [
+        ("dialpad", body.dialpad, ["api_key", "phone_whitelist", "enabled"]),
         ("telegram", body.telegram, ["token", "allow_from", "enabled"]),
         ("whatsapp", body.whatsapp, ["bridge_url", "bridge_token", "allow_from", "enabled"]),
     ]

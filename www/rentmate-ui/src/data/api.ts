@@ -226,6 +226,17 @@ export const SEND_MESSAGE_MUTATION = `
   }
 `;
 
+export const SEND_SMS_MUTATION = `
+  mutation SendSms($vendorId: String!, $body: String!, $taskId: String) {
+    sendSms(vendorId: $vendorId, body: $body, taskId: $taskId) {
+      uid
+      body
+      senderName
+      sentAt
+    }
+  }
+`;
+
 export const DELETE_CONVERSATION_MUTATION = `
   mutation DeleteConversation($uid: String!) {
     deleteConversation(uid: $uid)

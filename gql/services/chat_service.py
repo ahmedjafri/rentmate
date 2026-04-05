@@ -260,9 +260,10 @@ def send_message(
     is_ai: bool = False,
     draft_reply: str | None = None,
     related_task_ids: dict | None = None,
+    sent_at: datetime | None = None,
 ) -> Message:
     """Add a message to any conversation by conversation_id."""
-    now = datetime.now(UTC)
+    now = sent_at or datetime.now(UTC)
     msg = Message(
         id=str(uuid.uuid4()),
         conversation_id=conversation_id,

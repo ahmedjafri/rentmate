@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from main import app
 from handlers.chat import send_sms_reply, is_in_whitelist
 from handlers.deps import get_db
+from llm.client import AgentResponse
 from db.models import (
     Tenant,
     Conversation,
@@ -42,16 +43,17 @@ class TestDialpadWebhook(unittest.TestCase):
         self.db.flush()
 
     @patch('handlers.chat.send_via_channel', new_callable=AsyncMock)
-    @patch('handlers.chat.chat_with_agent', new_callable=AsyncMock, return_value=MOCK_AGENT_REPLY)
+    @patch('llm.client.call_agent', new_callable=AsyncMock)
     @patch('handlers.chat.agent_registry.ensure_agent', return_value=MOCK_AGENT_ID)
     def test_handle_new_message_with_mocked_agent(
         self, mock_ensure, mock_chat, mock_send_via_channel
     ):
+        mock_chat.return_value = AgentResponse(reply=MOCK_AGENT_REPLY, side_effects=[])
         app.dependency_overrides[get_db] = lambda: self.db
 
         # Mock the sms_router to resolve our tenant
         mock_sms_router = Mock()
-        mock_sms_router.resolve.return_value = ("default-account", self.tenant, "inbound")
+        mock_sms_router.resolve.return_value = ("default-account", self.tenant, "inbound", "tenant")
 
         payload = {
             "from_number": self.from_number,
@@ -100,15 +102,16 @@ class TestDialpadWebhook(unittest.TestCase):
         app.dependency_overrides = {}
 
     @patch('handlers.chat.send_via_channel', new_callable=AsyncMock)
-    @patch('handlers.chat.chat_with_agent', new_callable=AsyncMock, return_value=MOCK_AGENT_REPLY)
+    @patch('llm.client.call_agent', new_callable=AsyncMock)
     @patch('handlers.chat.agent_registry.ensure_agent', return_value=MOCK_AGENT_ID)
     def test_handle_existing_message_with_mocked_agent(
         self, mock_ensure, mock_chat, mock_send_via_channel
     ):
+        mock_chat.return_value = AgentResponse(reply=MOCK_AGENT_REPLY, side_effects=[])
         app.dependency_overrides[get_db] = lambda: self.db
 
         mock_sms_router = Mock()
-        mock_sms_router.resolve.return_value = ("default-account", self.tenant, "inbound")
+        mock_sms_router.resolve.return_value = ("default-account", self.tenant, "inbound", "tenant")
 
         payload = {
             "from_number": self.from_number,

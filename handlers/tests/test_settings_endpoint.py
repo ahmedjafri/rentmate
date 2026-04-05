@@ -54,7 +54,8 @@ class TestSettingsEndpoint(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertEqual(data["api_key"], "")  # never echoed back
+        # API key is masked (bullets if set, empty if not)
+        self.assertIn(data["api_key"], ("", "\u2022" * 8))
         self.assertEqual(data["model"], "openai/gpt-4o-mini")
         self.assertIn("autonomy", data)
 

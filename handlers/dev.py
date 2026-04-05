@@ -175,15 +175,19 @@ async def simulate_inbound(
     messages.append({"role": "user", "content": body.message})
 
     from backends.local_auth import DEFAULT_USER_ID
-    from handlers.chat import chat_with_agent
+    from llm.client import call_agent
+    from llm.side_effects import process_side_effects
     agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
 
     try:
-        reply = await chat_with_agent(agent_id, f"sim:{conv.id}", messages)
+        agent_resp = await call_agent(agent_id, f"sim:{conv.id}", messages)
+        reply = agent_resp.reply
     except Exception as e:
         print(f"[dev/simulate-inbound] Agent failed: {e}")
         reply = "[Agent unavailable]"
+        agent_resp = None
 
+    now = datetime.now(UTC)
     db.add(Message(
         id=str(uuid.uuid4()),
         conversation_id=conv.id,
@@ -192,8 +196,10 @@ async def simulate_inbound(
         message_type=MessageType.MESSAGE,
         sender_name="RentMate",
         is_ai=True,
-        sent_at=datetime.now(UTC),
+        sent_at=now,
     ))
+    if agent_resp and agent_resp.side_effects:
+        process_side_effects(db, agent_resp.side_effects, conv.id, now)
     db.commit()
 
     task_id = conv.task_id if conv.task_id else conv.id

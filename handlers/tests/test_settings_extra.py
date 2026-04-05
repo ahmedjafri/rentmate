@@ -77,13 +77,13 @@ class TestMaskIntegrations:
     def test_masks_token_field(self):
         stored = {"telegram": {"enabled": True, "token": "secret123"}}
         result = _mask_integrations(stored)
-        assert result["telegram"]["token"] == ""
+        assert result["telegram"]["token"] == "\u2022" * 8
         assert result["telegram"]["enabled"] is True
 
     def test_masks_bridge_token(self):
         stored = {"whatsapp": {"enabled": True, "bridge_token": "wha-secret"}}
         result = _mask_integrations(stored)
-        assert result["whatsapp"]["bridge_token"] == ""
+        assert result["whatsapp"]["bridge_token"] == "\u2022" * 8
 
     def test_missing_channel_returns_empty_dict(self):
         result = _mask_integrations({})
@@ -113,7 +113,7 @@ class TestIntegrationsEndpoint(unittest.TestCase):
         with patch("handlers.settings.load_integrations", return_value=stored):
             response = self.client.get("/settings/integrations", headers=AUTH)
         assert response.status_code == 200
-        assert response.json()["telegram"]["token"] == ""
+        assert response.json()["telegram"]["token"] == "\u2022" * 8
 
     def test_post_integrations_requires_auth(self):
         response = self.client.post("/settings/integrations", json={})

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Vendor } from '@/data/mockData';
-import { graphqlQuery, CREATE_VENDOR_MUTATION, UPDATE_VENDOR_MUTATION, DELETE_VENDOR_MUTATION, VENDOR_TYPES_QUERY } from '@/data/api';
+import { graphqlQuery, CREATE_VENDOR_MUTATION, UPDATE_VENDOR_MUTATION, DELETE_VENDOR_MUTATION, VENDOR_TYPES_QUERY, SEND_SMS_MUTATION } from '@/data/api';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -24,7 +24,7 @@ import {
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Wrench, Plus, Pencil, Trash2, Search, MessageSquare, Mail, Phone, Link, Copy, CheckCircle2 } from 'lucide-react';
+import { Wrench, Plus, Pencil, Trash2, Search, MessageSquare, Mail, Phone, Link, Copy, CheckCircle2, Send, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 
@@ -132,6 +132,9 @@ const Vendors = () => {
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [smsVendor, setSmsVendor] = useState<Vendor | null>(null);
+  const [smsBody, setSmsBody] = useState('');
+  const [smsSending, setSmsSending] = useState(false);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -169,6 +172,10 @@ const Vendors = () => {
   const handleSubmit = async () => {
     if (!form.name.trim()) {
       toast.error('Name is required');
+      return;
+    }
+    if (!form.vendorType) {
+      toast.error('Vendor type is required');
       return;
     }
     if (!form.phone.trim() && !form.email.trim()) {
@@ -349,6 +356,19 @@ const Vendors = () => {
                 {v.inviteToken && (
                   <InviteLink token={v.inviteToken} status={v.inviteStatus} />
                 )}
+                {v.phone && (
+                  <div className="pt-1.5">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs gap-1.5"
+                      onClick={() => { setSmsVendor(v); setSmsBody(''); }}
+                    >
+                      <Phone className="h-3 w-3" />
+                      Send SMS
+                    </Button>
+                  </div>
+                )}
               </div>
             </Card>
           ))}
@@ -457,6 +477,56 @@ const Vendors = () => {
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
             <Button onClick={handleSubmit} disabled={saving}>
               {saving ? 'Saving...' : editingId ? 'Update' : 'Add Vendor'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* SMS Dialog */}
+      <Dialog open={!!smsVendor} onOpenChange={open => { if (!open) setSmsVendor(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Phone className="h-4 w-4" />
+              Send SMS to {smsVendor?.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">{smsVendor?.phone}</p>
+            <Textarea
+              placeholder="Type your message..."
+              value={smsBody}
+              onChange={e => setSmsBody(e.target.value)}
+              rows={3}
+              className="resize-none"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSmsVendor(null)}>Cancel</Button>
+            <Button
+              disabled={!smsBody.trim() || smsSending}
+              className="gap-1.5"
+              onClick={async () => {
+                if (!smsVendor) return;
+                setSmsSending(true);
+                try {
+                  await graphqlQuery(SEND_SMS_MUTATION, {
+                    vendorId: smsVendor.id,
+                    body: smsBody.trim(),
+                  });
+                  toast.success(`SMS sent to ${smsVendor.name}`);
+                  setSmsVendor(null);
+                  setSmsBody('');
+                } catch (e) {
+                  toast.error(e instanceof Error ? e.message : 'Failed to send SMS');
+                } finally {
+                  setSmsSending(false);
+                }
+              }}
+            >
+              {smsSending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+              Send SMS
             </Button>
           </DialogFooter>
         </DialogContent>

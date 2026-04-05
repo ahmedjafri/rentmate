@@ -347,7 +347,7 @@ def _run_agent_for_task(db, conv, latest_body: str) -> str:
     from llm.context import build_task_context
     from llm.registry import agent_registry
     from backends.local_auth import DEFAULT_USER_ID
-    from handlers.chat import chat_with_agent
+    from llm.client import call_agent
 
     context = build_task_context(db, conv.id)
     from db.lib import get_conversation_with_messages
@@ -365,7 +365,8 @@ def _run_agent_for_task(db, conv, latest_body: str) -> str:
 
     loop = _asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(chat_with_agent(agent_id, session_key, messages))
+        resp = loop.run_until_complete(call_agent(agent_id, session_key, messages))
+        return resp.reply
     finally:
         loop.close()
 

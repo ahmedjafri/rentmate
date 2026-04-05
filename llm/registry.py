@@ -225,12 +225,13 @@ class AgentRegistry:
                 loop.tools.unregister(tool_name)
 
         # Register RentMate-specific tools (write actions → Suggestions)
-        from llm.tools import ProposeTaskTool, CloseTaskTool, SetModeTool, AttachVendorTool, LookupVendorsTool
+        from llm.tools import ProposeTaskTool, CloseTaskTool, SetModeTool, AttachVendorTool, LookupVendorsTool, CreateVendorTool
         loop.tools.register(ProposeTaskTool())
         loop.tools.register(CloseTaskTool())
         loop.tools.register(SetModeTool())
         loop.tools.register(AttachVendorTool())
         loop.tools.register(LookupVendorsTool())
+        loop.tools.register(CreateVendorTool())
 
         # Replace file-based memory with DB-backed memory
         from llm.memory_store import DbMemoryStore
