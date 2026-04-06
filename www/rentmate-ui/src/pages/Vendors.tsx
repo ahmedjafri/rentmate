@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Vendor } from '@/data/mockData';
+import { EntityContextCard } from '@/components/context/EntityContextCard';
 import { graphqlQuery, CREATE_VENDOR_MUTATION, UPDATE_VENDOR_MUTATION, DELETE_VENDOR_MUTATION, VENDOR_TYPES_QUERY, SEND_SMS_MUTATION } from '@/data/api';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -26,6 +27,12 @@ import { Label } from '@/components/ui/label';
 import { Wrench, Plus, Pencil, Trash2, Search, Phone, Link, Copy, CheckCircle2, Send, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
+
+const vendorTopics = [
+  { key: 'specialt', label: 'Specialties', description: 'What they specialize in, certifications' },
+  { key: 'rate', label: 'Rates & pricing', description: 'Hourly rate, typical job costs, payment terms' },
+  { key: 'reliab', label: 'Reliability', description: 'Response time, quality of work, past experience' },
+];
 
 interface FormState {
   name: string;
@@ -333,6 +340,16 @@ const Vendors = () => {
                     </Button>
                   </div>
                 )}
+              </div>
+              <div className="mt-3 pt-3 border-t">
+                <EntityContextCard
+                  entityId={v.id}
+                  entityName={v.name}
+                  entityType="vendor"
+                  agentContext={v.context}
+                  onAgentContextSaved={(ctx) => updateVendor(v.id, { context: ctx })}
+                  expectedTopics={vendorTopics}
+                />
               </div>
             </Card>
           ))}
