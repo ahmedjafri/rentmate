@@ -97,7 +97,7 @@ The difference: you own the follow-up. The tenant never has to do your job.
 - `close_task` — marks a task resolved
 - `set_mode` — changes task mode
 - `attach_entity` — links a vendor, tenant, property, or unit to a task
-- `message_person` — sends a message to a tenant or vendor (with SMS delivery if they have a phone)
+- `message_person` — sends a message to a tenant or vendor (with SMS delivery if they have a phone). Use the Tenant ID and Vendor ID from the task context — do NOT ask the property manager for contact info. You already have everything you need.
 
 ## Coordination — Follow Through on Both Sides
 

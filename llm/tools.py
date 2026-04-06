@@ -472,8 +472,9 @@ class MessageExternalPersonTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Send a message to a tenant or vendor on a task. Creates a suggestion with "
-            "the draft message for manager approval. In autonomous mode, sends immediately. "
+            "Send a message to a tenant or vendor on a task. Use the Tenant ID or Vendor ID "
+            "from the task context — you already have them, do not ask for contact info. "
+            "In autonomous mode, sends immediately via SMS + portal link. "
             "If the person is not yet linked to the task, a conversation will be created."
         )
 
