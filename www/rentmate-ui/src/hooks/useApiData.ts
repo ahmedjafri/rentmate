@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { graphqlQuery, HOUSES_QUERY, TENANTS_QUERY, TASKS_QUERY, VENDORS_QUERY, SUGGESTIONS_QUERY } from '@/data/api';
-import { Property, Tenant, Vendor, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, TaskParticipant } from '@/data/mockData';
+import { Property, Tenant, Vendor, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, TaskParticipant, LinkedConversation } from '@/data/mockData';
 
 interface ApiState {
   properties: Property[];
@@ -225,6 +225,13 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
     aiConversationId: t.aiConversationId ?? null,
     externalConversationId: t.externalConversationId ?? null,
     parentConversationId: t.externalConversationId ?? t.parentConversationId ?? null,
+    linkedConversations: (t.linkedConversations ?? []).map(lc => ({
+      uid: lc.uid,
+      label: lc.label,
+      conversationType: lc.conversationType,
+      lastMessageAt: lc.lastMessageAt,
+      messageCount: lc.messageCount,
+    })),
   };
 }
 
@@ -363,6 +370,7 @@ interface ApiTask {
   aiConversationId?: string | null;
   parentConversationId?: string | null;
   externalConversationId?: string | null;
+  linkedConversations?: { uid: string; label: string; conversationType: string; lastMessageAt?: string; messageCount: number }[];
 }
 
 interface ApiSuggestion {

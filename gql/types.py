@@ -364,6 +364,28 @@ class ChatMessageType:
 
 
 @strawberry.type
+class LinkedConversationType:
+    """Summary of a conversation linked to a task."""
+    uid: str
+    label: str
+    conversation_type: str
+    last_message_at: typing.Optional[str] = None
+    message_count: int = 0
+
+    @classmethod
+    def from_sql(cls, conv: typing.Any, label: str) -> "LinkedConversationType":
+        msgs = getattr(conv, "messages", []) or []
+        last_msg = max(msgs, key=lambda m: m.sent_at, default=None) if msgs else None
+        return cls(
+            uid=str(conv.id),
+            label=label,
+            conversation_type=conv.conversation_type or "task_ai",
+            last_message_at=_utc_iso(last_msg.sent_at) if last_msg else None,
+            message_count=len(msgs),
+        )
+
+
+@strawberry.type
 class TaskType:
     uid: str
     task_number: typing.Optional[int] = None
@@ -393,6 +415,7 @@ class TaskType:
     external_conversation_id: typing.Optional[str] = None
     steps: typing.Optional[strawberry.scalars.JSON] = None
     suggestion_options: typing.Optional[strawberry.scalars.JSON] = None
+    linked_conversations: typing.List[LinkedConversationType] = strawberry.field(default_factory=list)
 
     @classmethod
     def from_sql(cls, t: typing.Any) -> "TaskType":
@@ -424,6 +447,21 @@ class TaskType:
         # Get extra from the AI conversation
         extra = getattr(ai_convo, 'extra', None) or {} if ai_convo else {}
 
+        # Build linked conversations list
+        linked: list[LinkedConversationType] = []
+        if ai_convo:
+            linked.append(LinkedConversationType.from_sql(ai_convo, "AI"))
+        parent_convo = getattr(t, "parent_conversation", None)
+        if parent_convo:
+            ptype = getattr(parent_convo, "conversation_type", None) or "tenant"
+            plabel = "Tenant" if ptype == "tenant" else "Vendor" if ptype == "vendor" else ptype.replace("_", " ").title()
+            linked.append(LinkedConversationType.from_sql(parent_convo, plabel))
+        ext_convo = getattr(t, "external_conversation", None)
+        if ext_convo and (not parent_convo or ext_convo.id != parent_convo.id):
+            etype = getattr(ext_convo, "conversation_type", None) or "vendor"
+            elabel = "Vendor" if etype == "vendor" else "Tenant" if etype == "tenant" else etype.replace("_", " ").title()
+            linked.append(LinkedConversationType.from_sql(ext_convo, elabel))
+
         return cls(
             uid=str(t.id),
             task_number=t.task_number,
@@ -453,6 +491,7 @@ class TaskType:
             external_conversation_id=str(t.external_conversation_id) if t.external_conversation_id else None,
             steps=t.steps,
             suggestion_options=extra.get('suggestion_options'),
+            linked_conversations=linked,
         )
 
 

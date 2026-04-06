@@ -138,6 +138,13 @@ const TASK_FIELDS = `
   externalConversationId
   steps
   suggestionOptions
+  linkedConversations {
+    uid
+    label
+    conversationType
+    lastMessageAt
+    messageCount
+  }
   messages {
     uid
     body

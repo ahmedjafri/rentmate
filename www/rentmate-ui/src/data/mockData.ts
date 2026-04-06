@@ -15,6 +15,14 @@ export interface TaskParticipant {
   id?: string;
 }
 
+export interface LinkedConversation {
+  uid: string;
+  label: string;
+  conversationType: string;
+  lastMessageAt?: string | null;
+  messageCount: number;
+}
+
 export interface ActionDeskTask {
   id: string;
   taskNumber?: number | null;
@@ -40,6 +48,7 @@ export interface ActionDeskTask {
   assignedVendorName?: string;
   steps?: { key: string; label: string; status: 'pending' | 'active' | 'done'; note?: string }[];
   suggestionOptions?: { key: string; label: string; action: string; variant: string }[];
+  linkedConversations?: LinkedConversation[];
 }
 
 export type ChatMessageType = 'message' | 'internal' | 'approval' | 'context';
