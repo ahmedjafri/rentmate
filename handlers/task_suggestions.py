@@ -149,10 +149,19 @@ class SuggestionExecutor:
         self, suggestion_id: str, action: str, task: Task | None,
     ) -> Suggestion:
         """Mark the suggestion as accepted/dismissed via the service layer."""
-        return suggestion_service.act_on_suggestion(
+        result = suggestion_service.act_on_suggestion(
             self.db, suggestion_id, action,
             task_id=task.id if task else None,
         )
+        from llm.tracing import log_trace
+        log_trace(
+            "suggestion_executed", "executor",
+            f"Suggestion {action}: {result.title or suggestion_id}",
+            task_id=task.id if task else None,
+            suggestion_id=suggestion_id,
+            detail={"action": action, "status": result.status},
+        )
+        return result
 
 
 class CreateTaskSuggestionExecutor(SuggestionExecutor):

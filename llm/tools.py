@@ -112,6 +112,16 @@ def _create_suggestion(
             })
 
         db.commit()
+
+        # Trace suggestion creation
+        from llm.tracing import log_trace
+        log_trace(
+            "suggestion_created", "agent", title,
+            task_id=task_id,
+            suggestion_id=suggestion.id,
+            detail=action_payload,
+        )
+
         return suggestion.id
     finally:
         db.close()

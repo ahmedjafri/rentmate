@@ -109,8 +109,13 @@ async def chat_with_agent(
         "edit_memory": "Editing memory",
     }
 
+    # Extract task_id from session_key for tracing (e.g. "task:abc-123")
+    _trace_task_id = session_key.split(":", 1)[1] if session_key.startswith("task:") else None
+    _trace_source = "assess" if session_key.startswith("eval:") else ("chat" if not _trace_task_id else "chat")
+
     def _tool_progress(event_type: str, tool_name: str, preview: str | None, args: dict | None, **kwargs):
         """Hermes tool_progress_callback: (event_type, tool_name, preview, args, **kw)"""
+        from llm.tracing import log_trace
         label = _TOOL_LABELS.get(tool_name, tool_name)
         if event_type == "tool.started":
             hint = ""
@@ -147,6 +152,8 @@ async def chat_with_agent(
             msg = f"{label}{hint}"
             progress_events.append(msg)
             progress_queue.put(msg)
+            log_trace("tool_call", _trace_source, msg, task_id=_trace_task_id,
+                      tool_name=tool_name, detail=args)
         elif event_type == "tool.completed":
             is_error = kwargs.get("is_error", False)
             if is_error:
@@ -156,6 +163,14 @@ async def chat_with_agent(
                 msg = f"{label}: error" + (f" — {error_detail}" if error_detail else "")
                 progress_events.append(msg)
                 progress_queue.put(msg)
+                log_trace("error", _trace_source, msg, task_id=_trace_task_id,
+                          tool_name=tool_name, detail={"error": str(error_detail)})
+            else:
+                result = kwargs.get("result", "")
+                if isinstance(result, str) and len(result) > 500:
+                    result = result[:500] + "…"
+                log_trace("tool_result", _trace_source, f"{label} completed",
+                          task_id=_trace_task_id, tool_name=tool_name, detail={"result": result})
 
     def _step_callback(iteration: int, prev_tools: list | None, **kwargs):
         """Hermes step_callback: fires after each API call iteration."""
@@ -634,6 +649,9 @@ async def chat_endpoint(
                         db_conv.updated_at = now
                     write_db.commit()
                     print(f"[chat] Persisted AI reply ({len(agent_resp.reply)} chars) to {conv_id}")
+                    from llm.tracing import log_trace as _lt
+                    _lt("llm_reply", "chat", agent_resp.reply[:200],
+                        task_id=body.task_id, conversation_id=conv_id)
                     return agent_resp.reply, ai_msg.id, flushed_suggestions
                 except Exception as e:
                     write_db.rollback()
@@ -853,6 +871,9 @@ async def assess_task_endpoint(
                         db_conv.updated_at = now
                     write_db.commit()
                     print(f"[assess] Persisted AI reply ({len(agent_resp.reply)} chars) to AI conv {conv_id}")
+                    from llm.tracing import log_trace as _lt2
+                    _lt2("llm_reply", "assess", agent_resp.reply[:200],
+                         task_id=body.task_id, conversation_id=conv_id)
                     return agent_resp.reply, ai_msg.id, flushed_suggestions
                 except Exception as e:
                     write_db.rollback()

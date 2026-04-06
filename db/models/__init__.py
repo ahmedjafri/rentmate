@@ -15,6 +15,7 @@ from .documents import Document, DocumentTask, DocumentTag
 from .automation import AutomationRevision
 from .suggestions import Suggestion
 from .agent_memory import AgentMemory
+from .agent_trace import AgentTrace
 from db.enums import (
     TaskCategory, Urgency, TaskSource,
     AutomationSource, AgentSource, SuggestionSource,

@@ -392,8 +392,13 @@ def _scan_for_reply_suggestions(db) -> int:
             db, task=task, last_msg=last_msg,
             vendor_name=vendor_name, autonomy=autonomy,
         )
-        if executor.generate():
+        suggestion = executor.generate()
+        if suggestion:
             created += 1
+            from llm.tracing import log_trace
+            log_trace("suggestion_created", "reply_scanner",
+                      f"Reply suggestion: {suggestion.title or 'untitled'}",
+                      task_id=str(task.id), suggestion_id=suggestion.id)
 
     return created
 
