@@ -610,7 +610,11 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
                         self.db, conv_id, draft, task_id=task.id,
                     )
                     if entity_phone:
-                        self._dispatch_sms(entity_phone, draft)
+                        # For tenants, include a portal link in the SMS
+                        sms_body = draft
+                        if entity_type == "tenant":
+                            sms_body = self._append_tenant_portal_link(entity_id, draft)
+                        self._dispatch_sms(entity_phone, sms_body)
 
         suggestion = self._resolve_suggestion(suggestion_id, action, task)
         return suggestion, task
@@ -627,6 +631,22 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
                     return task.parent_conversation_id
             return task.external_conversation_id
         return None
+
+    def _append_tenant_portal_link(self, tenant_id: str, draft: str) -> str:
+        """Ensure tenant has a portal token and append the link to the SMS body."""
+        try:
+            from db.models import Tenant
+            from gql.services.tenant_service import TenantService
+            tenant = self.db.get(Tenant, tenant_id)
+            if tenant:
+                TenantService.ensure_portal_token(self.db, tenant)
+                self.db.flush()
+                portal_url = TenantService.get_portal_url(tenant)
+                if portal_url:
+                    return f"{draft}\n\nReply here: {portal_url}"
+        except Exception:
+            pass
+        return draft
 
     def _dispatch_sms(self, to_phone: str, body: str) -> None:
         """Dispatch an SMS via Quo (best-effort, non-blocking)."""

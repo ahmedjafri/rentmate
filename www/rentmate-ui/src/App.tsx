@@ -24,8 +24,9 @@ import DevTools from "./pages/DevTools";
 import Automation from "./pages/Automation";
 import AutomationDetail from "./pages/AutomationDetail";
 import NotFound from "./pages/NotFound";
-import VendorInvite from "./pages/VendorInvite";
+import PortalInvite from "./pages/VendorInvite";
 import VendorPortal from "./pages/VendorPortal";
+import TenantPortal from "./pages/TenantPortal";
 
 const queryClient = new QueryClient();
 
@@ -49,8 +50,9 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
-          <Route path="/t/:token" element={<VendorInvite />} />
+          <Route path="/t/:token" element={<PortalInvite />} />
           <Route path="/vendor-portal" element={<VendorPortal />} />
+          <Route path="/tenant-portal" element={<TenantPortal />} />
           <Route path="*" element={
             <AuthGate>
               <AppProvider>

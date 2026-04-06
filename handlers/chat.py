@@ -485,7 +485,8 @@ async def chat_endpoint(
     or omit both to auto-create a user_ai conversation.
     """
     await require_user(request)
-    from handlers.deps import SessionLocal as _SL
+    from handlers.deps import SessionLocal
+    _SL = SessionLocal.session_factory
 
     # ── Resolve conversation + context ────────────────────────────────────
     task_obj: Task | None = None
@@ -713,7 +714,8 @@ async def assess_task_endpoint(
     nothing is persisted and the client receives ``reply: null``.
     """
     await require_user(request)
-    from handlers.deps import SessionLocal as _SL
+    from handlers.deps import SessionLocal
+    _SL = SessionLocal.session_factory
 
     task_obj = db.query(Task).filter_by(id=body.task_id).first()
     if not task_obj:

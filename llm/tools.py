@@ -69,7 +69,7 @@ def _create_suggestion(
     from handlers.deps import SessionLocal
     from gql.services import suggestion_service, chat_service
 
-    db = SessionLocal()
+    db = SessionLocal.session_factory()
     try:
         suggestion = suggestion_service.create_suggestion(
             db,
@@ -122,7 +122,7 @@ def _get_task_title(task_id: str) -> str:
     from handlers.deps import SessionLocal
     from db.models import Task
 
-    db = SessionLocal()
+    db = SessionLocal.session_factory()
     try:
         task = db.query(Task).filter_by(id=task_id).first()
         return task.title if task else task_id
@@ -196,7 +196,7 @@ class ProposeTaskTool(Tool):
 
         from handlers.deps import SessionLocal
         from db.models import ExternalContact
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             vendor = db.query(ExternalContact).filter_by(id=vendor_id).first()
             vendor_name = vendor.name if vendor else "Vendor"
@@ -331,7 +331,7 @@ def _get_task_category(task_id: str) -> str | None:
     """Look up a task's category for autonomy checks."""
     from handlers.deps import SessionLocal
     from db.models import Task
-    db = SessionLocal()
+    db = SessionLocal.session_factory()
     try:
         task = db.query(Task).filter_by(id=task_id).first()
         return task.category if task else None
@@ -348,7 +348,7 @@ def _auto_execute_suggestion(suggestion_id: str, action: str) -> str | None:
     """
     from handlers.deps import SessionLocal
     from handlers.task_suggestions import SuggestionExecutor
-    db = SessionLocal()
+    db = SessionLocal.session_factory()
     try:
         executor = SuggestionExecutor.for_suggestion(db, suggestion_id)
         executor.execute(suggestion_id, action)
@@ -409,7 +409,7 @@ class AttachEntityToTaskTool(Tool):
 
         from handlers.deps import SessionLocal
         from db.models import ExternalContact, Tenant, Property, Unit
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             if entity_type == "vendor":
                 entity = db.query(ExternalContact).filter_by(id=entity_id).first()
@@ -503,7 +503,7 @@ class MessageExternalPersonTool(Tool):
 
         from handlers.deps import SessionLocal
         from db.models import ExternalContact, Tenant
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             if entity_type == "vendor":
                 entity = db.query(ExternalContact).filter_by(id=entity_id).first()
@@ -596,7 +596,7 @@ class LookupVendorsTool(Tool):
         vendor_type = kwargs.get("vendor_type")
         query = (kwargs.get("query") or "").strip().lower()
 
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             vendors = db.query(ExternalContact).all()
             results = []
@@ -674,7 +674,7 @@ class UpdateStepsTool(Tool):
         from db.models import Task
         from sqlalchemy.orm.attributes import flag_modified
 
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             task = db.query(Task).filter_by(id=task_id).first()
             if not task:
@@ -723,7 +723,7 @@ class CreateVendorTool(Tool):
         from gql.services.vendor_service import VendorService
         from gql.types import CreateVendorInput
 
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             vendor = VendorService.create_vendor(db, CreateVendorInput(
                 name=kwargs["name"],
@@ -815,7 +815,7 @@ class SaveMemoryTool(Tool):
         if not model_name:
             return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
 
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             import db.models as models
             model_cls = getattr(models, model_name)
@@ -896,7 +896,7 @@ class RecallMemoryTool(Tool):
 
         from handlers.deps import SessionLocal
         import db.models as models
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             model_cls = getattr(models, model_name)
             if entity_id:

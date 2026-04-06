@@ -20,7 +20,7 @@ from db.models import Base
 from gql.schema import schema
 from handlers.deps import SessionLocal, engine, require_user
 from handlers.settings import read_env_file, load_integrations
-from handlers import auth, automations, chat, documents, dev, settings, vendor_invite, vendor_portal
+from handlers import auth, automations, chat, documents, dev, settings, vendor_invite, vendor_portal, tenant_invite, tenant_portal
 from llm.registry import agent_registry
 
 # ─── logging ─────────────────────────────────────────────────────────────────
@@ -206,6 +206,8 @@ app.include_router(chat.router)
 app.include_router(dev.router, prefix="/dev")
 app.include_router(vendor_invite.router)
 app.include_router(vendor_portal.router)
+app.include_router(tenant_invite.router)
+app.include_router(tenant_portal.router)
 
 app.add_middleware(
     CORSMiddleware,
