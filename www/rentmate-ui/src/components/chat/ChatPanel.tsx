@@ -1,5 +1,5 @@
 import { useRef, useEffect, useMemo, useState } from 'react';
-import { X, Bot, Sparkles, Users, Zap, ShieldCheck, Hand, Lock, MessageSquare, RotateCcw, Loader2, Trash2 } from 'lucide-react';
+import { X, Bot, Sparkles, Users, Zap, ShieldCheck, Hand, Lock, MessageSquare, RotateCcw, Loader2, Trash2, Link as LinkIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -40,7 +40,7 @@ function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }
 }
 
 export function ChatPanel() {
-  const { chatPanel, closeChat, openChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, addDocument, replaceDocument, removeDocument, refreshData } = useApp();
+  const { chatPanel, closeChat, openChat, suggestions, actionDeskTasks, vendors, tenants, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, addDocument, replaceDocument, removeDocument, refreshData } = useApp();
   const [dismissConfirm, setDismissConfirm] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -936,21 +936,45 @@ export function ChatPanel() {
           {/* Linked conversation tabs — one per non-AI conversation */}
           {linkedChats.map(lc => (
             <TabsContent key={lc.uid} value={lc.uid} className="hidden data-[state=active]:flex flex-1 flex-col min-h-0 mt-0">
-              {/* Participant chips */}
+              {/* Participant chips + portal links */}
               <div className="flex items-center gap-1.5 px-3 py-1.5 border-b bg-muted/20 shrink-0 flex-wrap">
                 {activeTask.participants.filter(p => p.type === 'tenant' || p.type === 'vendor').length === 0 ? (
                   <span className="text-[11px] text-muted-foreground italic">No external participants yet</span>
                 ) : (
                   activeTask.participants
                     .filter(p => p.type === 'tenant' || p.type === 'vendor')
-                    .map((p, idx) => (
-                      <Badge key={p.id ?? `${p.name}-${idx}`} variant="secondary" className="text-[10px] rounded-lg gap-1">
-                        <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted-foreground/20 text-[9px] font-bold">
-                          {p.name.charAt(0).toUpperCase()}
-                        </span>
-                        {p.name}
-                      </Badge>
-                    ))
+                    .map((p, idx) => {
+                      // Find portal URL for this participant
+                      let portalUrl: string | undefined;
+                      if (p.type === 'vendor') {
+                        const v = vendors.find(v => v.id === activeTask.assignedVendorId);
+                        portalUrl = v?.portalUrl;
+                      } else if (p.type === 'tenant') {
+                        const t = tenants.find(t => p.name.includes(t.name.split(' ')[0]));
+                        portalUrl = t?.portalUrl;
+                      }
+                      return (
+                        <Badge key={p.id ?? `${p.name}-${idx}`} variant="secondary" className="text-[10px] rounded-lg gap-1">
+                          <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted-foreground/20 text-[9px] font-bold">
+                            {p.name.charAt(0).toUpperCase()}
+                          </span>
+                          {p.name}
+                          {portalUrl && (
+                            <button
+                              className="ml-0.5 text-primary/60 hover:text-primary transition-colors"
+                              title="Copy portal link"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigator.clipboard.writeText(portalUrl!);
+                                toast.success(`${p.type === 'vendor' ? 'Vendor' : 'Tenant'} portal link copied`);
+                              }}
+                            >
+                              <LinkIcon className="h-3 w-3" />
+                            </button>
+                          )}
+                        </Badge>
+                      );
+                    })
                 )}
               </div>
               <ScrollArea className="flex-1 overflow-x-hidden">
