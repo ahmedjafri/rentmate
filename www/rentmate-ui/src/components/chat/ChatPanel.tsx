@@ -718,12 +718,72 @@ export function ChatPanel() {
                   size="sm"
                   variant="outline"
                   className="h-6 rounded-lg text-[10px] px-2 gap-1 hover:bg-accent/10 hover:text-accent hover:border-accent/30"
-                  onClick={() => {
-                    updateTask(chatPanel.taskId!, { mode: 'autonomous' });
-                    addChatMessage(
-                      { taskId: chatPanel.taskId },
-                      { id: `msg-${Date.now()}`, role: 'assistant', content: 'RentMate turned back on for this task. I\'ll handle things autonomously.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' }
-                    );
+                  onClick={async () => {
+                    const taskId = chatPanel.taskId!;
+                    updateTask(taskId, { mode: 'autonomous' });
+                    // Assess the conversation — the agent will respond only if warranted
+                    setIsTyping(true);
+                    setProgressLog([]);
+                    try {
+                      const res = await fetch('/chat/assess', {
+                        method: 'POST',
+                        headers: authHeaders(),
+                        body: JSON.stringify({ task_id: taskId }),
+                      });
+                      if (!res.ok) { setIsTyping(false); return; }
+                      const reader = res.body!.getReader();
+                      const decoder = new TextDecoder();
+                      let buf = '';
+                      const progressLines: string[] = [];
+                      while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        buf += decoder.decode(value, { stream: true });
+                        const lines = buf.split('\n');
+                        buf = lines.pop() ?? '';
+                        for (const line of lines) {
+                          if (!line.startsWith('data: ')) continue;
+                          let event: { type: string; text?: string; reply?: string | null; message_id?: string | null; conversation_id?: string; suggestion_messages?: Array<{ id: string; body: string; suggestion_id?: string }> };
+                          try { event = JSON.parse(line.slice(6)); } catch { continue; }
+                          if (event.type === 'progress') {
+                            progressLines.push(event.text as string);
+                            setProgressLog(prev => [...prev, event.text as string]);
+                          } else if (event.type === 'done') {
+                            // Reasoning traces go to AI thread (internal)
+                            const traceLines = progressLines.filter(l => l !== 'Thinking\u2026');
+                            if (traceLines.length > 0) {
+                              addChatMessage({ taskId }, {
+                                id: `thinking-${Date.now()}`, role: 'assistant',
+                                content: traceLines.join('\n'), timestamp: new Date(),
+                                senderName: 'RentMate', senderType: 'ai', messageType: 'internal',
+                              });
+                            }
+                            // Reply goes to external chat (visible to vendor/tenant)
+                            if (event.reply) {
+                              setParticipantMessages(prev => [...prev, {
+                                id: event.message_id || `msg-${Date.now()}`, role: 'assistant',
+                                content: event.reply, timestamp: new Date(),
+                                senderName: 'RentMate', senderType: 'ai', messageType: 'message',
+                              }]);
+                            }
+                            if (event.suggestion_messages) {
+                              for (const sm of event.suggestion_messages) {
+                                addChatMessage({ taskId }, {
+                                  id: sm.id, role: 'assistant', content: sm.body,
+                                  timestamp: new Date(), senderName: 'RentMate',
+                                  senderType: 'ai', messageType: 'suggestion', suggestionId: sm.suggestion_id,
+                                });
+                              }
+                            }
+                            refreshData();
+                          }
+                        }
+                      }
+                    } catch (err) {
+                      console.warn('[assess] failed:', err);
+                    } finally {
+                      setIsTyping(false);
+                    }
                   }}
                 >
                   <Zap className="h-3 w-3" />
@@ -900,6 +960,28 @@ export function ChatPanel() {
                 {participantMessages.map(msg => (
                   <ChatMessageBubble key={msg.id} message={msg} onSuggestionClick={(sid) => openChat({ suggestionId: sid })} />
                 ))}
+                {isTyping && (
+                  <div className="flex items-start gap-2 overflow-hidden text-muted-foreground">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 shrink-0 mt-0.5">
+                      <Bot className="h-3.5 w-3.5 text-primary" />
+                    </div>
+                    <div className="flex-1 min-w-0 overflow-hidden py-2 px-3 rounded-2xl bg-muted">
+                      {progressLog.length === 0 ? (
+                        <div className="flex gap-1 py-0.5">
+                          <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:0ms]" />
+                          <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:150ms]" />
+                          <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:300ms]" />
+                        </div>
+                      ) : (
+                        <div className="space-y-0.5 overflow-hidden">
+                          {progressLog.slice(-3).map((line, i, arr) => (
+                            <p key={i} className={`text-xs truncate ${i === arr.length - 1 ? 'text-muted-foreground' : 'text-muted-foreground/50'}`}>{line}</p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </ScrollArea>
             {activeTask.parentConversationId ? (

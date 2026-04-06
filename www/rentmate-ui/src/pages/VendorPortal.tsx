@@ -20,6 +20,7 @@ interface VendorMe {
 
 interface VendorTask {
   id: string;
+  task_number?: number;
   title: string;
   status?: string;
   category?: string;
@@ -38,6 +39,7 @@ interface TaskMessage {
 interface TaskDetail extends VendorTask {
   urgency?: string;
   messages: TaskMessage[];
+  typing?: boolean;
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -83,12 +85,13 @@ function taskMessageToChat(m: TaskMessage): ChatMessage {
 function ChatPanel({ task, onBack }: { task: TaskDetail; onBack: () => void }) {
   const [messages, setMessages] = useState<TaskMessage[]>(task.messages);
   const [sending, setSending] = useState(false);
+  const [typing, setTyping] = useState(task.typing ?? false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Scroll to bottom when messages change
+  // Scroll to bottom when messages change or typing indicator appears
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, typing]);
 
   // Poll for new messages every 5s
   useEffect(() => {
@@ -98,6 +101,7 @@ function ChatPanel({ task, onBack }: { task: TaskDetail; onBack: () => void }) {
         if (r.ok) {
           const data: TaskDetail = await r.json();
           setMessages(data.messages);
+          setTyping(data.typing ?? false);
         }
       } catch { /* silent */ }
     }, 5000);
@@ -129,7 +133,10 @@ function ChatPanel({ task, onBack }: { task: TaskDetail; onBack: () => void }) {
           <ArrowLeft className="h-4 w-4" />
         </button>
         <div className="flex-1 min-w-0">
-          <p className="font-semibold text-sm leading-tight truncate">{task.title}</p>
+          <p className="font-semibold text-sm leading-tight truncate">
+            {task.task_number != null && <span className="text-muted-foreground font-normal">#{task.task_number} </span>}
+            {task.title}
+          </p>
           <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
             {task.category && (
               <span className="text-xs text-muted-foreground capitalize">{task.category}</span>
@@ -151,6 +158,20 @@ function ChatPanel({ task, onBack }: { task: TaskDetail; onBack: () => void }) {
         {messages.map((m) => (
           <ChatMessageBubble key={m.id} message={taskMessageToChat(m)} />
         ))}
+        {typing && (
+          <div className="flex items-start gap-2 text-muted-foreground">
+            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-muted shrink-0 mt-0.5">
+              <Wrench className="h-3.5 w-3.5" />
+            </div>
+            <div className="py-2 px-3 rounded-2xl bg-muted">
+              <div className="flex gap-1 py-0.5">
+                <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:0ms]" />
+                <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:150ms]" />
+                <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:300ms]" />
+              </div>
+            </div>
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
 
@@ -276,7 +297,10 @@ const VendorPortal = () => {
                       isActive ? 'bg-muted' : ''
                     } ${loadingTask === t.id ? 'opacity-60' : ''}`}
                   >
-                    <p className="text-sm font-medium leading-snug">{t.title}</p>
+                    <p className="text-sm font-medium leading-snug">
+                      {t.task_number != null && <span className="text-muted-foreground">#{t.task_number} </span>}
+                      {t.title}
+                    </p>
                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                       {t.category && (
                         <span className="text-xs text-muted-foreground capitalize">{t.category}</span>

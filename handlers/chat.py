@@ -318,6 +318,10 @@ class ChatRequest(BaseModel):
     task_id: Optional[str] = None
 
 
+class AssessRequest(BaseModel):
+    task_id: str
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 async def process_inbound_sms(db: Session, from_number: str, to_number: str, body: str):
@@ -650,6 +654,231 @@ async def chat_endpoint(
             if suggestion_msgs:
                 done_payload['suggestion_messages'] = suggestion_msgs
             print(f"[chat] SSE done: reply={len(reply or '')} chars, msg_id={msg_id}")
+            yield f"data: {_json.dumps(done_payload)}\n\n"
+        finally:
+            if queue in running.subscribers:
+                running.subscribers.remove(queue)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+NO_RESPONSE_SENTINEL = "[NO_RESPONSE]"
+
+ASSESS_PROMPT = (
+    "Autonomous mode was just enabled for this task. "
+    "Review the full conversation — including messages from external participants "
+    "(vendors, tenants) shown below — and the task progress steps. "
+    "If there is anything actionable: an unanswered question from a vendor or tenant, "
+    "scheduling information to act on, a next step in the progress plan to advance, "
+    "or information to provide — go ahead and respond normally. "
+    "Use the task progress steps as your guide for what to do next. "
+    "If the conversation is truly handled and nothing further is needed, "
+    f"reply with exactly: {NO_RESPONSE_SENTINEL}"
+)
+
+
+@router.post("/chat/assess")
+async def assess_task_endpoint(
+    body: AssessRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Assess a task conversation and respond only if warranted.
+
+    Called when autonomous mode is toggled on. The agent reviews the existing
+    conversation and decides whether to respond. If no response is needed,
+    nothing is persisted and the client receives ``reply: null``.
+    """
+    await require_user(request)
+    from handlers.deps import SessionLocal as _SL
+
+    task_obj = db.query(Task).filter_by(id=body.task_id).first()
+    if not task_obj:
+        raise HTTPException(status_code=404, detail="Task not found")
+    conv = task_obj.ai_conversation
+    if not conv:
+        raise HTTPException(status_code=404, detail="Task has no AI conversation")
+
+    context = build_task_context(db, body.task_id)
+    conv_id = conv.id
+    ext_conv_id = task_obj.external_conversation_id
+
+    # Set typing indicator on the external conversation so the vendor portal
+    # can show it while the agent is thinking.
+    if ext_conv_id:
+        ext_conv = db.query(Conversation).filter_by(id=ext_conv_id).first()
+        if ext_conv:
+            from sqlalchemy.orm.attributes import flag_modified
+            extra = dict(ext_conv.extra or {})
+            extra["ai_typing"] = True
+            ext_conv.extra = extra
+            flag_modified(ext_conv, "extra")
+    # Gather progress steps and external conversation for the assess prompt
+    import json as _assess_json
+    steps_text = ""
+    if task_obj.steps:
+        steps_text = "\n\nTask progress steps:\n" + _assess_json.dumps(task_obj.steps, indent=2)
+
+    ext_msgs_text = ""
+    if ext_conv_id:
+        ext_conv_obj = db.query(Conversation).filter_by(id=ext_conv_id).first()
+        if ext_conv_obj:
+            ext_msgs = sorted(
+                [m for m in (ext_conv_obj.messages or [])
+                 if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
+                key=lambda m: m.sent_at,
+            )[-20:]
+            if ext_msgs:
+                lines = []
+                for m in ext_msgs:
+                    sender = m.sender_name or ("AI" if m.is_ai else "Unknown")
+                    lines.append(f"[{sender}]: {m.body}")
+                ext_msgs_text = (
+                    "\n\nExternal conversation (with vendor/tenant):\n"
+                    + "\n".join(lines)
+                )
+
+    db.commit()
+
+    # Build message history from AI conversation + assess prompt with extras
+    all_msgs = [
+        m for m in (conv.messages or [])
+        if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)
+    ]
+    msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
+    messages_payload = [{"role": "system", "content": context}]
+    messages_payload += [
+        {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
+        for m in msg_rows
+    ]
+    messages_payload.append({
+        "role": "user",
+        "content": ASSESS_PROMPT + steps_text + ext_msgs_text,
+    })
+
+    from backends.local_auth import resolve_account_id
+    agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
+    session_key = f"task:{body.task_id}"
+    stream_id = str(_uuid.uuid4())
+
+    async def generate():
+        queue: asyncio.Queue = asyncio.Queue()
+        running = _RunningChat(task=None)
+        running.subscribers.append(queue)
+        _active_chats[stream_id] = running
+
+        async def on_progress(text: str, tool_hint: str | None = None, **_kwargs):
+            entry = f"[{tool_hint}] {text}" if tool_hint else text
+            running.progress_log.append(entry)
+            for sub in list(running.subscribers):
+                await sub.put(entry)
+
+        async def run_and_persist() -> tuple[str | None, str | None, list[dict]]:
+            from llm.tools import active_conversation_id
+            from llm.client import call_agent
+            from llm.side_effects import process_side_effects
+            token = active_conversation_id.set(conv_id)
+            try:
+                # NOTE: We do NOT persist a user message — the assess prompt is
+                # an internal trigger, not a real user message.
+                await on_progress("Thinking\u2026")
+                agent_resp = await call_agent(agent_id, session_key, messages_payload, on_progress)
+
+                # If agent says no response needed, skip persistence entirely
+                if agent_resp.reply.strip().startswith(NO_RESPONSE_SENTINEL):
+                    return None, None, []
+
+                write_db = _SL()
+                try:
+                    now = datetime.now(UTC)
+                    # Persist thinking traces to the AI conversation (internal)
+                    trace_lines = [l for l in running.progress_log if l != "Thinking\u2026"]
+                    if trace_lines:
+                        write_db.add(Message(
+                            id=str(_uuid.uuid4()),
+                            conversation_id=conv_id,
+                            sender_type=ParticipantType.ACCOUNT_USER,
+                            body="\n".join(trace_lines),
+                            message_type=MessageType.INTERNAL,
+                            sender_name="RentMate",
+                            is_ai=True,
+                            sent_at=now,
+                        ))
+                    # Persist the actual reply to the external conversation
+                    # so the vendor/tenant can see it.  Fall back to AI conv
+                    # if there is no external conversation.
+                    reply_conv_id = ext_conv_id or conv_id
+                    ai_msg = Message(
+                        id=str(_uuid.uuid4()),
+                        conversation_id=reply_conv_id,
+                        sender_type=ParticipantType.ACCOUNT_USER,
+                        body=agent_resp.reply,
+                        message_type=MessageType.MESSAGE,
+                        sender_name="RentMate",
+                        is_ai=True,
+                        sent_at=now,
+                    )
+                    write_db.add(ai_msg)
+                    flushed_suggestions = process_side_effects(
+                        write_db, agent_resp.side_effects, conv_id, now,
+                    )
+                    # Update timestamps on both conversations
+                    for cid in {conv_id, reply_conv_id}:
+                        c = write_db.query(Conversation).filter_by(id=cid).first()
+                        if c:
+                            c.updated_at = now
+                    write_db.commit()
+                    print(f"[assess] Persisted AI reply ({len(agent_resp.reply)} chars) to {reply_conv_id}")
+                    return agent_resp.reply, ai_msg.id, flushed_suggestions
+                except Exception as e:
+                    write_db.rollback()
+                    print(f"[assess] DB write failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return agent_resp.reply, str(_uuid.uuid4()), []
+                finally:
+                    write_db.close()
+            finally:
+                active_conversation_id.reset(token)
+                _active_chats.pop(stream_id, None)
+                # Clear typing indicator on external conversation
+                if ext_conv_id:
+                    clear_db = _SL()
+                    try:
+                        chat_service.clear_typing_indicator(clear_db, ext_conv_id)
+                    finally:
+                        clear_db.close()
+
+        running.task = asyncio.create_task(run_and_persist())
+
+        try:
+            yield f"data: {_json.dumps({'type': 'stream_id', 'stream_id': stream_id})}\n\n"
+
+            while not running.task.done():
+                try:
+                    text = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
+                except asyncio.TimeoutError:
+                    pass
+
+            while not queue.empty():
+                text = queue.get_nowait()
+                yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
+
+            try:
+                reply, msg_id, suggestion_msgs = running.task.result()
+            except Exception as exc:
+                print(f"[assess] SSE task failed: {exc!r}")
+                yield f"data: {_json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
+                return
+
+            done_payload: dict = {'type': 'done', 'reply': reply, 'message_id': msg_id, 'conversation_id': conv_id}
+            if suggestion_msgs:
+                done_payload['suggestion_messages'] = suggestion_msgs
             yield f"data: {_json.dumps(done_payload)}\n\n"
         finally:
             if queue in running.subscribers:
