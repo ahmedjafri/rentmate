@@ -586,3 +586,109 @@ class CreateVendorTool(Tool):
             return json.dumps({"status": "error", "message": str(e)})
         finally:
             db.close()
+
+
+class SaveMemoryTool(Tool):
+    """Save a context note for an entity (property, unit, tenant, vendor) or general."""
+
+    @property
+    def name(self) -> str:
+        return "save_memory"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Save a context note to long-term memory. Notes persist across "
+            "conversations. Attach notes to a specific entity (property, unit, "
+            "tenant, vendor) or save as general memory. Use this to remember "
+            "preferences, quirks, maintenance history, vendor reliability notes, "
+            "or anything the property manager tells you to remember."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["content"],
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The note to save (concise, one topic per note).",
+                },
+                "entity_type": {
+                    "type": "string",
+                    "enum": ["property", "unit", "tenant", "vendor", "general"],
+                    "description": "What type of entity this note is about. Use 'general' for preferences and global notes.",
+                },
+                "entity_id": {
+                    "type": "string",
+                    "description": "ID of the entity (property/unit/tenant/vendor). Required unless entity_type is 'general'.",
+                },
+                "entity_label": {
+                    "type": "string",
+                    "description": "Human-readable label (e.g. '16617 3rd Dr SE', 'Unit 3B', 'Handyman Rob'). Stored for display.",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        content = kwargs["content"]
+        entity_type = kwargs.get("entity_type", "general")
+        entity_id = kwargs.get("entity_id", "")
+        entity_label = kwargs.get("entity_label", "")
+
+        from llm.memory_store import DbMemoryStore
+        from backends.local_auth import DEFAULT_USER_ID
+        store = DbMemoryStore(DEFAULT_USER_ID)
+        store.add_note(
+            content=content,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            entity_label=entity_label,
+        )
+        label = entity_label or entity_type
+        return json.dumps({"status": "ok", "message": f"Note saved for {label}."})
+
+
+class RecallMemoryTool(Tool):
+    """Read back stored context notes, optionally filtered by entity."""
+
+    @property
+    def name(self) -> str:
+        return "recall_memory"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Read your long-term memory notes. Optionally filter by entity "
+            "type or specific entity ID. Returns all notes if no filter given."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "entity_type": {
+                    "type": "string",
+                    "enum": ["property", "unit", "tenant", "vendor", "general"],
+                    "description": "Filter by entity type. Omit to get all notes.",
+                },
+                "entity_id": {
+                    "type": "string",
+                    "description": "Filter by specific entity ID. Omit to get all notes of the given type.",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        entity_type = kwargs.get("entity_type")
+        entity_id = kwargs.get("entity_id")
+
+        from llm.memory_store import DbMemoryStore
+        from backends.local_auth import DEFAULT_USER_ID
+        store = DbMemoryStore(DEFAULT_USER_ID)
+        notes = store.get_notes(entity_type=entity_type, entity_id=entity_id)
+        if not notes:
+            return json.dumps({"notes": [], "message": "No notes found."})
+        return json.dumps({"notes": notes, "count": len(notes)})

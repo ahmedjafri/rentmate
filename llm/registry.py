@@ -34,11 +34,13 @@ def _register_rentmate_tools():
     from llm.tools import (
         ProposeTaskTool, CloseTaskTool, SetModeTool,
         AttachVendorTool, LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
+        SaveMemoryTool, RecallMemoryTool,
     )
 
     for tool_cls in (
         ProposeTaskTool, CloseTaskTool, SetModeTool,
         AttachVendorTool, LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
+        SaveMemoryTool, RecallMemoryTool,
     ):
         tool = tool_cls()
         # Flat schema — get_definitions() wraps it in {"type":"function","function":...}
@@ -108,13 +110,18 @@ class AgentRegistry:
         return None
 
     def build_system_prompt(self, account_id: str) -> str:
-        """Build the full system prompt from workspace files."""
+        """Build the full system prompt from workspace files + persistent memory."""
         agent_dir = DATA_DIR / account_id
         parts = []
         for filename in ["SOUL.md", "USER.md", "TOOLS.md"]:
             path = agent_dir / filename
             if path.exists():
                 parts.append(path.read_text())
+        # Inject persistent memory from DB
+        from llm.memory_store import DbMemoryStore
+        memory_context = DbMemoryStore(account_id).get_memory_context()
+        if memory_context:
+            parts.append(memory_context)
         return "\n\n---\n\n".join(parts)
 
     # ─── Channel management (Telegram/WhatsApp — not Hermes-specific) ────────

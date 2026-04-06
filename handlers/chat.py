@@ -102,6 +102,8 @@ async def chat_with_agent(
         "attach_vendor": "Assigning vendor",
         "create_vendor": "Creating vendor",
         "update_steps": "Updating progress",
+        "save_memory": "Saving note",
+        "recall_memory": "Checking memory",
     }
 
     def _tool_progress(event_type: str, tool_name: str, preview: str | None, args: dict | None, **kwargs):
