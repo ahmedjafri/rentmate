@@ -96,6 +96,7 @@ export interface PropertyUnit {
   id: string;
   label: string;
   isOccupied: boolean;
+  context?: string;
 }
 
 export interface Property {
@@ -104,6 +105,7 @@ export interface Property {
   address: string;
   propertyType?: 'single_family' | 'multi_family';
   source?: 'manual' | 'document';
+  context?: string;
   units: number;
   occupiedUnits: number;
   monthlyRevenue: number;
@@ -121,6 +123,7 @@ export interface Tenant {
   leaseEnd: Date;
   rentAmount: number;
   paymentStatus: 'current' | 'late' | 'overdue';
+  context?: string;
 }
 
 export interface MaintenanceTicket {
@@ -161,6 +164,7 @@ export interface Vendor {
   phone?: string;
   email?: string;
   notes?: string;
+  context?: string;
   portalUrl?: string;
 }
 

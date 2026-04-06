@@ -40,7 +40,8 @@ export const HOUSES_QUERY = `
       units
       occupiedUnits
       monthlyRevenue
-      unitList { uid label isOccupied }
+      context
+      unitList { uid label isOccupied context }
       tenants { uid name }
       leases {
         uid
@@ -97,6 +98,7 @@ export const TENANTS_QUERY = `
       rentAmount
       paymentStatus
       isActive
+      context
       extraProperties { key value }
       rents { uid name address }
       leases {
@@ -345,7 +347,7 @@ export const CREATE_TASK_MUTATION = `
 `;
 
 export const VENDORS_QUERY = `
-  query { vendors { uid name company vendorType phone email notes portalUrl createdAt } }
+  query { vendors { uid name company vendorType phone email notes context portalUrl createdAt } }
 `;
 
 export const VENDOR_TYPES_QUERY = `

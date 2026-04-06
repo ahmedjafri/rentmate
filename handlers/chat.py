@@ -110,15 +110,23 @@ async def chat_with_agent(
         """Hermes tool_progress_callback: (event_type, tool_name, preview, args, **kw)"""
         label = _TOOL_LABELS.get(tool_name, tool_name)
         if event_type == "tool.started":
-            # Build a human-readable summary instead of showing raw JSON
             hint = ""
             if args:
                 if tool_name == "lookup_vendors" and args.get("vendor_type"):
                     hint = f" ({args['vendor_type']})"
                 elif tool_name == "propose_task" and args.get("title"):
                     hint = f": {args['title'][:60]}"
-                elif tool_name == "attach_vendor" and args.get("vendor_id"):
-                    hint = ""  # vendor name not in args, keep it clean
+                elif tool_name == "save_memory":
+                    et = args.get("entity_type", "general")
+                    el = args.get("entity_label", "")
+                    if el:
+                        hint = f" → {et}: {el}"
+                    elif et != "general":
+                        hint = f" → {et}"
+                elif tool_name == "recall_memory":
+                    et = args.get("entity_type")
+                    if et:
+                        hint = f" ({et})"
             msg = f"{label}{hint}"
             progress_events.append(msg)
             progress_queue.put(msg)
