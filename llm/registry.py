@@ -116,7 +116,10 @@ class AgentRegistry:
         for filename in ["SOUL.md", "USER.md", "TOOLS.md"]:
             path = agent_dir / filename
             if path.exists():
-                parts.append(path.read_text())
+                content = path.read_text()
+                parts.append(content)
+                if filename == "SOUL.md":
+                    print(f"[hermes] SOUL.md: {len(content)} chars, v{_soul_version(content)}")
         # Inject persistent memory from DB
         from llm.memory_store import DbMemoryStore
         memory_context = DbMemoryStore(account_id).get_memory_context()
