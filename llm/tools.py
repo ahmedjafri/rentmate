@@ -312,6 +312,22 @@ class SetModeTool(Tool):
     async def execute(self, **kwargs: Any) -> str:
         task_id = kwargs["task_id"]
         mode = kwargs["mode"]
+
+        # Switching to waiting_approval is an escalation — do it immediately
+        if mode == "waiting_approval":
+            from handlers.deps import SessionLocal
+            from db.models import Task as TaskModel
+            db = SessionLocal.session_factory()
+            try:
+                task = db.query(TaskModel).filter_by(id=task_id).first()
+                if task:
+                    task.task_mode = mode
+                    db.commit()
+                    return json.dumps({"status": "ok", "message": f"Task switched to waiting_approval."})
+                return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
+            finally:
+                db.close()
+
         task_title = _get_task_title(task_id)
         options = [
             SuggestionOption(key="approve", label=f"Switch to {mode}", action="set_mode", variant="default"),
