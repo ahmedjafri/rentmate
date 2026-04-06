@@ -74,7 +74,15 @@ export function useApiData(): ApiState {
             units: h.units ?? 0,
             occupiedUnits: h.occupiedUnits ?? 0,
             monthlyRevenue: h.monthlyRevenue ?? 0,
-            unitList: h.unitList?.map(u => ({ id: u.uid, label: u.label, isOccupied: u.isOccupied })),
+            unitList: h.unitList?.map(u => ({
+              id: u.uid,
+              label: u.label,
+              isOccupied: u.isOccupied,
+              notes: u.notes ?? null,
+              tenantName: u.tenantName ?? null,
+              leaseEndDate: u.leaseEndDate ?? null,
+              pendingTaskCount: u.pendingTaskCount ?? 0,
+            })),
           }))
         : [];
 
@@ -278,6 +286,10 @@ interface ApiHouseUnit {
   uid: string;
   label: string;
   isOccupied: boolean;
+  notes?: string | null;
+  tenantName?: string | null;
+  leaseEndDate?: string | null;
+  pendingTaskCount?: number;
 }
 
 interface ApiHouse {

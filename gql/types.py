@@ -129,6 +129,12 @@ class CreatePropertyInput:
     unit_labels: typing.Optional[typing.List[str]] = None
 
 @strawberry.input
+class UpdateUnitNotesInput:
+    uid: str
+    notes: typing.Optional[str] = None
+
+
+@strawberry.input
 class AddLeaseForTenantInput:
     tenant_id: str
     property_id: str
@@ -153,6 +159,10 @@ class UnitType:
     uid: str
     label: str
     is_occupied: bool = False
+    notes: typing.Optional[str] = None
+    tenant_name: typing.Optional[str] = None
+    lease_end_date: typing.Optional[str] = None
+    pending_task_count: int = 0
 
 
 @strawberry.type
@@ -181,7 +191,7 @@ class HouseType:
             units=len(units),
             occupied_units=0,
             monthly_revenue=0.0,
-            unit_list=[UnitType(uid=str(u.id), label=u.label, is_occupied=False) for u in units],
+            unit_list=[UnitType(uid=str(u.id), label=u.label, is_occupied=False, notes=u.notes) for u in units],
         )
 
     @classmethod
@@ -205,8 +215,28 @@ class HouseType:
                 monthly_revenue += l.rent_amount or 0.0
             lease_items.append(LeaseType.from_sql(l))
 
+        # Build per-unit tenant name and lease end date from active leases
+        unit_tenant: dict = {}   # unit_id -> tenant display name
+        unit_lease_end: dict = {}  # unit_id -> lease end date str
+        for l in p.leases:
+            is_active = l.end_date >= today if l.end_date else False
+            if is_active and l.unit_id and l.tenant:
+                unit_tenant[l.unit_id] = tenant_display_name(l.tenant)
+                unit_lease_end[l.unit_id] = str(l.end_date)
+
+        # Count pending tasks per unit (passed in via _unit_task_counts if available)
+        unit_task_counts: dict = getattr(p, '_unit_task_counts', {})
+
         unit_list = [
-            UnitType(uid=str(u.id), label=u.label, is_occupied=u.id in active_unit_ids)
+            UnitType(
+                uid=str(u.id),
+                label=u.label,
+                is_occupied=u.id in active_unit_ids,
+                notes=u.notes,
+                tenant_name=unit_tenant.get(u.id),
+                lease_end_date=unit_lease_end.get(u.id),
+                pending_task_count=unit_task_counts.get(u.id, 0),
+            )
             for u in p.units
         ]
         return cls(

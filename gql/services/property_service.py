@@ -65,6 +65,15 @@ class PropertyService:
         return prop
 
     @staticmethod
+    def update_unit_notes(sess: Session, unit_id: str, notes: str | None) -> SqlUnit:
+        unit = sess.execute(select(SqlUnit).where(SqlUnit.id == unit_id)).scalar_one_or_none()
+        if not unit:
+            raise ValueError(f"Unit {unit_id} not found")
+        unit.notes = notes
+        sess.commit()
+        return unit
+
+    @staticmethod
     def delete_property(sess: Session, uid: str) -> bool:
         prop = sess.execute(select(SqlProperty).where(SqlProperty.id == uid)).scalar_one_or_none()
         if not prop:

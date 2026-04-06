@@ -22,6 +22,7 @@ from .types import (
     CreateTaskInput, AddDocumentTagInput, SendMessageInput, UpdateTaskInput,
     CreatePropertyInput, UpdatePropertyInput, CreateTenantWithLeaseInput, AddLeaseForTenantInput,
     VendorType, CreateVendorInput, UpdateVendorInput, VENDOR_TYPES,
+    UnitType, UpdateUnitNotesInput,
 )
 from .services.task_service import TaskService
 from .services import chat_service, suggestion_service
@@ -68,8 +69,25 @@ class Query:
     @strawberry.field(description="Returns all properties with their tenants and leases")
     def houses(self, info) -> typing.List[HouseType]:
         _current_user(info)
+        db = _session(info)
         today = date.today()
-        return [HouseType.from_sql(p, today) for p in fetch_properties(_session(info))]
+        properties = fetch_properties(db)
+        # Compute pending task counts per unit across all properties
+        from sqlalchemy import select as sa_select, func
+        from db.models import Task as TaskModel
+        active_statuses = ('active', 'suggested', 'paused')
+        rows = db.execute(
+            sa_select(TaskModel.unit_id, func.count(TaskModel.id))
+            .where(TaskModel.unit_id.isnot(None))
+            .where(TaskModel.task_status.in_(active_statuses))
+            .group_by(TaskModel.unit_id)
+        ).all()
+        unit_task_map = {r[0]: r[1] for r in rows}
+        for p in properties:
+            p._unit_task_counts = {
+                u.id: unit_task_map.get(u.id, 0) for u in p.units
+            }
+        return [HouseType.from_sql(p, today) for p in properties]
 
     @strawberry.field(description="Returns all tenants with their leases and properties")
     def tenants(self, info) -> typing.List[TenantType]:
@@ -319,6 +337,18 @@ class Mutation(AuthMutation):
         today = date.today()
         prop = PropertyService.update_property(_session(info), input)
         return HouseType.from_sql(prop, today)
+
+    @strawberry.mutation(description="Update notes on a unit")
+    def update_unit_notes(self, info, input: UpdateUnitNotesInput) -> UnitType:
+        _current_user(info)
+        db = _session(info)
+        unit = PropertyService.update_unit_notes(db, input.uid, input.notes)
+        return UnitType(
+            uid=str(unit.id),
+            label=unit.label,
+            is_occupied=False,  # Caller can refetch houses for full status
+            notes=unit.notes,
+        )
 
     @strawberry.mutation(description="Delete a property and all its units/leases (cascade)")
     def delete_property(self, info, uid: str) -> bool:

@@ -95,6 +95,10 @@ export interface PropertyUnit {
   id: string;
   label: string;
   isOccupied: boolean;
+  notes?: string | null;
+  tenantName?: string | null;
+  leaseEndDate?: string | null;
+  pendingTaskCount?: number;
 }
 
 export interface Property {

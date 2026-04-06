@@ -40,7 +40,7 @@ export const HOUSES_QUERY = `
       units
       occupiedUnits
       monthlyRevenue
-      unitList { uid label isOccupied }
+      unitList { uid label isOccupied notes tenantName leaseEndDate pendingTaskCount }
       tenants { uid name }
       leases {
         uid
@@ -81,7 +81,7 @@ export const CREATE_PROPERTY_MUTATION = `
       units
       occupiedUnits
       monthlyRevenue
-      unitList { uid label isOccupied }
+      unitList { uid label isOccupied notes tenantName leaseEndDate pendingTaskCount }
     }
   }
 `;
@@ -365,6 +365,16 @@ export const UPDATE_VENDOR_MUTATION = `
 
 export const DELETE_VENDOR_MUTATION = `
   mutation DeleteVendor($uid: String!) { deleteVendor(uid: $uid) }
+`;
+
+export const UPDATE_UNIT_NOTES_MUTATION = `
+  mutation UpdateUnitNotes($input: UpdateUnitNotesInput!) {
+    updateUnitNotes(input: $input) {
+      uid
+      label
+      notes
+    }
+  }
 `;
 
 export const ASSIGN_VENDOR_TO_TASK_MUTATION = `

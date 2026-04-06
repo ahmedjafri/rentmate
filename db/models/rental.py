@@ -69,6 +69,7 @@ class Unit(Base):
     )
 
     label = Column(String(100), nullable=False)
+    notes = Column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint(

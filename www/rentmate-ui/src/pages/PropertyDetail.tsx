@@ -5,8 +5,9 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EntityContextCard, propertyTopics } from '@/components/context/EntityContextCard';
-import { Users, ArrowLeft, MapPin, Bot, Wrench, User, Clock, MessageCircle, Zap, ShieldCheck, Hand, Lock, ChevronRight, Building2, Home, FileText, Trash2, Plus, X, Loader2, Pencil } from 'lucide-react';
-import { graphqlQuery, DELETE_PROPERTY_MUTATION, UPDATE_PROPERTY_MUTATION, CREATE_TENANT_WITH_LEASE_MUTATION, ADD_LEASE_FOR_TENANT_MUTATION } from '@/data/api';
+import { Users, ArrowLeft, MapPin, Bot, Wrench, User, Clock, MessageCircle, Zap, ShieldCheck, Hand, Lock, ChevronRight, Building2, Home, FileText, Trash2, Plus, X, Loader2, Pencil, AlertTriangle, Calendar, Check, StickyNote } from 'lucide-react';
+import { graphqlQuery, DELETE_PROPERTY_MUTATION, UPDATE_PROPERTY_MUTATION, CREATE_TENANT_WITH_LEASE_MUTATION, ADD_LEASE_FOR_TENANT_MUTATION, UPDATE_UNIT_NOTES_MUTATION } from '@/data/api';
+import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -48,6 +49,9 @@ const PropertyDetail = () => {
     firstName: '', lastName: '', email: '', phone: '',
     unitId: '', leaseStart: '', leaseEnd: '', rentAmount: '',
   });
+  const [editingUnitNotes, setEditingUnitNotes] = useState<string | null>(null);
+  const [unitNotesValue, setUnitNotesValue] = useState('');
+  const [savingUnitNotes, setSavingUnitNotes] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -169,6 +173,27 @@ const PropertyDetail = () => {
       toast.error(err instanceof Error ? err.message : 'Failed to add tenant');
     } finally {
       setAddingTenant(false);
+    }
+  };
+
+  const handleSaveUnitNotes = async (unitId: string) => {
+    setSavingUnitNotes(true);
+    try {
+      await graphqlQuery(UPDATE_UNIT_NOTES_MUTATION, {
+        input: { uid: unitId, notes: unitNotesValue || null },
+      });
+      // Update local state
+      updateProperty(id!, {
+        unitList: property?.unitList?.map(u =>
+          u.id === unitId ? { ...u, notes: unitNotesValue || null } : u
+        ),
+      });
+      toast.success('Unit notes saved');
+      setEditingUnitNotes(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save notes');
+    } finally {
+      setSavingUnitNotes(false);
     }
   };
 
@@ -310,18 +335,97 @@ const PropertyDetail = () => {
       {!isSingleFamily && property.unitList && property.unitList.length > 0 && (
         <div>
           <h2 className="text-sm font-bold mb-2">Units</h2>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {property.unitList.map(u => (
-              <Card key={u.id} className="p-3 rounded-xl flex items-center gap-2">
-                <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium truncate">{u.label}</p>
-                  <p className={`text-[11px] ${u.isOccupied ? 'text-green-600' : 'text-muted-foreground'}`}>
-                    {u.isOccupied ? 'Occupied' : 'Vacant'}
-                  </p>
-                </div>
-              </Card>
-            ))}
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {property.unitList.map(u => {
+              const isEditing = editingUnitNotes === u.id;
+              const leaseEndSoon = u.leaseEndDate
+                ? (new Date(u.leaseEndDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24 * 30) <= 3
+                : false;
+              return (
+                <Card key={u.id} className="p-3 rounded-xl space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{u.label}</p>
+                        <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                          <Badge variant="secondary" className={cn('text-[10px] rounded-md gap-0.5',
+                            u.isOccupied ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+                          )}>
+                            {u.isOccupied ? <Check className="h-2.5 w-2.5" /> : null}
+                            {u.isOccupied ? 'Occupied' : 'Vacant'}
+                          </Badge>
+                          {(u.pendingTaskCount ?? 0) > 0 && (
+                            <Badge variant="secondary" className="text-[10px] rounded-md gap-0.5 bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                              <AlertTriangle className="h-2.5 w-2.5" />
+                              {u.pendingTaskCount} task{u.pendingTaskCount !== 1 ? 's' : ''}
+                            </Badge>
+                          )}
+                          {u.isOccupied && leaseEndSoon && (
+                            <Badge variant="secondary" className="text-[10px] rounded-md gap-0.5 bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">
+                              <Calendar className="h-2.5 w-2.5" />
+                              Expiring
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0 shrink-0"
+                      onClick={() => {
+                        if (isEditing) {
+                          setEditingUnitNotes(null);
+                        } else {
+                          setEditingUnitNotes(u.id);
+                          setUnitNotesValue(u.notes ?? '');
+                        }
+                      }}
+                      title="Edit notes"
+                    >
+                      {isEditing ? <X className="h-3.5 w-3.5" /> : <StickyNote className="h-3.5 w-3.5" />}
+                    </Button>
+                  </div>
+
+                  {/* Tenant and lease info */}
+                  {u.isOccupied && u.tenantName && (
+                    <div className="text-[11px] text-muted-foreground flex items-center gap-1">
+                      <User className="h-3 w-3" />
+                      {u.tenantName}
+                      {u.leaseEndDate && (
+                        <span className="ml-1">
+                          &middot; Lease ends {new Date(u.leaseEndDate).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Notes display or edit */}
+                  {isEditing ? (
+                    <div className="space-y-1.5">
+                      <Textarea
+                        className="text-xs min-h-[60px] rounded-lg resize-none"
+                        placeholder="Add notes about this unit (condition, appliances, special instructions)..."
+                        value={unitNotesValue}
+                        onChange={e => setUnitNotesValue(e.target.value)}
+                      />
+                      <div className="flex justify-end gap-1.5">
+                        <Button variant="ghost" size="sm" className="h-6 text-[11px] rounded-md" onClick={() => setEditingUnitNotes(null)}>
+                          Cancel
+                        </Button>
+                        <Button size="sm" className="h-6 text-[11px] rounded-md gap-1" onClick={() => handleSaveUnitNotes(u.id)} disabled={savingUnitNotes}>
+                          {savingUnitNotes && <Loader2 className="h-3 w-3 animate-spin" />}
+                          Save
+                        </Button>
+                      </div>
+                    </div>
+                  ) : u.notes ? (
+                    <p className="text-[11px] text-muted-foreground bg-muted/40 rounded-md px-2 py-1.5 whitespace-pre-wrap">{u.notes}</p>
+                  ) : null}
+                </Card>
+              );
+            })}
           </div>
         </div>
       )}
