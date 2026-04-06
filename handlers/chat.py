@@ -93,28 +93,46 @@ async def chat_with_agent(
     progress_queue: _queue.Queue[str] = _queue.Queue()
     progress_events: list[str] = []
 
+    # Pretty tool name mapping
+    _TOOL_LABELS = {
+        "lookup_vendors": "Searching vendors",
+        "propose_task": "Proposing task",
+        "close_task": "Closing task",
+        "set_mode": "Changing mode",
+        "attach_vendor": "Assigning vendor",
+        "create_vendor": "Creating vendor",
+        "update_steps": "Updating progress",
+    }
+
     def _tool_progress(event_type: str, tool_name: str, preview: str | None, args: dict | None, **kwargs):
         """Hermes tool_progress_callback: (event_type, tool_name, preview, args, **kw)"""
+        label = _TOOL_LABELS.get(tool_name, tool_name)
         if event_type == "tool.started":
-            msg = f"[{tool_name}] {preview or 'running...'}"
+            # Build a human-readable summary instead of showing raw JSON
+            hint = ""
+            if args:
+                if tool_name == "lookup_vendors" and args.get("vendor_type"):
+                    hint = f" ({args['vendor_type']})"
+                elif tool_name == "propose_task" and args.get("title"):
+                    hint = f": {args['title'][:60]}"
+                elif tool_name == "attach_vendor" and args.get("vendor_id"):
+                    hint = ""  # vendor name not in args, keep it clean
+            msg = f"{label}{hint}"
             progress_events.append(msg)
             progress_queue.put(msg)
         elif event_type == "tool.completed":
-            duration = kwargs.get("duration", 0)
             is_error = kwargs.get("is_error", False)
-            status = "error" if is_error else f"done ({duration:.1f}s)"
-            msg = f"[{tool_name}] {status}"
-            progress_events.append(msg)
-            progress_queue.put(msg)
+            if is_error:
+                msg = f"{label}: error"
+                progress_events.append(msg)
+                progress_queue.put(msg)
 
     def _step_callback(iteration: int, prev_tools: list | None, **kwargs):
         """Hermes step_callback: fires after each API call iteration."""
-        if prev_tools:
-            tool_names = ", ".join(str(t) for t in prev_tools[:3])
-            msg = f"Step {iteration}: {tool_names}"
-        else:
-            msg = "Thinking\u2026"
-        progress_queue.put(msg)
+        # Skip — we already emit per-tool progress via _tool_progress.
+        # The first iteration (no prev_tools) would duplicate "Thinking…"
+        # which the SSE handler already emits.
+        pass
 
     # Log what we're sending to the agent
     print(f"[hermes] model={actual_model} provider={provider} base_url={api_base}")
@@ -147,17 +165,6 @@ async def chat_with_agent(
         kwargs = _orig_build(messages)
         if agent.tools and "tools" in kwargs and "tool_choice" not in kwargs:
             kwargs["tool_choice"] = "auto"
-        # Log what we're sending
-        print(f"[hermes-debug] API kwargs: model={kwargs.get('model')} "
-              f"tool_choice={kwargs.get('tool_choice')} "
-              f"tools={len(kwargs.get('tools', []))} "
-              f"messages={len(kwargs.get('messages', []))}")
-        # Log last 3 messages
-        for m in kwargs.get("messages", [])[-3:]:
-            role = m.get("role", "?")
-            content = (m.get("content") or "")[:120]
-            has_tc = bool(m.get("tool_calls"))
-            print(f"[hermes-debug]   {role}: {content!r} tool_calls={has_tc}")
         return kwargs
     agent._build_api_kwargs = _patched_build_api_kwargs
 
