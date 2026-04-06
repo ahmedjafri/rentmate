@@ -28,6 +28,8 @@ interface EntityContextCardProps {
   entityType?: 'property' | 'unit' | 'tenant' | 'vendor';
   /** Agent-managed context from the DB */
   agentContext?: string;
+  /** Callback when agent context is saved to DB */
+  onAgentContextSaved?: (newContext: string) => void;
   /** Topics the user should cover in their context notes */
   expectedTopics?: ContextTopic[];
   /** Auto-generated context lines derived from system data */
@@ -79,7 +81,7 @@ export const propertyTopics: ContextTopic[] = [
   { key: 'rule', label: 'Rules, policies & HOA', description: 'Special rules, HOA policies, dues, or local regulations' },
 ];
 
-export function EntityContextCard({ entityId, entityName, entityType, agentContext, expectedTopics = [], autoContext = [] }: EntityContextCardProps) {
+export function EntityContextCard({ entityId, entityName, entityType, agentContext, onAgentContextSaved, expectedTopics = [], autoContext = [] }: EntityContextCardProps) {
   const { getEntityContext, setEntityContext } = useApp();
   const [open, setOpen] = useState(false);
   const context = getEntityContext(entityId);
@@ -101,26 +103,37 @@ export function EntityContextCard({ entityId, entityName, entityType, agentConte
     setOpen(true);
   };
 
-  const handleSave = () => {
-    setEntityContext(entityId, draft);
-    setOpen(false);
-  };
-
-  const handleSaveAgentContext = async () => {
+  const saveAgentContext = async () => {
     if (!entityType) return;
     setSavingAgent(true);
     try {
+      const trimmed = agentDraft.trim();
       await graphqlQuery(UPDATE_ENTITY_CONTEXT_MUTATION, {
         entityType,
         entityId,
-        context: agentDraft.trim(),
+        context: trimmed,
       });
-      toast.success('Agent memory saved');
+      onAgentContextSaved?.(trimmed);
+      return true;
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to save');
+      toast.error(e instanceof Error ? e.message : 'Failed to save agent memory');
+      return false;
     } finally {
       setSavingAgent(false);
     }
+  };
+
+  const handleSave = async () => {
+    // Save human notes to localStorage
+    setEntityContext(entityId, draft);
+    // Save agent memory to DB if changed
+    const agentChanged = agentDraft !== (agentContext || '');
+    if (agentChanged && entityType) {
+      const ok = await saveAgentContext();
+      if (!ok) return; // Don't close on error
+    }
+    toast.success('Context saved');
+    setOpen(false);
   };
 
   const draftAllText = [draft, agentDraft, autoContextText].join(' ');
@@ -202,18 +215,6 @@ export function EntityContextCard({ entityId, entityName, entityType, agentConte
                     placeholder="No agent notes yet. RentMate will add context here as it learns about this entity."
                     className="min-h-[100px] resize-none text-sm font-mono"
                   />
-                  {agentDraft !== (agentContext || '') && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="mt-2 h-7 text-xs gap-1.5"
-                      onClick={handleSaveAgentContext}
-                      disabled={savingAgent}
-                    >
-                      {savingAgent ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                      Save Agent Memory
-                    </Button>
-                  )}
                 </div>
               )}
 
@@ -274,7 +275,10 @@ export function EntityContextCard({ entityId, entityName, entityType, agentConte
             </span>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={() => setOpen(false)}>Cancel</Button>
-              <Button size="sm" onClick={handleSave}>Save</Button>
+              <Button size="sm" onClick={handleSave} disabled={savingAgent}>
+                {savingAgent ? <Loader2 className="h-3 w-3 animate-spin mr-1.5" /> : null}
+                Save
+              </Button>
             </div>
           </div>
         </DialogContent>
