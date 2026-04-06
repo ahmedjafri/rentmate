@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { graphqlQuery, HOUSES_QUERY, TENANTS_QUERY, TASKS_QUERY, VENDORS_QUERY, SUGGESTIONS_QUERY } from '@/data/api';
 import { Property, Tenant, Vendor, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, TaskParticipant } from '@/data/mockData';
 
@@ -12,13 +12,57 @@ interface ApiState {
   isLoading: boolean;
   error: string | null;
   refresh: () => void;
+  /** Lightweight refresh that only re-fetches tasks and suggestions (used after AI chat). */
+  refreshTasksAndSuggestions: () => void;
 }
+
+/** Minimum interval (ms) between consecutive full fetches to prevent rapid-fire reloads. */
+const THROTTLE_MS = 10_000;
 
 export function useApiData(): ApiState {
   const [refreshKey, setRefreshKey] = useState(0);
-  const refresh = useCallback(() => setRefreshKey(k => k + 1), []);
+  /** Tracks whether only tasks/suggestions should be refreshed (vs full). */
+  const partialRefreshRef = useRef(false);
+  const lastFetchAtRef = useRef(0);
+  const throttleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [state, setState] = useState<Omit<ApiState, 'refresh'>>({
+  const refresh = useCallback(() => {
+    const now = Date.now();
+    const elapsed = now - lastFetchAtRef.current;
+    // If we recently fetched, skip or defer.
+    if (elapsed < THROTTLE_MS) {
+      // Schedule one trailing refresh if not already scheduled
+      if (!throttleTimerRef.current) {
+        throttleTimerRef.current = setTimeout(() => {
+          throttleTimerRef.current = null;
+          partialRefreshRef.current = false;
+          setRefreshKey(k => k + 1);
+        }, THROTTLE_MS - elapsed);
+      }
+      return;
+    }
+    partialRefreshRef.current = false;
+    setRefreshKey(k => k + 1);
+  }, []);
+
+  const refreshTasksAndSuggestions = useCallback(() => {
+    const now = Date.now();
+    const elapsed = now - lastFetchAtRef.current;
+    if (elapsed < THROTTLE_MS) {
+      if (!throttleTimerRef.current) {
+        throttleTimerRef.current = setTimeout(() => {
+          throttleTimerRef.current = null;
+          partialRefreshRef.current = true;
+          setRefreshKey(k => k + 1);
+        }, THROTTLE_MS - elapsed);
+      }
+      return;
+    }
+    partialRefreshRef.current = true;
+    setRefreshKey(k => k + 1);
+  }, []);
+
+  const [state, setState] = useState<Omit<ApiState, 'refresh' | 'refreshTasksAndSuggestions'>>({
     properties: [],
     tenants: [],
     vendors: [],
@@ -41,19 +85,53 @@ export function useApiData(): ApiState {
         hiddenAt = Date.now();
       } else if (document.visibilityState === 'visible') {
         if (hiddenAt !== null && Date.now() - hiddenAt > STALE_MS) {
-          setRefreshKey(k => k + 1);
+          refresh();
         }
         hiddenAt = null;
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
     return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [refresh]);
+
+  // Clean up throttle timer on unmount
+  useEffect(() => {
+    return () => {
+      if (throttleTimerRef.current) clearTimeout(throttleTimerRef.current);
+    };
   }, []);
 
   useEffect(() => {
     let cancelled = false;
+    const isPartial = partialRefreshRef.current;
 
     async function fetchAll() {
+      lastFetchAtRef.current = Date.now();
+
+      // For partial refreshes, only fetch tasks and suggestions
+      if (isPartial) {
+        const [tasksResult, suggestionsResult] = await Promise.allSettled([
+          graphqlQuery<{ tasks: ApiTask[] }>(TASKS_QUERY),
+          graphqlQuery<{ suggestions: ApiSuggestion[] }>(SUGGESTIONS_QUERY, {}),
+        ]);
+
+        if (cancelled) return;
+
+        const allTasks = tasksResult.status === 'fulfilled' ? (tasksResult.value.tasks || []) : [];
+        const actionDeskTasks: ActionDeskTask[] = allTasks
+          .filter(t => t.taskStatus !== 'dismissed')
+          .map(apiTaskToActionDesk);
+        const tickets: MaintenanceTicket[] = allTasks
+          .filter(t => t.category === 'maintenance')
+          .map(apiTaskToTicket);
+        const suggestions: Suggestion[] = suggestionsResult.status === 'fulfilled'
+          ? (suggestionsResult.value.suggestions || []).map(apiSuggestionToSuggestion)
+          : [];
+
+        setState(prev => ({ ...prev, actionDeskTasks, tickets, suggestions, isLoading: false }));
+        return;
+      }
+
       const [housesResult, tenantsResult, tasksResult, vendorsResult, suggestionsResult] = await Promise.allSettled([
         graphqlQuery<{ houses: ApiHouse[] }>(HOUSES_QUERY),
         graphqlQuery<{ tenants: ApiTenant[] }>(TENANTS_QUERY),
@@ -135,7 +213,7 @@ export function useApiData(): ApiState {
     return () => { cancelled = true; };
   }, [refreshKey]);
 
-  return { ...state, refresh };
+  return { ...state, refresh, refreshTasksAndSuggestions };
 }
 
 

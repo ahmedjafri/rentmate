@@ -1,6 +1,5 @@
 // Entity context management for properties, tenants, and other entities
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import {
   Suggestion, Property, Tenant, Vendor, MaintenanceTicket, AutonomySettings, ChatMessage, ActionDeskTask, ManagedDocument,
   defaultAutonomySettings,
@@ -67,6 +66,8 @@ interface AppContextType {
   closeChat: () => void;
   setAutonomySettings: (settings: AutonomySettings) => void;
   refreshData: () => void;
+  /** Lightweight refresh: only re-fetches tasks and suggestions. */
+  refreshTasksAndSuggestions: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -100,15 +101,7 @@ const loadFromStorage = <T,>(key: string, fallback: T): T => {
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { properties: apiProperties, tenants: apiTenants, vendors: apiVendors, actionDeskTasks: apiActionDeskTasks, tickets: apiTickets, suggestions: apiSuggestions, isLoading: apiLoading, error: apiError, refresh: refreshData } = useApiData();
-
-  // Re-fetch on route navigation
-  const location = useLocation();
-  const isFirstRender = useRef(true);
-  useEffect(() => {
-    if (isFirstRender.current) { isFirstRender.current = false; return; }
-    refreshData();
-  }, [location.pathname]);
+  const { properties: apiProperties, tenants: apiTenants, vendors: apiVendors, actionDeskTasks: apiActionDeskTasks, tickets: apiTickets, suggestions: apiSuggestions, isLoading: apiLoading, error: apiError, refresh: refreshData, refreshTasksAndSuggestions } = useApiData();
 
   // Seed from localStorage so a page reload (e.g. iOS Safari evicting the tab from memory)
   // shows cached data immediately instead of a blank loading state. Dates are coerced back
@@ -318,7 +311,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       chatPanel, entityContext, getEntityContext, setEntityContext,
       updateSuggestionStatus, updateSuggestion, addChatMessage, updateTaskMessage, setTaskMessages, updateTask,
       addTask, removeTask,
-      addProperty, updateProperty, removeProperty, addTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, closeChat, setAutonomySettings, refreshData,
+      addProperty, updateProperty, removeProperty, addTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, closeChat, setAutonomySettings, refreshData, refreshTasksAndSuggestions,
     }}>
       {children}
     </AppContext.Provider>

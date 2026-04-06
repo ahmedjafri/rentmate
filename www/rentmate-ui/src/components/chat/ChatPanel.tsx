@@ -39,7 +39,7 @@ function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }
 }
 
 export function ChatPanel() {
-  const { chatPanel, closeChat, openChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, addDocument, replaceDocument, removeDocument, refreshData } = useApp();
+  const { chatPanel, closeChat, openChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, addDocument, replaceDocument, removeDocument, refreshTasksAndSuggestions } = useApp();
   const [dismissConfirm, setDismissConfirm] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -444,8 +444,8 @@ export function ChatPanel() {
                 }
               }
             }
-            // Refresh data so new suggestions created by agent tools appear
-            refreshData();
+            // Refresh tasks/suggestions so new items created by agent tools appear
+            refreshTasksAndSuggestions();
           } else if (event.type === 'error') {
             activeStreamIdRef.current = null;
             sseError = new Error(event.message ?? 'AI unavailable');
