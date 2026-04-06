@@ -50,21 +50,16 @@ def _register_rentmate_tools():
             },
         }
 
-        # Bridge: wrap async execute() into a sync handler for Hermes
-        async def _async_handler(args, _tool=tool, **kwargs):
+        # Async handler — Hermes bridges it via _run_async when is_async=True
+        async def _handler(args, _tool=tool, **kwargs):
             return await _tool.execute(**args)
-
-        def _sync_handler(args, _async_handler=_async_handler, **kwargs):
-            import nest_asyncio
-            nest_asyncio.apply()
-            loop = asyncio.get_event_loop()
-            return loop.run_until_complete(_async_handler(args))
 
         registry.register(
             name=tool.name,
             toolset="rentmate",
             schema=schema,
-            handler=_sync_handler,
+            handler=_handler,
+            is_async=True,
             description=tool.description,
         )
 

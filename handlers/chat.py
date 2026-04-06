@@ -86,10 +86,18 @@ async def chat_with_agent(
     if conversation_history and conversation_history[-1]["role"] == "user":
         user_message = conversation_history.pop()["content"]
 
-    # Progress callback bridge
-    def _tool_progress(tool_name: str, status: str, result: str = "", **kwargs):
-        if on_progress and asyncio.get_event_loop().is_running():
-            asyncio.ensure_future(on_progress(f"[{tool_name}] {status}"))
+    # Collect progress events to relay after run_conversation returns
+    progress_events: list[str] = []
+
+    def _tool_progress(event_type: str, tool_name: str, preview: str | None, args: dict | None, **kwargs):
+        """Hermes tool_progress_callback: (event_type, tool_name, preview, args, **kw)"""
+        if event_type == "tool.started":
+            progress_events.append(f"[{tool_name}] {preview or 'running...'}")
+        elif event_type == "tool.completed":
+            duration = kwargs.get("duration", 0)
+            is_error = kwargs.get("is_error", False)
+            status = "error" if is_error else f"done ({duration:.1f}s)"
+            progress_events.append(f"[{tool_name}] {status}")
 
     agent = AIAgent(
         base_url=api_base,
@@ -103,16 +111,53 @@ async def chat_with_agent(
         session_id=session_key,
         skip_context_files=True,
         skip_memory=True,
-        tool_progress_callback=_tool_progress if on_progress else None,
+        tool_progress_callback=_tool_progress,
     )
 
-    result = await asyncio.to_thread(
-        agent.run_conversation,
-        user_message=user_message,
-        system_message=system_message,
-        conversation_history=conversation_history if conversation_history else None,
-    )
+    # Run in thread; relay progress events to async on_progress callback
+    import queue as _queue
+    progress_queue: _queue.Queue[str | None] = _queue.Queue()
 
+    original_tool_progress = _tool_progress
+    def _tool_progress_with_queue(event_type, tool_name, preview, args, **kwargs):
+        original_tool_progress(event_type, tool_name, preview, args, **kwargs)
+        if event_type == "tool.started":
+            progress_queue.put(f"[{tool_name}] {preview or 'running...'}")
+        elif event_type == "tool.completed":
+            duration = kwargs.get("duration", 0)
+            is_error = kwargs.get("is_error", False)
+            status = "error" if is_error else f"done ({duration:.1f}s)"
+            progress_queue.put(f"[{tool_name}] {status}")
+
+    agent.tool_progress_callback = _tool_progress_with_queue
+
+    async def _run_with_progress():
+        loop = asyncio.get_event_loop()
+        task = loop.run_in_executor(
+            None,
+            lambda: agent.run_conversation(
+                user_message=user_message,
+                system_message=system_message,
+                conversation_history=conversation_history if conversation_history else None,
+            ),
+        )
+        # Drain progress queue while agent runs
+        while not task.done():
+            try:
+                msg = progress_queue.get_nowait()
+                if msg and on_progress:
+                    await on_progress(msg)
+            except _queue.Empty:
+                pass
+            await asyncio.sleep(0.1)
+        # Drain remaining
+        while not progress_queue.empty():
+            msg = progress_queue.get_nowait()
+            if msg and on_progress:
+                await on_progress(msg)
+        return task.result()
+
+    result = await _run_with_progress()
     return result.get("final_response", "") if isinstance(result, dict) else str(result)
 
 
