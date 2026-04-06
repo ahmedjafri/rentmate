@@ -1,6 +1,6 @@
 from .base import Base
 from .rental import Property, Unit, Tenant, Lease
-from .tasks import Task
+from .tasks import Task, TaskNumberSequence
 from .messaging import (
     ParticipantType,
     ConversationType,
@@ -32,6 +32,7 @@ __all__ = [
     "MessageType",
     "ExternalContact",
     "Task",
+    "TaskNumberSequence",
     "Suggestion",
     "Conversation",
     "ConversationParticipant",
