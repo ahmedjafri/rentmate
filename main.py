@@ -59,6 +59,10 @@ _MIGRATE_COLS = [
     ("leases",         "payment_status",     "VARCHAR(20) DEFAULT 'current'"),
     ("properties",     "property_type",      "VARCHAR(20) DEFAULT 'multi_family'"),
     ("properties",     "source",             "VARCHAR(20)"),
+    ("properties",     "context",            "TEXT"),
+    ("units",          "context",            "TEXT"),
+    ("tenants",        "context",            "TEXT"),
+    ("external_contacts", "context",         "TEXT"),
 ]
 
 

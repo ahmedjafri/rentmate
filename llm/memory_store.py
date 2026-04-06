@@ -1,24 +1,15 @@
 """DB-backed memory store for the RentMate agent.
 
-Supports entity-scoped notes (property, unit, tenant, vendor) and general
-notes. Notes are stored in the agent_memory table with structured memory_type
-keys for efficient filtering.
-
-Memory types:
-  - "note:general"           — global preferences, decisions
-  - "note:property:{id}"     — property-specific context
-  - "note:unit:{id}"         — unit-specific context
-  - "note:tenant:{id}"       — tenant-specific context
-  - "note:vendor:{id}"       — vendor-specific context
-  - "long_term"              — legacy blob (backward compat)
+Entity-scoped context is stored directly on entity tables (properties, units,
+tenants, external_contacts) via the `context` column. General notes use the
+agent_memory table.
 """
-import json
 import uuid
 from datetime import UTC, datetime
 
 
 class DbMemoryStore:
-    """Reads/writes agent memory from the agent_memory DB table."""
+    """Reads/writes agent memory from entity context columns + agent_memory."""
 
     def __init__(self, agent_id: str):
         self.agent_id = agent_id
@@ -27,119 +18,111 @@ class DbMemoryStore:
         from handlers.deps import SessionLocal
         return SessionLocal()
 
-    # ── Entity-scoped notes ──────────────────────────────────────────────
+    # ── General notes (agent_memory table) ───────────────────────────────
 
-    def _memory_type_key(self, entity_type: str, entity_id: str = "") -> str:
-        if entity_type == "general" or not entity_id:
-            return "note:general"
-        return f"note:{entity_type}:{entity_id}"
-
-    def add_note(
-        self,
-        content: str,
-        entity_type: str = "general",
-        entity_id: str = "",
-        entity_label: str = "",
-    ) -> str:
+    def add_note(self, content: str, entity_type: str = "general",
+                 entity_id: str = "", entity_label: str = "") -> str:
+        """Add a general note to agent_memory."""
         from db.models import AgentMemory
         db = self._get_db()
         try:
             note_id = str(uuid.uuid4())
-            now = datetime.now(UTC)
-            meta = {}
-            if entity_label:
-                meta["label"] = entity_label
-            if entity_type != "general":
-                meta["entity_type"] = entity_type
-                if entity_id:
-                    meta["entity_id"] = entity_id
-
             db.add(AgentMemory(
                 id=note_id,
                 agent_id=self.agent_id,
-                memory_type=self._memory_type_key(entity_type, entity_id),
+                memory_type="note:general",
                 content=content,
-                updated_at=now,
+                updated_at=datetime.now(UTC),
             ))
             db.commit()
             return note_id
         finally:
             db.close()
 
-    def get_notes(
-        self,
-        entity_type: str | None = None,
-        entity_id: str | None = None,
-    ) -> list[dict]:
+    def get_notes(self, entity_type: str | None = None,
+                  entity_id: str | None = None) -> list[dict]:
+        """Get general notes from agent_memory."""
         from db.models import AgentMemory
         db = self._get_db()
         try:
-            query = db.query(AgentMemory).filter(
-                AgentMemory.agent_id == self.agent_id,
-                AgentMemory.memory_type.like("note:%"),
+            rows = (
+                db.query(AgentMemory)
+                .filter(
+                    AgentMemory.agent_id == self.agent_id,
+                    AgentMemory.memory_type == "note:general",
+                )
+                .order_by(AgentMemory.updated_at.desc())
+                .all()
             )
-            if entity_type and entity_id:
-                query = query.filter(
-                    AgentMemory.memory_type == self._memory_type_key(entity_type, entity_id)
-                )
-            elif entity_type:
-                query = query.filter(
-                    AgentMemory.memory_type.like(f"note:{entity_type}%")
-                )
-            rows = query.order_by(AgentMemory.updated_at.desc()).all()
-            notes = []
-            for row in rows:
-                # Parse entity info from memory_type key
-                parts = row.memory_type.split(":")
-                note = {
-                    "id": row.id,
-                    "content": row.content,
-                    "entity_type": parts[1] if len(parts) > 1 else "general",
-                    "updated_at": row.updated_at.isoformat() if row.updated_at else "",
-                }
-                if len(parts) > 2:
-                    note["entity_id"] = parts[2]
-                notes.append(note)
-            return notes
+            return [{"content": r.content, "entity_type": "general"} for r in rows]
         finally:
             db.close()
 
     # ── System prompt context ────────────────────────────────────────────
 
     def get_memory_context(self) -> str:
-        """Build a memory block for the system prompt.
+        """Build a memory block for the system prompt from entity context columns."""
+        db = self._get_db()
+        try:
+            parts = []
 
-        Entity-scoped notes are grouped by type, general notes come last.
-        """
-        notes = self.get_notes()
-        if not notes:
-            # Fall back to legacy long_term memory
-            legacy = self.read_long_term()
-            if legacy:
-                return f"## Long-term Memory\n{legacy}"
-            return ""
+            # Entity context from the actual tables
+            from db.models import Property, Unit, Tenant, ExternalContact
+            from db.queries import format_address
 
-        sections: dict[str, list[str]] = {}
-        for note in notes:
-            et = note["entity_type"]
-            label = et.capitalize()
-            if et not in sections:
-                sections[et] = []
-            entity_id = note.get("entity_id", "")
-            prefix = f"[{entity_id[:8]}] " if entity_id else ""
-            sections[et].append(f"- {prefix}{note['content']}")
+            props = db.query(Property).filter(Property.context.isnot(None)).all()
+            if props:
+                parts.append("### Properties")
+                for p in props:
+                    label = p.name or format_address(p)
+                    parts.append(f"**{label}**\n{p.context}")
 
-        parts = ["## Memory Notes"]
-        # Entity notes first, general last
-        for et in ["property", "unit", "tenant", "vendor"]:
-            if et in sections:
-                parts.append(f"\n### {et.capitalize()}")
-                parts.extend(sections[et])
-        if "general" in sections:
-            parts.append("\n### General")
-            parts.extend(sections["general"])
+            units = db.query(Unit).filter(Unit.context.isnot(None)).all()
+            if units:
+                parts.append("### Units")
+                for u in units:
+                    parts.append(f"**{u.label}**\n{u.context}")
 
-        return "\n".join(parts)
+            tenants = db.query(Tenant).filter(Tenant.context.isnot(None)).all()
+            if tenants:
+                parts.append("### Tenants")
+                for t in tenants:
+                    name = f"{t.first_name} {t.last_name}".strip()
+                    parts.append(f"**{name}**\n{t.context}")
+
+            vendors = db.query(ExternalContact).filter(ExternalContact.context.isnot(None)).all()
+            if vendors:
+                parts.append("### Vendors")
+                for v in vendors:
+                    parts.append(f"**{v.name}**\n{v.context}")
+
+            # General notes from agent_memory
+            from db.models import AgentMemory
+            general = (
+                db.query(AgentMemory)
+                .filter(
+                    AgentMemory.agent_id == self.agent_id,
+                    AgentMemory.memory_type == "note:general",
+                )
+                .order_by(AgentMemory.updated_at.desc())
+                .limit(20)
+                .all()
+            )
+            if general:
+                parts.append("### General")
+                for g in general:
+                    parts.append(f"- {g.content}")
+
+            if not parts:
+                # Fall back to legacy long_term
+                legacy = self.read_long_term()
+                if legacy:
+                    return f"## Memory Notes\n{legacy}"
+                return ""
+
+            return "## Memory Notes\n\n" + "\n\n".join(parts)
+        finally:
+            db.close()
 
     # ── Legacy blob (backward compat) ────────────────────────────────────
 

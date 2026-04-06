@@ -637,17 +637,49 @@ class SaveMemoryTool(Tool):
         entity_id = kwargs.get("entity_id", "")
         entity_label = kwargs.get("entity_label", "")
 
-        from llm.memory_store import DbMemoryStore
-        from backends.local_auth import DEFAULT_USER_ID
-        store = DbMemoryStore(DEFAULT_USER_ID)
-        store.add_note(
-            content=content,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            entity_label=entity_label,
-        )
-        label = entity_label or entity_type
-        return json.dumps({"status": "ok", "message": f"Note saved for {label}."})
+        from handlers.deps import SessionLocal
+        from datetime import UTC, datetime
+
+        if entity_type == "general" or not entity_id:
+            # General notes go to agent_memory table
+            from llm.memory_store import DbMemoryStore
+            from backends.local_auth import DEFAULT_USER_ID
+            store = DbMemoryStore(DEFAULT_USER_ID)
+            store.add_note(content=content, entity_type="general", entity_id="", entity_label="")
+            return json.dumps({"status": "ok", "message": "General note saved."})
+
+        # Entity-scoped notes go directly to the entity's context column
+        _MODEL_MAP = {
+            "property": "Property",
+            "unit": "Unit",
+            "tenant": "Tenant",
+            "vendor": "ExternalContact",
+        }
+        model_name = _MODEL_MAP.get(entity_type)
+        if not model_name:
+            return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
+
+        db = SessionLocal()
+        try:
+            import db.models as models
+            model_cls = getattr(models, model_name)
+            entity = db.query(model_cls).filter_by(id=entity_id).first()
+            if not entity:
+                return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
+
+            # Append to existing context with timestamp
+            now = datetime.now(UTC).strftime("%Y-%m-%d")
+            entry = f"[{now}] {content}"
+            existing = entity.context or ""
+            entity.context = f"{existing}\n{entry}".strip()
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(entity, "context")
+            db.commit()
+
+            label = entity_label or entity_type
+            return json.dumps({"status": "ok", "message": f"Context saved for {label}."})
+        finally:
+            db.close()
 
 
 class RecallMemoryTool(Tool):
@@ -685,10 +717,50 @@ class RecallMemoryTool(Tool):
         entity_type = kwargs.get("entity_type")
         entity_id = kwargs.get("entity_id")
 
-        from llm.memory_store import DbMemoryStore
-        from backends.local_auth import DEFAULT_USER_ID
-        store = DbMemoryStore(DEFAULT_USER_ID)
-        notes = store.get_notes(entity_type=entity_type, entity_id=entity_id)
-        if not notes:
-            return json.dumps({"notes": [], "message": "No notes found."})
-        return json.dumps({"notes": notes, "count": len(notes)})
+        if entity_type == "general" or (not entity_type and not entity_id):
+            # Read general notes from agent_memory
+            from llm.memory_store import DbMemoryStore
+            from backends.local_auth import DEFAULT_USER_ID
+            store = DbMemoryStore(DEFAULT_USER_ID)
+            notes = store.get_notes(entity_type="general")
+            if not notes:
+                return json.dumps({"notes": [], "message": "No general notes found."})
+            return json.dumps({"notes": notes, "count": len(notes)})
+
+        # Read from entity context column
+        _MODEL_MAP = {
+            "property": "Property",
+            "unit": "Unit",
+            "tenant": "Tenant",
+            "vendor": "ExternalContact",
+        }
+        model_name = _MODEL_MAP.get(entity_type or "")
+        if not model_name:
+            return json.dumps({"notes": [], "message": f"Unknown entity type: {entity_type}"})
+
+        from handlers.deps import SessionLocal
+        import db.models as models
+        db = SessionLocal()
+        try:
+            model_cls = getattr(models, model_name)
+            if entity_id:
+                entity = db.query(model_cls).filter_by(id=entity_id).first()
+                entities = [entity] if entity else []
+            else:
+                entities = db.query(model_cls).filter(model_cls.context.isnot(None)).all()
+
+            notes = []
+            for e in entities:
+                if e and e.context:
+                    label = getattr(e, "name", None) or getattr(e, "label", None) or str(e.id)[:8]
+                    notes.append({
+                        "entity_type": entity_type,
+                        "entity_id": str(e.id),
+                        "label": label,
+                        "context": e.context,
+                    })
+            if not notes:
+                return json.dumps({"notes": [], "message": f"No {entity_type} context found."})
+            return json.dumps({"notes": notes, "count": len(notes)})
+        finally:
+            db.close()
