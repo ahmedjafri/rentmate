@@ -86,18 +86,33 @@ async def chat_with_agent(
     if conversation_history and conversation_history[-1]["role"] == "user":
         user_message = conversation_history.pop()["content"]
 
-    # Collect progress events to relay after run_conversation returns
+    # Queue for bridging progress from the sync agent thread to async SSE
+    import queue as _queue
+    progress_queue: _queue.Queue[str] = _queue.Queue()
     progress_events: list[str] = []
 
     def _tool_progress(event_type: str, tool_name: str, preview: str | None, args: dict | None, **kwargs):
         """Hermes tool_progress_callback: (event_type, tool_name, preview, args, **kw)"""
         if event_type == "tool.started":
-            progress_events.append(f"[{tool_name}] {preview or 'running...'}")
+            msg = f"[{tool_name}] {preview or 'running...'}"
+            progress_events.append(msg)
+            progress_queue.put(msg)
         elif event_type == "tool.completed":
             duration = kwargs.get("duration", 0)
             is_error = kwargs.get("is_error", False)
             status = "error" if is_error else f"done ({duration:.1f}s)"
-            progress_events.append(f"[{tool_name}] {status}")
+            msg = f"[{tool_name}] {status}"
+            progress_events.append(msg)
+            progress_queue.put(msg)
+
+    def _step_callback(iteration: int, prev_tools: list | None, **kwargs):
+        """Hermes step_callback: fires after each API call iteration."""
+        if prev_tools:
+            tool_names = ", ".join(str(t) for t in prev_tools[:3])
+            msg = f"Step {iteration}: {tool_names}"
+        else:
+            msg = "Thinking\u2026"
+        progress_queue.put(msg)
 
     # Log what we're sending to the agent
     print(f"[hermes] model={actual_model} provider={provider} base_url={api_base}")
@@ -116,27 +131,15 @@ async def chat_with_agent(
         skip_context_files=True,
         skip_memory=True,
         tool_progress_callback=_tool_progress,
+        step_callback=_step_callback,
         verbose_logging=bool(os.getenv("HERMES_VERBOSE")),
     )
-
-    # Run in thread; relay progress events to async on_progress callback
-    import queue as _queue
-    progress_queue: _queue.Queue[str | None] = _queue.Queue()
-
-    original_tool_progress = _tool_progress
-    def _tool_progress_with_queue(event_type, tool_name, preview, args, **kwargs):
-        original_tool_progress(event_type, tool_name, preview, args, **kwargs)
-        if event_type == "tool.started":
-            progress_queue.put(f"[{tool_name}] {preview or 'running...'}")
-        elif event_type == "tool.completed":
-            duration = kwargs.get("duration", 0)
-            is_error = kwargs.get("is_error", False)
-            status = "error" if is_error else f"done ({duration:.1f}s)"
-            progress_queue.put(f"[{tool_name}] {status}")
-
-    agent.tool_progress_callback = _tool_progress_with_queue
+    # Force tool use enforcement — DeepSeek is not in Hermes's default list
+    # and will simulate tool calls in text without this
+    agent._tool_use_enforcement = True
 
     async def _run_with_progress():
+        import queue as _q
         loop = asyncio.get_event_loop()
         task = loop.run_in_executor(
             None,
@@ -152,7 +155,7 @@ async def chat_with_agent(
                 msg = progress_queue.get_nowait()
                 if msg and on_progress:
                     await on_progress(msg)
-            except _queue.Empty:
+            except _q.Empty:
                 pass
             await asyncio.sleep(0.1)
         # Drain remaining

@@ -41,13 +41,11 @@ def _register_rentmate_tools():
         AttachVendorTool, LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
     ):
         tool = tool_cls()
+        # Flat schema — get_definitions() wraps it in {"type":"function","function":...}
         schema = {
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters,
-            },
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.parameters,
         }
 
         # Async handler — Hermes bridges it via _run_async when is_async=True
