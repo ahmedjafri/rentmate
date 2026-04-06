@@ -138,6 +138,16 @@ async def chat_with_agent(
     # and will simulate tool calls in text without this
     agent._tool_use_enforcement = True
 
+    # Patch _build_api_kwargs to add tool_choice: "auto" for chat_completions.
+    # Hermes omits this, but DeepSeek defaults to "none" without it.
+    _orig_build = agent._build_api_kwargs
+    def _patched_build_api_kwargs(messages):
+        kwargs = _orig_build(messages)
+        if agent.tools and "tools" in kwargs and "tool_choice" not in kwargs:
+            kwargs["tool_choice"] = "auto"
+        return kwargs
+    agent._build_api_kwargs = _patched_build_api_kwargs
+
     async def _run_with_progress():
         import queue as _q
         loop = asyncio.get_event_loop()
