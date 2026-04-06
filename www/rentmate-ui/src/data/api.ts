@@ -138,6 +138,9 @@ const TASK_FIELDS = `
   externalConversationId
   steps
   suggestionOptions
+  propertyName
+  propertyAddress
+  resolvedAt
   messages {
     uid
     body

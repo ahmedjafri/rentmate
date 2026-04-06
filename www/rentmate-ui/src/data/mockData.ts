@@ -40,6 +40,13 @@ export interface ActionDeskTask {
   assignedVendorName?: string;
   steps?: { key: string; label: string; status: 'pending' | 'active' | 'done'; note?: string }[];
   suggestionOptions?: { key: string; label: string; action: string; variant: string }[];
+  propertyName?: string;
+  propertyAddress?: string;
+  resolvedAt?: Date | null;
+  unitLabel?: string;
+  tenantName?: string;
+  source?: string;
+  priority?: string;
 }
 
 export type ChatMessageType = 'message' | 'internal' | 'approval' | 'context';

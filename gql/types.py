@@ -16,6 +16,16 @@ def _utc_iso(dt: _datetime | None) -> str:
     return dt.isoformat() + "Z"
 
 
+def _format_address_safe(p) -> str | None:
+    """Format a property address, returning None if empty."""
+    from db.queries import format_address
+    try:
+        addr = format_address(p)
+        return addr if addr else None
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Input types
 # ---------------------------------------------------------------------------
@@ -393,6 +403,9 @@ class TaskType:
     external_conversation_id: typing.Optional[str] = None
     steps: typing.Optional[strawberry.scalars.JSON] = None
     suggestion_options: typing.Optional[strawberry.scalars.JSON] = None
+    property_name: typing.Optional[str] = None
+    property_address: typing.Optional[str] = None
+    resolved_at: typing.Optional[str] = None
 
     @classmethod
     def from_sql(cls, t: typing.Any) -> "TaskType":
@@ -453,6 +466,9 @@ class TaskType:
             external_conversation_id=str(t.external_conversation_id) if t.external_conversation_id else None,
             steps=t.steps,
             suggestion_options=extra.get('suggestion_options'),
+            property_name=(t.property.name if getattr(t, "property", None) and t.property else None),
+            property_address=(_format_address_safe(t.property) if getattr(t, "property", None) and t.property else None),
+            resolved_at=_utc_iso(t.resolved_at) or None,
         )
 
 

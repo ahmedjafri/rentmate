@@ -26,6 +26,7 @@ import AutomationDetail from "./pages/AutomationDetail";
 import NotFound from "./pages/NotFound";
 import VendorInvite from "./pages/VendorInvite";
 import VendorPortal from "./pages/VendorPortal";
+import TaskCommandCenter from "./pages/TaskCommandCenter";
 
 const queryClient = new QueryClient();
 
@@ -66,6 +67,7 @@ const App = () => (
                     <Route path="/documents/:id" element={<DocumentPage />} />
                     <Route path="/action-desk" element={<ActionDesk />} />
                     <Route path="/tasks" element={<Tasks />} />
+                    <Route path="/tasks/:id" element={<TaskCommandCenter />} />
                     <Route path="/chats" element={<Chats />} />
                     <Route path="/automation" element={<Automation />} />
                     <Route path="/automation/:key" element={<AutomationDetail />} />

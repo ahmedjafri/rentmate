@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
 import { Property, Tenant, ActionDeskTask, Vendor } from '@/data/mockData';
 import { Card } from '@/components/ui/card';
@@ -238,6 +238,7 @@ function SmartSearch({ chips, onChipsChange, tasks, properties, tenants }: Smart
 // ─── Tasks ───────────────────────────────────────────────────────────────────
 
 const Tasks = () => {
+  const navigate = useNavigate();
   const { actionDeskTasks, properties, tenants, vendors, openChat, chatPanel, isLoading, updateTask } = useApp();
   const [statusFilters, setStatusFilters] = useState<StatusFilter[]>([]);
   const [categoryFilters, setCategoryFilters] = useState<SuggestionCategory[]>([]);
@@ -348,7 +349,7 @@ const Tasks = () => {
     const property = task.propertyId ? properties.find(p => p.id === task.propertyId) : null;
 
     return (
-      <Card key={task.id} className={cn("px-3 py-2.5 rounded-xl hover:shadow-md transition-shadow cursor-pointer", chatPanel.isOpen && chatPanel.taskId === task.id && "ring-2 ring-primary/40")} onClick={() => openChat({ taskId: task.id })}>
+      <Card key={task.id} className={cn("px-3 py-2.5 rounded-xl hover:shadow-md transition-shadow cursor-pointer", chatPanel.isOpen && chatPanel.taskId === task.id && "ring-2 ring-primary/40")} onClick={() => navigate(`/tasks/${task.id}`)}>
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 flex-wrap min-w-0">
             <Badge variant="secondary" className={cn('text-[10px] rounded-lg gap-1 shrink-0', mode.className)}>
@@ -556,7 +557,7 @@ const Tasks = () => {
             const CompletedModeIcon = completedMode.icon;
             const StatusIcon = task.status === 'resolved' ? CheckCircle2 : task.status === 'cancelled' ? XCircle : PauseCircle;
             return (
-              <Card key={task.id} className={cn("p-4 rounded-xl opacity-70 cursor-pointer hover:opacity-85 transition-opacity", chatPanel.isOpen && chatPanel.taskId === task.id && "ring-2 ring-primary/40 opacity-100")} onClick={() => openChat({ taskId: task.id })}>
+              <Card key={task.id} className={cn("p-4 rounded-xl opacity-70 cursor-pointer hover:opacity-85 transition-opacity", chatPanel.isOpen && chatPanel.taskId === task.id && "ring-2 ring-primary/40 opacity-100")} onClick={() => navigate(`/tasks/${task.id}`)}>
                 <div className="flex items-start justify-between gap-3 mb-1">
                   <div className="flex items-center gap-2">
                     <StatusIcon className={cn('h-4 w-4', task.status === 'resolved' ? 'text-accent' : task.status === 'cancelled' ? 'text-destructive' : 'text-muted-foreground')} />

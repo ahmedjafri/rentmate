@@ -225,6 +225,13 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
     aiConversationId: t.aiConversationId ?? null,
     externalConversationId: t.externalConversationId ?? null,
     parentConversationId: t.externalConversationId ?? t.parentConversationId ?? null,
+    propertyName: t.propertyName ?? undefined,
+    propertyAddress: t.propertyAddress ?? undefined,
+    resolvedAt: t.resolvedAt ? parseUtc(t.resolvedAt) : null,
+    unitLabel: t.unitLabel ?? undefined,
+    tenantName: t.tenantName ?? undefined,
+    source: t.source ?? undefined,
+    priority: t.priority ?? undefined,
   };
 }
 
@@ -363,6 +370,9 @@ interface ApiTask {
   aiConversationId?: string | null;
   parentConversationId?: string | null;
   externalConversationId?: string | null;
+  propertyName?: string;
+  propertyAddress?: string;
+  resolvedAt?: string;
 }
 
 interface ApiSuggestion {
