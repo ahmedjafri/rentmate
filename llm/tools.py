@@ -281,7 +281,7 @@ class CloseTaskTool(Tool):
 
 
 class SetModeTool(Tool):
-    """Propose changing a task's operating mode."""
+    """Change a task's operating mode directly."""
 
     @property
     def name(self) -> str:
@@ -290,8 +290,8 @@ class SetModeTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Propose changing a task's operating mode (autonomous, manual, "
-            "or waiting_approval). The manager must approve the change."
+            "Change a task's operating mode (autonomous, manual, "
+            "or waiting_approval). Takes effect immediately."
         )
 
     @property
@@ -313,34 +313,18 @@ class SetModeTool(Tool):
         task_id = kwargs["task_id"]
         mode = kwargs["mode"]
 
-        # Switching to waiting_approval is an escalation — do it immediately
-        if mode == "waiting_approval":
-            from handlers.deps import SessionLocal
-            from db.models import Task as TaskModel
-            db = SessionLocal.session_factory()
-            try:
-                task = db.query(TaskModel).filter_by(id=task_id).first()
-                if task:
-                    task.task_mode = mode
-                    db.commit()
-                    return json.dumps({"status": "ok", "message": f"Task switched to waiting_approval."})
+        from handlers.deps import SessionLocal
+        from db.models import Task as TaskModel
+        db = SessionLocal.session_factory()
+        try:
+            task = db.query(TaskModel).filter_by(id=task_id).first()
+            if not task:
                 return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
-            finally:
-                db.close()
-
-        task_title = _get_task_title(task_id)
-        options = [
-            SuggestionOption(key="approve", label=f"Switch to {mode}", action="set_mode", variant="default"),
-            SuggestionOption(key="reject", label="Keep Current", action="reject_task", variant="ghost"),
-        ]
-        sid = _create_suggestion(
-            title=f"Change mode to {mode}: {task_title}",
-            ai_context=f"The agent recommends changing this task's mode to '{mode}'.",
-            options=options,
-            action_payload={"action": "set_mode", "mode": mode},
-            task_id=task_id,
-        )
-        return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Mode change to '{mode}' created for manager confirmation."})
+            task.task_mode = mode
+            db.commit()
+            return json.dumps({"status": "ok", "message": f"Task mode changed to {mode}."})
+        finally:
+            db.close()
 
 
 def _get_task_category(task_id: str) -> str | None:
