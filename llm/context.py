@@ -21,7 +21,7 @@ def load_account_context(db: Session) -> str:
             parts = [prop.address_line1, prop.city, prop.state, prop.postal_code]
             addr = ", ".join(p for p in parts if p)
             label = prop.name or addr
-            lines.append(f"  - {label} ({addr})")
+            lines.append(f"  - {label} ({addr}) [id: {prop.id}]")
 
     if active_leases:
         lines.append("Active Leases:")
@@ -72,7 +72,7 @@ def build_task_context(db: Session, task_id: str) -> str:
     if context_msgs:
         lines.append(f"Description: {context_msgs[0].body}")
 
-    # Property context
+    # Property context (include ID so the agent can use it for save_memory)
     prop: Optional[Property] = None
     if task.property_id:
         prop = db.query(Property).filter_by(id=task.property_id).first()
@@ -80,12 +80,14 @@ def build_task_context(db: Session, task_id: str) -> str:
             parts = [prop.address_line1, prop.city, prop.state, prop.postal_code]
             addr = ", ".join(p for p in parts if p)
             lines.append(f"Property: {prop.name or addr} ({addr})")
+            lines.append(f"Property ID: {prop.id}")
 
     # Unit + tenant + lease context
     if task.unit_id:
         unit = db.query(Unit).filter_by(id=task.unit_id).first()
         if unit:
             lines.append(f"Unit: {unit.label}")
+            lines.append(f"Unit ID: {unit.id}")
             today = date.today()
             active = [l for l in unit.leases if l.end_date >= today]
             if active:
@@ -96,6 +98,7 @@ def build_task_context(db: Session, task_id: str) -> str:
                     phone = tenant.phone or "no phone"
                     email = tenant.email or "no email"
                     lines.append(f"Current Tenant: {name} | {phone} | {email}")
+                    lines.append(f"Tenant ID: {tenant.id}")
                 start = lease.start_date.strftime("%Y-%m-%d") if lease.start_date else "?"
                 end = lease.end_date.strftime("%Y-%m-%d") if lease.end_date else "?"
                 rent = f"${lease.rent_amount:,.0f}/mo" if lease.rent_amount else "?"
