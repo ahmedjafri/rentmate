@@ -938,11 +938,11 @@ export function ChatPanel() {
             <TabsContent key={lc.uid} value={lc.uid} className="hidden data-[state=active]:flex flex-1 flex-col min-h-0 mt-0">
               {/* Participant chips + portal links */}
               <div className="flex items-center gap-1.5 px-3 py-1.5 border-b bg-muted/20 shrink-0 flex-wrap">
-                {activeTask.participants.filter(p => p.type === 'tenant' || p.type === 'vendor').length === 0 ? (
+                {activeTask.participants.filter(p => p.type === lc.conversationType).length === 0 ? (
                   <span className="text-[11px] text-muted-foreground italic">No external participants yet</span>
                 ) : (
                   activeTask.participants
-                    .filter(p => p.type === 'tenant' || p.type === 'vendor')
+                    .filter(p => p.type === lc.conversationType)
                     .map((p, idx) => {
                       // Find portal URL for this participant
                       let portalUrl: string | undefined;
