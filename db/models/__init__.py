@@ -1,5 +1,5 @@
 from .base import Base
-from .rental import Property, Unit, Tenant, Lease
+from .rental import Property, Unit, Tenant, Lease, lease_tenants
 from .tasks import Task
 from .messaging import (
     ParticipantType,
@@ -27,6 +27,7 @@ __all__ = [
     "Unit",
     "Tenant",
     "Lease",
+    "lease_tenants",
     "ParticipantType",
     "ConversationType",
     "MessageType",

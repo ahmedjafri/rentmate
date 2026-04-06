@@ -137,6 +137,11 @@ class AddLeaseForTenantInput:
     lease_end: str     # YYYY-MM-DD
     rent_amount: float
 
+@strawberry.input
+class AddTenantToLeaseInput:
+    lease_id: str
+    tenant_id: str
+
 
 # ---------------------------------------------------------------------------
 # Return types (with from_sql converters)
@@ -193,14 +198,17 @@ class HouseType:
         monthly_revenue = 0.0
 
         for l in p.leases:
-            t = l.tenant
             is_active = l.end_date >= today if l.end_date else False
-            if t:
+            # Collect all tenants on this lease (primary + roommates)
+            all_tenants_on_lease = getattr(l, "all_tenants", [])
+            if not all_tenants_on_lease and l.tenant:
+                all_tenants_on_lease = [l.tenant]
+            for t in all_tenants_on_lease:
                 t_key = str(t.id)
                 if t_key not in tenant_map:
                     tenant_map[t_key] = TenantType(uid=str(t.id), name=tenant_display_name(t))
-                if is_active and l.unit_id:
-                    active_unit_ids.add(l.unit_id)
+            if is_active and l.unit_id:
+                active_unit_ids.add(l.unit_id)
             if is_active:
                 monthly_revenue += l.rent_amount or 0.0
             lease_items.append(LeaseType.from_sql(l))
@@ -302,17 +310,27 @@ class LeaseType:
     end_date: str
     rent_amount: float
     tenant: typing.Optional[TenantType] = None
+    tenants: typing.List[TenantType] = strawberry.field(default_factory=list)
     house: typing.Optional[HouseType] = None
 
     @classmethod
     def from_sql(cls, l: typing.Any) -> "LeaseType":
         from db.queries import format_address, tenant_display_name
+        # all_tenants includes the primary tenant plus any roommates from the join table
+        all_tenants_list = getattr(l, "all_tenants", [])
+        if not all_tenants_list and l.tenant:
+            all_tenants_list = [l.tenant]
+        tenants = [
+            TenantType(uid=str(t.id), name=tenant_display_name(t))
+            for t in all_tenants_list
+        ]
         return cls(
             uid=str(l.id),
             start_date=str(l.start_date),
             end_date=str(l.end_date),
             rent_amount=l.rent_amount,
             tenant=TenantType(uid=str(l.tenant.id), name=tenant_display_name(l.tenant)) if l.tenant else None,
+            tenants=tenants,
             house=HouseType(
                 uid=str(l.property.id),
                 name=l.property.name or "",

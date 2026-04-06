@@ -3,7 +3,7 @@ from datetime import UTC, datetime, date as _date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from db.models import Tenant as SqlTenant, Lease as SqlLease, Unit as SqlUnit
-from gql.types import CreateTenantWithLeaseInput, AddLeaseForTenantInput
+from gql.types import CreateTenantWithLeaseInput, AddLeaseForTenantInput, AddTenantToLeaseInput
 
 
 class TenantService:
@@ -49,6 +49,11 @@ class TenantService:
             created_at=datetime.now(UTC),
         )
         sess.add(lease)
+        sess.flush()
+
+        # Also populate the many-to-many join table
+        lease.tenants.append(tenant)
+
         sess.commit()
         return tenant, unit, lease
 
@@ -78,5 +83,49 @@ class TenantService:
             created_at=datetime.now(UTC),
         )
         sess.add(lease)
+        sess.flush()
+
+        # Also populate the many-to-many join table
+        lease.tenants.append(tenant)
+
         sess.commit()
         return tenant, unit, lease
+
+    @staticmethod
+    def add_tenant_to_lease(
+        sess: Session, input: AddTenantToLeaseInput
+    ) -> SqlLease:
+        """Add an existing tenant to an existing lease (e.g. a roommate)."""
+        lease = sess.execute(select(SqlLease).where(SqlLease.id == input.lease_id)).scalar_one_or_none()
+        if not lease:
+            raise ValueError(f"Lease {input.lease_id} not found")
+
+        tenant = sess.execute(select(SqlTenant).where(SqlTenant.id == input.tenant_id)).scalar_one_or_none()
+        if not tenant:
+            raise ValueError(f"Tenant {input.tenant_id} not found")
+
+        # Check if already associated
+        if tenant in lease.tenants:
+            return lease
+
+        lease.tenants.append(tenant)
+        sess.commit()
+        return lease
+
+    @staticmethod
+    def remove_tenant_from_lease(
+        sess: Session, lease_id: str, tenant_id: str
+    ) -> SqlLease:
+        """Remove a tenant from a lease's tenant list (but not delete the tenant)."""
+        lease = sess.execute(select(SqlLease).where(SqlLease.id == lease_id)).scalar_one_or_none()
+        if not lease:
+            raise ValueError(f"Lease {lease_id} not found")
+
+        tenant = sess.execute(select(SqlTenant).where(SqlTenant.id == tenant_id)).scalar_one_or_none()
+        if not tenant:
+            raise ValueError(f"Tenant {tenant_id} not found")
+
+        if tenant in lease.tenants:
+            lease.tenants.remove(tenant)
+        sess.commit()
+        return lease

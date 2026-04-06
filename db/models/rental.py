@@ -1,3 +1,4 @@
+import builtins
 import uuid
 from datetime import datetime, date
 
@@ -8,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Table,
     Text,
     UniqueConstraint,
     JSON,
@@ -15,6 +17,15 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from .base import Base
+
+
+# Many-to-many association table: a lease can have multiple tenants (roommates)
+lease_tenants = Table(
+    "lease_tenants",
+    Base.metadata,
+    Column("lease_id", String(36), ForeignKey("leases.id", ondelete="CASCADE"), primary_key=True),
+    Column("tenant_id", String(36), ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
 class Property(Base):
@@ -108,15 +119,39 @@ class Tenant(Base):
 
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
+    # Legacy: leases where this tenant is the primary (via FK).
     leases = relationship(
         "Lease",
         back_populates="tenant",
         cascade="all, delete-orphan",
     )
 
+    # All leases this tenant is associated with (via many-to-many join table).
+    # This is the canonical relationship for multi-tenant support.
+    shared_leases = relationship(
+        "Lease",
+        secondary=lease_tenants,
+        back_populates="tenants",
+    )
+
+    @property
+    def all_leases(self):
+        """Return deduplicated list of all leases (primary + shared)."""
+        seen = set()
+        result = []
+        for lease in self.leases:
+            if lease.id not in seen:
+                seen.add(lease.id)
+                result.append(lease)
+        for lease in self.shared_leases:
+            if lease.id not in seen:
+                seen.add(lease.id)
+                result.append(lease)
+        return result
+
     @property
     def units(self):
-        return [lease.unit for lease in self.leases if lease.unit is not None]
+        return [lease.unit for lease in self.all_leases if lease.unit is not None]
 
 
 class Lease(Base):
@@ -156,3 +191,26 @@ class Lease(Base):
     tenant = relationship("Tenant", back_populates="leases")
     unit = relationship("Unit", back_populates="leases")
     property = relationship("Property", back_populates="leases")
+
+    # Many-to-many: all tenants on this lease (roommates).
+    # The primary tenant (via tenant_id FK) is always included in this list
+    # by the service layer when creating/adding tenants.
+    tenants = relationship(
+        "Tenant",
+        secondary=lease_tenants,
+        back_populates="shared_leases",
+    )
+
+    @builtins.property
+    def all_tenants(self):
+        """Return deduplicated list of all tenants (primary + co-tenants from join table)."""
+        seen: set[str] = set()
+        result: list = []
+        if self.tenant and self.tenant.id not in seen:
+            seen.add(self.tenant.id)
+            result.append(self.tenant)
+        for t in self.tenants:
+            if t.id not in seen:
+                seen.add(t.id)
+                result.append(t)
+        return result

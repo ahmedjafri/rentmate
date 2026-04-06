@@ -42,6 +42,7 @@ def fetch_properties(db: Session) -> list[Property]:
             select(Property).options(
                 selectinload(Property.units),
                 selectinload(Property.leases).selectinload(Lease.tenant),
+                selectinload(Property.leases).selectinload(Lease.tenants),
                 selectinload(Property.leases).selectinload(Lease.unit),
             )
         )
@@ -68,6 +69,7 @@ def fetch_leases(db: Session) -> list[Lease]:
         db.execute(
             select(Lease).options(
                 selectinload(Lease.tenant),
+                selectinload(Lease.tenants),
                 selectinload(Lease.property),
                 selectinload(Lease.unit),
             )

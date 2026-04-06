@@ -20,7 +20,7 @@ from .types import (
     UserType, HouseType, TenantType, LeaseType, TaskType, SuggestionType,
     ChatMessageType, DocumentTagType, ConversationSummaryType, SpawnTaskInput,
     CreateTaskInput, AddDocumentTagInput, SendMessageInput, UpdateTaskInput,
-    CreatePropertyInput, UpdatePropertyInput, CreateTenantWithLeaseInput, AddLeaseForTenantInput,
+    CreatePropertyInput, UpdatePropertyInput, CreateTenantWithLeaseInput, AddLeaseForTenantInput, AddTenantToLeaseInput,
     VendorType, CreateVendorInput, UpdateVendorInput, VENDOR_TYPES,
 )
 from .services.task_service import TaskService
@@ -339,6 +339,18 @@ class Mutation(AuthMutation):
     def create_tenant_with_lease(self, info, input: CreateTenantWithLeaseInput) -> TenantType:
         _current_user(info)
         return TenantType.from_new(*TenantService.create_tenant_with_lease(_session(info), input))
+
+    @strawberry.mutation(description="Add an existing tenant to a lease (e.g. roommate)")
+    def add_tenant_to_lease(self, info, input: AddTenantToLeaseInput) -> LeaseType:
+        _current_user(info)
+        lease = TenantService.add_tenant_to_lease(_session(info), input)
+        return LeaseType.from_sql(lease)
+
+    @strawberry.mutation(description="Remove a tenant from a lease (does not delete the tenant)")
+    def remove_tenant_from_lease(self, info, lease_id: str, tenant_id: str) -> LeaseType:
+        _current_user(info)
+        lease = TenantService.remove_tenant_from_lease(_session(info), lease_id, tenant_id)
+        return LeaseType.from_sql(lease)
 
     @strawberry.mutation(description="Assign a vendor to a task")
     def assign_vendor_to_task(self, info, task_id: str, vendor_id: str) -> TaskType:

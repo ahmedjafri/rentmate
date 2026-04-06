@@ -73,10 +73,17 @@ def _serialize_properties(props) -> list:
                 monthly_revenue += l.rent_amount or 0.0
                 if l.unit_id:
                     active_unit_ids.add(l.unit_id)
+            all_tenants_on_lease = getattr(l, "all_tenants", [])
+            if not all_tenants_on_lease and l.tenant:
+                all_tenants_on_lease = [l.tenant]
             leases.append({
                 "id": str(l.id),
                 "tenant": tenant_display_name(l.tenant) if l.tenant else None,
                 "tenant_id": str(l.tenant.id) if l.tenant else None,
+                "tenants": [
+                    {"id": str(t.id), "name": tenant_display_name(t)}
+                    for t in all_tenants_on_lease
+                ],
                 "unit": l.unit.label if l.unit else None,
                 "start_date": str(l.start_date),
                 "end_date": str(l.end_date),
@@ -126,11 +133,19 @@ def _serialize_tenants(tenants) -> list:
 
 def _serialize_leases(leases) -> list:
     today = date.today()
-    return [
-        {
+    results = []
+    for l in leases:
+        all_tenants_on_lease = getattr(l, "all_tenants", [])
+        if not all_tenants_on_lease and l.tenant:
+            all_tenants_on_lease = [l.tenant]
+        results.append({
             "id": str(l.id),
             "tenant": tenant_display_name(l.tenant) if l.tenant else None,
             "tenant_id": str(l.tenant.id) if l.tenant else None,
+            "tenants": [
+                {"id": str(t.id), "name": tenant_display_name(t)}
+                for t in all_tenants_on_lease
+            ],
             "property": l.property.name if l.property else None,
             "property_id": str(l.property_id) if l.property_id else None,
             "unit": l.unit.label if l.unit else None,
@@ -140,9 +155,8 @@ def _serialize_leases(leases) -> list:
             "rent_amount": l.rent_amount,
             "payment_status": l.payment_status,
             "is_active": bool(l.end_date and l.end_date >= today),
-        }
-        for l in leases
-    ]
+        })
+    return results
 
 
 def _task_tenant_and_unit(c):

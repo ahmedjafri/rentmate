@@ -26,21 +26,29 @@ def load_account_context(db: Session) -> str:
     if active_leases:
         lines.append("Active Leases:")
         for lease in active_leases:
-            tenant = lease.tenant
             unit = lease.unit
             prop = lease.property
-            if not tenant or not unit:
+            if not unit:
                 continue
-            name = f"{tenant.first_name} {tenant.last_name}".strip()
-            phone = tenant.phone or "no phone"
-            email = tenant.email or "no email"
+            all_tenants = getattr(lease, "all_tenants", [])
+            if not all_tenants and lease.tenant:
+                all_tenants = [lease.tenant]
+            if not all_tenants:
+                continue
+            tenant_parts = []
+            for tenant in all_tenants:
+                name = f"{tenant.first_name} {tenant.last_name}".strip()
+                phone = tenant.phone or "no phone"
+                email = tenant.email or "no email"
+                tenant_parts.append(f"{name} ({phone}, {email})")
+            tenant_str = "; ".join(tenant_parts)
             prop_label = prop.name if prop else "?"
             start = lease.start_date.strftime("%Y-%m-%d") if lease.start_date else "?"
             end = lease.end_date.strftime("%Y-%m-%d") if lease.end_date else "?"
             rent = f"${lease.rent_amount:,.0f}/mo" if lease.rent_amount else "?"
             status = lease.payment_status or "current"
             lines.append(
-                f"  - {name} | {phone} | {email} | {prop_label} {unit.label} "
+                f"  - {tenant_str} | {prop_label} {unit.label} "
                 f"| {start}–{end} | {rent} | payment: {status}"
             )
 
@@ -90,8 +98,10 @@ def build_task_context(db: Session, task_id: str) -> str:
             active = [l for l in unit.leases if l.end_date >= today]
             if active:
                 lease = active[0]
-                tenant = lease.tenant
-                if tenant:
+                all_tenants = getattr(lease, "all_tenants", [])
+                if not all_tenants and lease.tenant:
+                    all_tenants = [lease.tenant]
+                for tenant in all_tenants:
                     name = f"{tenant.first_name} {tenant.last_name}".strip()
                     phone = tenant.phone or "no phone"
                     email = tenant.email or "no email"
