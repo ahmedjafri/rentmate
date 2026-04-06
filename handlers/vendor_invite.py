@@ -1,7 +1,7 @@
-"""Public endpoints for vendor invite flow (no auth required).
+"""Public endpoint for vendor portal token auth (no login required).
 
-The invite link IS the vendor's permanent access credential.
-Visiting it accepts the invite and returns a JWT for portal access.
+The short URL `/t/{token}` is a frontend route served by the SPA.
+The frontend calls this API to exchange the token for a JWT.
 """
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -9,35 +9,19 @@ from sqlalchemy.orm import Session
 from gql.services.vendor_service import VendorService
 from handlers.deps import get_db
 
-router = APIRouter(prefix="/api/vendor-invite")
+router = APIRouter(prefix="/api/vendor-token")
 
 
 @router.get("/{token}")
-def get_invite_info(token: str, request: Request):
+def get_vendor_token(token: str, request: Request):
+    """Exchange a portal token for a JWT. No accept step needed."""
     db: Session = get_db(request)
-    vendor = VendorService._find_by_invite_token(db, token)
+    vendor = VendorService._find_by_portal_token(db, token)
     if not vendor:
-        raise HTTPException(status_code=404, detail="Invalid or expired invite link")
-    extra = vendor.extra or {}
-    status = extra.get("invite_status", "pending")
-    result = {
+        raise HTTPException(status_code=404, detail="Invalid portal link")
+    _, jwt_token = VendorService.authenticate_by_token(db, token)
+    return {
+        "vendor_id": str(vendor.id),
         "name": vendor.name,
-        "company": vendor.company,
-        "vendor_type": vendor.role_label,
-        "invite_status": status,
+        "access_token": jwt_token,
     }
-    # For returning vendors, include a fresh JWT so they can go straight to the portal
-    if status == "accepted":
-        _, jwt_token = VendorService.get_jwt_for_token(db, token)
-        result["access_token"] = jwt_token
-    return result
-
-
-@router.post("/{token}/accept")
-def accept_invite(token: str, request: Request):
-    db: Session = get_db(request)
-    try:
-        vendor, jwt_token = VendorService.accept_invite(db, token)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    return {"ok": True, "access_token": jwt_token, "vendor_id": str(vendor.id), "name": vendor.name}

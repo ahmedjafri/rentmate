@@ -1,4 +1,4 @@
-"""Nanobot tool classes for RentMate.
+"""RentMate agent tool classes.
 
 Includes suggestion tools (propose_task, close_task, set_mode, attach_vendor).
 
@@ -11,9 +11,27 @@ the agent runs.
 """
 import contextvars
 import json
+from abc import ABC, abstractmethod
 from typing import Any
 
-from nanobot.agent.tools.base import Tool
+
+class Tool(ABC):
+    """Base class for RentMate agent tools (standalone, no nanobot dependency)."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str: ...
+
+    @property
+    @abstractmethod
+    def description(self) -> str: ...
+
+    @property
+    @abstractmethod
+    def parameters(self) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def execute(self, **kwargs: Any) -> str: ...
 
 from db.enums import AgentSource, SuggestionOption, TaskCategory, Urgency
 from db.models import MessageType
@@ -124,7 +142,8 @@ class ProposeTaskTool(Tool):
             "The proposal appears in the action desk for approval. "
             "You MUST provide a vendor_id — use lookup_vendors first to find "
             "a suitable vendor for the task. Include a draft_message for the "
-            "vendor if appropriate."
+            "vendor if appropriate. Always include steps — the ordered plan "
+            "for completing this task (3-6 steps)."
         )
 
     @property
@@ -149,6 +168,24 @@ class ProposeTaskTool(Tool):
                 "draft_message": {"type": "string", "description": "Draft message to send to the vendor on approval"},
                 "property_id": {"type": "string", "description": "Property ID (if applicable)"},
                 "task_id": {"type": "string", "description": "Originating task ID (if applicable)"},
+                "steps": {
+                    "type": "array",
+                    "description": "Ordered progress plan for the task (3-6 steps). Each step has key, label, and status.",
+                    "items": {
+                        "type": "object",
+                        "required": ["key", "label", "status"],
+                        "properties": {
+                            "key": {"type": "string", "description": "Short unique key (e.g. 'find_vendor')"},
+                            "label": {"type": "string", "description": "Human-readable step label"},
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "active", "done"],
+                                "description": "Step status",
+                            },
+                            "note": {"type": "string", "description": "Optional context note"},
+                        },
+                    },
+                },
             },
         }
 
@@ -171,6 +208,9 @@ class ProposeTaskTool(Tool):
         draft_message = kwargs.get("draft_message")
         if draft_message:
             action_payload["draft_message"] = draft_message
+        steps = kwargs.get("steps")
+        if steps:
+            action_payload["steps"] = steps
 
         if draft_message:
             options = [
@@ -424,6 +464,74 @@ class LookupVendorsTool(Tool):
             db.close()
 
 
+class UpdateStepsTool(Tool):
+    """Update the ordered progress steps for a task."""
+
+    @property
+    def name(self) -> str:
+        return "update_steps"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Set or update the ordered progress steps for a task. Each step "
+            "has a key, label, status (pending/active/done), and optional note. "
+            "Pass the full list of steps — it replaces the current list. "
+            "Use this when you have enough context to lay out a plan, or when "
+            "a conversation indicates a step has been completed. "
+            "This is a read-write tool that updates immediately (no approval needed)."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["task_id", "steps"],
+            "properties": {
+                "task_id": {"type": "string", "description": "ID of the task"},
+                "steps": {
+                    "type": "array",
+                    "description": "Ordered list of progress steps",
+                    "items": {
+                        "type": "object",
+                        "required": ["key", "label", "status"],
+                        "properties": {
+                            "key": {"type": "string", "description": "Short unique key (e.g. 'find_vendor')"},
+                            "label": {"type": "string", "description": "Human-readable step label"},
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "active", "done"],
+                                "description": "Step status",
+                            },
+                            "note": {"type": "string", "description": "Optional note (e.g. 'Vendor confirmed Thursday 2pm')"},
+                        },
+                    },
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        task_id = kwargs["task_id"]
+        steps = kwargs["steps"]
+
+        from handlers.deps import SessionLocal
+        from db.models import Task
+        from sqlalchemy.orm.attributes import flag_modified
+
+        db = SessionLocal()
+        try:
+            task = db.query(Task).filter_by(id=task_id).first()
+            if not task:
+                return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
+            task.steps = steps
+            flag_modified(task, "steps")
+            db.commit()
+            step_summary = ", ".join(s["label"] for s in steps)
+            return json.dumps({"status": "ok", "message": f"Steps updated: {step_summary}"})
+        finally:
+            db.close()
+
+
 class CreateVendorTool(Tool):
     """Create a new vendor/contractor in the system."""
 
@@ -467,7 +575,6 @@ class CreateVendorTool(Tool):
                 company=kwargs.get("company"),
                 vendor_type=kwargs.get("vendor_type"),
                 email=kwargs.get("email"),
-                contact_method="rentmate",
             ))
             return json.dumps({
                 "status": "ok",
@@ -477,5 +584,183 @@ class CreateVendorTool(Tool):
             })
         except Exception as e:
             return json.dumps({"status": "error", "message": str(e)})
+        finally:
+            db.close()
+
+
+class SaveMemoryTool(Tool):
+    """Save a context note for an entity (property, unit, tenant, vendor) or general."""
+
+    @property
+    def name(self) -> str:
+        return "save_memory"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Save a context note to long-term memory. Notes persist across "
+            "conversations. Attach notes to a specific entity (property, unit, "
+            "tenant, vendor) or save as general memory. Use this to remember "
+            "preferences, quirks, maintenance history, vendor reliability notes, "
+            "or anything the property manager tells you to remember."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["content"],
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The note to save (concise, one topic per note).",
+                },
+                "entity_type": {
+                    "type": "string",
+                    "enum": ["property", "unit", "tenant", "vendor", "general"],
+                    "description": "What type of entity this note is about. Use 'general' for preferences and global notes.",
+                },
+                "entity_id": {
+                    "type": "string",
+                    "description": "ID of the entity (property/unit/tenant/vendor). Required unless entity_type is 'general'.",
+                },
+                "entity_label": {
+                    "type": "string",
+                    "description": "Human-readable label (e.g. '16617 3rd Dr SE', 'Unit 3B', 'Handyman Rob'). Stored for display.",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        content = kwargs["content"]
+        entity_type = kwargs.get("entity_type", "general")
+        entity_id = kwargs.get("entity_id", "")
+        entity_label = kwargs.get("entity_label", "")
+
+        from handlers.deps import SessionLocal
+        from datetime import UTC, datetime
+
+        if entity_type == "general" or not entity_id:
+            # General notes go to agent_memory table
+            from llm.memory_store import DbMemoryStore
+            from backends.local_auth import DEFAULT_USER_ID
+            store = DbMemoryStore(DEFAULT_USER_ID)
+            store.add_note(content=content, entity_type="general", entity_id="", entity_label="")
+            return json.dumps({"status": "ok", "message": "General note saved."})
+
+        # Entity-scoped notes go directly to the entity's context column
+        _MODEL_MAP = {
+            "property": "Property",
+            "unit": "Unit",
+            "tenant": "Tenant",
+            "vendor": "ExternalContact",
+        }
+        model_name = _MODEL_MAP.get(entity_type)
+        if not model_name:
+            return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
+
+        db = SessionLocal()
+        try:
+            import db.models as models
+            model_cls = getattr(models, model_name)
+            entity = db.query(model_cls).filter_by(id=entity_id).first()
+            if not entity:
+                return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
+
+            # Append to existing context with timestamp
+            now = datetime.now(UTC).strftime("%Y-%m-%d")
+            entry = f"[{now}] {content}"
+            existing = entity.context or ""
+            entity.context = f"{existing}\n{entry}".strip()
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(entity, "context")
+            db.commit()
+
+            label = entity_label or entity_type
+            return json.dumps({"status": "ok", "message": f"Context saved for {label}."})
+        finally:
+            db.close()
+
+
+class RecallMemoryTool(Tool):
+    """Read back stored context notes, optionally filtered by entity."""
+
+    @property
+    def name(self) -> str:
+        return "recall_memory"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Read your long-term memory notes. Optionally filter by entity "
+            "type or specific entity ID. Returns all notes if no filter given."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "entity_type": {
+                    "type": "string",
+                    "enum": ["property", "unit", "tenant", "vendor", "general"],
+                    "description": "Filter by entity type. Omit to get all notes.",
+                },
+                "entity_id": {
+                    "type": "string",
+                    "description": "Filter by specific entity ID. Omit to get all notes of the given type.",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        entity_type = kwargs.get("entity_type")
+        entity_id = kwargs.get("entity_id")
+
+        if entity_type == "general" or (not entity_type and not entity_id):
+            # Read general notes from agent_memory
+            from llm.memory_store import DbMemoryStore
+            from backends.local_auth import DEFAULT_USER_ID
+            store = DbMemoryStore(DEFAULT_USER_ID)
+            notes = store.get_notes(entity_type="general")
+            if not notes:
+                return json.dumps({"notes": [], "message": "No general notes found."})
+            return json.dumps({"notes": notes, "count": len(notes)})
+
+        # Read from entity context column
+        _MODEL_MAP = {
+            "property": "Property",
+            "unit": "Unit",
+            "tenant": "Tenant",
+            "vendor": "ExternalContact",
+        }
+        model_name = _MODEL_MAP.get(entity_type or "")
+        if not model_name:
+            return json.dumps({"notes": [], "message": f"Unknown entity type: {entity_type}"})
+
+        from handlers.deps import SessionLocal
+        import db.models as models
+        db = SessionLocal()
+        try:
+            model_cls = getattr(models, model_name)
+            if entity_id:
+                entity = db.query(model_cls).filter_by(id=entity_id).first()
+                entities = [entity] if entity else []
+            else:
+                entities = db.query(model_cls).filter(model_cls.context.isnot(None)).all()
+
+            notes = []
+            for e in entities:
+                if e and e.context:
+                    label = getattr(e, "name", None) or getattr(e, "label", None) or str(e.id)[:8]
+                    notes.append({
+                        "entity_type": entity_type,
+                        "entity_id": str(e.id),
+                        "label": label,
+                        "context": e.context,
+                    })
+            if not notes:
+                return json.dumps({"notes": [], "message": f"No {entity_type} context found."})
+            return json.dumps({"notes": notes, "count": len(notes)})
         finally:
             db.close()

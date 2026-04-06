@@ -12,7 +12,7 @@ const backendProxy = {
   '/automations':  { target: 'http://127.0.0.1:8002', changeOrigin: true },
   '/action-items': { target: 'http://127.0.0.1:8002', changeOrigin: true },
   '/dev/':         { target: 'http://127.0.0.1:8002', changeOrigin: true },
-  '/dialpad-webhook': { target: 'http://127.0.0.1:8002', changeOrigin: true },
+  '/quo-webhook': { target: 'http://127.0.0.1:8002', changeOrigin: true },
 };
 
 // https://vitejs.dev/config/

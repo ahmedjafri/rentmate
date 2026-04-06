@@ -144,9 +144,9 @@ def test_list_conversations_and_get_with_messages(db):
     assert [m.body for m in loaded.messages] == ["First msg", "Second msg"]
 
 
-def test_record_sms_from_dialpad(db):
+def test_record_sms_from_quo(db):
     from unittest.mock import patch, MagicMock
-    from db.lib import record_sms_from_dialpad
+    from db.lib import record_sms_from_quo
 
     from_number = normalize_phone("+15550005555")
     to_number = normalize_phone("+15559990000")
@@ -166,7 +166,7 @@ def test_record_sms_from_dialpad(db):
 
     with patch("backends.wire.sms_router", mock_router):
         body = "Inbound test"
-        msg, conv = record_sms_from_dialpad(
+        msg, conv = record_sms_from_quo(
             db=db,
             from_number=from_number,
             to_number=to_number,
@@ -175,7 +175,7 @@ def test_record_sms_from_dialpad(db):
 
     assert msg is not None
     assert msg.body == body
-    assert msg.meta["source"] == "dialpad"
+    assert msg.meta["source"] == "quo"
     assert msg.meta["direction"] == "inbound"
     assert msg.sender_tenant_id == tenant.id
 

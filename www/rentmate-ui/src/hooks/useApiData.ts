@@ -71,10 +71,11 @@ export function useApiData(): ApiState {
             address: h.address,
             propertyType: (h.propertyType ?? 'multi_family') as 'single_family' | 'multi_family',
             source: (h.source ?? 'manual') as 'manual' | 'document',
+            context: h.context,
             units: h.units ?? 0,
             occupiedUnits: h.occupiedUnits ?? 0,
             monthlyRevenue: h.monthlyRevenue ?? 0,
-            unitList: h.unitList?.map(u => ({ id: u.uid, label: u.label, isOccupied: u.isOccupied })),
+            unitList: h.unitList?.map(u => ({ id: u.uid, label: u.label, isOccupied: u.isOccupied, context: u.context })),
           }))
         : [];
 
@@ -89,6 +90,7 @@ export function useApiData(): ApiState {
             rentAmount: t.rentAmount ?? 0,
             paymentStatus: (t.paymentStatus as Tenant['paymentStatus']) ?? 'current',
             isActive: t.isActive ?? false,
+            context: t.context,
           }))
         : [];
 
@@ -118,9 +120,8 @@ export function useApiData(): ApiState {
             phone: v.phone,
             email: v.email,
             notes: v.notes,
-            contactMethod: v.contactMethod ?? 'rentmate',
-            inviteToken: v.inviteToken,
-            inviteStatus: v.inviteStatus,
+            context: v.context,
+            portalUrl: v.portalUrl,
           }))
         : [];
 
@@ -219,6 +220,7 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
     requireVendorType: t.requireVendorType,
     assignedVendorId: t.assignedVendorId,
     assignedVendorName: t.assignedVendorName,
+    steps: t.steps ?? undefined,
     suggestionOptions: t.suggestionOptions ?? undefined,
     aiConversationId: t.aiConversationId ?? null,
     externalConversationId: t.externalConversationId ?? null,
@@ -278,6 +280,7 @@ interface ApiHouseUnit {
   uid: string;
   label: string;
   isOccupied: boolean;
+  context?: string;
 }
 
 interface ApiHouse {
@@ -286,6 +289,7 @@ interface ApiHouse {
   address: string;
   propertyType?: string;
   source?: string;
+  context?: string;
   units?: number;
   occupiedUnits?: number;
   monthlyRevenue?: number;
@@ -300,7 +304,8 @@ interface ApiVendor {
   phone?: string;
   email?: string;
   notes?: string;
-  contactMethod?: string;
+  context?: string;
+  portalUrl?: string;
 }
 
 interface ApiTenant {
@@ -312,6 +317,7 @@ interface ApiTenant {
   rentAmount?: number;
   paymentStatus?: string;
   isActive?: boolean;
+  context?: string;
   rents?: { uid: string }[];
 }
 
@@ -352,6 +358,7 @@ interface ApiTask {
   requireVendorType?: string;
   assignedVendorId?: string;
   assignedVendorName?: string;
+  steps?: { key: string; label: string; status: string; note?: string }[];
   suggestionOptions?: { key: string; label: string; action: string; variant: string }[];
   aiConversationId?: string | null;
   parentConversationId?: string | null;

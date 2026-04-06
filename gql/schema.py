@@ -220,7 +220,7 @@ class Mutation(AuthMutation):
         db.refresh(msg)
         return ChatMessageType.from_sql(msg)
 
-    @strawberry.mutation(description="Send an SMS message to a vendor via Dialpad")
+    @strawberry.mutation(description="Send an SMS message to a vendor via Quo")
     def send_sms(self, info, vendor_id: str, body: str, task_id: typing.Optional[str] = None) -> ChatMessageType:
         _current_user(info)
         db = _session(info)
@@ -260,10 +260,10 @@ class Mutation(AuthMutation):
         db.commit()
         db.refresh(msg)
 
-        # Dispatch SMS via Dialpad
-        from handlers.chat import send_sms_reply, _get_dialpad_api_key, _get_dialpad_from_number
-        api_key = _get_dialpad_api_key()
-        from_num = _get_dialpad_from_number()
+        # Dispatch SMS via Quo
+        from handlers.chat import send_sms_reply, _get_quo_api_key, _get_quo_from_number
+        api_key = _get_quo_api_key()
+        from_num = _get_quo_from_number()
         if api_key:
             import asyncio
             try:
@@ -288,6 +288,21 @@ class Mutation(AuthMutation):
         _current_user(info)
         db = _session(info)
         task = TaskService.update_task(db, input)
+        db.commit()
+        db.refresh(task)
+        return TaskType.from_sql(task)
+
+    @strawberry.mutation(description="Update the ordered progress steps for a task")
+    def update_task_steps(self, info, uid: str, steps: strawberry.scalars.JSON) -> TaskType:
+        _current_user(info)
+        db = _session(info)
+        from db.models import Task
+        task = db.query(Task).filter_by(id=uid).first()
+        if not task:
+            raise ValueError(f"Task {uid} not found")
+        task.steps = steps
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(task, "steps")
         db.commit()
         db.refresh(task)
         return TaskType.from_sql(task)
@@ -319,6 +334,28 @@ class Mutation(AuthMutation):
         today = date.today()
         prop = PropertyService.update_property(_session(info), input)
         return HouseType.from_sql(prop, today)
+
+    @strawberry.mutation(description="Update the agent context for any entity (property, unit, tenant, vendor)")
+    def update_entity_context(self, info, entity_type: str, entity_id: str, context: str) -> bool:
+        _current_user(info)
+        db = _session(info)
+        _MODEL_MAP = {
+            "property": "Property",
+            "unit": "Unit",
+            "tenant": "Tenant",
+            "vendor": "ExternalContact",
+        }
+        model_name = _MODEL_MAP.get(entity_type)
+        if not model_name:
+            raise ValueError(f"Unknown entity type: {entity_type}")
+        import db.models as models
+        model_cls = getattr(models, model_name)
+        entity = db.query(model_cls).filter_by(id=entity_id).first()
+        if not entity:
+            raise ValueError(f"{entity_type} {entity_id} not found")
+        entity.context = context or None
+        db.commit()
+        return True
 
     @strawberry.mutation(description="Delete a property and all its units/leases (cascade)")
     def delete_property(self, info, uid: str) -> bool:
@@ -395,11 +432,6 @@ class Mutation(AuthMutation):
         suggestion, _task = executor.execute(uid, action, edited_body=edited_body)
         db.commit()
         return SuggestionType.from_sql(suggestion)
-
-    @strawberry.mutation(description="Accept a vendor invite (no auth required)")
-    def accept_vendor_invite(self, info, token: str) -> bool:
-        VendorService.accept_invite(_session(info), token)
-        return True
 
     @strawberry.mutation(description="Spawn a Task from an existing conversation, linking lineage")
     def spawn_task(self, info, input: SpawnTaskInput) -> TaskType:

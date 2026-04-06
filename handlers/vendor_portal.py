@@ -62,6 +62,7 @@ def vendor_tasks(request: Request):
     return [
         {
             "id": str(t.id),
+            "task_number": t.task_number,
             "title": t.title,
             "status": t.task_status,
             "category": t.category,
@@ -114,14 +115,22 @@ def vendor_task_detail(task_id: str, request: Request):
     info = _require_vendor(request)
     db = get_db(request)
     task = _verify_vendor_task(db, task_id, info["vendor_id"])
+    # Check if someone is typing in the external conversation
+    ai_typing = False
+    if task.external_conversation_id:
+        ext_conv = db.get(Conversation, task.external_conversation_id)
+        if ext_conv and (ext_conv.extra or {}).get("ai_typing"):
+            ai_typing = True
     return {
         "id": str(task.id),
+        "task_number": task.task_number,
         "title": task.title,
         "status": task.task_status,
         "category": task.category,
         "urgency": task.urgency,
         "created_at": task.created_at.isoformat() + "Z",
         "messages": _task_messages_for_vendor(db, task),
+        "typing": ai_typing,
     }
 
 

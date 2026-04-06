@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db.enums import TaskSource
-from db.lib import get_conversation_with_messages, record_sms_from_dialpad, route_inbound_to_tenant_chat
+from db.lib import get_conversation_with_messages, record_sms_from_quo, route_inbound_to_tenant_chat
 from db.models import Conversation, Message, MessageType, ParticipantType, Task
 from handlers.deps import get_db, require_user
 from llm.context import build_task_context, load_account_context
@@ -34,7 +34,7 @@ class _RunningChat:
 
 _active_chats: Dict[str, _RunningChat] = {}
 
-DIALPAD_API_KEY = os.getenv("DIALPAD_API_KEY", "")
+QUO_API_KEY = os.getenv("QUO_API_KEY", "")
 PHONE_WHITELIST = [p.strip() for p in os.getenv("PHONE_WHITELIST", "").split(",") if p.strip()]
 
 
@@ -50,29 +50,181 @@ async def chat_with_agent(
     messages: list[dict],
     on_progress: Optional[Callable] = None,
 ) -> str:
-    loop = agent_registry.get_loop(agent_id)
-    if loop is None:
-        raise RuntimeError("NanoBot agent not ready")
+    """Run the Hermes agent with the given messages and return its text reply."""
+    from run_agent import AIAgent
 
-    # Most recent user message
-    user_content = next(
-        (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
-    )
-    # Inject system/task context when present
+    model = os.getenv("LLM_MODEL", "anthropic/claude-haiku-4-5-20251001")
+    api_key = os.getenv("LLM_API_KEY", "")
+    api_base = os.getenv("LLM_BASE_URL") or None
+
+    # Map LiteLLM-style provider/model names to direct API endpoints
+    provider = None
+    actual_model = model
+    if "/" in model and not api_base:
+        provider_prefix, _, model_name = model.partition("/")
+        _PROVIDER_BASES = {
+            "deepseek": ("https://api.deepseek.com/v1", None),
+            "anthropic": ("https://api.anthropic.com/v1", "anthropic"),
+        }
+        if provider_prefix in _PROVIDER_BASES:
+            api_base, provider = _PROVIDER_BASES[provider_prefix]
+            actual_model = model_name
+
+    # Extract system message and conversation history
+    system_message = agent_registry.build_system_prompt(agent_id)
     sys_content = next((m["content"] for m in messages if m.get("role") == "system"), None)
     if sys_content:
-        user_content = f"<context>\n{sys_content}\n</context>\n\n{user_content}"
+        system_message = f"{system_message}\n\n---\n\n{sys_content}"
 
-    result = await loop.process_direct(
-        content=user_content,
-        session_key=session_key,
-        channel="rentmate",
-        chat_id=session_key,
-        on_progress=on_progress,
+    conversation_history = [
+        {"role": m["role"], "content": m["content"]}
+        for m in messages
+        if m.get("role") in ("user", "assistant")
+        # Filter out poisoned responses that contain simulated tool calls
+        and "[True]" not in (m.get("content") or "")
+    ]
+
+    user_message = ""
+    if conversation_history and conversation_history[-1]["role"] == "user":
+        user_message = conversation_history.pop()["content"]
+
+    # Queue for bridging progress from the sync agent thread to async SSE
+    import queue as _queue
+    progress_queue: _queue.Queue[str] = _queue.Queue()
+    progress_events: list[str] = []
+
+    # Pretty tool name mapping
+    _TOOL_LABELS = {
+        "lookup_vendors": "Searching vendors",
+        "propose_task": "Proposing task",
+        "close_task": "Closing task",
+        "set_mode": "Changing mode",
+        "attach_vendor": "Assigning vendor",
+        "create_vendor": "Creating vendor",
+        "update_steps": "Updating progress",
+        "save_memory": "Saving note",
+        "recall_memory": "Checking memory",
+    }
+
+    def _tool_progress(event_type: str, tool_name: str, preview: str | None, args: dict | None, **kwargs):
+        """Hermes tool_progress_callback: (event_type, tool_name, preview, args, **kw)"""
+        label = _TOOL_LABELS.get(tool_name, tool_name)
+        if event_type == "tool.started":
+            hint = ""
+            if args:
+                if tool_name == "lookup_vendors" and args.get("vendor_type"):
+                    hint = f" ({args['vendor_type']})"
+                elif tool_name == "propose_task" and args.get("title"):
+                    hint = f": {args['title'][:60]}"
+                elif tool_name == "save_memory":
+                    et = args.get("entity_type", "general")
+                    el = args.get("entity_label", "")
+                    if el:
+                        hint = f" → {et}: {el}"
+                    elif et != "general":
+                        hint = f" → {et}"
+                elif tool_name == "recall_memory":
+                    et = args.get("entity_type")
+                    if et:
+                        hint = f" ({et})"
+            msg = f"{label}{hint}"
+            progress_events.append(msg)
+            progress_queue.put(msg)
+        elif event_type == "tool.completed":
+            is_error = kwargs.get("is_error", False)
+            if is_error:
+                msg = f"{label}: error"
+                progress_events.append(msg)
+                progress_queue.put(msg)
+
+    def _step_callback(iteration: int, prev_tools: list | None, **kwargs):
+        """Hermes step_callback: fires after each API call iteration."""
+        # Skip — we already emit per-tool progress via _tool_progress.
+        # The first iteration (no prev_tools) would duplicate "Thinking…"
+        # which the SSE handler already emits.
+        pass
+
+    # Log what we're sending to the agent
+    print(f"[hermes] model={actual_model} provider={provider} base_url={api_base}")
+    print(f"[hermes] system_prompt={len(system_message)} chars, history={len(conversation_history)} msgs, user_message={len(user_message)} chars")
+
+    agent = AIAgent(
+        base_url=api_base,
+        api_key=api_key,
+        provider=provider,
+        model=actual_model,
+        max_iterations=40,
+        enabled_toolsets=["rentmate"],
+        quiet_mode=True,
+        platform="api",
+        session_id=session_key,
+        skip_context_files=True,
+        skip_memory=True,
+        tool_progress_callback=_tool_progress,
+        step_callback=_step_callback,
+        verbose_logging=bool(os.getenv("HERMES_VERBOSE")),
     )
-    # nanobot may return an OutboundMessage object or a plain string
-    if hasattr(result, 'content'):
-        return result.content
+    # Force tool use enforcement — DeepSeek is not in Hermes's default list
+    # and will simulate tool calls in text without this
+    agent._tool_use_enforcement = True
+
+    # Patch _build_api_kwargs to add tool_choice: "auto" for chat_completions.
+    # Hermes omits this, but DeepSeek defaults to "none" without it.
+    _orig_build = agent._build_api_kwargs
+    def _patched_build_api_kwargs(messages):
+        kwargs = _orig_build(messages)
+        if agent.tools and "tools" in kwargs and "tool_choice" not in kwargs:
+            kwargs["tool_choice"] = "auto"
+        return kwargs
+    agent._build_api_kwargs = _patched_build_api_kwargs
+
+    async def _run_with_progress():
+        import queue as _q
+        loop = asyncio.get_event_loop()
+        task = loop.run_in_executor(
+            None,
+            lambda: agent.run_conversation(
+                user_message=user_message,
+                system_message=system_message,
+                conversation_history=conversation_history if conversation_history else None,
+            ),
+        )
+        # Drain progress queue while agent runs
+        while not task.done():
+            try:
+                msg = progress_queue.get_nowait()
+                if msg and on_progress:
+                    await on_progress(msg)
+            except _q.Empty:
+                pass
+            await asyncio.sleep(0.1)
+        # Drain remaining
+        while not progress_queue.empty():
+            msg = progress_queue.get_nowait()
+            if msg and on_progress:
+                await on_progress(msg)
+        return task.result()
+
+    result = await _run_with_progress()
+
+    if isinstance(result, dict):
+        print(f"[hermes] api_calls={result.get('api_calls', '?')} "
+              f"completed={result.get('completed', '?')} "
+              f"input_tokens={result.get('input_tokens', '?')} "
+              f"output_tokens={result.get('output_tokens', '?')} "
+              f"progress_events={len(progress_events)}")
+        if progress_events:
+            for evt in progress_events:
+                print(f"[hermes]   progress: {evt}")
+        reply = result.get("final_response", "")
+        if not reply:
+            # Fallback: check messages for last assistant content
+            msgs = result.get("messages", [])
+            for m in reversed(msgs):
+                if m.get("role") == "assistant" and m.get("content"):
+                    reply = m["content"]
+                    break
+        return reply
     return str(result)
 
 
@@ -89,43 +241,40 @@ def _normalize_phone(num: str) -> str:
 
 
 async def send_sms_reply(from_num: str, to_num: str, text: str, api_key: str | None = None):
-    key = api_key or _get_dialpad_api_key()
+    key = api_key or _get_quo_api_key()
     if not key:
-        print("[sms] No Dialpad API key configured — skipping SMS")
+        print("[sms] No Quo API key configured — skipping SMS")
         return
     to_num = _normalize_phone(to_num)
     if from_num:
         from_num = _normalize_phone(from_num)
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            f"https://dialpad.com/api/v2/sms?apikey={key}",
-            headers={"accept": "application/json", "content-type": "application/json"},
+            "https://api.openphone.com/v1/messages",
+            headers={
+                "Authorization": key,
+                "Content-Type": "application/json",
+            },
             json={
-                "infer_country_code": False,
-                "channel_hashtag": None,
-                "from_number": from_num,
-                "media": None,
-                "sender_group_id": None,
-                "sender_group_type": None,
-                "text": text,
-                "to_numbers": [to_num],
-                "user_id": None,
+                "content": text,
+                "from": from_num,
+                "to": [to_num],
             },
         )
-        print(f"[sms] Dialpad response: {response.status_code} {response.text[:200]}")
+        print(f"[sms] Quo response: {response.status_code} {response.text[:200]}")
 
 
-def _get_dialpad_api_key() -> str:
-    """Get Dialpad API key from integrations config or env var."""
+def _get_quo_api_key() -> str:
+    """Get Quo (OpenPhone) API key from integrations config or env var."""
     from handlers.settings import load_integrations
-    cfg = load_integrations().get("dialpad", {})
-    return cfg.get("api_key") or DIALPAD_API_KEY
+    cfg = load_integrations().get("quo", {})
+    return cfg.get("api_key") or QUO_API_KEY
 
 
-def _get_dialpad_from_number() -> str:
-    """Get the outbound phone number from Dialpad config."""
+def _get_quo_from_number() -> str:
+    """Get the outbound phone number from Quo config."""
     from handlers.settings import load_integrations
-    cfg = load_integrations().get("dialpad", {})
+    cfg = load_integrations().get("quo", {})
     return cfg.get("from_number") or ""
 
 
@@ -169,55 +318,42 @@ class ChatRequest(BaseModel):
     task_id: Optional[str] = None
 
 
+class AssessRequest(BaseModel):
+    task_id: str
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
-@router.post("/dialpad-webhook")
-async def handle_message(
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    data = await request.json()
+async def process_inbound_sms(db: Session, from_number: str, to_number: str, body: str):
+    """Core inbound SMS handler shared by webhook and poller.
 
-    from_number = data["from_number"]
-    if len(data["to_number"]) > 1:
-        print(
-            "[Dialpad] More than 1 recipient (skipping), "
-            f"nums={data['to_number']}, msg={data.get('text', '')!r}")
-        return {"status": "ok"}
-
-    to_number: str = data["to_number"][0]
-    body = data["text"]
-
-    # Resolve sender (tenant or vendor) + direction
+    Returns True if the message was processed, False if skipped.
+    """
     from backends.wire import sms_router
     resolved = sms_router.resolve(db, from_number, to_number)
     if not resolved:
-        print(f"[Dialpad] Sender not resolved for from={from_number} to={to_number}")
-        return {"status": "ok"}
+        print(f"[sms] Sender not resolved for from={from_number} to={to_number}")
+        return False
 
     _account_id, entity, direction, entity_type = resolved
 
     if direction != "inbound":
-        return {"status": "ok"}
+        return False
 
     # ── Vendor inbound SMS ────────────────────────────────────────────
     if entity_type == "vendor":
-        from db.models import ConversationType, ParticipantType as PT, Message as MsgModel, ExternalContact
-        import uuid as _uuid2
-        from datetime import UTC as _UTC2, datetime as _dt2
+        from db.models import ConversationType, ParticipantType as PT, Message as MsgModel
 
         vendor = entity
-        # Find an existing vendor conversation for this vendor
         conv = chat_service.get_or_create_external_conversation(
             db,
             conversation_type=ConversationType.VENDOR,
             subject=f"SMS with {vendor.name}",
             vendor_id=str(vendor.id),
         )
-        # Persist the vendor's inbound message
-        now = _dt2.now(_UTC2)
+        now = datetime.now(UTC)
         db.add(MsgModel(
-            id=str(_uuid2.uuid4()),
+            id=str(_uuid.uuid4()),
             conversation_id=conv.id,
             sender_type=PT.EXTERNAL_CONTACT,
             sender_external_contact_id=str(vendor.id),
@@ -230,22 +366,19 @@ async def handle_message(
         ))
         conv.updated_at = now
         db.commit()
-        print(f"[Dialpad] Vendor SMS from {vendor.name}: {body[:80]}")
-        return {"status": "ok"}
+        print(f"[sms] Vendor SMS from {vendor.name}: {body[:80]}")
+        return True
 
     # ── Tenant inbound SMS ────────────────────────────────────────────
     tenant = entity
 
     if not is_in_whitelist(from_number):
-        print(
-            "[Dialpad] Number not in whitelist (skipping response), "
-            f"num={from_number}, msg={body!r}")
-        # Still record the message but don't trigger agent
-        record_sms_from_dialpad(db=db, from_number=from_number, to_number=to_number, body=body)
-        return {"status": "ok"}
+        print(f"[sms] Number not in whitelist (skipping response), num={from_number}")
+        record_sms_from_quo(db=db, from_number=from_number, to_number=to_number, body=body)
+        return True
 
     sender_meta = {
-        "source": "dialpad",
+        "source": "quo",
         "direction": "inbound",
         "from_number": from_number,
         "to_number": to_number,
@@ -261,8 +394,6 @@ async def handle_message(
     )
     db.commit()
 
-    # Build agent context and history
-    from llm.context import build_task_context
     from llm.client import call_agent
     from llm.side_effects import process_side_effects
     context = build_task_context(db, conv.id)
@@ -274,7 +405,6 @@ async def handle_message(
 
     agent_resp = await call_agent(agent_id, session_key, messages)
 
-    # Persist AI reply
     now = datetime.now(UTC)
     ai_msg = Message(
         id=str(_uuid.uuid4()),
@@ -291,7 +421,34 @@ async def handle_message(
     db.commit()
 
     await send_via_channel(conv, agent_resp.reply, inbound_meta=sender_meta)
+    return True
 
+
+@router.post("/quo-webhook")
+async def handle_message(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Handle inbound SMS from Quo (OpenPhone) webhook (message.received event)."""
+    data = await request.json()
+
+    event_type = data.get("type", "")
+    payload = data.get("data", data.get("object", data))
+
+    if event_type and event_type != "message.received":
+        return {"status": "ok"}
+
+    from_number = payload.get("from", "")
+    to_list = payload.get("to", [])
+    body = payload.get("body") or payload.get("content") or payload.get("text", "")
+
+    if not from_number or not to_list:
+        print(f"[Quo] Missing from/to in payload: {list(payload.keys())}")
+        return {"status": "ok"}
+
+    to_number = to_list[0] if isinstance(to_list, list) else to_list
+
+    await process_inbound_sms(db, from_number, to_number, body)
     return {"status": "ok"}
 
 
@@ -497,6 +654,231 @@ async def chat_endpoint(
             if suggestion_msgs:
                 done_payload['suggestion_messages'] = suggestion_msgs
             print(f"[chat] SSE done: reply={len(reply or '')} chars, msg_id={msg_id}")
+            yield f"data: {_json.dumps(done_payload)}\n\n"
+        finally:
+            if queue in running.subscribers:
+                running.subscribers.remove(queue)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+NO_RESPONSE_SENTINEL = "[NO_RESPONSE]"
+
+ASSESS_PROMPT = (
+    "Autonomous mode was just enabled for this task. "
+    "Review the full conversation — including messages from external participants "
+    "(vendors, tenants) shown below — and the task progress steps. "
+    "If there is anything actionable: an unanswered question from a vendor or tenant, "
+    "scheduling information to act on, a next step in the progress plan to advance, "
+    "or information to provide — go ahead and respond normally. "
+    "Use the task progress steps as your guide for what to do next. "
+    "If the conversation is truly handled and nothing further is needed, "
+    f"reply with exactly: {NO_RESPONSE_SENTINEL}"
+)
+
+
+@router.post("/chat/assess")
+async def assess_task_endpoint(
+    body: AssessRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Assess a task conversation and respond only if warranted.
+
+    Called when autonomous mode is toggled on. The agent reviews the existing
+    conversation and decides whether to respond. If no response is needed,
+    nothing is persisted and the client receives ``reply: null``.
+    """
+    await require_user(request)
+    from handlers.deps import SessionLocal as _SL
+
+    task_obj = db.query(Task).filter_by(id=body.task_id).first()
+    if not task_obj:
+        raise HTTPException(status_code=404, detail="Task not found")
+    conv = task_obj.ai_conversation
+    if not conv:
+        raise HTTPException(status_code=404, detail="Task has no AI conversation")
+
+    context = build_task_context(db, body.task_id)
+    conv_id = conv.id
+    ext_conv_id = task_obj.external_conversation_id
+
+    # Set typing indicator on the external conversation so the vendor portal
+    # can show it while the agent is thinking.
+    if ext_conv_id:
+        ext_conv = db.query(Conversation).filter_by(id=ext_conv_id).first()
+        if ext_conv:
+            from sqlalchemy.orm.attributes import flag_modified
+            extra = dict(ext_conv.extra or {})
+            extra["ai_typing"] = True
+            ext_conv.extra = extra
+            flag_modified(ext_conv, "extra")
+    # Gather progress steps and external conversation for the assess prompt
+    import json as _assess_json
+    steps_text = ""
+    if task_obj.steps:
+        steps_text = "\n\nTask progress steps:\n" + _assess_json.dumps(task_obj.steps, indent=2)
+
+    ext_msgs_text = ""
+    if ext_conv_id:
+        ext_conv_obj = db.query(Conversation).filter_by(id=ext_conv_id).first()
+        if ext_conv_obj:
+            ext_msgs = sorted(
+                [m for m in (ext_conv_obj.messages or [])
+                 if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
+                key=lambda m: m.sent_at,
+            )[-20:]
+            if ext_msgs:
+                lines = []
+                for m in ext_msgs:
+                    sender = m.sender_name or ("AI" if m.is_ai else "Unknown")
+                    lines.append(f"[{sender}]: {m.body}")
+                ext_msgs_text = (
+                    "\n\nExternal conversation (with vendor/tenant):\n"
+                    + "\n".join(lines)
+                )
+
+    db.commit()
+
+    # Build message history from AI conversation + assess prompt with extras
+    all_msgs = [
+        m for m in (conv.messages or [])
+        if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)
+    ]
+    msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
+    messages_payload = [{"role": "system", "content": context}]
+    messages_payload += [
+        {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
+        for m in msg_rows
+    ]
+    messages_payload.append({
+        "role": "user",
+        "content": ASSESS_PROMPT + steps_text + ext_msgs_text,
+    })
+
+    from backends.local_auth import resolve_account_id
+    agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
+    session_key = f"task:{body.task_id}"
+    stream_id = str(_uuid.uuid4())
+
+    async def generate():
+        queue: asyncio.Queue = asyncio.Queue()
+        running = _RunningChat(task=None)
+        running.subscribers.append(queue)
+        _active_chats[stream_id] = running
+
+        async def on_progress(text: str, tool_hint: str | None = None, **_kwargs):
+            entry = f"[{tool_hint}] {text}" if tool_hint else text
+            running.progress_log.append(entry)
+            for sub in list(running.subscribers):
+                await sub.put(entry)
+
+        async def run_and_persist() -> tuple[str | None, str | None, list[dict]]:
+            from llm.tools import active_conversation_id
+            from llm.client import call_agent
+            from llm.side_effects import process_side_effects
+            token = active_conversation_id.set(conv_id)
+            try:
+                # NOTE: We do NOT persist a user message — the assess prompt is
+                # an internal trigger, not a real user message.
+                await on_progress("Thinking\u2026")
+                agent_resp = await call_agent(agent_id, session_key, messages_payload, on_progress)
+
+                # If agent says no response needed, skip persistence entirely
+                if agent_resp.reply.strip().startswith(NO_RESPONSE_SENTINEL):
+                    return None, None, []
+
+                write_db = _SL()
+                try:
+                    now = datetime.now(UTC)
+                    # Persist thinking traces to the AI conversation (internal)
+                    trace_lines = [l for l in running.progress_log if l != "Thinking\u2026"]
+                    if trace_lines:
+                        write_db.add(Message(
+                            id=str(_uuid.uuid4()),
+                            conversation_id=conv_id,
+                            sender_type=ParticipantType.ACCOUNT_USER,
+                            body="\n".join(trace_lines),
+                            message_type=MessageType.INTERNAL,
+                            sender_name="RentMate",
+                            is_ai=True,
+                            sent_at=now,
+                        ))
+                    # Persist the actual reply to the external conversation
+                    # so the vendor/tenant can see it.  Fall back to AI conv
+                    # if there is no external conversation.
+                    reply_conv_id = ext_conv_id or conv_id
+                    ai_msg = Message(
+                        id=str(_uuid.uuid4()),
+                        conversation_id=reply_conv_id,
+                        sender_type=ParticipantType.ACCOUNT_USER,
+                        body=agent_resp.reply,
+                        message_type=MessageType.MESSAGE,
+                        sender_name="RentMate",
+                        is_ai=True,
+                        sent_at=now,
+                    )
+                    write_db.add(ai_msg)
+                    flushed_suggestions = process_side_effects(
+                        write_db, agent_resp.side_effects, conv_id, now,
+                    )
+                    # Update timestamps on both conversations
+                    for cid in {conv_id, reply_conv_id}:
+                        c = write_db.query(Conversation).filter_by(id=cid).first()
+                        if c:
+                            c.updated_at = now
+                    write_db.commit()
+                    print(f"[assess] Persisted AI reply ({len(agent_resp.reply)} chars) to {reply_conv_id}")
+                    return agent_resp.reply, ai_msg.id, flushed_suggestions
+                except Exception as e:
+                    write_db.rollback()
+                    print(f"[assess] DB write failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return agent_resp.reply, str(_uuid.uuid4()), []
+                finally:
+                    write_db.close()
+            finally:
+                active_conversation_id.reset(token)
+                _active_chats.pop(stream_id, None)
+                # Clear typing indicator on external conversation
+                if ext_conv_id:
+                    clear_db = _SL()
+                    try:
+                        chat_service.clear_typing_indicator(clear_db, ext_conv_id)
+                    finally:
+                        clear_db.close()
+
+        running.task = asyncio.create_task(run_and_persist())
+
+        try:
+            yield f"data: {_json.dumps({'type': 'stream_id', 'stream_id': stream_id})}\n\n"
+
+            while not running.task.done():
+                try:
+                    text = await asyncio.wait_for(queue.get(), timeout=0.1)
+                    yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
+                except asyncio.TimeoutError:
+                    pass
+
+            while not queue.empty():
+                text = queue.get_nowait()
+                yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
+
+            try:
+                reply, msg_id, suggestion_msgs = running.task.result()
+            except Exception as exc:
+                print(f"[assess] SSE task failed: {exc!r}")
+                yield f"data: {_json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
+                return
+
+            done_payload: dict = {'type': 'done', 'reply': reply, 'message_id': msg_id, 'conversation_id': conv_id}
+            if suggestion_msgs:
+                done_payload['suggestion_messages'] = suggestion_msgs
             yield f"data: {_json.dumps(done_payload)}\n\n"
         finally:
             if queue in running.subscribers:

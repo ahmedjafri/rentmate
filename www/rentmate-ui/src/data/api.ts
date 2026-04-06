@@ -40,7 +40,8 @@ export const HOUSES_QUERY = `
       units
       occupiedUnits
       monthlyRevenue
-      unitList { uid label isOccupied }
+      context
+      unitList { uid label isOccupied context }
       tenants { uid name }
       leases {
         uid
@@ -97,6 +98,7 @@ export const TENANTS_QUERY = `
       rentAmount
       paymentStatus
       isActive
+      context
       extraProperties { key value }
       rents { uid name address }
       leases {
@@ -134,6 +136,7 @@ const TASK_FIELDS = `
   aiConversationId
   parentConversationId
   externalConversationId
+  steps
   suggestionOptions
   messages {
     uid
@@ -344,7 +347,7 @@ export const CREATE_TASK_MUTATION = `
 `;
 
 export const VENDORS_QUERY = `
-  query { vendors { uid name company vendorType phone email notes contactMethod inviteToken inviteStatus createdAt } }
+  query { vendors { uid name company vendorType phone email notes context portalUrl createdAt } }
 `;
 
 export const VENDOR_TYPES_QUERY = `
@@ -353,18 +356,24 @@ export const VENDOR_TYPES_QUERY = `
 
 export const CREATE_VENDOR_MUTATION = `
   mutation CreateVendor($input: CreateVendorInput!) {
-    createVendor(input: $input) { uid name company vendorType phone email notes contactMethod inviteToken inviteStatus }
+    createVendor(input: $input) { uid name company vendorType phone email notes portalUrl }
   }
 `;
 
 export const UPDATE_VENDOR_MUTATION = `
   mutation UpdateVendor($input: UpdateVendorInput!) {
-    updateVendor(input: $input) { uid name company vendorType phone email notes contactMethod inviteToken inviteStatus }
+    updateVendor(input: $input) { uid name company vendorType phone email notes portalUrl }
   }
 `;
 
 export const DELETE_VENDOR_MUTATION = `
   mutation DeleteVendor($uid: String!) { deleteVendor(uid: $uid) }
+`;
+
+export const UPDATE_ENTITY_CONTEXT_MUTATION = `
+  mutation UpdateEntityContext($entityType: String!, $entityId: String!, $context: String!) {
+    updateEntityContext(entityType: $entityType, entityId: $entityId, context: $context)
+  }
 `;
 
 export const ASSIGN_VENDOR_TO_TASK_MUTATION = `

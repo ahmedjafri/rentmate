@@ -49,13 +49,13 @@ Defines the YAML automation language used by the Automations feature.
 
 | Layer | Location | Notes |
 |---|---|---|
-| FastAPI entry | `main.py` | Mounts `/graphql`, Dialpad webhook, `/suggest-reply`, static SPA |
+| FastAPI entry | `main.py` | Mounts `/graphql`, Quo webhook, `/suggest-reply`, static SPA |
 | Business logic | `db/lib.py` | All DB operations; multi-tenant scoping lives here |
 | ORM models | `db/models.py` | `Account → Property → Unit → Lease → Tenant`; messaging layer |
 | GraphQL | `gql/` | Strawberry schema; queries scoped to authenticated user's account |
 | AI agent | `llm/` | LangGraph + LiteLLM; system prompt in `llm/.context/index.md` |
 | Automation DSL | `automations/` + `db/dsl_runner.py` | Built-in checks in `automations/*.json` |
-| HTTP handlers | `handlers/` | `handlers/chat.py` owns Dialpad webhook + agent invocation |
+| HTTP handlers | `handlers/` | `handlers/chat.py` owns Quo webhook + agent invocation |
 | Frontend | `www/rentmate-ui/` | React/Vite; built to `dist/` served statically by FastAPI |
 | Migrations | `db/migrations/versions/` | Alembic; `SUPABASE_DB_URI` env var required |
 

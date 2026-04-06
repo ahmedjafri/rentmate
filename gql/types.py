@@ -153,6 +153,7 @@ class UnitType:
     uid: str
     label: str
     is_occupied: bool = False
+    context: typing.Optional[str] = None
 
 
 @strawberry.type
@@ -162,6 +163,7 @@ class HouseType:
     address: str
     property_type: typing.Optional[str] = None
     source: typing.Optional[str] = None
+    context: typing.Optional[str] = None
     units: typing.Optional[int] = None
     occupied_units: typing.Optional[int] = None
     monthly_revenue: typing.Optional[float] = None
@@ -178,10 +180,11 @@ class HouseType:
             address=format_address(p),
             property_type=p.property_type,
             source=p.source,
+            context=p.context,
             units=len(units),
             occupied_units=0,
             monthly_revenue=0.0,
-            unit_list=[UnitType(uid=str(u.id), label=u.label, is_occupied=False) for u in units],
+            unit_list=[UnitType(uid=str(u.id), label=u.label, is_occupied=False, context=u.context) for u in units],
         )
 
     @classmethod
@@ -206,7 +209,7 @@ class HouseType:
             lease_items.append(LeaseType.from_sql(l))
 
         unit_list = [
-            UnitType(uid=str(u.id), label=u.label, is_occupied=u.id in active_unit_ids)
+            UnitType(uid=str(u.id), label=u.label, is_occupied=u.id in active_unit_ids, context=u.context)
             for u in p.units
         ]
         return cls(
@@ -215,6 +218,7 @@ class HouseType:
             address=format_address(p),
             property_type=p.property_type or "multi_family",
             source=p.source or "manual",
+            context=p.context,
             units=len(p.units),
             occupied_units=len(active_unit_ids),
             monthly_revenue=monthly_revenue,
@@ -234,6 +238,7 @@ class TenantType:
     rent_amount: typing.Optional[float] = None
     payment_status: typing.Optional[str] = None
     is_active: bool = False
+    context: typing.Optional[str] = None
     rents: typing.List[HouseType] = strawberry.field(default_factory=list)
     leases: typing.List["LeaseType"] = strawberry.field(default_factory=list)
     extra_properties: typing.List[ExtraPropertyType] = strawberry.field(default_factory=list)
@@ -289,6 +294,7 @@ class TenantType:
             rent_amount=active_lease.rent_amount if active_lease else None,
             payment_status=active_lease.payment_status if active_lease and hasattr(active_lease, "payment_status") else "current",
             is_active=is_active,
+            context=t.context,
             rents=list(prop_map.values()),
             leases=lease_items,
             extra_properties=extra_properties,
@@ -385,6 +391,7 @@ class TaskType:
     assigned_vendor_id: typing.Optional[str] = None
     assigned_vendor_name: typing.Optional[str] = None
     external_conversation_id: typing.Optional[str] = None
+    steps: typing.Optional[strawberry.scalars.JSON] = None
     suggestion_options: typing.Optional[strawberry.scalars.JSON] = None
 
     @classmethod
@@ -444,6 +451,7 @@ class TaskType:
             assigned_vendor_id=extra.get('assigned_vendor_id'),
             assigned_vendor_name=extra.get('assigned_vendor_name'),
             external_conversation_id=str(t.external_conversation_id) if t.external_conversation_id else None,
+            steps=t.steps,
             suggestion_options=extra.get('suggestion_options'),
         )
 
@@ -533,9 +541,6 @@ VENDOR_TYPES: list[str] = [
 ]
 
 
-VENDOR_CONTACT_METHODS: list[str] = ["rentmate", "email", "phone"]
-
-
 @strawberry.type
 class VendorType:
     uid: str
@@ -545,14 +550,13 @@ class VendorType:
     phone: typing.Optional[str] = None
     email: typing.Optional[str] = None
     notes: typing.Optional[str] = None
-    contact_method: str = "rentmate"
-    invite_token: typing.Optional[str] = None
-    invite_status: typing.Optional[str] = None
+    context: typing.Optional[str] = None
+    portal_url: typing.Optional[str] = None
     created_at: str = ""
 
     @classmethod
     def from_sql(cls, v) -> "VendorType":
-        extra = v.extra or {}
+        from gql.services.vendor_service import VendorService
         return cls(
             uid=str(v.id),
             name=v.name,
@@ -561,9 +565,8 @@ class VendorType:
             phone=v.phone,
             email=v.email,
             notes=v.notes,
-            contact_method=extra.get("contact_method", "rentmate"),
-            invite_token=extra.get("invite_token"),
-            invite_status=extra.get("invite_status"),
+            context=v.context,
+            portal_url=VendorService.get_portal_url(v),
             created_at=_utc_iso(v.created_at),
         )
 
@@ -571,12 +574,11 @@ class VendorType:
 @strawberry.input
 class CreateVendorInput:
     name: str
+    phone: str
     company: typing.Optional[str] = None
     vendor_type: typing.Optional[str] = None
-    phone: typing.Optional[str] = None
     email: typing.Optional[str] = None
     notes: typing.Optional[str] = None
-    contact_method: str = "rentmate"
 
 
 @strawberry.input
@@ -588,7 +590,6 @@ class UpdateVendorInput:
     phone: typing.Optional[str] = None
     email: typing.Optional[str] = None
     notes: typing.Optional[str] = None
-    contact_method: typing.Optional[str] = None
 
 
 @strawberry.type

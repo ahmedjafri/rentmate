@@ -295,7 +295,7 @@ const PropertyDetail = () => {
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3">
-        <EntityContextCard entityId={property.id} entityName={property.name || property.address} expectedTopics={propertyTopics} autoContext={autoContext} />
+        <EntityContextCard entityId={property.id} entityName={property.name || property.address} entityType="property" agentContext={property.context} onAgentContextSaved={(ctx) => updateProperty(property.id, { context: ctx })} expectedTopics={propertyTopics} autoContext={autoContext} />
         <Card className="p-4 rounded-xl">
           <div className="flex items-center gap-2 mb-1">
             <Users className="h-4 w-4 text-muted-foreground" />

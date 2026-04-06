@@ -16,7 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 from sqlalchemy import Enum as SqlEnum
 
-from .base import Base
+from .base import Base, HasContext
 
 
 class ParticipantType(str, Enum):
@@ -42,7 +42,7 @@ class MessageType(str, Enum):
     THREAD     = "thread"    # deprecated — use MESSAGE
 
 
-class ExternalContact(Base):
+class ExternalContact(Base, HasContext):
     """
     Non-auth contacts (e.g., maintenance vendors).
     """

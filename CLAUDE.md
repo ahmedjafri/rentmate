@@ -64,7 +64,7 @@ Key rules:
 
 **`main.py`** — FastAPI entry point. Mounts:
 - `/graphql` — Strawberry GraphQL API
-- `/dialpad-webhook` — Receives inbound/outbound SMS from Dialpad, records them, and triggers the AI agent for whitelisted numbers
+- `/quo-webhook` — Receives inbound SMS from Quo (OpenPhone), records them, and triggers the AI agent for whitelisted numbers
 - `/suggest-reply` — Called by the Chrome extension to get an AI-suggested reply
 - `/*` — Catch-all serves the React SPA from `www/rentmate/dist/`
 
@@ -108,6 +108,6 @@ Before finishing any frontend change:
 
 - When using a service from `gql/services/`, import the module itself rather than individual functions. Use `from gql.services import chat_service` and call `chat_service.should_ai_respond(...)`, not `from gql.services.chat_service import should_ai_respond`.
 - All data is multi-tenant: every query is scoped to an `account_id` resolved from the authenticated user's `AccountUser` record.
-- The Dialpad integration is the primary inbound channel for SMS. Phone number normalization (`db/utils.py`) is critical for matching tenants/admins.
+- The Quo integration is the primary inbound channel for SMS. Phone number normalization (`db/utils.py`) is critical for matching tenants/admins.
 - Tests use per-test transaction rollback (savepoints) for isolation — do not call `db.commit()` inside test fixtures.
 - The agent system prompt is in `llm/.context/index.md` — edit that file to change RentMate's persona/responsibilities.

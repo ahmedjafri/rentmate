@@ -430,10 +430,10 @@ def route_inbound_to_task(
 
 
 # -------------------------------
-# Dialpad-specific helper
+# Quo-specific helper
 # -------------------------------
 
-def record_sms_from_dialpad(
+def record_sms_from_quo(
     db: Session,
     *,
     from_number: str,
@@ -441,7 +441,7 @@ def record_sms_from_dialpad(
     body: str,
 ) -> Optional[Message]:
     """
-    High-level helper for inbound Dialpad SMS.
+    High-level helper for inbound Quo SMS.
 
     Resolves tenant via SMS router, routes to a task via route_inbound_to_task,
     and returns (message, conversation) for the caller to drive the agent.
@@ -467,7 +467,7 @@ def record_sms_from_dialpad(
             sender_type=ParticipantType.ACCOUNT_USER,
             body=body,
             meta={
-                "source": "dialpad",
+                "source": "quo",
                 "direction": direction,
                 "from_number": from_number,
                 "to_number": to_number,
@@ -484,7 +484,7 @@ def record_sms_from_dialpad(
         body=body,
         channel_type="sms",
         sender_meta={
-            "source": "dialpad",
+            "source": "quo",
             "direction": "inbound",
             "from_number": from_number,
             "to_number": to_number,
@@ -494,7 +494,7 @@ def record_sms_from_dialpad(
     db.commit()
 
     print(
-        f"[Dialpad] Recorded SMS msg={msg.id} conv={msg.conversation_id} tenant={tenant.id}"
+        f"[Quo] Recorded SMS msg={msg.id} conv={msg.conversation_id} tenant={tenant.id}"
     )
 
     return msg, conv

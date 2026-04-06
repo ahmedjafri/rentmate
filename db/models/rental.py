@@ -14,10 +14,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
-from .base import Base
+from .base import Base, HasContext
 
 
-class Property(Base):
+class Property(Base, HasContext):
     """
     A property managed by the landlord.
     """
@@ -53,7 +53,7 @@ class Property(Base):
     )
 
 
-class Unit(Base):
+class Unit(Base, HasContext):
     """
     A rentable unit within a property.
     """
@@ -89,7 +89,7 @@ class Unit(Base):
     )
 
 
-class Tenant(Base):
+class Tenant(Base, HasContext):
     """
     A tenant/contact.
     """
