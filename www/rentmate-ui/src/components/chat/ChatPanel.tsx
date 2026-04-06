@@ -856,6 +856,7 @@ export function ChatPanel() {
                     <ChatMessageBubble
                       key={item.msg.id}
                       message={item.msg}
+                      taskId={chatPanel.taskId}
                       onSuggestionClick={(sid) => openChat({ suggestionId: sid })}
                     />
                   )

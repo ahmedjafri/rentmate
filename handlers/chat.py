@@ -910,6 +910,17 @@ async def assess_task_endpoint(
     )
 
 
+@router.get("/chat/task-context/{task_id}")
+async def get_task_context(
+    task_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Return the full context string the agent receives for a task."""
+    await require_user(request)
+    return {"context": build_task_context(db, task_id)}
+
+
 @router.get("/chat/conversations")
 async def list_chat_conversations(
     request: Request,
