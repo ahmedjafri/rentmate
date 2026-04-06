@@ -109,8 +109,16 @@ def build_task_context(db: Session, task_id: str) -> str:
             else:
                 lines.append("Unit is currently vacant.")
 
-    lines.append("")
-    lines.append(load_account_context(db))
+    # Only include the full account overview if the task doesn't already
+    # have property context — avoids dumping all properties when only one
+    # is relevant.
+    if not task.property_id:
+        lines.append("")
+        lines.append(load_account_context(db))
+    else:
+        account_name = os.environ.get("RENTMATE_ACCOUNT_NAME", "RentMate")
+        lines.append(f"\nAccount: {account_name}")
+
     return "\n".join(lines)
 
 
