@@ -131,10 +131,6 @@ class TaskService:
         ).scalar_one_or_none()
         if not vendor:
             raise ValueError(f"Vendor {vendor_id} not found")
-        # Block pending rentmate vendors from being assigned
-        extra = vendor.extra or {}
-        if extra.get("contact_method") == "rentmate" and extra.get("invite_status") == "pending":
-            raise ValueError(f"Vendor {vendor.name} has not accepted their invite yet")
         # Store vendor info in the AI conversation's extra field
         ai_convo = sess.get(Conversation, task.ai_conversation_id) if task.ai_conversation_id else None
         if ai_convo:

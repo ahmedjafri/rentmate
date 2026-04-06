@@ -1,21 +1,16 @@
-"""DB-backed memory store for nanobot agent.
+"""DB-backed memory store for the RentMate agent.
 
-Replaces the default file-based MemoryStore so that agent long-term memory
-and conversation history survive container restarts without needing disk
-persistence.
+Stores agent long-term memory and conversation history in the agent_memory
+table so it survives container restarts without needing disk persistence.
 """
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
-
-from nanobot.agent.memory import MemoryStore
 
 
-class DbMemoryStore(MemoryStore):
-    """MemoryStore subclass that reads/writes from the agent_memory table."""
+class DbMemoryStore:
+    """Reads/writes agent memory from the agent_memory DB table."""
 
-    def __init__(self, workspace: Path, agent_id: str):
-        super().__init__(workspace)
+    def __init__(self, agent_id: str):
         self.agent_id = agent_id
 
     def _get_db(self):
@@ -54,32 +49,6 @@ class DbMemoryStore(MemoryStore):
                     agent_id=self.agent_id,
                     memory_type="long_term",
                     content=content,
-                    updated_at=now,
-                ))
-            db.commit()
-        finally:
-            db.close()
-
-    def append_history(self, entry: str) -> None:
-        from db.models import AgentMemory
-        db = self._get_db()
-        try:
-            # Append to a single history row per agent (cheaper than one row per entry)
-            row = (
-                db.query(AgentMemory)
-                .filter_by(agent_id=self.agent_id, memory_type="history")
-                .first()
-            )
-            now = datetime.now(UTC)
-            if row:
-                row.content = row.content + entry.rstrip() + "\n\n"
-                row.updated_at = now
-            else:
-                db.add(AgentMemory(
-                    id=str(uuid.uuid4()),
-                    agent_id=self.agent_id,
-                    memory_type="history",
-                    content=entry.rstrip() + "\n\n",
                     updated_at=now,
                 ))
             db.commit()

@@ -48,7 +48,7 @@ class TestTaskVendorFlow:
 
     def _create_vendor(self, db, name="Acme Plumbing"):
         vendor = VendorService.create_vendor(
-            db, CreateVendorInput(name=name, email="vendor@test.com", vendor_type="Plumber", contact_method="email"),
+            db, CreateVendorInput(name=name, phone="555-0001", email="vendor@test.com", vendor_type="Plumber"),
         )
         # Capture scalar fields now — the ORM object may be detached later
         return {"id": str(vendor.id), "name": vendor.name}

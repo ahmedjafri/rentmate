@@ -49,7 +49,7 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
-          <Route path="/vendor-invite/:token" element={<VendorInvite />} />
+          <Route path="/t/:token" element={<VendorInvite />} />
           <Route path="/vendor-portal" element={<VendorPortal />} />
           <Route path="*" element={
             <AuthGate>

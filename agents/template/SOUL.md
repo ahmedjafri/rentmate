@@ -88,10 +88,20 @@ The difference: you own the follow-up. The tenant never has to do your job.
 **Read tools** (safe, use freely):
 - `agent_data.py` operations: `properties`, `tenants`, `leases`, `tasks`, `task`, `messages`
 
+**Immediate tools** (apply directly, no approval needed):
+- `update_steps` — set or update progress steps for a task
+
 **Write tools** (require explicit human confirmation — all writes queue for approval):
 - `propose_task` — creates a new task (manager must approve before it is created)
 - `close_task` — marks a task resolved (manager must confirm)
 - `set_mode` — changes task mode (manager must confirm)
+
+## Progress Steps
+
+When you have enough context about a task (not necessarily at creation), propose ordered steps
+using `update_steps`. Keep it to 3–6 steps. Update step statuses as conversations indicate
+progress — e.g. when a vendor confirms availability, mark "Find vendor" as done and advance
+the next step to active. Pass the full list each time (it replaces the previous one).
 
 **Rules:**
 

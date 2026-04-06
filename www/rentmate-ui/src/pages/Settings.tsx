@@ -34,7 +34,7 @@ const emptyChannel = (): ChannelConfig => ({
   enabled: false, token: '', botToken: '', appToken: '', allowFrom: '',
 });
 
-interface DialpadConfig {
+interface QuoConfig {
   enabled: boolean;
   apiKey: string;
   fromNumber: string;
@@ -45,7 +45,7 @@ interface DialpadConfig {
 }
 
 interface IntegrationsState {
-  dialpad: DialpadConfig;
+  quo: QuoConfig;
   telegram: ChannelConfig;
   whatsapp: ChannelConfig;
 }
@@ -70,7 +70,7 @@ const SettingsPage = () => {
   const { autonomySettings, setAutonomySettings } = useApp();
   const [llmConfig, setLlmConfig] = useState<LlmConfig>({ apiKey: '', model: '', baseUrl: '' });
   const [integrations, setIntegrations] = useState<IntegrationsState>({
-    dialpad: { enabled: false, apiKey: '', fromNumber: '', phoneWhitelist: '' },
+    quo: { enabled: false, apiKey: '', fromNumber: '', phoneWhitelist: '' },
     telegram: emptyChannel(),
     whatsapp: emptyChannel(),
   });
@@ -104,12 +104,12 @@ const SettingsPage = () => {
         if (data) {
           setIntegrations(prev => ({
             ...prev,
-            dialpad: {
-              enabled: data.dialpad?.enabled ?? false,
-              apiKey: data.dialpad?.api_key ?? '',
-              fromNumber: data.dialpad?.from_number ?? '',
-              phoneWhitelist: (data.dialpad?.phone_whitelist ?? []).join(', '),
-              webhookUrl: data.dialpad?.webhook_url ?? '',
+            quo: {
+              enabled: data.quo?.enabled ?? false,
+              apiKey: data.quo?.api_key ?? '',
+              fromNumber: data.quo?.from_number ?? '',
+              phoneWhitelist: (data.quo?.phone_whitelist ?? []).join(', '),
+              webhookUrl: data.quo?.webhook_url ?? '',
             },
             telegram: {
               enabled: data.telegram?.enabled ?? false,
@@ -140,15 +140,15 @@ const SettingsPage = () => {
         }
       })
       .catch(() => {});
-    fetch('/settings/integrations/dialpad/webhook', { headers })
+    fetch('/settings/integrations/quo/webhook', { headers })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data) {
           setIntegrations(prev => ({
             ...prev,
-            dialpad: {
-              ...prev.dialpad,
-              webhookUrl: data.webhook_url ?? prev.dialpad.webhookUrl,
+            quo: {
+              ...prev.quo,
+              webhookUrl: data.webhook_url ?? prev.quo.webhookUrl,
               webhookCanRegister: data.can_register ?? true,
               webhookReason: data.reason ?? undefined,
             },
@@ -206,11 +206,11 @@ const SettingsPage = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
         body: JSON.stringify({
-          dialpad: {
-            enabled: integrations.dialpad.enabled,
-            api_key: secretOrNull(integrations.dialpad.apiKey),
-            from_number: integrations.dialpad.fromNumber || null,
-            phone_whitelist: integrations.dialpad.phoneWhitelist
+          quo: {
+            enabled: integrations.quo.enabled,
+            api_key: secretOrNull(integrations.quo.apiKey),
+            from_number: integrations.quo.fromNumber || null,
+            phone_whitelist: integrations.quo.phoneWhitelist
               .split(',').map(s => s.trim()).filter(Boolean),
           },
           telegram: {
@@ -379,18 +379,18 @@ const SettingsPage = () => {
         </p>
 
         <div className="space-y-6">
-          {/* Dialpad */}
+          {/* Quo */}
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <Checkbox
                 id="dp-enabled"
-                checked={integrations.dialpad.enabled}
-                onCheckedChange={v => setIntegrations(prev => ({ ...prev, dialpad: { ...prev.dialpad, enabled: !!v } }))}
+                checked={integrations.quo.enabled}
+                onCheckedChange={v => setIntegrations(prev => ({ ...prev, quo: { ...prev.quo, enabled: !!v } }))}
               />
               <Phone className="h-4 w-4 text-muted-foreground" />
-              <Label htmlFor="dp-enabled" className="font-semibold cursor-pointer">Dialpad SMS</Label>
+              <Label htmlFor="dp-enabled" className="font-semibold cursor-pointer">Quo SMS</Label>
             </div>
-            {integrations.dialpad.enabled && (
+            {integrations.quo.enabled && (
               <div className="pl-6 space-y-3">
                 <div className="space-y-2">
                   <Label htmlFor="dp-key">API Key</Label>
@@ -398,10 +398,10 @@ const SettingsPage = () => {
                     id="dp-key"
                     type="password"
                     placeholder="Leave blank to keep existing key"
-                    value={integrations.dialpad.apiKey}
-                    onChange={e => setIntegrations(prev => ({ ...prev, dialpad: { ...prev.dialpad, apiKey: e.target.value } }))}
+                    value={integrations.quo.apiKey}
+                    onChange={e => setIntegrations(prev => ({ ...prev, quo: { ...prev.quo, apiKey: e.target.value } }))}
                   />
-                  <p className="text-xs text-muted-foreground">Found in Dialpad Admin &gt; Company Settings &gt; API Keys</p>
+                  <p className="text-xs text-muted-foreground">Found in Quo Workspace Settings &gt; Integrations &gt; API</p>
                   <Button
                     type="button"
                     variant="outline"
@@ -409,10 +409,10 @@ const SettingsPage = () => {
                     className="h-7 text-xs gap-1.5"
                     onClick={async () => {
                       try {
-                        const res = await fetch('/settings/integrations/dialpad/test', {
+                        const res = await fetch('/settings/integrations/quo/test', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
-                          body: JSON.stringify({ api_key: integrations.dialpad.apiKey || null }),
+                          body: JSON.stringify({ api_key: integrations.quo.apiKey || null }),
                         });
                         const data = await res.json();
                         if (data.ok) {
@@ -433,35 +433,35 @@ const SettingsPage = () => {
                   <Input
                     id="dp-from"
                     placeholder="+12065551234"
-                    value={integrations.dialpad.fromNumber}
-                    onChange={e => setIntegrations(prev => ({ ...prev, dialpad: { ...prev.dialpad, fromNumber: e.target.value } }))}
+                    value={integrations.quo.fromNumber}
+                    onChange={e => setIntegrations(prev => ({ ...prev, quo: { ...prev.quo, fromNumber: e.target.value } }))}
                   />
-                  <p className="text-xs text-muted-foreground">Your Dialpad number used to send outbound SMS</p>
+                  <p className="text-xs text-muted-foreground">Your Quo number used to send outbound SMS</p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="dp-whitelist">Phone Whitelist <span className="text-muted-foreground font-normal">(optional)</span></Label>
                   <Input
                     id="dp-whitelist"
                     placeholder="+12065551234, +12065555678"
-                    value={integrations.dialpad.phoneWhitelist}
-                    onChange={e => setIntegrations(prev => ({ ...prev, dialpad: { ...prev.dialpad, phoneWhitelist: e.target.value } }))}
+                    value={integrations.quo.phoneWhitelist}
+                    onChange={e => setIntegrations(prev => ({ ...prev, quo: { ...prev.quo, phoneWhitelist: e.target.value } }))}
                   />
                   <p className="text-xs text-muted-foreground">Comma-separated phone numbers RentMate should respond to. Leave empty for all.</p>
                 </div>
                 <div className="space-y-2">
                   <Label>Webhook</Label>
-                  {integrations.dialpad.webhookUrl ? (
+                  {integrations.quo.webhookUrl ? (
                     <div className="flex items-center gap-2">
                       <code className="flex-1 text-[11px] bg-muted px-2.5 py-1.5 rounded truncate select-all">
-                        {integrations.dialpad.webhookUrl}
+                        {integrations.quo.webhookUrl}
                       </code>
                     </div>
                   ) : (
                     <p className="text-xs text-muted-foreground">No webhook registered yet.</p>
                   )}
-                  {integrations.dialpad.webhookCanRegister === false ? (
+                  {integrations.quo.webhookCanRegister === false ? (
                     <p className="text-xs text-amber-600 dark:text-amber-400">
-                      {integrations.dialpad.webhookReason || 'Webhook registration not available in this environment.'}
+                      {integrations.quo.webhookReason || 'Webhook registration not available in this environment.'}
                     </p>
                   ) : (
                     <Button
@@ -471,15 +471,15 @@ const SettingsPage = () => {
                       className="h-7 text-xs gap-1.5"
                       onClick={async () => {
                         try {
-                          const res = await fetch('/settings/integrations/dialpad/webhook', {
+                          const res = await fetch('/settings/integrations/quo/webhook', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
                             body: JSON.stringify({}),
                           });
                           const data = await res.json();
                           if (data.ok) {
-                            setIntegrations(prev => ({ ...prev, dialpad: { ...prev.dialpad, webhookUrl: data.webhook_url } }));
-                            toast.success('Webhook registered with Dialpad');
+                            setIntegrations(prev => ({ ...prev, quo: { ...prev.quo, webhookUrl: data.webhook_url } }));
+                            toast.success(data.message || 'Webhook URL saved');
                           } else {
                             toast.error(data.error || 'Failed to register webhook');
                           }
@@ -492,7 +492,7 @@ const SettingsPage = () => {
                     </Button>
                   )}
                   <p className="text-xs text-muted-foreground">
-                    Registers this server's URL with Dialpad for inbound SMS delivery.
+                    Configure this webhook URL in Quo Workspace Settings &gt; Integrations &gt; Webhooks.
                   </p>
                 </div>
               </div>

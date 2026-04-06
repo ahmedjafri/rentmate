@@ -12,6 +12,7 @@ import { getToken, authFetch } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SuggestionOptions } from './SuggestionOptions';
+import { ProgressSteps } from './ProgressSteps';
 import { graphqlQuery, TASK_QUERY, SEND_MESSAGE_MUTATION, SEND_SMS_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
 import { apiMessagesToChatThread } from '@/hooks/useApiData';
 
@@ -44,7 +45,7 @@ export function ChatPanel() {
   const [dismissing, setDismissing] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [activeTaskTab, setActiveTaskTab] = useState<'chat' | 'ai'>('chat');
+  const [activeTaskTab, setActiveTaskTab] = useState<'chat' | 'ai' | 'progress'>('chat');
   const [participantMessages, setParticipantMessages] = useState<ChatMessage[]>([]);
   const [participantLoading, setParticipantLoading] = useState(false);
   const [sendViaSms, setSendViaSms] = useState(false);
@@ -749,12 +750,13 @@ export function ChatPanel() {
       {activeTask ? (
         <Tabs
           value={activeTaskTab}
-          onValueChange={v => setActiveTaskTab(v as 'chat' | 'ai')}
+          onValueChange={v => setActiveTaskTab(v as 'chat' | 'ai' | 'progress')}
           className="flex-1 flex flex-col min-h-0"
         >
           <TabsList className="shrink-0 mx-3 mt-2 mb-0 h-8 self-start gap-1 bg-muted/50">
             <TabsTrigger value="chat" className="text-xs h-6 px-3">Chat</TabsTrigger>
             <TabsTrigger value="ai" className="text-xs h-6 px-3">AI</TabsTrigger>
+            <TabsTrigger value="progress" className="text-xs h-6 px-3">Progress</TabsTrigger>
           </TabsList>
 
           {/* AI tab — internal RentMate thread */}
@@ -847,6 +849,13 @@ export function ChatPanel() {
                 <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} onFileUpload={handleFileUpload} />
               </div>
             )}
+          </TabsContent>
+
+          {/* Progress tab */}
+          <TabsContent value="progress" className="hidden data-[state=active]:flex flex-1 flex-col min-h-0 mt-0">
+            <ScrollArea className="flex-1 overflow-x-hidden">
+              <ProgressSteps steps={activeTask.steps} />
+            </ScrollArea>
           </TabsContent>
 
           {/* Chat tab — participant conversation */}

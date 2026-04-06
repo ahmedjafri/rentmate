@@ -385,6 +385,7 @@ class TaskType:
     assigned_vendor_id: typing.Optional[str] = None
     assigned_vendor_name: typing.Optional[str] = None
     external_conversation_id: typing.Optional[str] = None
+    steps: typing.Optional[strawberry.scalars.JSON] = None
     suggestion_options: typing.Optional[strawberry.scalars.JSON] = None
 
     @classmethod
@@ -444,6 +445,7 @@ class TaskType:
             assigned_vendor_id=extra.get('assigned_vendor_id'),
             assigned_vendor_name=extra.get('assigned_vendor_name'),
             external_conversation_id=str(t.external_conversation_id) if t.external_conversation_id else None,
+            steps=t.steps,
             suggestion_options=extra.get('suggestion_options'),
         )
 
@@ -533,9 +535,6 @@ VENDOR_TYPES: list[str] = [
 ]
 
 
-VENDOR_CONTACT_METHODS: list[str] = ["rentmate", "email", "phone"]
-
-
 @strawberry.type
 class VendorType:
     uid: str
@@ -545,14 +544,12 @@ class VendorType:
     phone: typing.Optional[str] = None
     email: typing.Optional[str] = None
     notes: typing.Optional[str] = None
-    contact_method: str = "rentmate"
-    invite_token: typing.Optional[str] = None
-    invite_status: typing.Optional[str] = None
+    portal_url: typing.Optional[str] = None
     created_at: str = ""
 
     @classmethod
     def from_sql(cls, v) -> "VendorType":
-        extra = v.extra or {}
+        from gql.services.vendor_service import VendorService
         return cls(
             uid=str(v.id),
             name=v.name,
@@ -561,9 +558,7 @@ class VendorType:
             phone=v.phone,
             email=v.email,
             notes=v.notes,
-            contact_method=extra.get("contact_method", "rentmate"),
-            invite_token=extra.get("invite_token"),
-            invite_status=extra.get("invite_status"),
+            portal_url=VendorService.get_portal_url(v),
             created_at=_utc_iso(v.created_at),
         )
 
@@ -571,12 +566,11 @@ class VendorType:
 @strawberry.input
 class CreateVendorInput:
     name: str
+    phone: str
     company: typing.Optional[str] = None
     vendor_type: typing.Optional[str] = None
-    phone: typing.Optional[str] = None
     email: typing.Optional[str] = None
     notes: typing.Optional[str] = None
-    contact_method: str = "rentmate"
 
 
 @strawberry.input
@@ -588,7 +582,6 @@ class UpdateVendorInput:
     phone: typing.Optional[str] = None
     email: typing.Optional[str] = None
     notes: typing.Optional[str] = None
-    contact_method: typing.Optional[str] = None
 
 
 @strawberry.type

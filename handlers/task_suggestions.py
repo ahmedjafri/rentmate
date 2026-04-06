@@ -47,6 +47,8 @@ class SuggestionExecutor:
             cls = SetModeSuggestionExecutor
         elif action_type == "attach_vendor":
             cls = AttachVendorSuggestionExecutor
+        elif action_type == "update_steps":
+            cls = UpdateStepsSuggestionExecutor
         elif suggestion.task_id:
             cls = ReplyInTaskSuggestionExecutor
         else:
@@ -255,6 +257,13 @@ class CreateTaskSuggestionExecutor(SuggestionExecutor):
 
             task = self._create_task_from_suggestion(suggestion)
 
+            # Apply progress steps if the agent included them
+            steps = payload.get("steps")
+            if steps:
+                task.steps = steps
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(task, "steps")
+
             vendor_id = payload.get("vendor_id")
             if vendor_id:
                 self._wire_vendor_conversation(task, suggestion, vendor_id)
@@ -453,6 +462,35 @@ class AttachVendorSuggestionExecutor(SuggestionExecutor):
                     draft = edited_body or payload.get("draft_message")
                     if draft:
                         self._send_draft_message(task, draft)
+
+        suggestion = self._resolve_suggestion(suggestion_id, action, task)
+        return suggestion, task
+
+
+class UpdateStepsSuggestionExecutor(SuggestionExecutor):
+    """Execute a suggestion to update a task's progress steps."""
+
+    def execute(
+        self,
+        suggestion_id: str,
+        action: str,
+        edited_body: str | None = None,
+    ) -> tuple[Suggestion, Task | None]:
+        suggestion = self._fetch_suggestion(suggestion_id)
+        task = None
+
+        if action == "update_steps" and suggestion.task_id:
+            payload = suggestion.action_payload or {}
+            steps = payload.get("steps")
+
+            task = self.db.execute(
+                select(Task).where(Task.id == suggestion.task_id)
+            ).scalar_one_or_none()
+
+            if task and steps is not None:
+                task.steps = steps
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(task, "steps")
 
         suggestion = self._resolve_suggestion(suggestion_id, action, task)
         return suggestion, task

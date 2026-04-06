@@ -1,4 +1,4 @@
-"""Nanobot tool classes for RentMate.
+"""RentMate agent tool classes.
 
 Includes suggestion tools (propose_task, close_task, set_mode, attach_vendor).
 
@@ -11,9 +11,27 @@ the agent runs.
 """
 import contextvars
 import json
+from abc import ABC, abstractmethod
 from typing import Any
 
-from nanobot.agent.tools.base import Tool
+
+class Tool(ABC):
+    """Base class for RentMate agent tools (standalone, no nanobot dependency)."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str: ...
+
+    @property
+    @abstractmethod
+    def description(self) -> str: ...
+
+    @property
+    @abstractmethod
+    def parameters(self) -> dict[str, Any]: ...
+
+    @abstractmethod
+    async def execute(self, **kwargs: Any) -> str: ...
 
 from db.enums import AgentSource, SuggestionOption, TaskCategory, Urgency
 from db.models import MessageType
@@ -124,7 +142,8 @@ class ProposeTaskTool(Tool):
             "The proposal appears in the action desk for approval. "
             "You MUST provide a vendor_id — use lookup_vendors first to find "
             "a suitable vendor for the task. Include a draft_message for the "
-            "vendor if appropriate."
+            "vendor if appropriate. Always include steps — the ordered plan "
+            "for completing this task (3-6 steps)."
         )
 
     @property
@@ -149,6 +168,24 @@ class ProposeTaskTool(Tool):
                 "draft_message": {"type": "string", "description": "Draft message to send to the vendor on approval"},
                 "property_id": {"type": "string", "description": "Property ID (if applicable)"},
                 "task_id": {"type": "string", "description": "Originating task ID (if applicable)"},
+                "steps": {
+                    "type": "array",
+                    "description": "Ordered progress plan for the task (3-6 steps). Each step has key, label, and status.",
+                    "items": {
+                        "type": "object",
+                        "required": ["key", "label", "status"],
+                        "properties": {
+                            "key": {"type": "string", "description": "Short unique key (e.g. 'find_vendor')"},
+                            "label": {"type": "string", "description": "Human-readable step label"},
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "active", "done"],
+                                "description": "Step status",
+                            },
+                            "note": {"type": "string", "description": "Optional context note"},
+                        },
+                    },
+                },
             },
         }
 
@@ -171,6 +208,9 @@ class ProposeTaskTool(Tool):
         draft_message = kwargs.get("draft_message")
         if draft_message:
             action_payload["draft_message"] = draft_message
+        steps = kwargs.get("steps")
+        if steps:
+            action_payload["steps"] = steps
 
         if draft_message:
             options = [
@@ -424,6 +464,74 @@ class LookupVendorsTool(Tool):
             db.close()
 
 
+class UpdateStepsTool(Tool):
+    """Update the ordered progress steps for a task."""
+
+    @property
+    def name(self) -> str:
+        return "update_steps"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Set or update the ordered progress steps for a task. Each step "
+            "has a key, label, status (pending/active/done), and optional note. "
+            "Pass the full list of steps — it replaces the current list. "
+            "Use this when you have enough context to lay out a plan, or when "
+            "a conversation indicates a step has been completed. "
+            "This is a read-write tool that updates immediately (no approval needed)."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["task_id", "steps"],
+            "properties": {
+                "task_id": {"type": "string", "description": "ID of the task"},
+                "steps": {
+                    "type": "array",
+                    "description": "Ordered list of progress steps",
+                    "items": {
+                        "type": "object",
+                        "required": ["key", "label", "status"],
+                        "properties": {
+                            "key": {"type": "string", "description": "Short unique key (e.g. 'find_vendor')"},
+                            "label": {"type": "string", "description": "Human-readable step label"},
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "active", "done"],
+                                "description": "Step status",
+                            },
+                            "note": {"type": "string", "description": "Optional note (e.g. 'Vendor confirmed Thursday 2pm')"},
+                        },
+                    },
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        task_id = kwargs["task_id"]
+        steps = kwargs["steps"]
+
+        from handlers.deps import SessionLocal
+        from db.models import Task
+        from sqlalchemy.orm.attributes import flag_modified
+
+        db = SessionLocal()
+        try:
+            task = db.query(Task).filter_by(id=task_id).first()
+            if not task:
+                return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
+            task.steps = steps
+            flag_modified(task, "steps")
+            db.commit()
+            step_summary = ", ".join(s["label"] for s in steps)
+            return json.dumps({"status": "ok", "message": f"Steps updated: {step_summary}"})
+        finally:
+            db.close()
+
+
 class CreateVendorTool(Tool):
     """Create a new vendor/contractor in the system."""
 
@@ -467,7 +575,6 @@ class CreateVendorTool(Tool):
                 company=kwargs.get("company"),
                 vendor_type=kwargs.get("vendor_type"),
                 email=kwargs.get("email"),
-                contact_method="rentmate",
             ))
             return json.dumps({
                 "status": "ok",

@@ -22,7 +22,7 @@ MOCK_AGENT_ID = "mock-agent-id"
 
 
 @pytest.mark.usefixtures("db")
-class TestDialpadWebhook(unittest.TestCase):
+class TestQuoWebhook(unittest.TestCase):
 
     def setUp(self):
         """Set up the test client for the FastAPI app."""
@@ -56,14 +56,17 @@ class TestDialpadWebhook(unittest.TestCase):
         mock_sms_router.resolve.return_value = ("default-account", self.tenant, "inbound", "tenant")
 
         payload = {
-            "from_number": self.from_number,
-            "to_number": [self.to_number],
-            "text": "Hello, how can I help?",
+            "type": "message.received",
+            "data": {
+                "from": self.from_number,
+                "to": [self.to_number],
+                "body": "Hello, how can I help?",
+            },
         }
 
         with patch('backends.wire.sms_router', mock_sms_router), \
              patch('handlers.chat.PHONE_WHITELIST', [self.from_number]):
-            response = self.client.post("/dialpad-webhook", json=payload)
+            response = self.client.post("/quo-webhook", json=payload)
 
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
@@ -95,8 +98,8 @@ class TestDialpadWebhook(unittest.TestCase):
             )
             .one()
         )
-        self.assertEqual(msg.body, payload["text"])
-        self.assertEqual(msg.meta.get("source"), "dialpad")
+        self.assertEqual(msg.body, payload["data"]["body"])
+        self.assertEqual(msg.meta.get("source"), "quo")
         self.assertEqual(msg.meta.get("direction"), "inbound")
 
         app.dependency_overrides = {}
@@ -114,18 +117,20 @@ class TestDialpadWebhook(unittest.TestCase):
         mock_sms_router.resolve.return_value = ("default-account", self.tenant, "inbound", "tenant")
 
         payload = {
-            "from_number": self.from_number,
-            "to_number": [self.to_number],
-            "text": "Message1",
+            "type": "message.received",
+            "data": {
+                "from": self.from_number,
+                "to": [self.to_number],
+                "body": "Message1",
+            },
         }
 
         with patch('backends.wire.sms_router', mock_sms_router), \
              patch('handlers.chat.PHONE_WHITELIST', [self.from_number]):
-            self.client.post("/dialpad-webhook", json=payload)
+            self.client.post("/quo-webhook", json=payload)
 
-            payload2 = dict(payload)
-            payload2["text"] = "Message2"
-            response2 = self.client.post("/dialpad-webhook", json=payload2)
+            payload2 = {"type": "message.received", "data": {**payload["data"], "body": "Message2"}}
+            response2 = self.client.post("/quo-webhook", json=payload2)
 
         assert response2.status_code == 200
 
@@ -154,10 +159,10 @@ class TestDialpadWebhook(unittest.TestCase):
 
         mock_client.post.assert_called_once()
         args, kwargs = mock_client.post.call_args
-        self.assertIn("https://dialpad.com/api/v2/sms", args[0])
-        self.assertEqual(kwargs["json"]["from_number"], "5559876543")
-        self.assertIn("5550001234", kwargs["json"]["to_numbers"])
-        self.assertEqual(kwargs["json"]["text"], "This is a test reply.")
+        self.assertIn("https://api.openphone.com/v1/messages", args[0])
+        self.assertEqual(kwargs["json"]["from"], "5559876543")
+        self.assertIn("5550001234", kwargs["json"]["to"])
+        self.assertEqual(kwargs["json"]["content"], "This is a test reply.")
 
     def test_is_in_whitelist(self):
         """

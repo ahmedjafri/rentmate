@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Boolean, UniqueConstraint
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Boolean, UniqueConstraint, JSON
 from sqlalchemy.orm import relationship
 from .base import Base
 
@@ -24,6 +24,7 @@ class Task(Base):
     urgency      = Column(String(20),  nullable=True)
     priority     = Column(String(20),  nullable=True)
     confidential = Column(Boolean,     nullable=False, default=False)
+    steps        = Column(JSON,        nullable=True)   # ordered list of progress steps
     last_message_at = Column(DateTime, nullable=True)
     channel_type = Column(String(20),  nullable=True)
 

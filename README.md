@@ -23,7 +23,7 @@ The difference matters in practice. When AI is a layer on top, every new capabil
 
 - **AI Chat** — Ask questions about your tenants, leases, and properties
 - **Document Processing** — Upload lease PDFs and automatically extract tenant/property/lease data
-- **SMS Integration** — Auto-reply to tenant texts via Dialpad webhook
+- **SMS Integration** — Auto-reply to tenant texts via Quo webhook
 - **GraphQL API** — Full data access via a Strawberry GraphQL endpoint
 - **React UI** — Built-in web interface for property management
 
@@ -61,7 +61,7 @@ Open [http://localhost:8002](http://localhost:8002) and log in with the password
 | `RENTMATE_DB_PATH` | No | `./data/rentmate.db` | SQLite database path |
 | `RENTMATE_DOCS_DIR` | No | `./data/documents` | Document storage directory |
 | `RENTMATE_CHROMA_DIR` | No | `./data/chroma` | ChromaDB vector store path |
-| `DIALPAD_API_KEY` | No | — | Dialpad API key for SMS |
+| `QUO_API_KEY` | No | — | Quo API key for SMS |
 | `PHONE_WHITELIST` | No | — | Comma-separated phone numbers for auto-reply |
 
 ## Architecture
@@ -72,7 +72,7 @@ FastAPI backend (main.py)
   ├── /auth/login       — JWT authentication
   ├── /upload-document  — Document upload + processing
   ├── /chat             — AI chat endpoint
-  ├── /dialpad-webhook  — Inbound SMS from Dialpad
+  ├── /quo-webhook  — Inbound SMS from Quo
   └── /*                — React SPA (www/rentmate/dist/)
 
 backends/

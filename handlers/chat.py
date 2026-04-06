@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db.enums import TaskSource
-from db.lib import get_conversation_with_messages, record_sms_from_dialpad, route_inbound_to_tenant_chat
+from db.lib import get_conversation_with_messages, record_sms_from_quo, route_inbound_to_tenant_chat
 from db.models import Conversation, Message, MessageType, ParticipantType, Task
 from handlers.deps import get_db, require_user
 from llm.context import build_task_context, load_account_context
@@ -34,7 +34,7 @@ class _RunningChat:
 
 _active_chats: Dict[str, _RunningChat] = {}
 
-DIALPAD_API_KEY = os.getenv("DIALPAD_API_KEY", "")
+QUO_API_KEY = os.getenv("QUO_API_KEY", "")
 PHONE_WHITELIST = [p.strip() for p in os.getenv("PHONE_WHITELIST", "").split(",") if p.strip()]
 
 
@@ -50,30 +50,70 @@ async def chat_with_agent(
     messages: list[dict],
     on_progress: Optional[Callable] = None,
 ) -> str:
-    loop = agent_registry.get_loop(agent_id)
-    if loop is None:
-        raise RuntimeError("NanoBot agent not ready")
+    """Run the Hermes agent with the given messages and return its text reply."""
+    from run_agent import AIAgent
 
-    # Most recent user message
-    user_content = next(
-        (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
-    )
-    # Inject system/task context when present
+    model = os.getenv("LLM_MODEL", "anthropic/claude-haiku-4-5-20251001")
+    api_key = os.getenv("LLM_API_KEY", "")
+    api_base = os.getenv("LLM_BASE_URL") or None
+
+    # Map LiteLLM-style provider/model names to direct API endpoints
+    provider = None
+    actual_model = model
+    if "/" in model and not api_base:
+        provider_prefix, _, model_name = model.partition("/")
+        _PROVIDER_BASES = {
+            "deepseek": ("https://api.deepseek.com/v1", None),
+            "anthropic": ("https://api.anthropic.com/v1", "anthropic"),
+        }
+        if provider_prefix in _PROVIDER_BASES:
+            api_base, provider = _PROVIDER_BASES[provider_prefix]
+            actual_model = model_name
+
+    # Extract system message and conversation history
+    system_message = agent_registry.build_system_prompt(agent_id)
     sys_content = next((m["content"] for m in messages if m.get("role") == "system"), None)
     if sys_content:
-        user_content = f"<context>\n{sys_content}\n</context>\n\n{user_content}"
+        system_message = f"{system_message}\n\n---\n\n{sys_content}"
 
-    result = await loop.process_direct(
-        content=user_content,
-        session_key=session_key,
-        channel="rentmate",
-        chat_id=session_key,
-        on_progress=on_progress,
+    conversation_history = [
+        {"role": m["role"], "content": m["content"]}
+        for m in messages
+        if m.get("role") in ("user", "assistant")
+    ]
+
+    user_message = ""
+    if conversation_history and conversation_history[-1]["role"] == "user":
+        user_message = conversation_history.pop()["content"]
+
+    # Progress callback bridge
+    def _tool_progress(tool_name: str, status: str, result: str = "", **kwargs):
+        if on_progress and asyncio.get_event_loop().is_running():
+            asyncio.ensure_future(on_progress(f"[{tool_name}] {status}"))
+
+    agent = AIAgent(
+        base_url=api_base,
+        api_key=api_key,
+        provider=provider,
+        model=actual_model,
+        max_iterations=40,
+        enabled_toolsets=["rentmate"],
+        quiet_mode=True,
+        platform="api",
+        session_id=session_key,
+        skip_context_files=True,
+        skip_memory=True,
+        tool_progress_callback=_tool_progress if on_progress else None,
     )
-    # nanobot may return an OutboundMessage object or a plain string
-    if hasattr(result, 'content'):
-        return result.content
-    return str(result)
+
+    result = await asyncio.to_thread(
+        agent.run_conversation,
+        user_message=user_message,
+        system_message=system_message,
+        conversation_history=conversation_history if conversation_history else None,
+    )
+
+    return result.get("final_response", "") if isinstance(result, dict) else str(result)
 
 
 def _normalize_phone(num: str) -> str:
@@ -89,43 +129,40 @@ def _normalize_phone(num: str) -> str:
 
 
 async def send_sms_reply(from_num: str, to_num: str, text: str, api_key: str | None = None):
-    key = api_key or _get_dialpad_api_key()
+    key = api_key or _get_quo_api_key()
     if not key:
-        print("[sms] No Dialpad API key configured — skipping SMS")
+        print("[sms] No Quo API key configured — skipping SMS")
         return
     to_num = _normalize_phone(to_num)
     if from_num:
         from_num = _normalize_phone(from_num)
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            f"https://dialpad.com/api/v2/sms?apikey={key}",
-            headers={"accept": "application/json", "content-type": "application/json"},
+            "https://api.openphone.com/v1/messages",
+            headers={
+                "Authorization": key,
+                "Content-Type": "application/json",
+            },
             json={
-                "infer_country_code": False,
-                "channel_hashtag": None,
-                "from_number": from_num,
-                "media": None,
-                "sender_group_id": None,
-                "sender_group_type": None,
-                "text": text,
-                "to_numbers": [to_num],
-                "user_id": None,
+                "content": text,
+                "from": from_num,
+                "to": [to_num],
             },
         )
-        print(f"[sms] Dialpad response: {response.status_code} {response.text[:200]}")
+        print(f"[sms] Quo response: {response.status_code} {response.text[:200]}")
 
 
-def _get_dialpad_api_key() -> str:
-    """Get Dialpad API key from integrations config or env var."""
+def _get_quo_api_key() -> str:
+    """Get Quo (OpenPhone) API key from integrations config or env var."""
     from handlers.settings import load_integrations
-    cfg = load_integrations().get("dialpad", {})
-    return cfg.get("api_key") or DIALPAD_API_KEY
+    cfg = load_integrations().get("quo", {})
+    return cfg.get("api_key") or QUO_API_KEY
 
 
-def _get_dialpad_from_number() -> str:
-    """Get the outbound phone number from Dialpad config."""
+def _get_quo_from_number() -> str:
+    """Get the outbound phone number from Quo config."""
     from handlers.settings import load_integrations
-    cfg = load_integrations().get("dialpad", {})
+    cfg = load_integrations().get("quo", {})
     return cfg.get("from_number") or ""
 
 
@@ -171,53 +208,36 @@ class ChatRequest(BaseModel):
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
-@router.post("/dialpad-webhook")
-async def handle_message(
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    data = await request.json()
+async def process_inbound_sms(db: Session, from_number: str, to_number: str, body: str):
+    """Core inbound SMS handler shared by webhook and poller.
 
-    from_number = data["from_number"]
-    if len(data["to_number"]) > 1:
-        print(
-            "[Dialpad] More than 1 recipient (skipping), "
-            f"nums={data['to_number']}, msg={data.get('text', '')!r}")
-        return {"status": "ok"}
-
-    to_number: str = data["to_number"][0]
-    body = data["text"]
-
-    # Resolve sender (tenant or vendor) + direction
+    Returns True if the message was processed, False if skipped.
+    """
     from backends.wire import sms_router
     resolved = sms_router.resolve(db, from_number, to_number)
     if not resolved:
-        print(f"[Dialpad] Sender not resolved for from={from_number} to={to_number}")
-        return {"status": "ok"}
+        print(f"[sms] Sender not resolved for from={from_number} to={to_number}")
+        return False
 
     _account_id, entity, direction, entity_type = resolved
 
     if direction != "inbound":
-        return {"status": "ok"}
+        return False
 
     # ── Vendor inbound SMS ────────────────────────────────────────────
     if entity_type == "vendor":
-        from db.models import ConversationType, ParticipantType as PT, Message as MsgModel, ExternalContact
-        import uuid as _uuid2
-        from datetime import UTC as _UTC2, datetime as _dt2
+        from db.models import ConversationType, ParticipantType as PT, Message as MsgModel
 
         vendor = entity
-        # Find an existing vendor conversation for this vendor
         conv = chat_service.get_or_create_external_conversation(
             db,
             conversation_type=ConversationType.VENDOR,
             subject=f"SMS with {vendor.name}",
             vendor_id=str(vendor.id),
         )
-        # Persist the vendor's inbound message
-        now = _dt2.now(_UTC2)
+        now = datetime.now(UTC)
         db.add(MsgModel(
-            id=str(_uuid2.uuid4()),
+            id=str(_uuid.uuid4()),
             conversation_id=conv.id,
             sender_type=PT.EXTERNAL_CONTACT,
             sender_external_contact_id=str(vendor.id),
@@ -230,22 +250,19 @@ async def handle_message(
         ))
         conv.updated_at = now
         db.commit()
-        print(f"[Dialpad] Vendor SMS from {vendor.name}: {body[:80]}")
-        return {"status": "ok"}
+        print(f"[sms] Vendor SMS from {vendor.name}: {body[:80]}")
+        return True
 
     # ── Tenant inbound SMS ────────────────────────────────────────────
     tenant = entity
 
     if not is_in_whitelist(from_number):
-        print(
-            "[Dialpad] Number not in whitelist (skipping response), "
-            f"num={from_number}, msg={body!r}")
-        # Still record the message but don't trigger agent
-        record_sms_from_dialpad(db=db, from_number=from_number, to_number=to_number, body=body)
-        return {"status": "ok"}
+        print(f"[sms] Number not in whitelist (skipping response), num={from_number}")
+        record_sms_from_quo(db=db, from_number=from_number, to_number=to_number, body=body)
+        return True
 
     sender_meta = {
-        "source": "dialpad",
+        "source": "quo",
         "direction": "inbound",
         "from_number": from_number,
         "to_number": to_number,
@@ -261,8 +278,6 @@ async def handle_message(
     )
     db.commit()
 
-    # Build agent context and history
-    from llm.context import build_task_context
     from llm.client import call_agent
     from llm.side_effects import process_side_effects
     context = build_task_context(db, conv.id)
@@ -274,7 +289,6 @@ async def handle_message(
 
     agent_resp = await call_agent(agent_id, session_key, messages)
 
-    # Persist AI reply
     now = datetime.now(UTC)
     ai_msg = Message(
         id=str(_uuid.uuid4()),
@@ -291,7 +305,34 @@ async def handle_message(
     db.commit()
 
     await send_via_channel(conv, agent_resp.reply, inbound_meta=sender_meta)
+    return True
 
+
+@router.post("/quo-webhook")
+async def handle_message(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Handle inbound SMS from Quo (OpenPhone) webhook (message.received event)."""
+    data = await request.json()
+
+    event_type = data.get("type", "")
+    payload = data.get("data", data.get("object", data))
+
+    if event_type and event_type != "message.received":
+        return {"status": "ok"}
+
+    from_number = payload.get("from", "")
+    to_list = payload.get("to", [])
+    body = payload.get("body") or payload.get("content") or payload.get("text", "")
+
+    if not from_number or not to_list:
+        print(f"[Quo] Missing from/to in payload: {list(payload.keys())}")
+        return {"status": "ok"}
+
+    to_number = to_list[0] if isinstance(to_list, list) else to_list
+
+    await process_inbound_sms(db, from_number, to_number, body)
     return {"status": "ok"}
 
 

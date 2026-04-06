@@ -118,9 +118,7 @@ export function useApiData(): ApiState {
             phone: v.phone,
             email: v.email,
             notes: v.notes,
-            contactMethod: v.contactMethod ?? 'rentmate',
-            inviteToken: v.inviteToken,
-            inviteStatus: v.inviteStatus,
+            portalUrl: v.portalUrl,
           }))
         : [];
 
@@ -219,6 +217,7 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
     requireVendorType: t.requireVendorType,
     assignedVendorId: t.assignedVendorId,
     assignedVendorName: t.assignedVendorName,
+    steps: t.steps ?? undefined,
     suggestionOptions: t.suggestionOptions ?? undefined,
     aiConversationId: t.aiConversationId ?? null,
     externalConversationId: t.externalConversationId ?? null,
@@ -300,7 +299,7 @@ interface ApiVendor {
   phone?: string;
   email?: string;
   notes?: string;
-  contactMethod?: string;
+  portalUrl?: string;
 }
 
 interface ApiTenant {
@@ -352,6 +351,7 @@ interface ApiTask {
   requireVendorType?: string;
   assignedVendorId?: string;
   assignedVendorName?: string;
+  steps?: { key: string; label: string; status: string; note?: string }[];
   suggestionOptions?: { key: string; label: string; action: string; variant: string }[];
   aiConversationId?: string | null;
   parentConversationId?: string | null;

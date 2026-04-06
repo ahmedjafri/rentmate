@@ -134,6 +134,7 @@ const TASK_FIELDS = `
   aiConversationId
   parentConversationId
   externalConversationId
+  steps
   suggestionOptions
   messages {
     uid
@@ -344,7 +345,7 @@ export const CREATE_TASK_MUTATION = `
 `;
 
 export const VENDORS_QUERY = `
-  query { vendors { uid name company vendorType phone email notes contactMethod inviteToken inviteStatus createdAt } }
+  query { vendors { uid name company vendorType phone email notes portalUrl createdAt } }
 `;
 
 export const VENDOR_TYPES_QUERY = `
@@ -353,13 +354,13 @@ export const VENDOR_TYPES_QUERY = `
 
 export const CREATE_VENDOR_MUTATION = `
   mutation CreateVendor($input: CreateVendorInput!) {
-    createVendor(input: $input) { uid name company vendorType phone email notes contactMethod inviteToken inviteStatus }
+    createVendor(input: $input) { uid name company vendorType phone email notes portalUrl }
   }
 `;
 
 export const UPDATE_VENDOR_MUTATION = `
   mutation UpdateVendor($input: UpdateVendorInput!) {
-    updateVendor(input: $input) { uid name company vendorType phone email notes contactMethod inviteToken inviteStatus }
+    updateVendor(input: $input) { uid name company vendorType phone email notes portalUrl }
   }
 `;
 

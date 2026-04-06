@@ -21,10 +21,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Wrench, Plus, Pencil, Trash2, Search, MessageSquare, Mail, Phone, Link, Copy, CheckCircle2, Send, Loader2 } from 'lucide-react';
+import { Wrench, Plus, Pencil, Trash2, Search, Phone, Link, Copy, CheckCircle2, Send, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 
@@ -35,33 +34,15 @@ interface FormState {
   phone: string;
   email: string;
   notes: string;
-  contactMethod: string;
 }
 
 const emptyForm = (): FormState => ({
   name: '', company: '', vendorType: '', phone: '', email: '', notes: '',
-  contactMethod: 'rentmate',
 });
 
-const CONTACT_METHOD_LABELS: Record<string, { label: string; icon: React.ReactNode; disabled?: boolean; hint?: string }> = {
-  rentmate: { label: 'RentMate', icon: <MessageSquare className="h-3.5 w-3.5" /> },
-  email: { label: 'Email', icon: <Mail className="h-3.5 w-3.5" />, disabled: true, hint: 'Coming soon' },
-  phone: { label: 'Phone / SMS', icon: <Phone className="h-3.5 w-3.5" />, disabled: true, hint: 'Coming soon' },
-};
 
-const contactMethodLabel = (method: string) =>
-  CONTACT_METHOD_LABELS[method]?.label ?? method;
-
-const INVITE_STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  pending: { label: 'Pending', color: 'bg-amber-100 text-amber-800' },
-  accepted: { label: 'Accepted', color: 'bg-blue-100 text-blue-800' },
-  registered: { label: 'Registered', color: 'bg-green-100 text-green-800' },
-};
-
-function InviteLink({ token, status }: { token: string; status?: string }) {
+function PortalLink({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
-  const url = `${window.location.origin}/vendor-invite/${token}`;
-  const statusInfo = INVITE_STATUS_LABELS[status ?? 'pending'];
 
   const handleCopy = async () => {
     try {
@@ -77,7 +58,7 @@ function InviteLink({ token, status }: { token: string; status?: string }) {
         document.body.removeChild(textarea);
       }
       setCopied(true);
-      toast.success('Invite link copied');
+      toast.success('Portal link copied');
       setTimeout(() => setCopied(false), 2000);
     } catch {
       toast.error('Failed to copy — select the link manually');
@@ -88,12 +69,7 @@ function InviteLink({ token, status }: { token: string; status?: string }) {
     <div className="pt-1.5 space-y-1">
       <div className="flex items-center gap-1.5">
         <Link className="h-3 w-3 text-muted-foreground" />
-        <span className="text-xs text-muted-foreground">Invite link</span>
-        {statusInfo && (
-          <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 h-4 ${statusInfo.color}`}>
-            {statusInfo.label}
-          </Badge>
-        )}
+        <span className="text-xs text-muted-foreground">Portal link</span>
       </div>
       <div className="flex items-center gap-1.5">
         <code className="text-[11px] bg-muted px-2 py-1 rounded truncate max-w-[280px] select-all">
@@ -164,7 +140,6 @@ const Vendors = () => {
       phone: v.phone ?? '',
       email: v.email ?? '',
       notes: v.notes ?? '',
-      contactMethod: v.contactMethod ?? 'rentmate',
     });
     setDialogOpen(true);
   };
@@ -178,8 +153,8 @@ const Vendors = () => {
       toast.error('Vendor type is required');
       return;
     }
-    if (!form.phone.trim() && !form.email.trim()) {
-      toast.error('At least one of phone or email is required');
+    if (!form.phone.trim()) {
+      toast.error('Phone number is required');
       return;
     }
     setSaving(true);
@@ -188,14 +163,13 @@ const Vendors = () => {
         name: form.name.trim(),
         company: form.company.trim() || null,
         vendorType: form.vendorType || null,
-        phone: form.phone.trim() || null,
+        phone: form.phone.trim(),
         email: form.email.trim() || null,
         notes: form.notes.trim() || null,
-        contactMethod: form.contactMethod,
       };
 
       if (editingId) {
-        const data = await graphqlQuery<{ updateVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string; contactMethod?: string; inviteToken?: string; inviteStatus?: string } }>(
+        const data = await graphqlQuery<{ updateVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string; portalUrl?: string } }>(
           UPDATE_VENDOR_MUTATION,
           { input: { uid: editingId, ...input } },
         );
@@ -206,13 +180,11 @@ const Vendors = () => {
           phone: data.updateVendor.phone,
           email: data.updateVendor.email,
           notes: data.updateVendor.notes,
-          contactMethod: data.updateVendor.contactMethod ?? 'rentmate',
-          inviteToken: data.updateVendor.inviteToken,
-          inviteStatus: data.updateVendor.inviteStatus,
+          portalUrl: data.updateVendor.portalUrl,
         });
         toast.success('Vendor updated');
       } else {
-        const data = await graphqlQuery<{ createVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string; contactMethod?: string; inviteToken?: string; inviteStatus?: string } }>(
+        const data = await graphqlQuery<{ createVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string; portalUrl?: string } }>(
           CREATE_VENDOR_MUTATION,
           { input },
         );
@@ -224,9 +196,7 @@ const Vendors = () => {
           phone: data.createVendor.phone,
           email: data.createVendor.email,
           notes: data.createVendor.notes,
-          contactMethod: data.createVendor.contactMethod ?? 'rentmate',
-          inviteToken: data.createVendor.inviteToken,
-          inviteStatus: data.createVendor.inviteStatus,
+          portalUrl: data.createVendor.portalUrl,
         });
         toast.success('Vendor added');
       }
@@ -344,18 +314,12 @@ const Vendors = () => {
                   {v.vendorType && (
                     <Badge variant="secondary" className="text-xs">{v.vendorType}</Badge>
                   )}
-                  <Badge variant="outline" className="text-xs gap-1">
-                    {CONTACT_METHOD_LABELS[v.contactMethod ?? 'rentmate']?.icon}
-                    {contactMethodLabel(v.contactMethod ?? 'rentmate')}
-                  </Badge>
                 </div>
                 <div className="pt-1 space-y-0.5 text-sm text-muted-foreground">
                   {v.phone && <div>{v.phone}</div>}
                   {v.email && <div>{v.email}</div>}
                 </div>
-                {v.inviteToken && (
-                  <InviteLink token={v.inviteToken} status={v.inviteStatus} />
-                )}
+                {v.portalUrl && <PortalLink url={v.portalUrl} />}
                 {v.phone && (
                   <div className="pt-1.5">
                     <Button
@@ -401,7 +365,7 @@ const Vendors = () => {
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Vendor Type</Label>
+              <Label>Vendor Type *</Label>
               <Select value={form.vendorType} onValueChange={val => setForm(f => ({ ...f, vendorType: val }))}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select type" />
@@ -414,37 +378,7 @@ const Vendors = () => {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Contact Method</Label>
-              <RadioGroup
-                value={form.contactMethod}
-                onValueChange={val => setForm(f => ({ ...f, contactMethod: val }))}
-                className="flex flex-col gap-2"
-              >
-                {Object.entries(CONTACT_METHOD_LABELS).map(([value, { label, icon, disabled, hint }]) => (
-                  <label
-                    key={value}
-                    className={`flex items-center gap-3 rounded-md border px-3 py-2 cursor-pointer transition-colors ${
-                      disabled
-                        ? 'opacity-40 cursor-not-allowed'
-                        : form.contactMethod === value
-                        ? 'border-primary bg-primary/5'
-                        : 'hover:bg-muted/50'
-                    }`}
-                  >
-                    <RadioGroupItem value={value} disabled={disabled} />
-                    <span className="flex items-center gap-2 text-sm">
-                      {icon}
-                      {label}
-                    </span>
-                    {hint && (
-                      <span className="ml-auto text-xs text-muted-foreground">{hint}</span>
-                    )}
-                  </label>
-                ))}
-              </RadioGroup>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="v-phone">Phone</Label>
+              <Label htmlFor="v-phone">Phone *</Label>
               <Input
                 id="v-phone"
                 value={form.phone}

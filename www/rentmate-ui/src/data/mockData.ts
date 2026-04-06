@@ -38,6 +38,7 @@ export interface ActionDeskTask {
   requireVendorType?: string;
   assignedVendorId?: string;
   assignedVendorName?: string;
+  steps?: { key: string; label: string; status: 'pending' | 'active' | 'done'; note?: string }[];
   suggestionOptions?: { key: string; label: string; action: string; variant: string }[];
 }
 
@@ -160,9 +161,7 @@ export interface Vendor {
   phone?: string;
   email?: string;
   notes?: string;
-  contactMethod: string;
-  inviteToken?: string;
-  inviteStatus?: string;
+  portalUrl?: string;
 }
 
 export interface ManagedDocument {

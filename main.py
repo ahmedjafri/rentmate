@@ -49,6 +49,7 @@ _MIGRATE_COLS = [
     ("tasks",          "parent_conversation_id",   "VARCHAR(36)"),
     ("tasks",          "external_conversation_id", "VARCHAR(36)"),
     ("tasks",          "resolved_at",              "TIMESTAMP"),
+    ("tasks",          "steps",                    "TEXT"),
     ("messages",       "message_type",       "VARCHAR(20)"),
     ("messages",       "sender_name",        "VARCHAR(255)"),
     ("messages",       "is_ai",              "BOOLEAN NOT NULL DEFAULT 0"),
@@ -143,6 +144,17 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         agent_registry.populate_all_agents(db)
+        # Migrate vendors: ensure all have a short portal_token
+        from db.models import ExternalContact as _EC
+        from gql.services.vendor_service import VendorService as _VS
+        _migrated = 0
+        for v in db.query(_EC).all():
+            if not (v.extra or {}).get("portal_token"):
+                _VS.ensure_portal_token(db, v)
+                _migrated += 1
+        if _migrated:
+            db.commit()
+            print(f"Migrated {_migrated} vendor(s) to portal tokens")
         from db.models import Document as DocModel
         stuck = db.query(DocModel).filter(DocModel.status.in_(["pending", "processing"])).all()
         for doc in stuck:
@@ -168,6 +180,10 @@ async def lifespan(app: FastAPI):
     if os.getenv("GMAIL_CLIENT_ID"):
         asyncio.create_task(_gmail_poll_loop())
         print("Gmail polling enabled")
+
+    # Quo SMS poller: primary channel locally, backup in production
+    from handlers.quo_poller import quo_poll_loop
+    asyncio.create_task(quo_poll_loop())
 
     yield
 
