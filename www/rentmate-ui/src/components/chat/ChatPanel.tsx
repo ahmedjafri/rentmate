@@ -1,5 +1,5 @@
 import { useRef, useEffect, useMemo, useState } from 'react';
-import { X, Bot, Sparkles, Users, Zap, ShieldCheck, Hand, Lock, MessageSquare, RotateCcw, Loader2, Trash2, Phone as PhoneIcon } from 'lucide-react';
+import { X, Bot, Sparkles, Users, Zap, ShieldCheck, Hand, Lock, MessageSquare, RotateCcw, Loader2, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -13,7 +13,7 @@ import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SuggestionOptions } from './SuggestionOptions';
 import { ProgressSteps } from './ProgressSteps';
-import { graphqlQuery, TASK_QUERY, SEND_MESSAGE_MUTATION, SEND_SMS_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
+import { graphqlQuery, TASK_QUERY, SEND_MESSAGE_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
 import { apiMessagesToChatThread } from '@/hooks/useApiData';
 
 function authHeaders() {
@@ -48,7 +48,6 @@ export function ChatPanel() {
   const [activeTaskTab, setActiveTaskTab] = useState<string>('ai');
   const [participantMessages, setParticipantMessages] = useState<ChatMessage[]>([]);
   const [participantLoading, setParticipantLoading] = useState(false);
-  const [sendViaSms, setSendViaSms] = useState(false);
 
   const handleDismiss = async () => {
     if (!chatPanel.taskId) return;
@@ -765,13 +764,14 @@ export function ChatPanel() {
                                 senderName: 'RentMate', senderType: 'ai', messageType: 'internal',
                               });
                             }
-                            // Reply goes to external chat (visible to vendor/tenant)
+                            // Reply goes to AI thread — external messages
+                            // are sent via the message_person suggestion flow
                             if (event.reply) {
-                              setParticipantMessages(prev => [...prev, {
+                              addChatMessage({ taskId }, {
                                 id: event.message_id || `msg-${Date.now()}`, role: 'assistant',
                                 content: event.reply, timestamp: new Date(),
                                 senderName: 'RentMate', senderType: 'ai', messageType: 'message',
-                              }]);
+                              });
                             }
                             if (event.suggestion_messages) {
                               for (const sm of event.suggestion_messages) {
@@ -988,21 +988,6 @@ export function ChatPanel() {
                 </div>
               ) : (
                 <div className="border-t shrink-0">
-                  {activeTask.assignedVendorId && (
-                    <div className="flex items-center gap-1.5 px-3 pt-2">
-                      <input
-                        type="checkbox"
-                        id={`sms-toggle-${lc.uid}`}
-                        checked={sendViaSms}
-                        onChange={e => setSendViaSms(e.target.checked)}
-                        className="h-3.5 w-3.5 rounded border-input accent-primary cursor-pointer"
-                      />
-                      <label htmlFor={`sms-toggle-${lc.uid}`} className="text-[11px] text-muted-foreground cursor-pointer flex items-center gap-1">
-                        <PhoneIcon className="h-3 w-3" />
-                        Send as SMS
-                      </label>
-                    </div>
-                  )}
                   <ChatInput
                     onSend={async (content) => {
                       const taskId = chatPanel.taskId!;
@@ -1017,22 +1002,14 @@ export function ChatPanel() {
                       };
                       setParticipantMessages(prev => [...prev, msg]);
                       try {
-                        if (sendViaSms && activeTask.assignedVendorId) {
-                          await graphqlQuery(SEND_SMS_MUTATION, {
-                            vendorId: activeTask.assignedVendorId,
-                            body: content,
-                            taskId,
-                          });
-                        } else {
-                          await graphqlQuery(SEND_MESSAGE_MUTATION, {
-                            input: { conversationId: lc.uid, body: content },
-                          });
-                        }
+                        await graphqlQuery(SEND_MESSAGE_MUTATION, {
+                          input: { conversationId: lc.uid, body: content },
+                        });
                       } catch {
                         toast.error('Failed to send message');
                       }
                     }}
-                    placeholder={sendViaSms ? "Send SMS to vendor..." : `Reply in ${lc.label} chat...`}
+                    placeholder={`Reply in ${lc.label} chat...`}
                   />
                 </div>
               )}

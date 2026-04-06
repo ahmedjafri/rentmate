@@ -100,6 +100,8 @@ async def chat_with_agent(
         "close_task": "Closing task",
         "set_mode": "Changing mode",
         "attach_vendor": "Assigning vendor",
+        "attach_entity": "Attaching to task",
+        "message_person": "Sending message",
         "create_vendor": "Creating vendor",
         "update_steps": "Updating progress",
         "save_memory": "Saving note",
@@ -127,13 +129,30 @@ async def chat_with_agent(
                     et = args.get("entity_type")
                     if et:
                         hint = f" ({et})"
+                elif tool_name == "attach_entity":
+                    etype = args.get("entity_type", "")
+                    hint = f" ({etype})" if etype else ""
+                elif tool_name == "message_person":
+                    etype = args.get("entity_type", "")
+                    draft = args.get("draft_message", "")
+                    hint = f" → {etype}"
+                    if draft:
+                        hint += f": {draft[:80]}"
+                elif tool_name == "update_steps":
+                    steps = args.get("steps")
+                    if steps and isinstance(steps, list):
+                        labels = [s.get("label", "") for s in steps[:3] if isinstance(s, dict)]
+                        hint = f": {', '.join(l for l in labels if l)}" if labels else ""
             msg = f"{label}{hint}"
             progress_events.append(msg)
             progress_queue.put(msg)
         elif event_type == "tool.completed":
             is_error = kwargs.get("is_error", False)
             if is_error:
-                msg = f"{label}: error"
+                error_detail = kwargs.get("error", "") or kwargs.get("result", "")
+                if isinstance(error_detail, str) and len(error_detail) > 120:
+                    error_detail = error_detail[:120] + "…"
+                msg = f"{label}: error" + (f" — {error_detail}" if error_detail else "")
                 progress_events.append(msg)
                 progress_queue.put(msg)
 
@@ -742,9 +761,8 @@ async def assess_task_endpoint(
                     + "\n".join(lines)
                 )
 
-    db.commit()
-
-    # Build message history from AI conversation + assess prompt with extras
+    # Build message history BEFORE commit/session close — eagerly extract
+    # all ORM data into plain dicts so the async generator doesn't need the session.
     all_msgs = [
         m for m in (conv.messages or [])
         if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)
@@ -755,6 +773,8 @@ async def assess_task_endpoint(
         {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
         for m in msg_rows
     ]
+
+    db.commit()
     messages_payload.append({
         "role": "user",
         "content": ASSESS_PROMPT + steps_text + ext_msgs_text,
@@ -808,13 +828,12 @@ async def assess_task_endpoint(
                             is_ai=True,
                             sent_at=now,
                         ))
-                    # Persist the actual reply to the external conversation
-                    # so the vendor/tenant can see it.  Fall back to AI conv
-                    # if there is no external conversation.
-                    reply_conv_id = ext_conv_id or conv_id
+                    # Persist the reply to the AI conversation. External
+                    # messages are sent through the message_person tool /
+                    # suggestion flow, not directly from the assess endpoint.
                     ai_msg = Message(
                         id=str(_uuid.uuid4()),
-                        conversation_id=reply_conv_id,
+                        conversation_id=conv_id,
                         sender_type=ParticipantType.ACCOUNT_USER,
                         body=agent_resp.reply,
                         message_type=MessageType.MESSAGE,
@@ -826,13 +845,11 @@ async def assess_task_endpoint(
                     flushed_suggestions = process_side_effects(
                         write_db, agent_resp.side_effects, conv_id, now,
                     )
-                    # Update timestamps on both conversations
-                    for cid in {conv_id, reply_conv_id}:
-                        c = write_db.query(Conversation).filter_by(id=cid).first()
-                        if c:
-                            c.updated_at = now
+                    db_conv = write_db.query(Conversation).filter_by(id=conv_id).first()
+                    if db_conv:
+                        db_conv.updated_at = now
                     write_db.commit()
-                    print(f"[assess] Persisted AI reply ({len(agent_resp.reply)} chars) to {reply_conv_id}")
+                    print(f"[assess] Persisted AI reply ({len(agent_resp.reply)} chars) to AI conv {conv_id}")
                     return agent_resp.reply, ai_msg.id, flushed_suggestions
                 except Exception as e:
                     write_db.rollback()

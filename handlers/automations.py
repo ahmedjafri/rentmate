@@ -377,7 +377,7 @@ def _scan_for_reply_suggestions(db) -> int:
                 Suggestion.task_id == task.id,
                 Suggestion.status == "pending",
             )
-        ).scalar_one_or_none()
+        ).scalars().first()
         if existing:
             continue
 

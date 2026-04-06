@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from sqlalchemy import select
-from sqlalchemy.orm import joinedload
 
 from db.lib import get_conversation_with_messages
 from db.models import (
@@ -135,38 +134,10 @@ def get_or_create_external_conversation(
     tenant_id: str | None = None,
     ai_typing: bool = False,
 ) -> Conversation:
-    """Find an existing non-archived conversation with the same participants, or create one.
+    """Create a new conversation for a vendor or tenant.
 
-    For vendor conversations: looks for an active conversation where the vendor
-    is already a participant. For tenant conversations: looks for a 1:1 with
-    that tenant. Falls back to creating a new conversation.
+    Always creates a fresh conversation so each task gets its own thread.
     """
-    participant_id = vendor_id or tenant_id
-    if participant_id:
-        # Look for an existing conversation with this participant
-        participant_filter = (
-            ConversationParticipant.external_contact_id == vendor_id
-            if vendor_id
-            else ConversationParticipant.tenant_id == tenant_id
-        )
-        existing = (
-            db.query(Conversation)
-            .options(joinedload(Conversation.participants))
-            .join(ConversationParticipant)
-            .filter(
-                Conversation.is_archived.is_(False),
-                Conversation.conversation_type == conversation_type,
-                participant_filter,
-                ConversationParticipant.is_active.is_(True),
-            )
-        )
-        if property_id:
-            existing = existing.filter(Conversation.property_id == property_id)
-        conv = existing.order_by(Conversation.updated_at.desc()).first()
-        if conv:
-            return conv
-
-    # Create a new conversation
     now = datetime.now(UTC)
     conv = Conversation(
         id=str(uuid.uuid4()),

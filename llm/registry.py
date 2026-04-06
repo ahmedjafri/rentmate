@@ -33,13 +33,15 @@ def _register_rentmate_tools():
     from tools.registry import registry
     from llm.tools import (
         ProposeTaskTool, CloseTaskTool, SetModeTool,
-        AttachVendorTool, LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
+        AttachEntityToTaskTool, MessageExternalPersonTool,
+        LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
         SaveMemoryTool, RecallMemoryTool,
     )
 
     for tool_cls in (
         ProposeTaskTool, CloseTaskTool, SetModeTool,
-        AttachVendorTool, LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
+        AttachEntityToTaskTool, MessageExternalPersonTool,
+        LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
         SaveMemoryTool, RecallMemoryTool,
     ):
         tool = tool_cls()

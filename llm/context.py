@@ -63,6 +63,7 @@ def build_task_context(db: Session, task_id: str) -> str:
         f"Category: {task.category or 'general'}",
         f"Urgency: {task.urgency or 'normal'}",
         f"Status: {task.task_status or 'active'}",
+        f"Mode: {task.task_mode or 'manual'}",
     ]
 
     # Task description (first context message from the AI conversation)

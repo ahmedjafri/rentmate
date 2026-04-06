@@ -1,6 +1,6 @@
 """RentMate agent tool classes.
 
-Includes suggestion tools (propose_task, close_task, set_mode, attach_vendor).
+Includes suggestion tools (propose_task, close_task, set_mode, attach_entity, message_person).
 
 When a tool creates a suggestion during a chat, it queues a SUGGESTION message
 via ``pending_suggestion_messages``.  The chat handler flushes these *after*
@@ -91,7 +91,9 @@ def _create_suggestion(
         if conv_id:
             body_parts = [title]
             if action_payload:
-                if action_payload.get("vendor_name"):
+                if action_payload.get("entity_name"):
+                    body_parts.append(f"{(action_payload.get('entity_type') or 'entity').title()}: {action_payload['entity_name']}")
+                elif action_payload.get("vendor_name"):
                     body_parts.append(f"Vendor: {action_payload['vendor_name']}")
                 if action_payload.get("draft_message"):
                     body_parts.append(f"Draft: {action_payload['draft_message'][:200]}")
@@ -325,81 +327,235 @@ class SetModeTool(Tool):
         return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Mode change to '{mode}' created for manager confirmation."})
 
 
-class AttachVendorTool(Tool):
-    """Propose attaching a vendor conversation to a task, with an optional draft message."""
+def _get_task_category(task_id: str) -> str | None:
+    """Look up a task's category for autonomy checks."""
+    from handlers.deps import SessionLocal
+    from db.models import Task
+    db = SessionLocal()
+    try:
+        task = db.query(Task).filter_by(id=task_id).first()
+        return task.category if task else None
+    finally:
+        db.close()
+
+
+def _auto_execute_suggestion(suggestion_id: str, action: str) -> str | None:
+    """Auto-execute a suggestion when in autonomous mode.
+
+    Returns None on success, or an error message string on failure.
+    The executor's ``send_autonomous_message`` commits internally, so we
+    don't add our own commit — just close the session when done.
+    """
+    from handlers.deps import SessionLocal
+    from handlers.task_suggestions import SuggestionExecutor
+    db = SessionLocal()
+    try:
+        executor = SuggestionExecutor.for_suggestion(db, suggestion_id)
+        executor.execute(suggestion_id, action)
+        # Flush any remaining changes (task FK updates, suggestion status)
+        # that weren't committed by inner service calls.
+        if db.new or db.dirty:
+            db.commit()
+        return None
+    except Exception as e:
+        print(f"[auto-execute] Failed suggestion {suggestion_id} action={action}: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return str(e)
+    finally:
+        db.close()
+
+
+class AttachEntityToTaskTool(Tool):
+    """Attach any entity (vendor, tenant, property, unit) to a task."""
 
     @property
     def name(self) -> str:
-        return "attach_vendor"
+        return "attach_entity"
 
     @property
     def description(self) -> str:
         return (
-            "Propose attaching a vendor/contractor conversation to an existing task. "
-            "You MUST provide vendor_id — use lookup_vendors first to find the right "
-            "vendor. An optional draft_message can be included for the manager to "
-            "review and send to the vendor."
+            "Attach an entity to an existing task. For vendors and tenants, this also "
+            "creates/links a conversation. For properties and units, sets the FK on the task. "
+            "Use lookup_vendors first if you need to find a vendor ID."
         )
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "required": ["task_id", "vendor_id"],
+            "required": ["task_id", "entity_id", "entity_type"],
             "properties": {
-                "task_id": {"type": "string", "description": "ID of the task to attach a vendor conversation to"},
-                "vendor_id": {"type": "string", "description": "ID of the vendor (use lookup_vendors to find this)"},
-                "draft_message": {"type": "string", "description": "Optional draft message to send to the vendor on approval"},
+                "task_id": {"type": "string", "description": "ID of the task"},
+                "entity_id": {"type": "string", "description": "ID of the entity to attach"},
+                "entity_type": {
+                    "type": "string",
+                    "enum": ["vendor", "tenant", "property", "unit"],
+                    "description": "Type of entity",
+                },
             },
         }
 
     async def execute(self, **kwargs: Any) -> str:
         task_id = kwargs["task_id"]
-        vendor_id = kwargs["vendor_id"]
-        draft_message = kwargs.get("draft_message")
+        entity_id = kwargs["entity_id"]
+        entity_type = kwargs["entity_type"]
         task_title = _get_task_title(task_id)
 
         from handlers.deps import SessionLocal
-        from db.models import ExternalContact
+        from db.models import ExternalContact, Tenant, Property, Unit
         db = SessionLocal()
         try:
-            vendor = db.query(ExternalContact).filter_by(id=vendor_id).first()
-            vendor_name = vendor.name if vendor else "Vendor"
+            if entity_type == "vendor":
+                entity = db.query(ExternalContact).filter_by(id=entity_id).first()
+                entity_name = entity.name if entity else "Vendor"
+            elif entity_type == "tenant":
+                entity = db.query(Tenant).filter_by(id=entity_id).first()
+                entity_name = f"{entity.first_name} {entity.last_name}".strip() if entity else "Tenant"
+            elif entity_type == "property":
+                entity = db.query(Property).filter_by(id=entity_id).first()
+                entity_name = entity.name or entity.address_line1 if entity else "Property"
+            elif entity_type == "unit":
+                entity = db.query(Unit).filter_by(id=entity_id).first()
+                entity_name = entity.label if entity else "Unit"
+            else:
+                return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
+
+            if not entity:
+                return json.dumps({"status": "error", "message": f"{entity_type.title()} {entity_id} not found"})
         finally:
             db.close()
 
-        action_payload: dict = {
-            "action": "attach_vendor",
-            "vendor_id": vendor_id,
-            "vendor_name": vendor_name,
+        action_payload = {
+            "action": "attach_entity",
+            "entity_id": entity_id,
+            "entity_type": entity_type,
+            "entity_name": entity_name,
         }
-        if draft_message:
-            action_payload["draft_message"] = draft_message
-
-        if draft_message:
-            options = [
-                SuggestionOption(key="send", label="Send to Vendor", action="attach_vendor_send", variant="default"),
-                SuggestionOption(key="edit", label="Edit Message", action="edit_draft", variant="outline"),
-                SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
-            ]
-            title = f"Contact {vendor_name} for: {task_title}"
-            ai_context = f"The agent recommends contacting {vendor_name} about this task.\n\nDraft message:\n{draft_message}"
-        else:
-            options = [
-                SuggestionOption(key="attach", label=f"Attach {vendor_name}", action="attach_vendor", variant="default"),
-                SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
-            ]
-            title = f"Attach {vendor_name} to: {task_title}"
-            ai_context = f"The agent recommends assigning {vendor_name} to this task."
+        options = [
+            SuggestionOption(key="attach", label=f"Attach {entity_name}", action="attach_entity", variant="default"),
+            SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
+        ]
 
         sid = _create_suggestion(
-            title=title,
-            ai_context=ai_context,
+            title=f"Attach {entity_type}: {entity_name} to {task_title}",
+            ai_context=f"The agent recommends attaching {entity_type} '{entity_name}' to this task.",
             options=options,
             action_payload=action_payload,
             task_id=task_id,
         )
-        return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Vendor suggestion for {vendor_name} created for manager review."})
+
+        # Auto-execute in autonomous mode
+        from gql.services import settings_service
+        category = _get_task_category(task_id)
+        if settings_service.get_autonomy_for_category(category) == "autonomous":
+            err = _auto_execute_suggestion(sid, "attach_entity")
+            if err:
+                return json.dumps({"status": "error", "suggestion_id": sid, "message": f"Failed to attach {entity_name}: {err}. Suggestion saved for manual review."})
+            return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"{entity_type.title()} '{entity_name}' attached to task (auto-approved)."})
+
+        return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Suggestion to attach {entity_name} created for manager review."})
+
+
+class MessageExternalPersonTool(Tool):
+    """Send a message to an external person (tenant or vendor) on a task."""
+
+    @property
+    def name(self) -> str:
+        return "message_person"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Send a message to a tenant or vendor on a task. Creates a suggestion with "
+            "the draft message for manager approval. In autonomous mode, sends immediately. "
+            "If the person is not yet linked to the task, a conversation will be created."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["task_id", "entity_id", "entity_type", "draft_message"],
+            "properties": {
+                "task_id": {"type": "string", "description": "ID of the task"},
+                "entity_id": {"type": "string", "description": "ID of the tenant or vendor"},
+                "entity_type": {
+                    "type": "string",
+                    "enum": ["tenant", "vendor"],
+                    "description": "Type of person to message",
+                },
+                "draft_message": {"type": "string", "description": "The message to send"},
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        task_id = kwargs["task_id"]
+        entity_id = kwargs["entity_id"]
+        entity_type = kwargs["entity_type"]
+        draft_message = kwargs["draft_message"]
+        task_title = _get_task_title(task_id)
+
+        from handlers.deps import SessionLocal
+        from db.models import ExternalContact, Tenant
+        db = SessionLocal()
+        try:
+            if entity_type == "vendor":
+                entity = db.query(ExternalContact).filter_by(id=entity_id).first()
+                entity_name = entity.name if entity else "Vendor"
+                entity_phone = entity.phone if entity else None
+            elif entity_type == "tenant":
+                entity = db.query(Tenant).filter_by(id=entity_id).first()
+                entity_name = f"{entity.first_name} {entity.last_name}".strip() if entity else "Tenant"
+                entity_phone = entity.phone if entity else None
+            else:
+                return json.dumps({"status": "error", "message": f"Can only message tenants or vendors, not {entity_type}"})
+
+            if not entity:
+                return json.dumps({"status": "error", "message": f"{entity_type.title()} {entity_id} not found"})
+        finally:
+            db.close()
+
+        action_payload = {
+            "action": "message_person",
+            "entity_id": entity_id,
+            "entity_type": entity_type,
+            "entity_name": entity_name,
+            "entity_phone": entity_phone,
+            "draft_message": draft_message,
+        }
+        options = [
+            SuggestionOption(key="send", label=f"Send to {entity_name}", action="message_person_send", variant="default"),
+            SuggestionOption(key="edit", label="Edit Message", action="edit_draft", variant="outline"),
+            SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
+        ]
+
+        sid = _create_suggestion(
+            title=f"Message {entity_name}: {task_title}",
+            ai_context=f"The agent wants to send a message to {entity_name} ({entity_type}).\n\nDraft message:\n{draft_message}",
+            options=options,
+            action_payload=action_payload,
+            task_id=task_id,
+        )
+
+        # Auto-execute in autonomous mode
+        from gql.services import settings_service
+        category = _get_task_category(task_id)
+        if settings_service.get_autonomy_for_category(category) == "autonomous":
+            err = _auto_execute_suggestion(sid, "message_person_send")
+            if err:
+                return json.dumps({"status": "error", "suggestion_id": sid, "message": f"Failed to send message to {entity_name}: {err}. Suggestion saved for manual review."})
+            note = f"Message sent to {entity_name} (auto-approved)."
+            if not entity_phone:
+                note += " Note: no phone number on file, message saved but not delivered via SMS."
+            return json.dumps({"status": "ok", "suggestion_id": sid, "message": note})
+
+        return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Message suggestion for {entity_name} created for manager review."})
 
 
 class LookupVendorsTool(Tool):
