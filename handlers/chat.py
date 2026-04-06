@@ -99,6 +99,10 @@ async def chat_with_agent(
             status = "error" if is_error else f"done ({duration:.1f}s)"
             progress_events.append(f"[{tool_name}] {status}")
 
+    # Log what we're sending to the agent
+    print(f"[hermes] model={actual_model} provider={provider} base_url={api_base}")
+    print(f"[hermes] system_prompt={len(system_message)} chars, history={len(conversation_history)} msgs, user_message={len(user_message)} chars")
+
     agent = AIAgent(
         base_url=api_base,
         api_key=api_key,
@@ -112,6 +116,7 @@ async def chat_with_agent(
         skip_context_files=True,
         skip_memory=True,
         tool_progress_callback=_tool_progress,
+        verbose_logging=bool(os.getenv("HERMES_VERBOSE")),
     )
 
     # Run in thread; relay progress events to async on_progress callback
@@ -158,7 +163,26 @@ async def chat_with_agent(
         return task.result()
 
     result = await _run_with_progress()
-    return result.get("final_response", "") if isinstance(result, dict) else str(result)
+
+    if isinstance(result, dict):
+        print(f"[hermes] api_calls={result.get('api_calls', '?')} "
+              f"completed={result.get('completed', '?')} "
+              f"input_tokens={result.get('input_tokens', '?')} "
+              f"output_tokens={result.get('output_tokens', '?')} "
+              f"progress_events={len(progress_events)}")
+        if progress_events:
+            for evt in progress_events:
+                print(f"[hermes]   progress: {evt}")
+        reply = result.get("final_response", "")
+        if not reply:
+            # Fallback: check messages for last assistant content
+            msgs = result.get("messages", [])
+            for m in reversed(msgs):
+                if m.get("role") == "assistant" and m.get("content"):
+                    reply = m["content"]
+                    break
+        return reply
+    return str(result)
 
 
 def _normalize_phone(num: str) -> str:
