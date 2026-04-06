@@ -185,6 +185,12 @@ function apiTaskParticipants(t: ApiTask): TaskParticipant[] {
     seen.add(t.assignedVendorName);
   }
 
+  // Add tenant directly if known — don't require them to have sent a message yet
+  if (t.tenantName && !seen.has(t.tenantName)) {
+    participants.push({ type: 'tenant', name: t.tenantName });
+    seen.add(t.tenantName);
+  }
+
   // Add unique non-AI senders from messages
   for (const m of t.messages ?? []) {
     if (m.isAi || !m.senderName || seen.has(m.senderName)) continue;
