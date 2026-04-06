@@ -80,6 +80,8 @@ async def chat_with_agent(
         {"role": m["role"], "content": m["content"]}
         for m in messages
         if m.get("role") in ("user", "assistant")
+        # Filter out poisoned responses that contain simulated tool calls
+        and "[True]" not in (m.get("content") or "")
     ]
 
     user_message = ""
