@@ -370,6 +370,12 @@ export const DELETE_VENDOR_MUTATION = `
   mutation DeleteVendor($uid: String!) { deleteVendor(uid: $uid) }
 `;
 
+export const UPDATE_ENTITY_CONTEXT_MUTATION = `
+  mutation UpdateEntityContext($entityType: String!, $entityId: String!, $context: String!) {
+    updateEntityContext(entityType: $entityType, entityId: $entityId, context: $context)
+  }
+`;
+
 export const ASSIGN_VENDOR_TO_TASK_MUTATION = `
   mutation AssignVendorToTask($taskId: String!, $vendorId: String!) {
     assignVendorToTask(taskId: $taskId, vendorId: $vendorId) {

@@ -335,6 +335,28 @@ class Mutation(AuthMutation):
         prop = PropertyService.update_property(_session(info), input)
         return HouseType.from_sql(prop, today)
 
+    @strawberry.mutation(description="Update the agent context for any entity (property, unit, tenant, vendor)")
+    def update_entity_context(self, info, entity_type: str, entity_id: str, context: str) -> bool:
+        _current_user(info)
+        db = _session(info)
+        _MODEL_MAP = {
+            "property": "Property",
+            "unit": "Unit",
+            "tenant": "Tenant",
+            "vendor": "ExternalContact",
+        }
+        model_name = _MODEL_MAP.get(entity_type)
+        if not model_name:
+            raise ValueError(f"Unknown entity type: {entity_type}")
+        import db.models as models
+        model_cls = getattr(models, model_name)
+        entity = db.query(model_cls).filter_by(id=entity_id).first()
+        if not entity:
+            raise ValueError(f"{entity_type} {entity_id} not found")
+        entity.context = context or None
+        db.commit()
+        return True
+
     @strawberry.mutation(description="Delete a property and all its units/leases (cascade)")
     def delete_property(self, info, uid: str) -> bool:
         _current_user(info)

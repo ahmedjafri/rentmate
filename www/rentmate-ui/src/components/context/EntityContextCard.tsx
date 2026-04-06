@@ -2,12 +2,14 @@ import { useState, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { FileText, AlertTriangle, CheckCircle2, Info, Bot, ChevronRight } from 'lucide-react';
+import { FileText, AlertTriangle, CheckCircle2, Bot, ChevronRight, Loader2 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
+import { graphqlQuery, UPDATE_ENTITY_CONTEXT_MUTATION } from '@/data/api';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 export interface ContextTopic {
   key: string;
@@ -23,6 +25,9 @@ export interface AutoContext {
 interface EntityContextCardProps {
   entityId: string;
   entityName: string;
+  entityType?: 'property' | 'unit' | 'tenant' | 'vendor';
+  /** Agent-managed context from the DB */
+  agentContext?: string;
   /** Topics the user should cover in their context notes */
   expectedTopics?: ContextTopic[];
   /** Auto-generated context lines derived from system data */
@@ -38,7 +43,6 @@ function checkTopicCoverage(text: string, topics: ContextTopic[]): { covered: Co
   const covered: ContextTopic[] = [];
   const missing: ContextTopic[] = [];
   for (const topic of topics) {
-    // Check if any keyword from the topic label/key appears in the text
     const keywords = [topic.key, ...topic.label.toLowerCase().split(/\s+/)];
     const found = keywords.some(kw => lower.includes(kw.toLowerCase()));
     if (found) covered.push(topic);
@@ -75,20 +79,25 @@ export const propertyTopics: ContextTopic[] = [
   { key: 'rule', label: 'Rules, policies & HOA', description: 'Special rules, HOA policies, dues, or local regulations' },
 ];
 
-export function EntityContextCard({ entityId, entityName, expectedTopics = [], autoContext = [] }: EntityContextCardProps) {
+export function EntityContextCard({ entityId, entityName, entityType, agentContext, expectedTopics = [], autoContext = [] }: EntityContextCardProps) {
   const { getEntityContext, setEntityContext } = useApp();
   const [open, setOpen] = useState(false);
   const context = getEntityContext(entityId);
   const [draft, setDraft] = useState('');
+  const [agentDraft, setAgentDraft] = useState('');
+  const [savingAgent, setSavingAgent] = useState(false);
   const autoContextText = useMemo(() => autoContext.map(a => `${a.label} ${a.value}`).join(' '), [autoContext]);
-  const wordCount = countWords(context) + countWords(autoContextText);
 
-  const { missing } = useMemo(() => checkTopicCoverage(context, expectedTopics), [context, expectedTopics]);
+  const allText = [context, agentContext || '', autoContextText].join(' ');
+  const wordCount = countWords(allText);
+
+  const { missing } = useMemo(() => checkTopicCoverage(allText, expectedTopics), [allText, expectedTopics]);
   const health = getContextHealth(wordCount, missing.length, expectedTopics.length);
   const hc = healthConfig[health];
 
   const handleOpen = () => {
     setDraft(context);
+    setAgentDraft(agentContext || '');
     setOpen(true);
   };
 
@@ -97,8 +106,26 @@ export function EntityContextCard({ entityId, entityName, expectedTopics = [], a
     setOpen(false);
   };
 
-  const draftWordCount = countWords(draft) + countWords(autoContextText);
-  const draftCoverage = useMemo(() => checkTopicCoverage(draft, expectedTopics), [draft, expectedTopics]);
+  const handleSaveAgentContext = async () => {
+    if (!entityType) return;
+    setSavingAgent(true);
+    try {
+      await graphqlQuery(UPDATE_ENTITY_CONTEXT_MUTATION, {
+        entityType,
+        entityId,
+        context: agentDraft.trim(),
+      });
+      toast.success('Agent memory saved');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to save');
+    } finally {
+      setSavingAgent(false);
+    }
+  };
+
+  const draftAllText = [draft, agentDraft, autoContextText].join(' ');
+  const draftWordCount = countWords(draftAllText);
+  const draftCoverage = useMemo(() => checkTopicCoverage(draftAllText, expectedTopics), [draftAllText, expectedTopics]);
   const draftHealth = getContextHealth(draftWordCount, draftCoverage.missing.length, expectedTopics.length);
   const draftHc = healthConfig[draftHealth];
 
@@ -157,6 +184,37 @@ export function EntityContextCard({ entityId, entityName, expectedTopics = [], a
                     </div>
                   </CollapsibleContent>
                 </Collapsible>
+              )}
+
+              {/* Agent memory */}
+              {entityType && (
+                <div>
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <Bot className="h-3.5 w-3.5 text-primary" />
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Agent Memory</span>
+                    {agentDraft && (
+                      <span className="text-[10px] text-muted-foreground ml-1">({countWords(agentDraft)} words)</span>
+                    )}
+                  </div>
+                  <Textarea
+                    value={agentDraft}
+                    onChange={(e) => setAgentDraft(e.target.value)}
+                    placeholder="No agent notes yet. RentMate will add context here as it learns about this entity."
+                    className="min-h-[100px] resize-none text-sm font-mono"
+                  />
+                  {agentDraft !== (agentContext || '') && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="mt-2 h-7 text-xs gap-1.5"
+                      onClick={handleSaveAgentContext}
+                      disabled={savingAgent}
+                    >
+                      {savingAgent ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                      Save Agent Memory
+                    </Button>
+                  )}
+                </div>
               )}
 
               {/* Missing topics warnings */}
