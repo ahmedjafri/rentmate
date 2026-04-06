@@ -30,7 +30,7 @@ const tenantTopics = [
 const TenantDetail = () => {
   const { id } = useParams<{ id: string }>();
   const { state: navState } = useLocation();
-  const { tenants, properties, actionDeskTasks, openChat } = useApp();
+  const { tenants, properties, actionDeskTasks, openChat, updateTenant } = useApp();
 
   const tenant = tenants.find(t => t.id === id);
   const backTo = navState?.from === 'tenants'
@@ -80,7 +80,7 @@ const TenantDetail = () => {
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3">
-        <EntityContextCard entityId={tenant.id} entityName={tenant.name} expectedTopics={tenantTopics} autoContext={autoContext} />
+        <EntityContextCard entityId={tenant.id} entityName={tenant.name} entityType="tenant" agentContext={tenant.context} onAgentContextSaved={(ctx) => updateTenant(tenant.id, { context: ctx })} expectedTopics={tenantTopics} autoContext={autoContext} />
         <Card className="p-4 rounded-xl">
           <div className="flex items-center gap-2 mb-1">
             <Calendar className="h-4 w-4 text-muted-foreground" />
