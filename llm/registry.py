@@ -10,6 +10,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from backends.local_auth import DEFAULT_USER_ID
+from storage.blob_store import LocalBlobStore
 
 
 class _DbSessionManager:
@@ -319,10 +320,10 @@ class AgentRegistry:
 
     def _write_workspace(self, agent_dir: Path, db: Session, account_id: str = DEFAULT_USER_ID):
         agent_dir.mkdir(parents=True, exist_ok=True)
+        blob = LocalBlobStore(agent_dir)
         agent_id = account_id
 
         for filename in _STATIC_TEMPLATE_FILES:
-            dest = agent_dir / filename
             # 1. Try DB first (source of truth for existing agents)
             db_content = self._db_read_file(db, agent_id, filename)
             if db_content is not None:
@@ -336,23 +337,22 @@ class AgentRegistry:
                             db_content = src.read_text()
                             self._db_write_file(db, agent_id, filename, db_content)
                             print(f"[nanobot] SOUL.md upgraded: v{old_v} → v{new_v}")
-                dest.write_text(db_content)
+                blob.write(filename, db_content)
                 continue
             # 2. Fall back to template (first boot)
             src = TEMPLATE_DIR / filename
             if src.exists():
                 content = src.read_text()
-                shutil.copy2(src, dest)
+                blob.write(filename, content)
                 self._db_write_file(db, agent_id, filename, content)
 
         admin_email = os.environ.get("RENTMATE_ADMIN_EMAIL", "admin@localhost")
         account_name = os.environ.get("RENTMATE_ACCOUNT_NAME", "RentMate")
 
-        user_md = agent_dir / "USER.md"
         db_user = self._db_read_file(db, agent_id, "USER.md")
         if db_user is not None:
-            user_md.write_text(db_user)
-        elif not user_md.exists():
+            blob.write("USER.md", db_user)
+        elif not blob.exists("USER.md"):
             content = (
                 f"# USER.md - About Your Manager\n\n"
                 f"- **Name:** {admin_email}\n"
@@ -361,14 +361,14 @@ class AgentRegistry:
                 f"- **Role:** admin\n\n"
                 f"_(Update this as you learn more about how they prefer to work.)_\n"
             )
-            user_md.write_text(content)
+            blob.write("USER.md", content)
             self._db_write_file(db, agent_id, "USER.md", content)
 
         data_script = Path(__file__).parent / "agent_data.py"
         action_script = Path(__file__).parent / "agent_action.py"
         workspace_abs = str((DATA_DIR / DEFAULT_USER_ID).resolve())
 
-        (agent_dir / "TOOLS.md").write_text(
+        blob.write("TOOLS.md",
             f"# TOOLS.md - Communication Channels & Data Access\n\n"
             f"## Communication Channels\n\n"
             f"- **SMS (Dialpad)** — Inbound/outbound tenant texts route through Dialpad. "
@@ -432,7 +432,7 @@ class AgentRegistry:
             f"_(Add vendor contacts here as you learn them.)_\n"
         )
         # Persist TOOLS.md to DB (regenerated each startup with current paths)
-        tools_content = (agent_dir / "TOOLS.md").read_text()
+        tools_content = blob.read("TOOLS.md") or ""
         self._db_write_file(db, agent_id, "TOOLS.md", tools_content)
 
         db.commit()
