@@ -145,6 +145,17 @@ async def chat_with_agent(
         kwargs = _orig_build(messages)
         if agent.tools and "tools" in kwargs and "tool_choice" not in kwargs:
             kwargs["tool_choice"] = "auto"
+        # Log what we're sending
+        print(f"[hermes-debug] API kwargs: model={kwargs.get('model')} "
+              f"tool_choice={kwargs.get('tool_choice')} "
+              f"tools={len(kwargs.get('tools', []))} "
+              f"messages={len(kwargs.get('messages', []))}")
+        # Log last 3 messages
+        for m in kwargs.get("messages", [])[-3:]:
+            role = m.get("role", "?")
+            content = (m.get("content") or "")[:120]
+            has_tc = bool(m.get("tool_calls"))
+            print(f"[hermes-debug]   {role}: {content!r} tool_calls={has_tc}")
         return kwargs
     agent._build_api_kwargs = _patched_build_api_kwargs
 
