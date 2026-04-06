@@ -99,6 +99,7 @@ export const TENANTS_QUERY = `
       paymentStatus
       isActive
       context
+      portalUrl
       extraProperties { key value }
       rents { uid name address }
       leases {

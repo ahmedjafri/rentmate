@@ -91,6 +91,7 @@ export function useApiData(): ApiState {
             paymentStatus: (t.paymentStatus as Tenant['paymentStatus']) ?? 'current',
             isActive: t.isActive ?? false,
             context: t.context,
+            portalUrl: t.portalUrl,
           }))
         : [];
 
@@ -325,6 +326,7 @@ interface ApiTenant {
   paymentStatus?: string;
   isActive?: boolean;
   context?: string;
+  portalUrl?: string;
   rents?: { uid: string }[];
 }
 

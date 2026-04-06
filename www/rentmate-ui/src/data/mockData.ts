@@ -133,6 +133,7 @@ export interface Tenant {
   rentAmount: number;
   paymentStatus: 'current' | 'late' | 'overdue';
   context?: string;
+  portalUrl?: string;
 }
 
 export interface MaintenanceTicket {

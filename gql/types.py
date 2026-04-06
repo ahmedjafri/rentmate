@@ -239,6 +239,7 @@ class TenantType:
     payment_status: typing.Optional[str] = None
     is_active: bool = False
     context: typing.Optional[str] = None
+    portal_url: typing.Optional[str] = None
     rents: typing.List[HouseType] = strawberry.field(default_factory=list)
     leases: typing.List["LeaseType"] = strawberry.field(default_factory=list)
     extra_properties: typing.List[ExtraPropertyType] = strawberry.field(default_factory=list)
@@ -285,6 +286,7 @@ class TenantType:
             ExtraPropertyType(key=str(k), value=str(v))
             for k, v in (t.extra or {}).items()
         ]
+        from gql.services.tenant_service import TenantService
         return cls(
             uid=str(t.id),
             name=tenant_display_name(t),
@@ -295,6 +297,7 @@ class TenantType:
             payment_status=active_lease.payment_status if active_lease and hasattr(active_lease, "payment_status") else "current",
             is_active=is_active,
             context=t.context,
+            portal_url=TenantService.get_portal_url(t),
             rents=list(prop_map.values()),
             leases=lease_items,
             extra_properties=extra_properties,
