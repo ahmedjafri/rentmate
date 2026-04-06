@@ -937,3 +937,77 @@ class RecallMemoryTool(Tool):
             return json.dumps({"notes": notes, "count": len(notes)})
         finally:
             db.close()
+
+
+class EditMemoryTool(Tool):
+    """Replace the entire context for an entity — use to compact, correct, or clean up notes."""
+
+    @property
+    def name(self) -> str:
+        return "edit_memory"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Replace the full context notes for an entity. Use this to remove stale "
+            "entries, compact verbose notes, or correct mistakes. First call recall_memory "
+            "to read the current notes, then call edit_memory with the cleaned-up version. "
+            "Pass an empty string to clear all notes for an entity."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["entity_type", "entity_id", "new_context"],
+            "properties": {
+                "entity_type": {
+                    "type": "string",
+                    "enum": ["property", "unit", "tenant", "vendor"],
+                    "description": "Type of entity whose context to replace.",
+                },
+                "entity_id": {
+                    "type": "string",
+                    "description": "ID of the entity.",
+                },
+                "new_context": {
+                    "type": "string",
+                    "description": "The full replacement context text. Pass empty string to clear.",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        entity_type = kwargs["entity_type"]
+        entity_id = kwargs["entity_id"]
+        new_context = kwargs["new_context"]
+
+        _MODEL_MAP = {
+            "property": "Property",
+            "unit": "Unit",
+            "tenant": "Tenant",
+            "vendor": "ExternalContact",
+        }
+        model_name = _MODEL_MAP.get(entity_type)
+        if not model_name:
+            return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
+
+        from handlers.deps import SessionLocal
+        db = SessionLocal.session_factory()
+        try:
+            import db.models as models
+            model_cls = getattr(models, model_name)
+            entity = db.query(model_cls).filter_by(id=entity_id).first()
+            if not entity:
+                return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
+
+            entity.context = new_context.strip() or None
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(entity, "context")
+            db.commit()
+
+            label = getattr(entity, "name", None) or getattr(entity, "label", None) or entity_type
+            action = "cleared" if not new_context.strip() else "updated"
+            return json.dumps({"status": "ok", "message": f"Context {action} for {label}."})
+        finally:
+            db.close()

@@ -35,14 +35,14 @@ def _register_rentmate_tools():
         ProposeTaskTool, CloseTaskTool, SetModeTool,
         AttachEntityToTaskTool, MessageExternalPersonTool,
         LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
-        SaveMemoryTool, RecallMemoryTool,
+        SaveMemoryTool, RecallMemoryTool, EditMemoryTool,
     )
 
     for tool_cls in (
         ProposeTaskTool, CloseTaskTool, SetModeTool,
         AttachEntityToTaskTool, MessageExternalPersonTool,
         LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
-        SaveMemoryTool, RecallMemoryTool,
+        SaveMemoryTool, RecallMemoryTool, EditMemoryTool,
     ):
         tool = tool_cls()
         # Flat schema — get_definitions() wraps it in {"type":"function","function":...}
