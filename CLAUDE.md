@@ -1,6 +1,12 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for coding agents (Claude Code, Copilot, etc.) working in this repo.
+
+## What is RentMate?
+
+AI-driven property management assistant. Handles tenant communications, maintenance triage, lease lifecycle events, and automations — so landlords can own property without it owning their time.
+
+Stack: FastAPI + Strawberry GraphQL backend, React/Vite frontend, SQLAlchemy ORM on SQLite, LiteLLM-based AI agent.
 
 ## Commands
 
@@ -17,7 +23,7 @@ poetry run pytest tests/test_db_lib.py    # single file
 poetry run pytest -k "test_name"          # single test by name
 ```
 
-Tests use `testcontainers` to spin up a real Postgres instance automatically — no manual DB setup required.
+Tests use `testcontainers` to spin up a real Postgres instance — no manual DB setup required.
 
 ### Database migrations
 ```bash
@@ -25,7 +31,7 @@ poetry run alembic revision --autogenerate -m "description"  # generate migratio
 poetry run alembic upgrade head                               # apply migrations
 ```
 
-Migrations live in `db/migrations/versions/`. The `alembic.ini` `sqlalchemy.url` is a placeholder; the real URL is configured via the DB engine in `db/session.py`.
+Migrations live in `db/migrations/versions/`. The `alembic.ini` `sqlalchemy.url` is a placeholder; the real URL comes from the engine in `db/session.py`.
 
 ### Frontend
 ```bash
@@ -38,63 +44,114 @@ npm run dev:fe     # Vite dev server only (port 8080, proxies to backend on 8002
 
 ## Environment Variables
 
-Required at runtime:
-- `DEEPSEEK_API_KEY` — Used by LiteLLM for the AI agent
+Key variables (set in `data/settings.json` or shell):
+- `LLM_MODEL` — Model identifier (default: `anthropic/claude-haiku-4-5-20251001`)
+- `LLM_API_KEY` — API key for LLM provider
+- `RENTMATE_AGENT_URL` — If set, uses hosted agent instead of local
+- `RENTMATE_DATA_DIR` — Data directory (default: `./data`)
+- `RENTMATE_ENV` — `development` enables debug features and seeds automations
+- `QUO_API_KEY` — OpenPhone API key for SMS
+- `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `GMAIL_SENDER_ADDRESS` — Gmail OAuth (optional)
+- `PHONE_WHITELIST` — Comma-separated phone numbers allowed to trigger agent
 
 ## Architecture
 
 ### Backend 3-layer design
 
-The backend follows a strict **handlers → services → models** layering:
+Strict **handlers → services → models** layering:
 
-1. **Handlers** (`handlers/`, `gql/schema.py` mutations) — HTTP/GraphQL entry points. Responsible for auth, request validation, orchestrating multiple service calls, creating/finding conversations, and managing transactions (savepoints). Handlers decide *what* to do and in what order.
+1. **Handlers** (`handlers/`, `gql/schema.py` mutations) — HTTP/GraphQL entry points. Responsible for auth, request validation, orchestrating service calls, creating/finding conversations, and managing transactions. Handlers decide *what* to do and in what order.
 
 2. **Services** (`gql/services/`) — Stateless business logic. Each service operates on the DB session it receives. Services must NOT create conversations or manage cross-entity orchestration — that belongs in the handler. Import services as modules (`from gql.services import chat_service`) not individual functions.
 
-3. **Models** (`db/models/`) — SQLAlchemy ORM definitions. Pure data layer, no business logic.
+3. **Models** (`db/models/`) — SQLAlchemy ORM definitions (SQLite with WAL mode). Pure data layer, no business logic.
 
 Key rules:
 - Conversation creation/lookup always happens at the handler layer via `chat_service.get_or_create_external_conversation()`. Services like `TaskService.create_task()` create only the task and its AI conversation; the handler is responsible for the external conversation.
-- `db/lib.py` contains lower-level DB helpers (SMS recording, tenant upserts) that predate the service layer. New business logic should go in `gql/services/`.
+- `db/lib.py` contains lower-level DB helpers (SMS recording, tenant upserts, inbound message routing) that predate the service layer. New business logic should go in `gql/services/`.
 
-### Backend (Python / FastAPI)
+### Backend detail
 
-**`main.py`** — FastAPI entry point. Mounts:
-- `/graphql` — Strawberry GraphQL API
-- `/quo-webhook` — Receives inbound SMS from Quo (OpenPhone), records them, and triggers the AI agent for whitelisted numbers
-- `/suggest-reply` — Called by the Chrome extension to get an AI-suggested reply
-- `/*` — Catch-all serves the React SPA from `www/rentmate/dist/`
+**`main.py`** — FastAPI entry point. Mounts routers, middleware, and the SPA catch-all. On startup: creates DB tables, runs schema migrations, starts the agent gateway, and kicks off polling loops (Gmail, Quo SMS, automation audit/heartbeat). Also runnable directly (`python main.py --port 8002 --reload`).
 
-Authentication uses JWTs validated per-request in `get_context()`. The resolved user is passed into GraphQL resolvers via context.
-
-**`db/models/`** — SQLAlchemy ORM models (SQLite):
-- `Account` → `Property` → `Unit` → `Lease` → `Tenant` (core rental hierarchy)
+**`db/models/`** — SQLAlchemy ORM models:
+- Rental hierarchy: `Account` → `Property` → `Unit` → `Lease` → `Tenant`
 - `AccountUser` — links users to an `Account` with a role (`admin`, `manager`, `tenant`)
-- `Conversation` / `ConversationParticipant` / `Message` / `MessageReceipt` — messaging layer, participants can be tenants, account users, or external contacts (vendors)
+- Messaging: `Conversation`, `ConversationParticipant`, `Message`, `MessageReceipt` — participants can be tenants, account users, or external contacts (vendors)
+- Tasks: `Task`, `TaskNumberSequence` — per-account monotonic task numbering
+- Documents: `Document`, `DocumentTask`, `DocumentTag`
+- AI: `AgentMemory`, `AgentTrace`
+- Automations: `AutomationRevision`
+- Settings: `AppSetting`
+
+**`db/session.py`** — SQLAlchemy engine and `SessionLocal` factory. SQLite DB at `data/rentmate.db`.
+
+**`db/lib.py`** — Legacy DB helpers: `route_inbound_to_task()`, `route_inbound_to_tenant_chat()`, `get_or_create_tenant_by_phone()`, `spawn_task_from_conversation()`.
+
+**`db/dsl_runner.py`** — Property-Flow DSL interpreter for YAML automation scripts.
 
 **`gql/services/`** — Business logic services:
-- `task_service.py` — Task CRUD, vendor assignment metadata, message persistence
-- `chat_service.py` — Conversation lookup/creation (`get_or_create_external_conversation`), autonomous messaging, typing indicators, message history
-- `property_service.py`, `tenant_service.py`, `vendor_service.py`, `document_service.py` — Domain services
+- `chat_service.py` — Conversation lookup/creation, autonomous messaging, typing indicators
+- `task_service.py` — Task CRUD, vendor assignment, message persistence
+- `sms_service.py` — SMS sending via Quo
+- `document_service.py` — Document extraction and embedding
+- `suggestion_service.py` / `task_suggestions.py` — Task suggestion creation and execution
+- `settings_service.py` — App and integration settings
+- `portal_auth.py` — Tenant/vendor portal authentication
+- `property_service.py`, `tenant_service.py`, `vendor_service.py` — Domain services
 
-**`handlers/`** — HTTP route handlers (automations, chat, vendor portal, etc.). Orchestrate service calls, manage transactions, and handle external conversation wiring.
+**`gql/schema.py`** — Strawberry GraphQL query/mutation definitions. Mutations act as handlers: resolve auth, call services, wire conversations.
 
-**`gql/schema.py`** — GraphQL query/mutation definitions. Mutations act as handlers: they resolve auth, call services, and wire conversations.
+**`handlers/`** — HTTP route handlers:
+- `chat.py` — Agent chat execution, streaming responses, progress events
+- `automations.py` — Automation DSL execution, audit and heartbeat loops
+- `documents.py` — Document upload, extraction, embedding
+- `settings.py` — Integration configuration (Quo, Gmail, etc.)
+- `quo_poller.py` — SMS polling from Quo/OpenPhone (5 min dev, 15 min prod)
+- `tenant_portal.py`, `vendor_portal.py` — Portal endpoints
+- `tenant_invite.py`, `vendor_invite.py` — Onboarding link handlers
 
-**`db/lib.py`** — Legacy DB helpers (SMS recording, tenant upserts). Predates the service layer.
+**`backends/`** — Pluggable backend abstractions:
+- `wire.py` — Wiring for all backends
+- `local_auth.py` — Dev single-tenant auth
+- `local_storage.py` — Local filesystem storage
+- `chroma_vector.py` — Chroma vector DB for document embeddings
+- `single_tenant_sms.py` — Dev SMS routing
+- `gmail.py` — Gmail OAuth client (polling + send)
 
 **`llm/`** — AI agent:
-- `client.py` — `chat_with_agent()` initializes the AI agent, runs conversations, bridges progress events. `call_agent()` dispatches to hosted or local agent.
-- `tools.py` — Agent tools (propose_task, close_task, message_person, attach_entity, etc.)
-- `registry.py` — Agent registry, tool registration, system prompt building from `agents/template/SOUL.md`
+- `client.py` — `chat_with_agent()` / `call_agent()` dispatch to local or hosted agent
+- `tools.py` — Agent tools: propose_task, close_task, message_person, attach_entity, lookup/create vendors, save/recall/edit memory, update_steps
+- `registry.py` — Agent registry, tool registration, gateway lifecycle, system prompt assembly
+- `context.py` — Builds system prompt and task context
+- `side_effects.py` — Processes agent tool results (recording messages, creating tasks)
+- `memory_store.py` — DB-backed memory (entity context columns + `agent_memory` table)
+- `tracing.py` — Logs agent operations for debugging
+- `document_processor.py` — PDF text extraction and LLM-based parsing
 
-### Frontend (`www/rentmate/`)
+**`agents/template/`** — Agent identity files (copied to `data/agent/` at runtime):
+- `SOUL.md` — Persona, responsibilities, hard constraints, escalation protocol
+- `AGENTS.md` — Session startup, memory system, group chat etiquette
+- `IDENTITY.md` — Name, role, vibe
+- `HEARTBEAT.md` — Periodic background check template
 
-React SPA (Vite). Built output is served statically by FastAPI. The frontend communicates exclusively via the `/graphql` endpoint.
+**`automations/`** — Built-in automation definitions (JSON). DSL-based YAML scripts interpreted by `db/dsl_runner.py`. Stored as `AutomationRevision` rows.
 
-### Chrome Extension (`chrome/`)
+### Frontend (`www/rentmate-ui/`)
 
-Browser extension for TenantCloud (`app.tenantcloud.com`). `content.js` injects UI into the page; `suggestion.js` calls `/suggest-reply` to get AI-drafted responses.
+React 18 SPA (Vite + TypeScript). shadcn/ui components, TanStack React Query, Tailwind CSS. Built output served statically by FastAPI. Communicates exclusively via `/graphql`.
+
+### Inbound channels
+
+- **SMS (Quo/OpenPhone)** — Primary channel. Webhook at `/quo-webhook` + backup poller in `handlers/quo_poller.py`. Phone normalization in `db/utils.py`.
+- **Email (Gmail)** — Optional. Polling loop in `main.py` every 60s. Routes to tasks via `route_inbound_to_task()`.
+
+## Design Documentation (`docs/`)
+
+These docs define product behavior and the automation DSL. **Keep them in sync with the code.**
+
+- **`docs/product.md`** — Product vision, 47 suggestion types across 8 categories, 4 autonomy levels (Notify Only → Fully Autonomous), autonomy ceilings per suggestion type.
+- **`docs/property-flow.md`** — Property-Flow DSL v1.1 spec. YAML automation language: translate → validate → execute pipeline.
 
 ## Code Quality Rules
 
@@ -129,8 +186,13 @@ Browser extension for TenantCloud (`app.tenantcloud.com`). `content.js` injects 
 
 ### Key design patterns
 
-- When using a service from `gql/services/`, import the module itself rather than individual functions. Use `from gql.services import chat_service` and call `chat_service.should_ai_respond(...)`, not `from gql.services.chat_service import should_ai_respond`.
-- All data is multi-tenant: every query is scoped to an `account_id` resolved from the authenticated user's `AccountUser` record.
-- The Quo integration is the primary inbound channel for SMS. Phone number normalization (`db/utils.py`) is critical for matching tenants/admins.
+- Import service modules, not individual functions: `from gql.services import chat_service` then `chat_service.should_ai_respond(...)`.
+- All data is multi-tenant: every query scoped to `account_id` from the authenticated user's `AccountUser` record.
 - Tests use per-test transaction rollback (savepoints) for isolation — do not call `db.commit()` inside test fixtures.
-- The agent system prompt is in `llm/.context/index.md` — edit that file to change RentMate's persona/responsibilities.
+- The agent system prompt is assembled from `agents/template/` files + `llm/.context/index.md`.
+
+### Critical constraints
+
+- **Multi-tenancy** — Every DB query must be scoped to `account_id`. No exceptions.
+- **Autonomy ceilings** — Each suggestion type in `docs/product.md` has a max autonomy level that cannot be exceeded. Don't add code paths that bypass human approval for restricted actions (legal notices, deposit deductions, etc.).
+- **Property-Flow DSL** — Must pass JSON Schema validation before execution. No path to executing arbitrary code through automation scripts.

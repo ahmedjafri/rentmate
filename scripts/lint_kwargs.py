@@ -95,7 +95,7 @@ def check_handler_imports(path: Path, tree: ast.Module) -> list[str]:
     # Skip files that are allowed to import handlers
     if any(path_str.startswith(p) for p in ("handlers/", "tests/", "scripts/", "evals/")):
         return errors
-    if path.name in ("main.py", "conftest.py", "serve.py"):
+    if path.name in ("main.py", "conftest.py"):
         return errors
 
     for node in ast.walk(tree):

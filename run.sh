@@ -4,10 +4,10 @@ VENV_PYTHON="$HOME/.cache/pypoetry/virtualenvs/rentmate-UFMNINIZ-py3.12/bin/pyth
 
 case "$1" in
 start)
-$VENV_PYTHON serve.py --port 8000 --log-level debug --reload
+$VENV_PYTHON main.py --port 8000 --log-level debug --reload
 ;;
 dev)
-RENTMATE_ENV=development $VENV_PYTHON serve.py --port 8002 --log-level debug --reload # --ssl-keyfile=key.key --ssl-certfile=cert.crt
+RENTMATE_ENV=development $VENV_PYTHON main.py --port 8002 --log-level debug --reload # --ssl-keyfile=key.key --ssl-certfile=cert.crt
 ;;
 cli)
 $VENV_PYTHON db/cli.py
