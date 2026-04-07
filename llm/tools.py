@@ -14,6 +14,9 @@ import json
 from abc import ABC, abstractmethod
 from typing import Any
 
+from db.enums import AgentSource, SuggestionOption, TaskCategory, Urgency
+from db.models import MessageType
+
 
 class Tool(ABC):
     """Base class for RentMate agent tools (standalone, no nanobot dependency)."""
@@ -32,9 +35,6 @@ class Tool(ABC):
 
     @abstractmethod
     async def execute(self, **kwargs: Any) -> str: ...
-
-from db.enums import AgentSource, SuggestionOption, TaskCategory, Urgency
-from db.models import MessageType
 
 # Set by the chat handler before calling the agent so tools can link
 # suggestions back to the originating conversation.

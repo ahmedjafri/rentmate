@@ -1,6 +1,8 @@
 import asyncio
+import hashlib as _hb_hashlib
 import json as _json
 import os
+import threading as _hb_threading
 import uuid as _uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -709,9 +711,6 @@ NO_RESPONSE_SENTINEL = "[NO_RESPONSE]"
 
 
 # ─── Agent heartbeat ─────────────────────────────────────────────────────────
-
-import hashlib as _hb_hashlib
-import threading as _hb_threading
 
 _heartbeat_locks: dict[str, _hb_threading.Lock] = {}
 _heartbeat_locks_lock = _hb_threading.Lock()

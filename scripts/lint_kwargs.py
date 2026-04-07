@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-DIRS = ["db", "gql", "backends", "llm"]
+DIRS = ["db", "gql", "backends", "llm", "handlers"]
 EXCLUDE = {"__pycache__", "migrations", "tests", ".venv"}
 
 
@@ -64,6 +64,30 @@ def check_keyword_only_params(path: Path, tree: ast.Module) -> list[str]:
     return errors
 
 
+def check_lazy_imports(path: Path, tree: ast.Module) -> list[str]:
+    """Find imports inside function/method bodies that should be at module level."""
+    errors = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for child in ast.walk(node):
+            if child is node:
+                continue
+            if isinstance(child, (ast.Import, ast.ImportFrom)):
+                module = ""
+                if isinstance(child, ast.ImportFrom):
+                    module = child.module or ""
+                    names = ", ".join(a.name for a in child.names)
+                    desc = f"from {module} import {names}"
+                else:
+                    names = ", ".join(a.name for a in child.names)
+                    desc = f"import {names}"
+                errors.append(
+                    f"{path}:{child.lineno}: lazy import inside {node.name}(): {desc}"
+                )
+    return errors
+
+
 def check_private_imports(path: Path, tree: ast.Module) -> list[str]:
     """Find imports of private symbols from core directories."""
     errors = []
@@ -105,7 +129,23 @@ def main():
 
             all_errors.extend(check_keyword_only_params(rel, tree))
 
-    # Check private imports from ALL Python files (not just core dirs)
+    # Check lazy imports in core dirs + private imports from ALL Python files
+    for dir_name in DIRS:
+        dir_path = ROOT / dir_name
+        if not dir_path.exists():
+            continue
+        for py_file in sorted(dir_path.rglob("*.py")):
+            if not _should_check(py_file):
+                continue
+            rel = py_file.relative_to(ROOT)
+            try:
+                source = py_file.read_text()
+                tree = ast.parse(source, filename=str(rel))
+            except SyntaxError:
+                continue
+            all_errors.extend(check_lazy_imports(rel, tree))
+
+    # Check private imports from ALL Python files
     for py_file in sorted(ROOT.rglob("*.py")):
         if not _should_check(py_file):
             continue

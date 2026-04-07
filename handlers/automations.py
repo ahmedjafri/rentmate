@@ -31,7 +31,7 @@ from db.models import (
 )
 from gql.services import chat_service, settings_service, suggestion_service
 from gql.services.task_service import TaskService
-from gql.types import CreateTaskInput
+from gql.types import VENDOR_TYPES as _VENDOR_TYPES, CreateTaskInput
 from handlers.default_automations import _CHECK_META, _DEFAULT_AUTOMATION_CONFIG
 from handlers.deps import SessionLocal, extract_json, get_db, require_user
 from handlers.settings import get_autonomy_settings
@@ -838,8 +838,6 @@ async def add_automation(body: NewAutomationBody, request: Request):
     _add_custom_automation(body.label.strip(), body.description.strip(), body.interval_hours, script=body.script or None)
     return _build_automations_response()
 
-
-from gql.types import VENDOR_TYPES as _VENDOR_TYPES
 
 
 def _build_generate_script_system() -> str:

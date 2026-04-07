@@ -6,9 +6,6 @@ import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-_HERE = Path(__file__).parent
-_DIST = _HERE / "www" / "rentmate-ui" / "dist"
-
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -33,6 +30,9 @@ from handlers import (
 from handlers.deps import SessionLocal, engine, require_user
 from handlers.settings import load_integrations, read_env_file
 from llm.registry import agent_registry
+
+_HERE = Path(__file__).parent
+_DIST = _HERE / "www" / "rentmate-ui" / "dist"
 
 # ─── logging ─────────────────────────────────────────────────────────────────
 
