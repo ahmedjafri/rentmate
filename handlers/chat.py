@@ -715,11 +715,16 @@ _heartbeat_locks: dict[str, _hb_threading.Lock] = {}
 _heartbeat_locks_lock = _hb_threading.Lock()
 
 
-def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
+def agent_task_heartbeat(task_id: str, hint: str | None = None, force: bool = False) -> str | None:
     """Run the agent against a task and let it respond/act.
 
     This is the core primitive for driving autonomous tasks forward.
     Called when external messages arrive or periodically by the heartbeat loop.
+
+    Args:
+        force: If True, skip the pending-suggestions and mode checks.
+               Use for on-demand triggers (portal messages) where we know
+               a response is needed.
 
     Returns the agent reply text, or None if no response was needed.
     """
@@ -733,12 +738,12 @@ def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
         return None  # another heartbeat is already running for this task
 
     try:
-        return _agent_task_heartbeat_inner(task_id, hint)
+        return _agent_task_heartbeat_inner(task_id, hint, force=force)
     finally:
         lock.release()
 
 
-def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | None:
+def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None, force: bool = False) -> str | None:
     import asyncio as _hb_asyncio
     import json as _hb_json
     from handlers.deps import SessionLocal
@@ -754,20 +759,21 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
         task = db.query(Task).filter_by(id=task_id).first()
         if not task:
             return None
-        if task.task_mode != "autonomous":
+        if not force and task.task_mode != "autonomous":
             return None
         conv = task.ai_conversation
         if not conv:
             return None
 
-        # Skip if there are already pending suggestions for this task
-        from db.models import Suggestion
-        pending_count = db.query(Suggestion).filter(
-            Suggestion.task_id == task_id,
-            Suggestion.status == "pending",
-        ).count()
-        if pending_count > 0:
-            return None
+        # Skip if there are already pending suggestions (periodic loop only)
+        if not force:
+            from db.models import Suggestion
+            pending_count = db.query(Suggestion).filter(
+                Suggestion.task_id == task_id,
+                Suggestion.status == "pending",
+            ).count()
+            if pending_count > 0:
+                return None
 
         conv_id = conv.id
         ext_conv_id = task.external_conversation_id

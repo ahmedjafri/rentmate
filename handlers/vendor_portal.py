@@ -211,6 +211,6 @@ def _run_heartbeat(task_id: str, hint: str):
     time.sleep(1)  # let the request session close before accessing DB
     try:
         from handlers.chat import agent_task_heartbeat
-        agent_task_heartbeat(task_id, hint=hint)
+        agent_task_heartbeat(task_id, hint=hint, force=True)
     except Exception as e:
         print(f"[vendor-portal] Heartbeat failed: {e}")
