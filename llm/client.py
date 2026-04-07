@@ -21,7 +21,7 @@ class AgentResponse:
 
 async def call_agent(
     agent_id: str,
-    session_key: str,
+    *, session_key: str,
     messages: list[dict],
     on_progress: Optional[Callable] = None,
     account_context: dict[str, Any] | None = None,

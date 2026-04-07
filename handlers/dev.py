@@ -189,7 +189,7 @@ async def simulate_inbound(
     agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
 
     try:
-        agent_resp = await call_agent(agent_id, f"sim:{conv.id}", messages)
+        agent_resp = await call_agent(agent_id, session_key=f"sim:{conv.id}", messages=messages)
         reply = agent_resp.reply
     except Exception as e:
         print(f"[dev/simulate-inbound] Agent failed: {e}")
@@ -208,7 +208,7 @@ async def simulate_inbound(
         sent_at=now,
     ))
     if agent_resp and agent_resp.side_effects:
-        process_side_effects(db, agent_resp.side_effects, conv.id, now)
+        process_side_effects(db, side_effects=agent_resp.side_effects, conversation_id=conv.id, base_time=now)
     db.commit()
 
     task_id = conv.task_id if conv.task_id else conv.id

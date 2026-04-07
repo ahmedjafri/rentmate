@@ -78,7 +78,7 @@ class VendorService:
 
     @staticmethod
     def _find_by_portal_token(sess: Session, token: str) -> Optional[ExternalContact]:
-        return portal_auth.find_by_portal_token(sess, ExternalContact, token)
+        return portal_auth.find_by_portal_token(sess, model_class=ExternalContact, token=token)
 
     @staticmethod
     def authenticate_by_token(sess: Session, token: str) -> Tuple[ExternalContact, str]:

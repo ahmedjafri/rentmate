@@ -28,8 +28,11 @@ def _is_public(name: str) -> bool:
     return not name.startswith("_")
 
 
+MIN_PARAMS_FOR_KWARGS = 3  # only enforce when 3+ params (after self/cls)
+
+
 def check_keyword_only_params(path: Path, tree: ast.Module) -> list[str]:
-    """Find public functions with positional-or-keyword params (should be keyword-only)."""
+    """Find public functions with 3+ positional params that should be keyword-only."""
     errors = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -38,30 +41,26 @@ def check_keyword_only_params(path: Path, tree: ast.Module) -> list[str]:
         if not _is_public(name):
             continue
 
-        # Skip methods of private classes
-        # (we'd need parent tracking for this — skip for now)
-
         args = node.args
-        # Positional-or-keyword params (excluding self/cls)
-        posonlyargs = args.posonlyargs or []
         regular_args = args.args or []
 
         # Filter out self/cls
         param_names = [a.arg for a in regular_args]
         if param_names and param_names[0] in ("self", "cls"):
             param_names = param_names[1:]
-            regular_args = regular_args[1:]
 
-        # If there are positional-or-keyword params AND no kw_only separator (*),
-        # that's a violation. Check by seeing if all non-self params are in kwonlyargs.
-        non_self_positional = len(regular_args) - len(posonlyargs)
-        if non_self_positional > 0:
-            # Has positional params that should be keyword-only
-            offending = [a.arg for a in regular_args[len(posonlyargs):]]
-            errors.append(
-                f"{path}:{node.lineno}: {name}() has positional params that should be keyword-only: "
-                f"{', '.join(offending)}"
-            )
+        # Skip if already using keyword-only args
+        if args.kwonlyargs:
+            continue
+
+        # Only enforce when there are 3+ params (after self/cls)
+        if len(param_names) < MIN_PARAMS_FOR_KWARGS:
+            continue
+
+        errors.append(
+            f"{path}:{node.lineno}: {name}() has {len(param_names)} positional params "
+            f"(should use keyword-only after first): {', '.join(param_names)}"
+        )
     return errors
 
 

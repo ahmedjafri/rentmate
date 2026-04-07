@@ -361,7 +361,7 @@ def _check_lease_status(db: Session, warn_days: int = EXPIRY_WARN_DAYS, dry_run:
 
 def run_data_audit(
     db: Session,
-    config: dict | None = None,
+    *, config: dict | None = None,
     check_name: str | None = None,
     dry_run: bool = False,
 ) -> int:

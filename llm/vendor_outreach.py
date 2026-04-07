@@ -27,7 +27,7 @@ _SYSTEM = (
 
 def generate_vendor_outreach(
     task_title: str,
-    task_body: str,
+    *, task_body: str,
     category: str | None = None,
     vendor_name: str | None = None,
     context: str | None = None,

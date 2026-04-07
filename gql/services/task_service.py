@@ -84,7 +84,7 @@ class TaskService:
         return task
 
     @staticmethod
-    def update_task_status(sess: Session, uid: str, status: str) -> Task:
+    def update_task_status(sess: Session, *, uid: str, status: str) -> Task:
         task = sess.execute(
             select(Task).where(Task.id == uid)
         ).scalar_one_or_none()
@@ -135,7 +135,7 @@ class TaskService:
         return True
 
     @staticmethod
-    def assign_vendor_to_task(sess: Session, task_id: str, vendor_id: str) -> Task:
+    def assign_vendor_to_task(sess: Session, *, task_id: str, vendor_id: str) -> Task:
         """Link a vendor to a task and record the assignment in the AI conversation.
 
         The caller (handler layer) is responsible for creating or finding the

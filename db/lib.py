@@ -56,7 +56,7 @@ def _address_similarity(a: str, b: str) -> float:
     return len(a_w & b_w) / len(a_w | b_w)
 
 
-def find_candidate_properties(db: Session, address: str, threshold: float = 0.55) -> list:
+def find_candidate_properties(db: Session, *, address: str, threshold: float = 0.55) -> list:
     """Return existing properties whose address fuzzy-matches the query, scored 0-1."""
     if not address:
         return []
@@ -84,7 +84,7 @@ def find_candidate_properties(db: Session, address: str, threshold: float = 0.55
 
 def get_or_create_tenant_by_phone(
     db: Session,
-    phone: str,
+    *, phone: str,
     first_name: str = "Unknown",
     last_name: str = "Tenant",
 ) -> Tenant:
@@ -115,7 +115,7 @@ def get_or_create_tenant_by_phone(
 
 def get_or_create_conversation_for_tenant(
     db: Session,
-    tenant: Tenant,
+    *, tenant: Tenant,
     subject: Optional[str] = None,
 ) -> Conversation:
     """
@@ -167,7 +167,7 @@ def get_or_create_conversation_for_tenant(
 
 def add_message(
     db: Session,
-    conversation: Conversation,
+    *, conversation: Conversation,
     sender_type: ParticipantType,
     body: Optional[str] = None,
     body_html: Optional[str] = None,
@@ -224,7 +224,7 @@ def add_message(
 
 def list_conversations(
     db: Session,
-    limit: int = 50,
+    *, limit: int = 50,
     offset: int = 0,
 ) -> List[Conversation]:
     """
@@ -686,7 +686,7 @@ def compute_suggestions(db: Session, data: dict) -> list:
     return result
 
 
-def group_suggestions(doc_id: str, filename: str, suggestions: list, suggestion_states: dict, db: Optional[Session] = None) -> list:
+def group_suggestions(doc_id: str, *, filename: str, suggestions: list, suggestion_states: dict, db: Optional[Session] = None) -> list:
     """
     Group flat suggestions by lease_index and entity type.
     Returns one set of location/tenant/lease groups per lease entry.
@@ -958,7 +958,7 @@ def get_or_create_user_ai_conversation(
 
 def apply_document_extraction(
     db: Session,
-    data: dict,
+    *, data: dict,
     apply_only: Optional[List[str]] = None,
     property_id_override: Optional[str] = None,
 ) -> dict:

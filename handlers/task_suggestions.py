@@ -140,7 +140,7 @@ class SuggestionExecutor:
             vendor_id=vendor_id,
         )
         task.external_conversation_id = ext_convo.id
-        TaskService.assign_vendor_to_task(self.db, task.id, vendor_id)
+        TaskService.assign_vendor_to_task(self.db, task_id=task.id, vendor_id=vendor_id)
 
     def _send_draft_message(self, task: Task, draft: str) -> None:
         """Send a draft message to the task's external conversation."""
@@ -246,7 +246,7 @@ class CreateTaskSuggestionExecutor(SuggestionExecutor):
         if has_vendor_draft:
             chat_service.send_message(
                 self.db,
-                suggestion.ai_conversation_id,
+                conversation_id=suggestion.ai_conversation_id,
                 body="Here's a suggested message you can send to the vendor:",
                 message_type=MessageType.SUGGESTION,
                 sender_name="RentMate",
@@ -358,7 +358,7 @@ class ReplyInTaskSuggestionExecutor(SuggestionExecutor):
         suggestion.task_id = self.task.id
 
         chat_service.send_message(
-            self.db, suggestion.ai_conversation_id,
+            self.db, conversation_id=suggestion.ai_conversation_id,
             body=f"{self.vendor_name} replied. Here's a suggested response:",
             message_type=MessageType.SUGGESTION,
             sender_name="RentMate",

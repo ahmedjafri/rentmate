@@ -9,7 +9,7 @@ class LocalStorageBackend:
     def __init__(self):
         DOCS_DIR.mkdir(parents=True, exist_ok=True)
 
-    async def upload(self, path: str, data: bytes, content_type: str) -> str:
+    async def upload(self, path: str, *, data: bytes, content_type: str) -> str:
         dest = DOCS_DIR / path
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)

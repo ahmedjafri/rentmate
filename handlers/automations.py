@@ -809,10 +809,10 @@ async def create_task_directly(body: CreateSimulatedTaskBody, request: Request):
                 vendor_id=vendor_id,
             )
             task.external_conversation_id = ext_convo.id
-            TaskService.assign_vendor_to_task(db, task.id, vendor_id)
+            TaskService.assign_vendor_to_task(db, task_id=task.id, vendor_id=vendor_id)
 
         chat_service.send_message(
-            db, task.ai_conversation_id,
+            db, conversation_id=task.ai_conversation_id,
             body=body.body,
             message_type=MessageType.CONTEXT,
             sender_name="RentMate",

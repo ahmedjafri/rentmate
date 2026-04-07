@@ -101,7 +101,7 @@ class GmailClient:
     def send_reply(
         self,
         to: str,
-        subject: str,
+        *, subject: str,
         body: str,
         thread_id: Optional[str] = None,
     ):

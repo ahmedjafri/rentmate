@@ -4,7 +4,7 @@ DEFAULT_ACCOUNT_ID = "00000000-0000-0000-0000-000000000001"
 
 
 class SingleTenantSMSRouter:
-    def resolve(self, db, from_number: str, to_number: str):
+    def resolve(self, db, *, from_number: str, to_number: str):
         """Resolve an SMS participant. Returns (account_id, entity, direction, entity_type).
 
         entity_type is 'tenant' or 'vendor'.

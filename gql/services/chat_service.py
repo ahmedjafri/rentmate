@@ -38,7 +38,7 @@ def get_or_create_conversation(db: Session, conversation_id: str) -> Conversatio
 
 def build_agent_message_history(
     db: Session,
-    conv_id: str,
+    *, conv_id: str,
     user_message: str,
     context: str,
     exclude_last: bool = False,
@@ -59,7 +59,7 @@ def build_agent_message_history(
 
 def persist_user_ai_messages(
     db: Session,
-    conv_id: str,
+    *, conv_id: str,
     user_message: str,
     ai_reply: str,
 ) -> None:
@@ -102,7 +102,7 @@ def should_ai_respond(conversation: Conversation) -> bool:
     )
 
 
-def persist_user_message_only(db: Session, conv_id: str, body: str) -> None:
+def persist_user_message_only(db: Session, *, conv_id: str, body: str) -> None:
     """Persist only the user message (no AI reply) and bump conversation.updated_at."""
     now = datetime.now(UTC)
     db.add(Message(
@@ -120,10 +120,10 @@ def persist_user_message_only(db: Session, conv_id: str, body: str) -> None:
         conv.updated_at = now
 
 
-def list_conversations(db: Session, conversation_type: str, limit: int = 50) -> list[Conversation]:
+def list_conversations(db: Session, *, conversation_type: str, limit: int = 50) -> list[Conversation]:
     """Thin wrapper over fetch_conversations."""
     from db.queries import fetch_conversations
-    return fetch_conversations(db, conversation_type, limit=limit)
+    return fetch_conversations(db, conversation_type=conversation_type, limit=limit)
 
 
 def get_or_create_external_conversation(
@@ -180,7 +180,7 @@ def get_or_create_external_conversation(
 
 def send_autonomous_message(
     db: Session,
-    conversation_id: str,
+    *, conversation_id: str,
     body: str,
     task_id: str | None = None,
 ) -> Message:
@@ -228,7 +228,7 @@ def send_autonomous_message(
 
 def send_message(
     db: Session,
-    conversation_id: str,
+    *, conversation_id: str,
     body: str,
     message_type: str = MessageType.MESSAGE,
     sender_name: str = "You",

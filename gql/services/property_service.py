@@ -11,7 +11,7 @@ class PropertyService:
     @staticmethod
     def create_property(
         sess: Session,
-        address: str,
+        *, address: str,
         property_type: str = "multi_family",
         name: str | None = None,
         city: str | None = None,

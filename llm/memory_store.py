@@ -20,7 +20,7 @@ class DbMemoryStore:
 
     # ── General notes (agent_memory table) ───────────────────────────────
 
-    def add_note(self, content: str, entity_type: str = "general",
+    def add_note(self, content: str, *, entity_type: str = "general",
                  entity_id: str = "", entity_label: str = "") -> str:
         """Add a general note to agent_memory."""
         from db.models import AgentMemory

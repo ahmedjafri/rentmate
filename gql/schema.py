@@ -99,7 +99,7 @@ class Query:
     def tasks(
         self,
         info,
-        category: typing.Optional[str] = None,
+        *, category: typing.Optional[str] = None,
         status: typing.Optional[str] = None,
         source: typing.Optional[str] = None,
     ) -> typing.List[TaskType]:
@@ -136,7 +136,7 @@ class Query:
     def suggestions(
         self,
         info,
-        status: typing.Optional[str] = None,
+        *, status: typing.Optional[str] = None,
         limit: int = 50,
     ) -> typing.List[SuggestionType]:
         _current_user(info)
@@ -158,12 +158,12 @@ class Query:
     def conversations(
         self,
         info,
-        conversation_type: str,
+        *, conversation_type: str,
         limit: int = 50,
         offset: int = 0,
     ) -> typing.List[ConversationSummaryType]:
         _current_user(info)
-        return [ConversationSummaryType.from_sql(c) for c in fetch_conversations(_session(info), conversation_type, limit=limit, offset=offset)]
+        return [ConversationSummaryType.from_sql(c) for c in fetch_conversations(_session(info), conversation_type=conversation_type, limit=limit, offset=offset)]
 
 
 # ---------------------------
@@ -197,10 +197,10 @@ class Mutation(AuthMutation):
         return TaskType.from_sql(task)
 
     @strawberry.mutation(description="Transition task_status (e.g. suggested→active, active→resolved)")
-    def update_task_status(self, info, uid: str, status: str) -> TaskType:
+    def update_task_status(self, info, *, uid: str, status: str) -> TaskType:
         _current_user(info)
         db = _session(info)
-        task = TaskService.update_task_status(db, uid, status)
+        task = TaskService.update_task_status(db, uid=uid, status=status)
         db.commit()
         db.refresh(task)
         return TaskType.from_sql(task)
@@ -241,7 +241,7 @@ class Mutation(AuthMutation):
         return ChatMessageType.from_sql(msg)
 
     @strawberry.mutation(description="Send an SMS message to a vendor via Quo")
-    def send_sms(self, info, vendor_id: str, body: str, task_id: typing.Optional[str] = None) -> ChatMessageType:
+    def send_sms(self, info, *, vendor_id: str, body: str, task_id: typing.Optional[str] = None) -> ChatMessageType:
         _current_user(info)
         db = _session(info)
         from db.models import ConversationType, ExternalContact, Task
@@ -272,7 +272,7 @@ class Mutation(AuthMutation):
 
         # Persist the message
         msg = chat_service.send_message(
-            db, conv.id,
+            db, conversation_id=conv.id,
             body=body,
             sender_name="You",
             is_ai=False,
@@ -313,7 +313,7 @@ class Mutation(AuthMutation):
         return TaskType.from_sql(task)
 
     @strawberry.mutation(description="Update the ordered progress steps for a task")
-    def update_task_steps(self, info, uid: str, steps: strawberry.scalars.JSON) -> TaskType:
+    def update_task_steps(self, info, *, uid: str, steps: strawberry.scalars.JSON) -> TaskType:
         _current_user(info)
         db = _session(info)
         from db.models import Task
@@ -356,7 +356,7 @@ class Mutation(AuthMutation):
         return HouseType.from_sql(prop, today)
 
     @strawberry.mutation(description="Update the agent context for any entity (property, unit, tenant, vendor)")
-    def update_entity_context(self, info, entity_type: str, entity_id: str, context: str) -> bool:
+    def update_entity_context(self, info, *, entity_type: str, entity_id: str, context: str) -> bool:
         _current_user(info)
         db = _session(info)
         _MODEL_MAP = {
@@ -398,7 +398,7 @@ class Mutation(AuthMutation):
         return TenantType.from_new(*TenantService.create_tenant_with_lease(_session(info), input))
 
     @strawberry.mutation(description="Assign a vendor to a task")
-    def assign_vendor_to_task(self, info, task_id: str, vendor_id: str) -> TaskType:
+    def assign_vendor_to_task(self, info, *, task_id: str, vendor_id: str) -> TaskType:
         _current_user(info)
         db = _session(info)
         from sqlalchemy import select as sa_select
@@ -418,7 +418,7 @@ class Mutation(AuthMutation):
             vendor_id=vendor_id,
         )
         task.external_conversation_id = ext_convo.id
-        task = TaskService.assign_vendor_to_task(db, task_id, vendor_id)
+        task = TaskService.assign_vendor_to_task(db, task_id=task_id, vendor_id=vendor_id)
         db.commit()
         db.refresh(task)
         return TaskType.from_sql(task)
@@ -442,7 +442,7 @@ class Mutation(AuthMutation):
     def act_on_suggestion(
         self,
         info,
-        uid: str,
+        *, uid: str,
         action: str,
         edited_body: typing.Optional[str] = None,
     ) -> SuggestionType:

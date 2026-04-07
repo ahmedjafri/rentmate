@@ -252,7 +252,7 @@ class TenantType:
     extra_properties: typing.List[ExtraPropertyType] = strawberry.field(default_factory=list)
 
     @classmethod
-    def from_new(cls, tenant: typing.Any, unit: typing.Any, lease: typing.Any) -> "TenantType":
+    def from_new(cls, tenant: typing.Any, *, unit: typing.Any, lease: typing.Any) -> "TenantType":
         return cls(
             uid=str(tenant.id),
             name=f"{tenant.first_name} {tenant.last_name}",

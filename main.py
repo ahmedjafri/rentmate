@@ -402,7 +402,7 @@ def _run_agent_for_task(db, conv, latest_body: str) -> str:
 
     loop = _asyncio.new_event_loop()
     try:
-        resp = loop.run_until_complete(call_agent(agent_id, session_key, messages))
+        resp = loop.run_until_complete(call_agent(agent_id, session_key=session_key, messages=messages))
         return resp.reply
     finally:
         loop.close()

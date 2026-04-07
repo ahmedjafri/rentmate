@@ -78,7 +78,7 @@ def fetch_leases(db: Session) -> list[Lease]:
 
 def fetch_tasks(
     db: Session,
-    category: Optional[str] = None,
+    *, category: Optional[str] = None,
     status: Optional[str] = None,
     source: Optional[str] = None,
 ) -> list[Task]:
@@ -118,7 +118,7 @@ def fetch_task(db: Session, uid: str) -> Optional[Task]:
 
 def fetch_conversations(
     db: Session,
-    conversation_type: str,
+    *, conversation_type: str,
     limit: int = 50,
     offset: int = 0,
 ) -> list[Conversation]:

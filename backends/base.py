@@ -13,7 +13,7 @@ class AuthBackend(ABC):
 
 class StorageBackend(ABC):
     @abstractmethod
-    async def upload(self, path: str, data: bytes, content_type: str) -> str:
+    async def upload(self, path: str, *, data: bytes, content_type: str) -> str:
         """Returns storage path"""
 
     @abstractmethod
@@ -25,10 +25,10 @@ class StorageBackend(ABC):
 
 class VectorBackend(ABC):
     @abstractmethod
-    def add_document(self, doc_id: str, chunks: list[str], metadatas: list[dict]) -> None: ...
+    def add_document(self, doc_id: str, *, chunks: list[str], metadatas: list[dict]) -> None: ...
 
     @abstractmethod
-    def query(self, text: str, n_results: int = 5, filter: dict | None = None) -> list[dict]: ...
+    def query(self, text: str, *, n_results: int = 5, filter: dict | None = None) -> list[dict]: ...
 
     @abstractmethod
     def delete_document(self, doc_id: str) -> None: ...
@@ -36,7 +36,7 @@ class VectorBackend(ABC):
 
 class SMSRouter(ABC):
     @abstractmethod
-    def resolve(self, db, from_number: str, to_number: str) -> tuple | None:
+    def resolve(self, db, *, from_number: str, to_number: str) -> tuple | None:
         """
         Returns (account_id, tenant, direction) or None.
         OSS: account_id is always DEFAULT_ACCOUNT_ID

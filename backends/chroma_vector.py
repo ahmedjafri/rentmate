@@ -15,13 +15,13 @@ class ChromaVectorBackend:
             embedding_function=self._ef,
         )
 
-    def add_document(self, doc_id: str, chunks: list[str], metadatas: list[dict]) -> None:
+    def add_document(self, doc_id: str, *, chunks: list[str], metadatas: list[dict]) -> None:
         if not chunks:
             return
         ids = [f"{doc_id}::{i}" for i in range(len(chunks))]
         self._collection.upsert(ids=ids, documents=chunks, metadatas=metadatas)
 
-    def query(self, text: str, n_results: int = 5, filter: dict | None = None) -> list[dict]:
+    def query(self, text: str, *, n_results: int = 5, filter: dict | None = None) -> list[dict]:
         kwargs: dict = {"query_texts": [text], "n_results": n_results}
         if filter:
             kwargs["where"] = filter

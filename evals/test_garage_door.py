@@ -310,7 +310,7 @@ async def _run_agent_turn(db, task: Task, user_message: str) -> dict:
     pending_token = pending_suggestion_messages.set([])
 
     try:
-        resp = await call_agent(agent_id, session_key, messages)
+        resp = await call_agent(agent_id, session_key=session_key, messages=messages)
 
         # Collect pending suggestion messages
         pending = pending_suggestion_messages.get() or []

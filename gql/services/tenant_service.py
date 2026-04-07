@@ -89,7 +89,7 @@ class TenantService:
 
     @staticmethod
     def _find_by_portal_token(sess: Session, token: str) -> Optional[SqlTenant]:
-        return portal_auth.find_by_portal_token(sess, SqlTenant, token)
+        return portal_auth.find_by_portal_token(sess, model_class=SqlTenant, token=token)
 
     @staticmethod
     def authenticate_by_token(sess: Session, token: str) -> Tuple[SqlTenant, str]:

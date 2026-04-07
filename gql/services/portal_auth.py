@@ -82,7 +82,7 @@ def ensure_portal_token(entity, db: "Session | None" = None) -> str:
     return extra["portal_token"]
 
 
-def find_by_portal_token(db: Session, model_class, token: str):
+def find_by_portal_token(db: Session, *, model_class, token: str):
     """Find an entity by portal_token (or legacy invite_token) in its extra JSON."""
     entities = db.execute(select(model_class)).scalars().all()
     for e in entities:

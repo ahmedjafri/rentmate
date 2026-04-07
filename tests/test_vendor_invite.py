@@ -166,7 +166,7 @@ class TestAssignVendorToTask:
     def test_vendor_can_be_assigned(self, db):
         vendor = VendorService.create_vendor(db, CreateVendorInput(name="Oscar", phone="555-0070", vendor_type="Plumber"))
         task = self._mk_task(db)
-        result = TaskService.assign_vendor_to_task(db, str(task.id), str(vendor.id))
+        result = TaskService.assign_vendor_to_task(db, task_id=str(task.id), vendor_id=str(vendor.id))
         ai_convo = db.get(Conversation, result.ai_conversation_id)
         assert (ai_convo.extra or {}).get("assigned_vendor_id") == str(vendor.id)
         assert (ai_convo.extra or {}).get("assigned_vendor_name") == "Oscar"

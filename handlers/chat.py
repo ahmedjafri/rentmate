@@ -432,13 +432,13 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
     from llm.client import call_agent
     from llm.side_effects import process_side_effects
     context = build_task_context(db, conv.id)
-    messages = chat_service.build_agent_message_history(db, conv.id, body, context, exclude_last=True)
+    messages = chat_service.build_agent_message_history(db, conv_id=conv.id, user_message=body, context=context, exclude_last=True)
 
     from backends.local_auth import resolve_account_id
     agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
     session_key = f"sms:{conv.id}"
 
-    agent_resp = await call_agent(agent_id, session_key, messages)
+    agent_resp = await call_agent(agent_id, session_key=session_key, messages=messages)
 
     now = datetime.now(UTC)
     ai_msg = Message(
@@ -452,7 +452,7 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
         sent_at=now,
     )
     db.add(ai_msg)
-    process_side_effects(db, agent_resp.side_effects, conv.id, now)
+    process_side_effects(db, side_effects=agent_resp.side_effects, conversation_id=conv.id, base_time=now)
     db.commit()
 
     await send_via_channel(conv, agent_resp.reply, inbound_meta=sender_meta)
@@ -559,7 +559,7 @@ async def chat_endpoint(
         ]
         messages_payload.append({"role": "user", "content": body.message})
     else:
-        messages_payload = chat_service.build_agent_message_history(db, conv_id, body.message, context)
+        messages_payload = chat_service.build_agent_message_history(db, conv_id=conv_id, user_message=body.message, context=context)
 
     from backends.local_auth import resolve_account_id
     agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
@@ -608,7 +608,7 @@ async def chat_endpoint(
                     pre_db.close()
 
                 await on_progress("Thinking\u2026")
-                agent_resp = await call_agent(agent_id, session_key, messages_payload, on_progress)
+                agent_resp = await call_agent(agent_id, session_key=session_key, messages=messages_payload, on_progress=on_progress)
 
                 write_db = _SL()
                 try:
@@ -642,7 +642,7 @@ async def chat_endpoint(
                     # Materialize side-effects (suggestions, vendor creation)
                     # after the AI reply so they appear below it.
                     flushed_suggestions = process_side_effects(
-                        write_db, agent_resp.side_effects, conv_id, now,
+                        write_db, side_effects=agent_resp.side_effects, conversation_id=conv_id, base_time=now,
                     )
                     db_conv = write_db.query(Conversation).filter_by(id=conv_id).first()
                     if db_conv:
@@ -886,7 +886,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
             _loop = _hb_asyncio.new_event_loop()
             try:
                 _agent_result[0] = _loop.run_until_complete(
-                    call_agent(agent_id, session_key, messages_payload)
+                    call_agent(agent_id, session_key=session_key, messages=messages_payload)
                 )
                 _agent_result[1] = pending_suggestion_messages.get() or []
             finally:
@@ -934,7 +934,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
             side_effects = resp.side_effects + [
                 {"type": "suggestion_message", **p} for p in pending
             ]
-            flushed = process_side_effects(write_db, side_effects, conv_id, now)
+            flushed = process_side_effects(write_db, side_effects=side_effects, conversation_id=conv_id, base_time=now)
 
             db_conv = write_db.query(Conversation).filter_by(id=conv_id).first()
             if db_conv:
@@ -1100,7 +1100,7 @@ async def assess_task_endpoint(
                 # NOTE: We do NOT persist a user message — the assess prompt is
                 # an internal trigger, not a real user message.
                 await on_progress("Thinking\u2026")
-                agent_resp = await call_agent(agent_id, session_key, messages_payload, on_progress)
+                agent_resp = await call_agent(agent_id, session_key=session_key, messages=messages_payload, on_progress=on_progress)
 
                 # If agent says no response needed, skip persistence entirely
                 if agent_resp.reply.strip().startswith(NO_RESPONSE_SENTINEL):
@@ -1137,7 +1137,7 @@ async def assess_task_endpoint(
                     )
                     write_db.add(ai_msg)
                     flushed_suggestions = process_side_effects(
-                        write_db, agent_resp.side_effects, conv_id, now,
+                        write_db, side_effects=agent_resp.side_effects, conversation_id=conv_id, base_time=now,
                     )
                     db_conv = write_db.query(Conversation).filter_by(id=conv_id).first()
                     if db_conv:

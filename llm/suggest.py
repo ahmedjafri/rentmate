@@ -33,7 +33,7 @@ _CATEGORY_HINTS = {
 
 def generate_task_suggestion(
     subject: str,
-    context_body: str,
+    *, context_body: str,
     category: str,
     tenant_name: str | None = None,
     property_address: str | None = None,

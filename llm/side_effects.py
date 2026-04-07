@@ -17,7 +17,7 @@ from gql.services.chat_service import send_message
 
 def process_side_effects(
     db: Session,
-    side_effects: list[dict],
+    *, side_effects: list[dict],
     conversation_id: str,
     base_time: datetime,
 ) -> list[dict]:

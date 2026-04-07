@@ -608,7 +608,7 @@ def _query_resource(db: Session, resource: str) -> List[Any]:
 
 def run_script(
     db: Session,
-    script_yaml: str,
+    *, script_yaml: str,
     params: Optional[Dict[str, Any]] = None,
     dry_run: bool = False,
 ) -> int:

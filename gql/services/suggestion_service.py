@@ -184,7 +184,7 @@ def act_on_suggestion(
 
 def get_suggestions(
     sess: Session,
-    status: str | None = None,
+    *, status: str | None = None,
     limit: int = 50,
 ) -> list[Suggestion]:
     """Fetch suggestions, optionally filtered by status."""
