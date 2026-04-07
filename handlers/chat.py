@@ -710,21 +710,32 @@ NO_RESPONSE_SENTINEL = "[NO_RESPONSE]"
 
 # ─── Agent heartbeat ─────────────────────────────────────────────────────────
 
+import hashlib as _hb_hashlib
 import threading as _hb_threading
 _heartbeat_locks: dict[str, _hb_threading.Lock] = {}
 _heartbeat_locks_lock = _hb_threading.Lock()
+_heartbeat_state: dict[str, str] = {}  # task_id → context hash from last run
 
 
-def agent_task_heartbeat(task_id: str, hint: str | None = None, force: bool = False) -> str | None:
+def _compute_heartbeat_hash(db, task) -> str:
+    """Hash the full task context + latest message timestamps."""
+    context = build_task_context(db, task.id)
+    parts = [context]
+    for conv_id in [task.ai_conversation_id, task.external_conversation_id, task.parent_conversation_id]:
+        if conv_id:
+            last_msg = db.query(Message.sent_at).filter(
+                Message.conversation_id == conv_id
+            ).order_by(Message.sent_at.desc()).first()
+            if last_msg:
+                parts.append(f"{conv_id}:{last_msg[0].isoformat()}")
+    return _hb_hashlib.md5("".join(parts).encode()).hexdigest()
+
+
+def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
     """Run the agent against a task and let it respond/act.
 
     This is the core primitive for driving autonomous tasks forward.
     Called when external messages arrive or periodically by the heartbeat loop.
-
-    Args:
-        force: If True, skip the pending-suggestions and mode checks.
-               Use for on-demand triggers (portal messages) where we know
-               a response is needed.
 
     Returns the agent reply text, or None if no response was needed.
     """
@@ -738,12 +749,12 @@ def agent_task_heartbeat(task_id: str, hint: str | None = None, force: bool = Fa
         return None  # another heartbeat is already running for this task
 
     try:
-        return _agent_task_heartbeat_inner(task_id, hint, force=force)
+        return _agent_task_heartbeat_inner(task_id, hint)
     finally:
         lock.release()
 
 
-def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None, force: bool = False) -> str | None:
+def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | None:
     import asyncio as _hb_asyncio
     import json as _hb_json
     from handlers.deps import SessionLocal
@@ -759,21 +770,16 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None, force: bo
         task = db.query(Task).filter_by(id=task_id).first()
         if not task:
             return None
-        if not force and task.task_mode != "autonomous":
-            return None
         conv = task.ai_conversation
         if not conv:
             return None
 
-        # Skip if there are already pending suggestions (periodic loop only)
-        if not force:
-            from db.models import Suggestion
-            pending_count = db.query(Suggestion).filter(
-                Suggestion.task_id == task_id,
-                Suggestion.status == "pending",
-            ).count()
-            if pending_count > 0:
-                return None
+        # Change detection: skip if nothing changed since last heartbeat
+        current_hash = _compute_heartbeat_hash(db, task)
+        if _heartbeat_state.get(task_id) == current_hash:
+            print(f"[heartbeat] Skipping task {task_id} — no changes since last run")
+            log_trace("heartbeat", "heartbeat", "Skipped — no context changes", task_id=task_id)
+            return None
 
         conv_id = conv.id
         ext_conv_id = task.external_conversation_id
@@ -880,6 +886,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None, force: bo
             # Clear typing indicator
             if ext_conv_id:
                 chat_service.clear_typing_indicator(db, ext_conv_id)
+            _heartbeat_state[task_id] = current_hash
             log_trace("heartbeat", "heartbeat", f"No response needed for task {task_id}",
                       task_id=task_id)
             return None
@@ -912,6 +919,17 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None, force: bo
             if db_conv:
                 db_conv.updated_at = now
             write_db.commit()
+
+            # Store hash so next heartbeat knows nothing changed
+            # (recompute since agent may have modified task state)
+            try:
+                fresh_db = SessionLocal.session_factory()
+                fresh_task = fresh_db.query(Task).filter_by(id=task_id).first()
+                if fresh_task:
+                    _heartbeat_state[task_id] = _compute_heartbeat_hash(fresh_db, fresh_task)
+                fresh_db.close()
+            except Exception:
+                pass
 
             log_trace("heartbeat", "heartbeat",
                       f"Agent replied ({len(resp.reply)} chars): {resp.reply[:100]}",
