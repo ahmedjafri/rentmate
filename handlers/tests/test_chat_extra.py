@@ -1,14 +1,15 @@
 """Tests for handlers/chat.py — /chat endpoint and helpers."""
 import json
 import os
-import pytest
 import unittest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
-from main import app
-from handlers.deps import get_db
+
 from backends.local_auth import DEFAULT_USER_ID
+from handlers.deps import get_db
+from main import app
 
 
 def make_token():

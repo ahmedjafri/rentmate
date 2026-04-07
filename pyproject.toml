@@ -26,6 +26,7 @@ pytest = "^9.0.0"
 alembic = "^1.17.1"
 testcontainers = {extras = ["postgres"], version = "^4.14.2"}
 psycopg2-binary = "^2.9"
+ruff = "^0.15.9"
 
 [tool.pytest.ini_options]
 addopts = "-m 'not eval'"
@@ -33,6 +34,49 @@ markers = [
   "eval: LLM-judge eval cases (run with -m eval)",
   "postgres: integration tests that require Docker + a running Postgres container",
 ]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+exclude = [
+    "db/migrations/",
+    "www/",
+    ".venv/",
+    "__pycache__/",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes (unused imports, undefined names)
+    "I",      # isort (import ordering & consolidation)
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "E701",   # multiple statements on one line (used in compact patterns)
+    "E741",   # ambiguous variable names
+    "F401",   # unused imports (too noisy during development)
+    "F821",   # undefined name (false positives from conditional imports)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"main.py" = ["E402"]            # startup code before imports
+"handlers/deps.py" = ["E402"]   # engine setup before session factory
+"handlers/automations.py" = ["E402", "F841"]
+"handlers/chat.py" = ["E402", "F841"]
+"llm/registry.py" = ["F841"]
+"llm/tools.py" = ["E402"]       # circular dep workarounds
+"llm/agent_action.py" = ["E402"]
+"scripts/*" = ["E402"]
+"conftest.py" = ["E402"]
+"tests/*" = ["F841", "E402"]    # unused vars in tests are fine
+"*/tests/*" = ["F841", "E402", "E702"]
+"evals/*" = ["F841", "E402"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = ["db", "gql", "handlers", "llm", "backends", "evals"]
 
 [build-system]
 requires = ["poetry-core"]

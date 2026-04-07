@@ -18,7 +18,7 @@ class SingleTenantSMSRouter:
         if not from_norm or not to_norm:
             return None
 
-        from db.models import Tenant, ExternalContact
+        from db.models import ExternalContact, Tenant
 
         # inbound: from = tenant
         tenant = db.query(Tenant).filter(Tenant.phone == from_norm).one_or_none()

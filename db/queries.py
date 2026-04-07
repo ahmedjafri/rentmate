@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session, selectinload
 
 from db.models import Conversation, ConversationParticipant, ExternalContact, Lease, Message, Property, Task, Tenant
 
-
 # ---------------------------------------------------------------------------
 # Formatting helpers (pure functions over ORM models)
 # ---------------------------------------------------------------------------

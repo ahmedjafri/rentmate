@@ -1,17 +1,18 @@
 """Tests for handlers/documents.py endpoints."""
 import io
 import os
-import uuid
-import pytest
 import unittest
+import uuid
 from datetime import datetime
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
-from main import app
-from handlers.deps import get_db
-from db.models import Document, DocumentTag, Property
+
 from backends.local_auth import DEFAULT_USER_ID
+from db.models import Document, DocumentTag, Property
+from handlers.deps import get_db
+from main import app
 
 
 def _make_property(db, prop_id):

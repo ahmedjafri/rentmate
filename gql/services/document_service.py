@@ -1,7 +1,9 @@
 from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from db.models import DocumentTag as SqlDocumentTag, Document as SqlDocument
+
+from db.models import Document as SqlDocument, DocumentTag as SqlDocumentTag
 from gql.types import AddDocumentTagInput
 
 

@@ -17,19 +17,28 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from db.audit import run_data_audit
-from db.enums import TaskCategory, TaskSource, AutomationSource, AgentSource
+from db.enums import AgentSource, AutomationSource, TaskCategory, TaskSource
 from db.models import (
-    AutomationRevision, Conversation, ConversationType, ExternalContact,
-    Message, MessageType, ParticipantType, Suggestion, Task,
+    AutomationRevision,
+    Conversation,
+    ConversationType,
+    ExternalContact,
+    Message,
+    MessageType,
+    ParticipantType,
+    Suggestion,
+    Task,
 )
 from gql.services import chat_service, settings_service, suggestion_service
 from gql.services.task_service import TaskService
 from gql.types import CreateTaskInput
-from handlers.default_automations import _DEFAULT_AUTOMATION_CONFIG, _CHECK_META
+from handlers.default_automations import _CHECK_META, _DEFAULT_AUTOMATION_CONFIG
 from handlers.deps import SessionLocal, extract_json, get_db, require_user
 from handlers.settings import get_autonomy_settings
 from handlers.task_suggestions import (
-    CreateTaskSuggestionExecutor, ReplyInTaskSuggestionExecutor, SuggestionExecutor,
+    CreateTaskSuggestionExecutor,
+    ReplyInTaskSuggestionExecutor,
+    SuggestionExecutor,
 )
 
 router = APIRouter()
@@ -831,6 +840,7 @@ async def add_automation(body: NewAutomationBody, request: Request):
 
 
 from gql.types import VENDOR_TYPES as _VENDOR_TYPES
+
 
 def _build_generate_script_system() -> str:
     vendor_list = ", ".join(_VENDOR_TYPES)

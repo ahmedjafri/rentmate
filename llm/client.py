@@ -10,7 +10,6 @@ from typing import Any, Callable, Optional
 
 import httpx
 
-
 AGENT_URL = os.getenv("RENTMATE_AGENT_URL")  # e.g. https://agent.rentmate.com
 
 

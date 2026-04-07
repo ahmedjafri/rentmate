@@ -1,7 +1,9 @@
 import uuid
 from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
 from db.models import Property as SqlProperty, Unit as SqlUnit
 
 

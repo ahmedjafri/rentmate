@@ -3,18 +3,18 @@ from datetime import datetime
 from enum import Enum
 
 from sqlalchemy import (
-    Column,
-    String,
-    DateTime,
-    ForeignKey,
+    JSON,
     Boolean,
+    Column,
+    DateTime,
+    Enum as SqlEnum,
+    ForeignKey,
+    Index,
+    String,
     Text,
     UniqueConstraint,
-    JSON,
-    Index,
 )
 from sqlalchemy.orm import relationship
-from sqlalchemy import Enum as SqlEnum
 
 from .base import Base, HasContext
 

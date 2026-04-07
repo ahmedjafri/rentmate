@@ -2,27 +2,27 @@
 
 import re
 import uuid
-from datetime import UTC, datetime, date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import List, Optional
 
-from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, select as sa_select
-from .utils import normalize_phone
+from sqlalchemy.orm import Session, joinedload
 
 from .models import (
-    Tenant,
-    Property,
-    Task,
-    Unit,
-    Lease,
     Conversation,
     ConversationParticipant,
+    ConversationType,
+    ExternalContact,
+    Lease,
     Message,
     MessageReceipt,
-    ExternalContact,
     ParticipantType,
-    ConversationType,
+    Property,
+    Task,
+    Tenant,
+    Unit,
 )
+from .utils import normalize_phone
 
 
 def _normalize_address(addr: str) -> str:
@@ -944,7 +944,7 @@ def get_or_create_user_ai_conversation(
     # Create a new user_ai conversation
     conv = Conversation(
         id=str(uuid.uuid4()),
-        subject=session_key or f"Chat with RentMate",
+        subject=session_key or "Chat with RentMate",
         is_group=False,
         is_archived=False,
         conversation_type=ConversationType.USER_AI,

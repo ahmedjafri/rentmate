@@ -10,13 +10,13 @@ Postgres only:    poetry run pytest tests/test_startup.py -m postgres
 Skip Postgres:    poetry run pytest tests/test_startup.py -m "not postgres"
 """
 
+from unittest.mock import patch
+
 import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.pool import StaticPool
-from unittest.mock import patch
 
 from db.models import Base
-
 
 # ---------------------------------------------------------------------------
 # Helpers

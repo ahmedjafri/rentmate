@@ -31,6 +31,13 @@ echo "Port forwarding..."
 sudo iptables -t nat -A PREROUTING -p tcp --dport 30001 -j DNAT --to-destination $(minikube ip):30001
 sudo iptables -A FORWARD -p tcp -d $(minikube ip) --dport 30001 -m state --state NEW,RELATED,ESTABLISHED -j ACCEPT
 ;;
+lint)
+echo "Running ruff..."
+poetry run ruff check .
+echo ""
+echo "Running keyword-only params + private import checker..."
+poetry run python scripts/lint_kwargs.py
+;;
 *)
 echo "Invalid argument: $1"
 usage

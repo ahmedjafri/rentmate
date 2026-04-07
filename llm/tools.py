@@ -66,9 +66,9 @@ def _create_suggestion(
     If ``active_conversation_id`` is set, also adds an APPROVAL message to
     that conversation so the suggestion appears inline in the chat.
     """
-    from handlers.deps import SessionLocal
-    from gql.services import suggestion_service, chat_service
     from db.models import Suggestion
+    from gql.services import chat_service, suggestion_service
+    from handlers.deps import SessionLocal
 
     db = SessionLocal.session_factory()
     try:
@@ -143,8 +143,8 @@ def _create_suggestion(
 
 def _get_task_title(task_id: str) -> str:
     """Look up a task's title for use in suggestion headlines."""
-    from handlers.deps import SessionLocal
     from db.models import Task
+    from handlers.deps import SessionLocal
 
     db = SessionLocal.session_factory()
     try:
@@ -219,8 +219,8 @@ class ProposeTaskTool(Tool):
     async def execute(self, **kwargs: Any) -> str:
         vendor_id = kwargs["vendor_id"]
 
-        from handlers.deps import SessionLocal
         from db.models import ExternalContact
+        from handlers.deps import SessionLocal
         db = SessionLocal.session_factory()
         try:
             vendor = db.query(ExternalContact).filter_by(id=vendor_id).first()
@@ -291,9 +291,10 @@ class CloseTaskTool(Tool):
     async def execute(self, **kwargs: Any) -> str:
         task_id = kwargs["task_id"]
 
-        from handlers.deps import SessionLocal
-        from db.models import Task as TaskModel
         from datetime import UTC, datetime
+
+        from db.models import Task as TaskModel
+        from handlers.deps import SessionLocal
         db = SessionLocal.session_factory()
         try:
             task = db.query(TaskModel).filter_by(id=task_id).first()
@@ -356,8 +357,8 @@ class SetModeTool(Tool):
         task_id = kwargs["task_id"]
         mode = kwargs["mode"]
 
-        from handlers.deps import SessionLocal
         from db.models import Task as TaskModel
+        from handlers.deps import SessionLocal
         db = SessionLocal.session_factory()
         try:
             task = db.query(TaskModel).filter_by(id=task_id).first()
@@ -372,8 +373,8 @@ class SetModeTool(Tool):
 
 def _get_task_category(task_id: str) -> str | None:
     """Look up a task's category for autonomy checks."""
-    from handlers.deps import SessionLocal
     from db.models import Task
+    from handlers.deps import SessionLocal
     db = SessionLocal.session_factory()
     try:
         task = db.query(Task).filter_by(id=task_id).first()
@@ -450,8 +451,8 @@ class AttachEntityToTaskTool(Tool):
         entity_type = kwargs["entity_type"]
         task_title = _get_task_title(task_id)
 
+        from db.models import ExternalContact, Property, Tenant, Unit
         from handlers.deps import SessionLocal
-        from db.models import ExternalContact, Tenant, Property, Unit
         db = SessionLocal.session_factory()
         try:
             if entity_type == "vendor":
@@ -545,8 +546,8 @@ class MessageExternalPersonTool(Tool):
         draft_message = kwargs["draft_message"]
         task_title = _get_task_title(task_id)
 
-        from handlers.deps import SessionLocal
         from db.models import ExternalContact, Tenant
+        from handlers.deps import SessionLocal
         db = SessionLocal.session_factory()
         try:
             if entity_type == "vendor":
@@ -634,8 +635,8 @@ class LookupVendorsTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        from handlers.deps import SessionLocal
         from db.models import ExternalContact
+        from handlers.deps import SessionLocal
 
         vendor_type = kwargs.get("vendor_type")
         query = (kwargs.get("query") or "").strip().lower()
@@ -714,9 +715,10 @@ class UpdateStepsTool(Tool):
         task_id = kwargs["task_id"]
         steps = kwargs["steps"]
 
-        from handlers.deps import SessionLocal
-        from db.models import Task
         from sqlalchemy.orm.attributes import flag_modified
+
+        from db.models import Task
+        from handlers.deps import SessionLocal
 
         db = SessionLocal.session_factory()
         try:
@@ -763,9 +765,9 @@ class CreateVendorTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        from handlers.deps import SessionLocal
         from gql.services.vendor_service import VendorService
         from gql.types import CreateVendorInput
+        from handlers.deps import SessionLocal
 
         db = SessionLocal.session_factory()
         try:
@@ -847,8 +849,9 @@ class SaveMemoryTool(Tool):
         entity_label = kwargs.get("entity_label", "")
         task_id = kwargs.get("task_id", "")
 
-        from handlers.deps import SessionLocal
         from datetime import UTC, datetime
+
+        from handlers.deps import SessionLocal
 
         # Task-scoped notes
         if scope == "task":
@@ -871,8 +874,8 @@ class SaveMemoryTool(Tool):
 
         if entity_type == "general" or not entity_id:
             # General notes go to agent_memory table
-            from llm.memory_store import DbMemoryStore
             from backends.local_auth import DEFAULT_USER_ID
+            from llm.memory_store import DbMemoryStore
             store = DbMemoryStore(DEFAULT_USER_ID)
             store.add_note(content=content, entity_type="general", entity_id="", entity_label="")
             return json.dumps({"status": "ok", "message": "General note saved."})
@@ -948,8 +951,8 @@ class RecallMemoryTool(Tool):
 
         if entity_type == "general" or (not entity_type and not entity_id):
             # Read general notes from agent_memory
-            from llm.memory_store import DbMemoryStore
             from backends.local_auth import DEFAULT_USER_ID
+            from llm.memory_store import DbMemoryStore
             store = DbMemoryStore(DEFAULT_USER_ID)
             notes = store.get_notes(entity_type="general")
             if not notes:
@@ -967,8 +970,8 @@ class RecallMemoryTool(Tool):
         if not model_name:
             return json.dumps({"notes": [], "message": f"Unknown entity type: {entity_type}"})
 
-        from handlers.deps import SessionLocal
         import db.models as models
+        from handlers.deps import SessionLocal
         db = SessionLocal.session_factory()
         try:
             model_cls = getattr(models, model_name)

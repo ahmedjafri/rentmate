@@ -5,12 +5,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.enums import (
-    TaskCategory, Urgency,
-    AutomationSource, AgentSource, SuggestionSource, SuggestionOption,
+    AgentSource,
+    AutomationSource,
+    SuggestionOption,
+    SuggestionSource,
+    TaskCategory,
+    Urgency,
 )
 from db.models import (
-    Suggestion, Conversation, ConversationType,
-    Message, MessageType, ParticipantType as PT,
+    Conversation,
+    ConversationType,
+    Message,
+    MessageType,
+    ParticipantType as PT,
+    Suggestion,
 )
 
 

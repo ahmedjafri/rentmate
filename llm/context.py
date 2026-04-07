@@ -4,7 +4,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from db.models import Task, Lease, MessageType, Property, Unit, Tenant
+from db.models import Lease, MessageType, Property, Task, Tenant, Unit
 
 
 def load_account_context(db: Session) -> str:

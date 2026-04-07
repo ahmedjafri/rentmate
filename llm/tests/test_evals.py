@@ -6,8 +6,10 @@ Tests are skipped when LLM_API_KEY is not set (e.g. in CI without credentials).
 Set LLM_API_KEY (and optionally LLM_MODEL / LLM_BASE_URL) to enable them.
 """
 import os
+
 import pytest
-from evals.runner import load_cases, load_automation_meta, judge_case
+
+from evals.runner import judge_case, load_automation_meta, load_cases
 
 _has_api_key = bool(os.getenv("LLM_API_KEY"))
 

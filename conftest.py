@@ -1,10 +1,12 @@
 import os
-import pytest
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+
 from db.models import Base
 
 # Load .env into os.environ so LLM-dependent tests (evals, document extraction)

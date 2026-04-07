@@ -1,16 +1,16 @@
 import uuid
-from datetime import datetime, date
+from datetime import date, datetime
 
 from sqlalchemy import (
+    JSON,
     Column,
-    String,
     Date,
     DateTime,
     Float,
     ForeignKey,
+    String,
     Text,
     UniqueConstraint,
-    JSON,
 )
 from sqlalchemy.orm import relationship
 

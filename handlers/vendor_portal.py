@@ -1,12 +1,20 @@
 """Vendor-facing REST endpoints. All require a vendor JWT."""
-from datetime import UTC, datetime
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from db.models import Conversation, ConversationParticipant, ExternalContact, Message, MessageType, ParticipantType, Task
+from db.models import (
+    Conversation,
+    ConversationParticipant,
+    ExternalContact,
+    Message,
+    MessageType,
+    ParticipantType,
+    Task,
+)
 from gql.services.vendor_service import VendorService
 from handlers.deps import get_db
 

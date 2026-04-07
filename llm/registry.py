@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from backends.local_auth import DEFAULT_USER_ID
 
-
 # Paths
 AGENTS_DIR = Path(__file__).parent.parent / "agents"
 TEMPLATE_DIR = AGENTS_DIR / "template"
@@ -31,11 +30,19 @@ def _soul_version(text: str) -> int:
 def _register_rentmate_tools():
     """Register RentMate-specific tools with the Hermes tool registry."""
     from tools.registry import registry
+
     from llm.tools import (
-        ProposeTaskTool, CloseTaskTool, SetModeTool,
-        AttachEntityToTaskTool, MessageExternalPersonTool,
-        LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
-        SaveMemoryTool, RecallMemoryTool, EditMemoryTool,
+        AttachEntityToTaskTool,
+        CloseTaskTool,
+        CreateVendorTool,
+        EditMemoryTool,
+        LookupVendorsTool,
+        MessageExternalPersonTool,
+        ProposeTaskTool,
+        RecallMemoryTool,
+        SaveMemoryTool,
+        SetModeTool,
+        UpdateStepsTool,
     )
 
     for tool_cls in (
@@ -153,6 +160,7 @@ class AgentRegistry:
     @staticmethod
     def _db_write_file(db: Session, agent_id: str, filename: str, content: str):
         import uuid as _uuid
+
         from db.models import AgentMemory
         row = db.query(AgentMemory).filter_by(
             agent_id=agent_id, memory_type=f"file:{filename}"
@@ -218,42 +226,42 @@ class AgentRegistry:
         workspace_abs = str((DATA_DIR / DEFAULT_USER_ID).resolve())
 
         (agent_dir / "TOOLS.md").write_text(
-            f"# TOOLS.md - Communication Channels & Data Access\n\n"
-            f"## Communication Channels\n\n"
-            f"- **SMS (Quo)** — Inbound/outbound tenant texts route through Quo. "
-            f"You reply automatically.\n"
-            f"- **Web Chat** — Property managers chat with you via the RentMate web interface.\n\n"
-            f"## Live Data\n\n"
-            f"Use the available tools to fetch live property/tenant/lease data. Always prefer a live "
-            f"query over any cached or remembered data — the database is the source of truth.\n\n"
-            f"### Data Operations\n\n"
-            f"| Operation | Description | Options |\n"
-            f"|-----------|-------------|--------|\n"
-            f"| `properties` | All properties with units, occupancy, and lease summary | |\n"
-            f"| `tenants` | All tenants with active lease info (unit, property, rent, status) | |\n"
-            f"| `leases` | All leases with tenant and property details | |\n"
-            f"| `tasks` | Task list (maintenance, lease issues, etc.) | `--category` `--status` |\n"
-            f"| `task` | Single task with full message thread | `--id <uid>` |\n"
-            f"| `messages` | Messages for a conversation/SMS thread | `--id <conversation-id>` |\n\n"
-            f"## Write Actions (require manager confirmation)\n\n"
-            f"All write operations are **queued for human confirmation** — they do not execute\n"
-            f"immediately. The manager's UI will show a confirmation card before any change is\n"
-            f"committed to the database. Never call these in response to ambiguous requests.\n\n"
-            f"### Write Operations\n\n"
-            f"| Operation | Description |\n"
-            f"|-----------|-------------|\n"
-            f"| `propose_task` | Propose a new task — manager must approve before it is created |\n"
-            f"| `close_task` | Request to close/resolve a task — manager must confirm |\n"
-            f"| `set_mode` | Request a task mode change — manager must confirm |\n"
-            f"| `update_steps` | Set or update progress steps for a task (immediate) |\n\n"
-            f"### DO NOT\n\n"
-            f"- **Do not install packages** (apt-get, pip, brew, etc.) to access data.\n"
-            f"- **Do not connect to the database directly** — do not use sqlite3, sqlalchemy, "
-            f"or any other library to open the database file.\n"
-            f"- **Do not search the filesystem for the database.**\n"
-            f"- **Do not write raw SQL.** Use the provided tools for all data operations.\n\n"
-            f"## Vendor Notes\n\n"
-            f"_(Add vendor contacts here as you learn them.)_\n"
+            "# TOOLS.md - Communication Channels & Data Access\n\n"
+            "## Communication Channels\n\n"
+            "- **SMS (Quo)** — Inbound/outbound tenant texts route through Quo. "
+            "You reply automatically.\n"
+            "- **Web Chat** — Property managers chat with you via the RentMate web interface.\n\n"
+            "## Live Data\n\n"
+            "Use the available tools to fetch live property/tenant/lease data. Always prefer a live "
+            "query over any cached or remembered data — the database is the source of truth.\n\n"
+            "### Data Operations\n\n"
+            "| Operation | Description | Options |\n"
+            "|-----------|-------------|--------|\n"
+            "| `properties` | All properties with units, occupancy, and lease summary | |\n"
+            "| `tenants` | All tenants with active lease info (unit, property, rent, status) | |\n"
+            "| `leases` | All leases with tenant and property details | |\n"
+            "| `tasks` | Task list (maintenance, lease issues, etc.) | `--category` `--status` |\n"
+            "| `task` | Single task with full message thread | `--id <uid>` |\n"
+            "| `messages` | Messages for a conversation/SMS thread | `--id <conversation-id>` |\n\n"
+            "## Write Actions (require manager confirmation)\n\n"
+            "All write operations are **queued for human confirmation** — they do not execute\n"
+            "immediately. The manager's UI will show a confirmation card before any change is\n"
+            "committed to the database. Never call these in response to ambiguous requests.\n\n"
+            "### Write Operations\n\n"
+            "| Operation | Description |\n"
+            "|-----------|-------------|\n"
+            "| `propose_task` | Propose a new task — manager must approve before it is created |\n"
+            "| `close_task` | Request to close/resolve a task — manager must confirm |\n"
+            "| `set_mode` | Request a task mode change — manager must confirm |\n"
+            "| `update_steps` | Set or update progress steps for a task (immediate) |\n\n"
+            "### DO NOT\n\n"
+            "- **Do not install packages** (apt-get, pip, brew, etc.) to access data.\n"
+            "- **Do not connect to the database directly** — do not use sqlite3, sqlalchemy, "
+            "or any other library to open the database file.\n"
+            "- **Do not search the filesystem for the database.**\n"
+            "- **Do not write raw SQL.** Use the provided tools for all data operations.\n\n"
+            "## Vendor Notes\n\n"
+            "_(Add vendor contacts here as you learn them.)_\n"
         )
         tools_content = (agent_dir / "TOOLS.md").read_text()
         self._db_write_file(db, agent_id, "TOOLS.md", tools_content)

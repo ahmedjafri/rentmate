@@ -1,6 +1,7 @@
 import os
-import jwt
 from datetime import UTC, datetime, timedelta
+
+import jwt
 
 JWT_SECRET = os.getenv("JWT_SECRET", "rentmate-local-secret")
 RENTMATE_PASSWORD = os.getenv("RENTMATE_PASSWORD", "rentmate")

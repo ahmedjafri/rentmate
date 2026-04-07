@@ -2,15 +2,18 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from sqlalchemy import select
-
 from db.lib import get_conversation_with_messages
 from db.models import (
-    Conversation, ConversationParticipant, ConversationType,
-    Message, MessageType, ParticipantType,
+    Conversation,
+    ConversationParticipant,
+    ConversationType,
+    Message,
+    MessageType,
+    ParticipantType,
 )
 
 logger = logging.getLogger("rentmate.chat_service")
@@ -211,8 +214,9 @@ def send_autonomous_message(
     flag_modified(convo, "extra")
 
     if task_id:
-        from db.models import Task
         from sqlalchemy import select
+
+        from db.models import Task
         task = db.execute(select(Task).where(Task.id == task_id)).scalar_one_or_none()
         if task:
             task.last_message_at = now

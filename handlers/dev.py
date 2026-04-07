@@ -19,8 +19,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from db.lib import route_inbound_to_task, get_conversation_with_messages
-from db.models import Conversation, ConversationParticipant, Message, MessageType, ParticipantType, Suggestion, Task, Tenant
+from db.lib import get_conversation_with_messages, route_inbound_to_task
+from db.models import (
+    Conversation,
+    ConversationParticipant,
+    Message,
+    MessageType,
+    ParticipantType,
+    Suggestion,
+    Task,
+    Tenant,
+)
 from handlers.deps import get_db, require_user
 from llm.context import build_task_context
 from llm.registry import agent_registry
@@ -325,8 +334,9 @@ async def list_traces(
 ):
     """Return recent agent traces for debugging."""
     await require_user(request)
-    from db.models import AgentTrace
     from sqlalchemy import select
+
+    from db.models import AgentTrace
 
     q = select(AgentTrace).order_by(AgentTrace.timestamp.desc())
     if task_id:

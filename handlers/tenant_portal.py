@@ -1,12 +1,12 @@
 """Tenant-facing REST endpoints. All require a tenant JWT."""
-from datetime import UTC, datetime
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from db.models import Conversation, ConversationParticipant, Message, MessageType, ParticipantType, Task, Tenant, Lease
+from db.models import Conversation, ConversationParticipant, Lease, Message, MessageType, ParticipantType, Task, Tenant
 from gql.services.tenant_service import TenantService
 from handlers.deps import get_db
 

@@ -31,7 +31,7 @@ from sqlalchemy.orm import sessionmaker
 DB_PATH = os.getenv("RENTMATE_DB_PATH", "./data/rentmate.db")
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
-from db.models import Base, Property, Unit, Tenant, Lease, Document
+from db.models import Base, Document, Lease, Property, Tenant, Unit
 
 engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
 Base.metadata.create_all(engine)
@@ -79,7 +79,7 @@ u2c = Unit(id=str(uuid.uuid4()), property_id=prop2.id, label="Unit 201", created
 u2d = Unit(id=str(uuid.uuid4()), property_id=prop2.id, label="Unit 202", created_at=now)
 db.add_all([u1a, u1b, u1c, u2a, u2b, u2c, u2d])
 db.flush()
-print(f"  + 7 units across both properties")
+print("  + 7 units across both properties")
 
 
 # ── Existing tenants ──────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ devon   = Tenant(id=str(uuid.uuid4()), first_name="Devon",  last_name="Torres", 
 aisha   = Tenant(id=str(uuid.uuid4()), first_name="Aisha",  last_name="Williams", email="aisha.w@outlook.com",     phone="+14255550104", created_at=now)
 db.add_all([marcus, priya, devon, aisha])
 db.flush()
-print(f"  + 4 tenants: Marcus Johnson, Priya Patel, Devon Torres, Aisha Williams")
+print("  + 4 tenants: Marcus Johnson, Priya Patel, Devon Torres, Aisha Williams")
 
 
 # ── Active leases ─────────────────────────────────────────────────────────────
@@ -101,7 +101,7 @@ leases = [
 ]
 db.add_all(leases)
 db.flush()
-print(f"  + 4 active leases")
+print("  + 4 active leases")
 
 
 # ── Dummy documents that drive dashboard suggestions ──────────────────────────
@@ -129,8 +129,8 @@ doc1 = Document(
     created_at=now,
     processed_at=now,
 )
-print(f"  + doc1: dummy_harbor_view_riley.pdf")
-print(f"         → suggestions: location (new property) + tenant (new tenant)")
+print("  + doc1: dummy_harbor_view_riley.pdf")
+print("         → suggestions: location (new property) + tenant (new tenant)")
 
 # Doc 2 ── New tenant at an existing property with an existing vacant unit
 # Suggestions generated: tenant (create_tenant)
@@ -154,8 +154,8 @@ doc2 = Document(
     created_at=now,
     processed_at=now,
 )
-print(f"  + doc2: dummy_pinecrest_lena_chen.pdf")
-print(f"         → suggestions: tenant (new tenant at existing property)")
+print("  + doc2: dummy_pinecrest_lena_chen.pdf")
+print("         → suggestions: tenant (new tenant at existing property)")
 
 # Doc 3 ── Renewal for Marcus Johnson — different email and higher rent
 # Suggestions generated: tenant (update email) + lease (update rent + end date)
@@ -179,13 +179,13 @@ doc3 = Document(
     created_at=now,
     processed_at=now,
 )
-print(f"  + doc3: dummy_meadows_marcus_renewal.pdf")
-print(f"         → suggestions: tenant (update email) + lease (update rent + end date)")
+print("  + doc3: dummy_meadows_marcus_renewal.pdf")
+print("         → suggestions: tenant (update email) + lease (update rent + end date)")
 
 db.add_all([doc1, doc2, doc3])
 db.commit()
 
-print(f"""
+print("""
 Done! Seeded:
   2 properties · 7 units · 4 tenants · 4 active leases
   3 processed documents → ~5 pending dashboard suggestion groups

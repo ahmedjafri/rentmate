@@ -15,10 +15,10 @@ from sqlalchemy.orm import Session
 from db.enums import TaskSource
 from db.lib import get_conversation_with_messages, record_sms_from_quo, route_inbound_to_tenant_chat
 from db.models import Conversation, Message, MessageType, ParticipantType, Task
+from gql.services import chat_service
 from handlers.deps import get_db, require_user
 from llm.context import build_task_context, load_account_context
-from llm.registry import agent_registry, DATA_DIR
-from gql.services import chat_service
+from llm.registry import DATA_DIR, agent_registry
 
 router = APIRouter()
 
@@ -377,7 +377,7 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
 
     # ── Vendor inbound SMS ────────────────────────────────────────────
     if entity_type == "vendor":
-        from db.models import ConversationType, ParticipantType as PT, Message as MsgModel
+        from db.models import ConversationType, Message as MsgModel, ParticipantType as PT
 
         vendor = entity
         conv = chat_service.get_or_create_external_conversation(
@@ -582,9 +582,9 @@ async def chat_endpoint(
                 await sub.put(entry)
 
         async def run_and_persist() -> tuple[str, str, list[dict]]:
-            from llm.tools import active_conversation_id
             from llm.client import call_agent
             from llm.side_effects import process_side_effects
+            from llm.tools import active_conversation_id
             token = active_conversation_id.set(conv_id)
             try:
                 # Persist user message BEFORE running the agent so it gets an
@@ -712,6 +712,7 @@ NO_RESPONSE_SENTINEL = "[NO_RESPONSE]"
 
 import hashlib as _hb_hashlib
 import threading as _hb_threading
+
 _heartbeat_locks: dict[str, _hb_threading.Lock] = {}
 _heartbeat_locks_lock = _hb_threading.Lock()
 _heartbeat_state: dict[str, str] = {}  # task_id → context hash from last run
@@ -719,8 +720,9 @@ _heartbeat_state: dict[str, str] = {}  # task_id → context hash from last run
 
 def _compute_heartbeat_hash(task) -> str:
     """Hash task state + latest message timestamps using a short-lived session."""
-    from handlers.deps import SessionLocal
     from sqlalchemy import text
+
+    from handlers.deps import SessionLocal
     db = SessionLocal.session_factory()
     try:
         parts = []
@@ -774,13 +776,14 @@ def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
 def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | None:
     import asyncio as _hb_asyncio
     import json as _hb_json
+
+    from backends.local_auth import DEFAULT_USER_ID
     from handlers.deps import SessionLocal
     from llm.client import call_agent
-    from llm.tools import active_conversation_id, pending_suggestion_messages
     from llm.registry import agent_registry
     from llm.side_effects import process_side_effects
+    from llm.tools import active_conversation_id, pending_suggestion_messages
     from llm.tracing import log_trace
-    from backends.local_auth import DEFAULT_USER_ID
 
     db = SessionLocal.session_factory()
     try:
@@ -1089,9 +1092,9 @@ async def assess_task_endpoint(
                 await sub.put(entry)
 
         async def run_and_persist() -> tuple[str | None, str | None, list[dict]]:
-            from llm.tools import active_conversation_id
             from llm.client import call_agent
             from llm.side_effects import process_side_effects
+            from llm.tools import active_conversation_id
             token = active_conversation_id.set(conv_id)
             try:
                 # NOTE: We do NOT persist a user message — the assess prompt is

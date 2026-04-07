@@ -67,7 +67,7 @@ class DbMemoryStore:
             parts = []
 
             # Entity context from the actual tables
-            from db.models import Property, Unit, Tenant, ExternalContact
+            from db.models import ExternalContact, Property, Tenant, Unit
             from db.queries import format_address
 
             props = db.query(Property).filter(Property.context.isnot(None)).all()

@@ -1,7 +1,17 @@
 from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from db.models import Task, TaskNumberSequence, Conversation, ExternalContact, Message, ParticipantType as PT, ConversationType
+
+from db.models import (
+    Conversation,
+    ConversationType,
+    ExternalContact,
+    Message,
+    ParticipantType as PT,
+    Task,
+    TaskNumberSequence,
+)
 from gql.types import CreateTaskInput, UpdateTaskInput
 
 

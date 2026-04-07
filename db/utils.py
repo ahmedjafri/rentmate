@@ -1,5 +1,6 @@
 import re
 
+
 def normalize_phone(phone: str, default_country_code: str = "+1") -> str | None:
     """
     Normalize phone numbers:

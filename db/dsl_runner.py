@@ -14,13 +14,12 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from db.enums import TaskCategory, TaskSource, Urgency
-
 import yaml
 from sqlalchemy.orm import Session
 
+from db.enums import TaskCategory, TaskSource, Urgency
+
 from .models import (
-    Task,
     Conversation,
     ConversationParticipant,
     ConversationType,
@@ -29,6 +28,7 @@ from .models import (
     MessageType,
     ParticipantType,
     Property,
+    Task,
     Tenant,
     Unit,
 )
@@ -484,7 +484,7 @@ def _do_create_task(db: Session, subject: str, body: str, category: str,
     db.flush()
 
     # Assign task_number per account
-    from sqlalchemy import select as sa_select, func as sa_func
+    from sqlalchemy import func as sa_func, select as sa_select
     max_num = db.execute(
         sa_select(sa_func.coalesce(sa_func.max(Task.task_number), 0))
         .where(Task.account_id == task.account_id)

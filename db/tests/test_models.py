@@ -5,16 +5,16 @@ import pytest
 from sqlalchemy import select
 
 from db.models import (
-    Property,
-    Unit,
-    Tenant,
-    Lease,
     Conversation,
     ConversationParticipant,
+    ExternalContact,
+    Lease,
     Message,
     MessageReceipt,
-    ExternalContact,
     ParticipantType,
+    Property,
+    Tenant,
+    Unit,
 )
 
 

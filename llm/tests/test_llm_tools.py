@@ -8,11 +8,9 @@ from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-
 # ---------------------------------------------------------------------------
 # agent_query.py — _validate_sql
 # ---------------------------------------------------------------------------
-
 from llm.agent_query import _validate_sql
 
 
@@ -98,15 +96,15 @@ class TestQueueAction:
 # agent_data.py — serializers
 # ---------------------------------------------------------------------------
 
-from llm.agent_data import (
-    _serialize_properties,
-    _serialize_tenants,
-    _serialize_leases,
-    _serialize_tasks,
-    _serialize_task,
-    _serialize_messages,
-)
 from db.models import ParticipantType
+from llm.agent_data import (
+    _serialize_leases,
+    _serialize_messages,
+    _serialize_properties,
+    _serialize_task,
+    _serialize_tasks,
+    _serialize_tenants,
+)
 
 
 def _mock_property(prop_id="prop-1", name="Test Property"):

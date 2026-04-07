@@ -18,25 +18,26 @@ Covers:
 - _migrate_schema() idempotent column additions
 """
 
-import pytest
 from datetime import date, timedelta
-from sqlalchemy import create_engine, select, text, inspect
-from sqlalchemy.orm import sessionmaker
+
+import pytest
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import sessionmaker
 
 from db.models import (
     Base,
-    Property,
-    Unit,
-    Tenant,
-    Lease,
     Conversation,
-    Task,
+    Document,
+    DocumentTag,
+    DocumentTask,
+    Lease,
     Message,
     ParticipantType,
-    Document,
-    DocumentTask,
-    DocumentTag,
+    Property,
+    Task,
+    Tenant,
+    Unit,
 )
 from gql.schema import schema
 
@@ -1249,8 +1250,6 @@ class TestMigrateSchema:
         _migrate_schema() must survive being run against a schema that already
         has all the columns (the normal case in tests). It should not raise.
         """
-        from sqlalchemy import create_engine, text
-        from db.models import Base
 
         eng = create_engine(
             "sqlite:///:memory:",
@@ -1272,8 +1271,6 @@ class TestMigrateSchema:
         """
         _migrate_schema() adds the column when it is genuinely missing.
         """
-        from sqlalchemy import create_engine, text
-        from db.models import Base
 
         eng = create_engine(
             "sqlite:///:memory:",
@@ -1313,8 +1310,7 @@ class TestMigrateSchema:
         """
         After _migrate_schema() runs, all expected columns exist in the DB.
         """
-        from sqlalchemy import create_engine, inspect as sa_inspect
-        from db.models import Base
+        from sqlalchemy import inspect as sa_inspect
 
         eng = create_engine(
             "sqlite:///:memory:",

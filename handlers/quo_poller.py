@@ -83,7 +83,7 @@ def _get_contacts_with_phones() -> list[str]:
     """Return all phone numbers for tenants and vendors."""
     db = SessionLocal()
     try:
-        from db.models import Tenant, ExternalContact
+        from db.models import ExternalContact, Tenant
         phones: list[str] = []
         for t in db.query(Tenant).filter(Tenant.phone.isnot(None)).all():
             if t.phone:
@@ -102,8 +102,9 @@ def _is_duplicate(body: str, sent_at_iso: str | None) -> bool:
         return False
     db = SessionLocal()
     try:
-        from db.models import Message
         from dateutil.parser import isoparse
+
+        from db.models import Message
         msg_time = isoparse(sent_at_iso)
         window = timedelta(seconds=10)
         return db.query(Message).filter(

@@ -1,21 +1,23 @@
 import unittest
 import unittest.mock
-from unittest.mock import AsyncMock, Mock, patch
-import pytest
 import uuid
+from unittest.mock import AsyncMock, Mock, patch
+
 import httpx
+import pytest
 from fastapi.testclient import TestClient
-from main import app
-from handlers.chat import send_sms_reply, is_in_whitelist
-from handlers.deps import get_db
-from llm.client import AgentResponse
+
 from db.models import (
-    Tenant,
     Conversation,
     ConversationParticipant,
     Message,
+    Tenant,
 )
 from db.utils import normalize_phone
+from handlers.chat import is_in_whitelist, send_sms_reply
+from handlers.deps import get_db
+from llm.client import AgentResponse
+from main import app
 
 MOCK_AGENT_REPLY = "This is a mock response."
 MOCK_AGENT_ID = "mock-agent-id"

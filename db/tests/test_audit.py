@@ -13,21 +13,21 @@ Covers:
 - run_data_audit returns correct created count
 """
 
-import pytest
 from datetime import date, timedelta
 
+import pytest
+
+from db.audit import EXPIRY_WARN_DAYS, run_data_audit
 from db.models import (
     Base,
-    Property,
-    Unit,
-    Tenant,
-    Lease,
-    Task,
     Conversation,
+    Lease,
     Message,
+    Property,
+    Task,
+    Tenant,
+    Unit,
 )
-from db.audit import run_data_audit, EXPIRY_WARN_DAYS
-
 
 # ---------------------------------------------------------------------------
 # Helpers

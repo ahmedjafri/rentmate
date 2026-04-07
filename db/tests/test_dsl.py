@@ -32,9 +32,8 @@ from datetime import date, timedelta
 
 import pytest
 
-from db.audit import run_data_audit, EXPIRY_WARN_DAYS
-from db.models import Conversation, Task, Lease, Message, Property, Tenant, Unit
-
+from db.audit import EXPIRY_WARN_DAYS, run_data_audit
+from db.models import Conversation, Lease, Message, Property, Task, Tenant, Unit
 
 # ---------------------------------------------------------------------------
 # Shared helpers — mirror test_audit.py helpers so tests are self-contained

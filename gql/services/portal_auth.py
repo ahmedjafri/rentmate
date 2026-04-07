@@ -12,7 +12,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-
 _JWT_SECRET = os.getenv("JWT_SECRET", "rentmate-local-secret")
 _JWT_ALGORITHM = "HS256"
 

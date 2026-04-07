@@ -1,9 +1,11 @@
 """Tests for gql/services/tenant_service.py."""
+from datetime import date, datetime
+
 import pytest
-from datetime import datetime, date
-from db.models import Property, Unit, Tenant, Lease
+
+from db.models import Lease, Property, Tenant, Unit
 from gql.services.tenant_service import TenantService
-from gql.types import CreateTenantWithLeaseInput, AddLeaseForTenantInput
+from gql.types import AddLeaseForTenantInput, CreateTenantWithLeaseInput
 
 
 def _mk_property(db):

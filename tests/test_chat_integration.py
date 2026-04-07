@@ -33,7 +33,6 @@ from sqlalchemy.pool import StaticPool
 
 from db.models import Base, Conversation, Message, Task
 
-
 # ─── DB helpers ──────────────────────────────────────────────────────────────
 
 def _make_engine():

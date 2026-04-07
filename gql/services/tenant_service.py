@@ -1,13 +1,13 @@
 import uuid
-from datetime import UTC, datetime, date as _date
+from datetime import UTC, date as _date, datetime
 from typing import Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import Tenant as SqlTenant, Lease as SqlLease, Unit as SqlUnit
-from gql.types import CreateTenantWithLeaseInput, AddLeaseForTenantInput
+from db.models import Lease as SqlLease, Tenant as SqlTenant, Unit as SqlUnit
 from gql.services import portal_auth
+from gql.types import AddLeaseForTenantInput, CreateTenantWithLeaseInput
 
 
 class TenantService:

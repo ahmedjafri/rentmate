@@ -5,23 +5,30 @@ Integration test: automation simulation → task creation → vendor conversatio
 Validates the full lifecycle that a property manager and vendor go through
 when an automation suggests a task with a vendor assignment.
 """
-import pytest
 import os
 import uuid
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
-from main import app
 from db.models import (
-    Base, Conversation, ConversationParticipant, ConversationType,
-    ExternalContact, Message, MessageType, ParticipantType, Task,
+    Base,
+    Conversation,
+    ConversationParticipant,
+    ConversationType,
+    ExternalContact,
+    Message,
+    MessageType,
+    ParticipantType,
+    Task,
 )
 from gql.schema import schema
 from gql.services.vendor_service import VendorService
 from gql.types import CreateVendorInput
 from handlers.deps import get_db
+from main import app
 
 FAKE_USER = {"id": "test-user-id", "email": "admin@test.com"}
 
@@ -32,6 +39,7 @@ def _gql_context(db):
 
 def _make_token():
     import jwt
+
     from backends.local_auth import DEFAULT_USER_ID
     return jwt.encode(
         {"sub": DEFAULT_USER_ID, "email": "admin@localhost"},

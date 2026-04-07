@@ -9,6 +9,7 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
+    "lint:py": "cd ../.. && poetry run ruff check . && poetry run python scripts/lint_kwargs.py",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

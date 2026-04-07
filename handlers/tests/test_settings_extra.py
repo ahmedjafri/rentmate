@@ -1,17 +1,18 @@
 """Extended tests for handlers/settings.py — env file helpers and integrations endpoint."""
 import json
 import os
-import pytest
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
-from main import app
-from handlers.deps import get_db
-from handlers.settings import read_env_file, write_env_file, _mask_integrations, load_integrations
+
 from backends.local_auth import DEFAULT_USER_ID
+from handlers.deps import get_db
+from handlers.settings import _mask_integrations, load_integrations, read_env_file, write_env_file
+from main import app
 
 
 def make_token():

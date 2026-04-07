@@ -1,35 +1,53 @@
 # gql/schema.py
 import typing
-import strawberry
 from datetime import date
+
+import strawberry
 from strawberry.schema.config import StrawberryConfig
 
+from db.lib import spawn_task_from_conversation as _spawn_task
 from db.queries import (
+    fetch_conversations,
     fetch_leases,
     fetch_messages,
     fetch_properties,
     fetch_task,
     fetch_tasks,
     fetch_tenants,
-    fetch_conversations,
     fetch_vendors,
 )
-from db.lib import spawn_task_from_conversation as _spawn_task
-from .auth_mutations import Mutation as AuthMutation
-from .types import (
-    UserType, HouseType, TenantType, LeaseType, TaskType, SuggestionType,
-    ChatMessageType, DocumentTagType, ConversationSummaryType, SpawnTaskInput,
-    CreateTaskInput, AddDocumentTagInput, SendMessageInput, UpdateTaskInput,
-    CreatePropertyInput, UpdatePropertyInput, CreateTenantWithLeaseInput, AddLeaseForTenantInput,
-    VendorType, CreateVendorInput, UpdateVendorInput, VENDOR_TYPES,
-)
-from .services.task_service import TaskService
-from .services import chat_service, suggestion_service
-from .services.property_service import PropertyService
-from .services.tenant_service import TenantService
-from .services.document_service import DocumentService
-from .services.vendor_service import VendorService
 
+from .auth_mutations import Mutation as AuthMutation
+from .services import chat_service, suggestion_service
+from .services.document_service import DocumentService
+from .services.property_service import PropertyService
+from .services.task_service import TaskService
+from .services.tenant_service import TenantService
+from .services.vendor_service import VendorService
+from .types import (
+    VENDOR_TYPES,
+    AddDocumentTagInput,
+    AddLeaseForTenantInput,
+    ChatMessageType,
+    ConversationSummaryType,
+    CreatePropertyInput,
+    CreateTaskInput,
+    CreateTenantWithLeaseInput,
+    CreateVendorInput,
+    DocumentTagType,
+    HouseType,
+    LeaseType,
+    SendMessageInput,
+    SpawnTaskInput,
+    SuggestionType,
+    TaskType,
+    TenantType,
+    UpdatePropertyInput,
+    UpdateTaskInput,
+    UpdateVendorInput,
+    UserType,
+    VendorType,
+)
 
 # ---------------------------
 # Context helpers
@@ -122,9 +140,10 @@ class Query:
         limit: int = 50,
     ) -> typing.List[SuggestionType]:
         _current_user(info)
-        from sqlalchemy.orm import joinedload, selectinload
-        from db.models import Suggestion, Conversation, Message
         from sqlalchemy import select as sa_select
+        from sqlalchemy.orm import joinedload, selectinload
+
+        from db.models import Conversation, Message, Suggestion
         db = _session(info)
         q = sa_select(Suggestion).options(
             joinedload(Suggestion.ai_conversation).selectinload(Conversation.messages),
@@ -205,7 +224,8 @@ class Mutation(AuthMutation):
             draft_reply=input.draft_reply,
         )
         # Bump last_message_at on the linked task if any
-        from sqlalchemy import select as _sel, or_
+        from sqlalchemy import or_, select as _sel
+
         from db.models import Task
         task = db.execute(
             _sel(Task).where(or_(
@@ -224,7 +244,7 @@ class Mutation(AuthMutation):
     def send_sms(self, info, vendor_id: str, body: str, task_id: typing.Optional[str] = None) -> ChatMessageType:
         _current_user(info)
         db = _session(info)
-        from db.models import ExternalContact, ConversationType, Task
+        from db.models import ConversationType, ExternalContact, Task
 
         vendor = db.query(ExternalContact).filter_by(id=vendor_id).first()
         if not vendor:
@@ -261,7 +281,7 @@ class Mutation(AuthMutation):
         db.refresh(msg)
 
         # Dispatch SMS via Quo
-        from handlers.chat import send_sms_reply, _get_quo_api_key, _get_quo_from_number
+        from handlers.chat import _get_quo_api_key, _get_quo_from_number, send_sms_reply
         api_key = _get_quo_api_key()
         from_num = _get_quo_from_number()
         if api_key:
@@ -382,7 +402,8 @@ class Mutation(AuthMutation):
         _current_user(info)
         db = _session(info)
         from sqlalchemy import select as sa_select
-        from db.models import Task as TaskModel, ConversationType
+
+        from db.models import ConversationType, Task as TaskModel
         task = db.execute(
             sa_select(TaskModel).where(TaskModel.id == task_id)
         ).scalar_one_or_none()

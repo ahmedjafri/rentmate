@@ -23,9 +23,20 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from db.models import (
-    Base, Conversation, ConversationParticipant, ConversationType,
-    ExternalContact, Lease, Message, MessageType, ParticipantType,
-    Property, Suggestion, Task, Tenant, Unit,
+    Base,
+    Conversation,
+    ConversationParticipant,
+    ConversationType,
+    ExternalContact,
+    Lease,
+    Message,
+    MessageType,
+    ParticipantType,
+    Property,
+    Suggestion,
+    Task,
+    Tenant,
+    Unit,
 )
 
 # ── constants ────────────────────────────────────────────────────────────────
@@ -285,10 +296,10 @@ def _add_message(db, conv_id: str, sender_name: str, body: str,
 
 async def _run_agent_turn(db, task: Task, user_message: str) -> dict:
     """Run one agent turn and return structured results."""
-    from llm.tools import active_conversation_id, pending_suggestion_messages
+    from backends.local_auth import DEFAULT_USER_ID
     from llm.client import call_agent
     from llm.registry import agent_registry
-    from backends.local_auth import DEFAULT_USER_ID
+    from llm.tools import active_conversation_id, pending_suggestion_messages
 
     messages = _build_messages(db, task, user_message)
     agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
@@ -517,7 +528,7 @@ class TestGarageDoorLifecycle:
             )
             assert judge["pass"], f"LLM judge failed on tenant message: {judge['reason']}"
 
-        print(f"\n✓ Turn 2 passed — agent checked with tenant before confirming")
+        print("\n✓ Turn 2 passed — agent checked with tenant before confirming")
 
     def test_turn3_tenant_confirms_agent_confirms_vendor(self, db, scenario, mock_sms, autonomous_mode):
         """Turn 3: Tenant confirms → agent confirms with vendor."""
@@ -562,7 +573,7 @@ class TestGarageDoorLifecycle:
             loop = asyncio.new_event_loop()
             result = loop.run_until_complete(_run_agent_turn(
                 db, task,
-                f"The tenant confirmed they'll be home at 2pm tomorrow. "
+                "The tenant confirmed they'll be home at 2pm tomorrow. "
                 "Now confirm the schedule with the vendor.",
             ))
 
@@ -602,7 +613,7 @@ class TestGarageDoorLifecycle:
             )
             assert judge["pass"], f"LLM judge failed on vendor confirmation: {judge['reason']}"
 
-        print(f"\n✓ Turn 3 passed — vendor schedule confirmed after tenant approval")
+        print("\n✓ Turn 3 passed — vendor schedule confirmed after tenant approval")
 
     def test_turn4_work_complete_close_task(self, db, scenario, mock_sms, autonomous_mode):
         """Turn 4: Vendor completes work → agent notifies tenant and closes task."""
@@ -699,4 +710,4 @@ class TestGarageDoorLifecycle:
             )
             assert judge["pass"], f"LLM judge failed on tenant notification: {judge['reason']}"
 
-        print(f"\n✓ Turn 4 passed — tenant notified, task closed/closing")
+        print("\n✓ Turn 4 passed — tenant notified, task closed/closing")

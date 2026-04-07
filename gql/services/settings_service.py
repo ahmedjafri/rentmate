@@ -2,7 +2,7 @@
 
 Keeps the handler layer from reaching into settings internals directly.
 """
-from db.enums import TaskCategory, SuggestionOption
+from db.enums import SuggestionOption, TaskCategory
 
 _AUTONOMY_MODES: dict[str, tuple[str, str]] = {
     "manual":     ("manual",           "suggested"),

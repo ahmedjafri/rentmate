@@ -1,26 +1,31 @@
-from .base import Base
-from .rental import Property, Unit, Tenant, Lease
-from .tasks import Task, TaskNumberSequence
-from .messaging import (
-    ParticipantType,
-    ConversationType,
-    MessageType,
-    ExternalContact,
-    Conversation,
-    ConversationParticipant,
-    Message,
-    MessageReceipt,
+from db.enums import (
+    AgentSource,
+    AutomationSource,
+    SuggestionOption,
+    SuggestionSource,
+    TaskCategory,
+    TaskSource,
+    Urgency,
 )
-from .documents import Document, DocumentTask, DocumentTag
-from .automation import AutomationRevision
-from .suggestions import Suggestion
+
 from .agent_memory import AgentMemory
 from .agent_trace import AgentTrace
-from db.enums import (
-    TaskCategory, Urgency, TaskSource,
-    AutomationSource, AgentSource, SuggestionSource,
-    SuggestionOption,
+from .automation import AutomationRevision
+from .base import Base
+from .documents import Document, DocumentTag, DocumentTask
+from .messaging import (
+    Conversation,
+    ConversationParticipant,
+    ConversationType,
+    ExternalContact,
+    Message,
+    MessageReceipt,
+    MessageType,
+    ParticipantType,
 )
+from .rental import Lease, Property, Tenant, Unit
+from .suggestions import Suggestion
+from .tasks import Task, TaskNumberSequence
 
 __all__ = [
     "Base",

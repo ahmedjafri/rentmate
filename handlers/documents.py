@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backends.wire import storage_backend
-from db.lib import apply_document_extraction, compute_suggestions, group_suggestions, find_candidate_properties
+from db.lib import apply_document_extraction, compute_suggestions, find_candidate_properties, group_suggestions
 from db.models import Document, DocumentTask
 from handlers.deps import extract_json, get_db, require_user
 
@@ -201,7 +201,7 @@ async def get_document_tags(
 ):
     """Return all tags for a document, enriched with entity names."""
     await require_user(request)
-    from db.models import DocumentTag, Property as SqlProperty, Unit as SqlUnit, Tenant as SqlTenant
+    from db.models import DocumentTag, Property as SqlProperty, Tenant as SqlTenant, Unit as SqlUnit
     from db.queries import format_address as _format_address
     tags = db.query(DocumentTag).filter(DocumentTag.document_id == document_id).all()
     result = []
@@ -296,7 +296,7 @@ async def get_property_documents(
 ):
     """Return documents tagged to a property."""
     await require_user(request)
-    from db.models import DocumentTag, Document as DocModel
+    from db.models import Document as DocModel, DocumentTag
     tags = db.query(DocumentTag).filter(DocumentTag.property_id == property_id).all()
     doc_ids = [t.document_id for t in tags]
     if not doc_ids:
@@ -498,8 +498,9 @@ async def suggestion_group_chat(
     body: SuggestionChatRequest,
     request: Request,
 ):
-    import litellm
     import os
+
+    import litellm
 
     await require_user(request)
 

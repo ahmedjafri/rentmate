@@ -1,12 +1,19 @@
 # gql/types.py
-import strawberry
 import typing
 from datetime import date as _date, datetime as _datetime
-from db.models import MessageType
+
+import strawberry
+
 from db.enums import (  # noqa: F401 — re-exported
-    TaskCategory, Urgency, TaskSource,
-    AutomationSource, AgentSource, SuggestionSource, SuggestionOption,
+    AgentSource,
+    AutomationSource,
+    SuggestionOption,
+    SuggestionSource,
+    TaskCategory,
+    TaskSource,
+    Urgency,
 )
+from db.models import MessageType
 
 
 def _utc_iso(dt: _datetime | None) -> str:

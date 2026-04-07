@@ -7,12 +7,16 @@ work that belongs above the service layer per the project's architecture rules.
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.enums import AutomationSource, AgentSource, SuggestionSource
+from db.enums import AgentSource, AutomationSource, SuggestionSource
 from db.models import (
-    Suggestion, Task, Conversation, ConversationType,
-    Message, MessageType,
+    Conversation,
+    ConversationType,
+    Message,
+    MessageType,
+    Suggestion,
+    Task,
 )
-from gql.services import chat_service, suggestion_service, settings_service
+from gql.services import chat_service, settings_service, suggestion_service
 from gql.services.task_service import TaskService
 from gql.types import CreateTaskInput
 
@@ -672,7 +676,7 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
     def _dispatch_sms(self, to_phone: str, body: str) -> None:
         """Dispatch an SMS via Quo (best-effort, non-blocking)."""
         try:
-            from handlers.chat import send_sms_reply, _get_quo_api_key, _get_quo_from_number
+            from handlers.chat import _get_quo_api_key, _get_quo_from_number, send_sms_reply
             api_key = _get_quo_api_key()
             from_num = _get_quo_from_number()
             if api_key:

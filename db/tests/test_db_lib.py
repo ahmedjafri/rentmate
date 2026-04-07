@@ -3,21 +3,20 @@
 import pytest
 
 from db.lib import (
-    get_or_create_tenant_by_phone,
-    get_or_create_conversation_for_tenant,
     add_message,
-    list_conversations,
     get_conversation_with_messages,
+    get_or_create_conversation_for_tenant,
+    get_or_create_tenant_by_phone,
+    list_conversations,
 )
 from db.models import (
-    Tenant,
     ConversationParticipant,
-    ParticipantType,
     Message,
     MessageReceipt,
+    ParticipantType,
+    Tenant,
 )
 from db.utils import normalize_phone
-
 
 # ---------------------------
 # Tests
@@ -145,7 +144,8 @@ def test_list_conversations_and_get_with_messages(db):
 
 
 def test_record_sms_from_quo(db):
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
+
     from db.lib import record_sms_from_quo
 
     from_number = normalize_phone("+15550005555")

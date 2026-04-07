@@ -16,21 +16,20 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-logger = logging.getLogger("rentmate.audit")
-
-from .enums import TaskCategory, Urgency, TaskSource
+from .enums import TaskCategory, TaskSource, Urgency
 from .models import (
-    Task,
     Conversation,
+    Lease,
     Message,
     MessageType,
     ParticipantType,
     Property,
-    Unit,
-    Lease,
+    Task,
     Tenant,
+    Unit,
 )
 
+logger = logging.getLogger("rentmate.audit")
 
 # How many days before lease end to flag as "expiring soon"
 EXPIRY_WARN_DAYS = 60
@@ -132,7 +131,7 @@ def _create_task(
     db.flush()  # get task.id without committing
 
     # Assign task_number per account
-    from sqlalchemy import select as sa_select, func as sa_func
+    from sqlalchemy import func as sa_func, select as sa_select
     max_num = db.execute(
         sa_select(sa_func.coalesce(sa_func.max(Task.task_number), 0))
         .where(Task.account_id == task.account_id)
@@ -413,8 +412,8 @@ def run_data_audit(
     _PYTHON_HANDLED = {
         "lease_status", "incomplete_properties", "missing_contact",
     }
-    from handlers.default_automations import _CHECK_META as _BUILTIN_META
     from db.dsl_runner import run_script
+    from handlers.default_automations import _CHECK_META as _BUILTIN_META
     for builtin_key, meta in _BUILTIN_META.items():
         if builtin_key in _PYTHON_HANDLED:
             continue

@@ -30,7 +30,7 @@ _root = Path(__file__).parent.parent
 sys.path.insert(0, str(_root))
 
 from sqlalchemy import create_engine  # noqa: E402
-from sqlalchemy.orm import sessionmaker, scoped_session  # noqa: E402
+from sqlalchemy.orm import scoped_session, sessionmaker  # noqa: E402
 
 from db.models import ParticipantType  # noqa: E402
 from db.queries import (  # noqa: E402
@@ -43,7 +43,6 @@ from db.queries import (  # noqa: E402
     format_address,
     tenant_display_name,
 )
-
 
 # ---------------------------------------------------------------------------
 # DB session (mirrors handlers/deps.py without pulling in FastAPI deps)

@@ -18,9 +18,20 @@ from strawberry.fastapi import GraphQLRouter
 
 from db.models import Base
 from gql.schema import schema
+from handlers import (
+    auth,
+    automations,
+    chat,
+    dev,
+    documents,
+    settings,
+    tenant_invite,
+    tenant_portal,
+    vendor_invite,
+    vendor_portal,
+)
 from handlers.deps import SessionLocal, engine, require_user
-from handlers.settings import read_env_file, load_integrations
-from handlers import auth, automations, chat, documents, dev, settings, vendor_invite, vendor_portal, tenant_invite, tenant_portal
+from handlers.settings import load_integrations, read_env_file
 from llm.registry import agent_registry
 
 # ─── logging ─────────────────────────────────────────────────────────────────
@@ -275,12 +286,14 @@ async def _gmail_poll_loop():
 
 def _handle_gmail_batch():
     """Synchronous handler for a single Gmail poll cycle."""
+    import uuid as _uuid
+    from datetime import datetime as _dt
+
+    from sqlalchemy import func
+
     from backends.gmail import GmailClient
     from db.lib import route_inbound_to_task
     from db.models import Conversation, Message, MessageType, ParticipantType, Tenant
-    from sqlalchemy import func
-    import uuid as _uuid
-    from datetime import datetime as _dt
 
     gmail = GmailClient()
     try:
@@ -367,10 +380,11 @@ def _handle_gmail_batch():
 def _run_agent_for_task(db, conv, latest_body: str) -> str:
     """Run the agent synchronously for a task and return its reply text."""
     import asyncio as _asyncio
-    from llm.context import build_task_context
-    from llm.registry import agent_registry
+
     from backends.local_auth import DEFAULT_USER_ID
     from llm.client import call_agent
+    from llm.context import build_task_context
+    from llm.registry import agent_registry
 
     context = build_task_context(db, conv.id)
     from db.lib import get_conversation_with_messages

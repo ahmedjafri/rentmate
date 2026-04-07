@@ -1,9 +1,11 @@
 # gql/auth_mutations.py
 
 import strawberry
+
+from backends.local_auth import DEFAULT_USER_EMAIL, DEFAULT_USER_ID
 from backends.wire import auth_backend
-from backends.local_auth import DEFAULT_USER_ID, DEFAULT_USER_EMAIL
-from .types import LoginInput, AuthPayload, UserType
+
+from .types import AuthPayload, LoginInput, UserType
 
 
 @strawberry.type

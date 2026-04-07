@@ -6,8 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import ExternalContact
-from gql.types import CreateVendorInput, UpdateVendorInput, VENDOR_TYPES
 from gql.services import portal_auth
+from gql.types import VENDOR_TYPES, CreateVendorInput, UpdateVendorInput
 
 
 def _validate_vendor_type(vendor_type: str | None) -> None:

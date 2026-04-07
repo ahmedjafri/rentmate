@@ -22,9 +22,9 @@ from pathlib import Path
 from typing import Any
 
 from evals.runner import (
+    CriterionResult,
     EvalCase,
     EvalResult,
-    CriterionResult,
     load_cases,
     print_result,
     print_summary,

@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 from db.models import Document
 
 
-
 def _get_session_factory():
     """Import lazily to avoid circular imports at module load time."""
     from main import SessionLocal
@@ -61,6 +60,7 @@ async def process_document(document_id: str) -> None:
     Background task: extract text, embed chunks, and run LLM extraction on a Document.
     """
     import json
+
     from backends.wire import storage_backend, vector_backend
 
     SessionLocal = _get_session_factory()

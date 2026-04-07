@@ -1,19 +1,20 @@
 """Tests for handlers/automations.py — validate, create-task, config helpers, etc."""
 import json
 import os
-import pytest
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
-from main import app
-from handlers.deps import get_db
+
+from backends.local_auth import DEFAULT_USER_ID
 from handlers.automations import (
     _merge_automation_config,
     _record_run,
     _run_log,
 )
-from backends.local_auth import DEFAULT_USER_ID
+from handlers.deps import get_db
+from main import app
 
 
 def make_token():
@@ -225,7 +226,7 @@ class TestCreateSimulatedTask(unittest.TestCase):
 
     def test_create_suggestion_seeds_context_message(self):
         """The context message must be persisted on the suggestion's AI conversation."""
-        from db.models import Suggestion, Message
+        from db.models import Message, Suggestion
 
         with patch("handlers.automations.SessionLocal") as mock_sl:
             mock_sl.session_factory.return_value = self.db
@@ -256,7 +257,7 @@ class TestCreateSimulatedTask(unittest.TestCase):
     @patch("gql.services.settings_service.get_autonomy_for_category", return_value="manual")
     def test_suggestion_with_vendor_stores_payload(self, *_):
         """Vendor info should be stored in the suggestion's action_payload."""
-        from db.models import Suggestion, ExternalContact
+        from db.models import ExternalContact, Suggestion
 
         vendor = ExternalContact(name="Ace Plumbing", role_label="plumber", extra={"contact_method": "email"})
         self.db.add(vendor)
@@ -288,7 +289,7 @@ class TestCreateSimulatedTask(unittest.TestCase):
     @patch("gql.services.settings_service.get_autonomy_for_category", return_value="suggest")
     def test_suggest_mode_creates_approval_with_draft(self, *_):
         """In suggest mode, vendor draft should be in action_payload and approval message."""
-        from db.models import Suggestion, Message, ExternalContact
+        from db.models import ExternalContact, Message, Suggestion
 
         vendor = ExternalContact(name="Draft Vendor", extra={"contact_method": "email"})
         self.db.add(vendor)
@@ -334,7 +335,7 @@ class TestCreateSimulatedTask(unittest.TestCase):
     @patch("gql.services.settings_service.get_autonomy_for_category", return_value="manual")
     def test_manual_mode_default_options(self, *_):
         """In manual mode, suggestion should have accept/reject options."""
-        from db.models import Suggestion, Message, ExternalContact
+        from db.models import ExternalContact, Message, Suggestion
 
         vendor = ExternalContact(name="Manual Vendor", extra={"contact_method": "email"})
         self.db.add(vendor)

@@ -22,7 +22,7 @@ import pytest
 
 from db.audit import run_data_audit
 from db.dsl_runner import run_script
-from db.models import Conversation, Task, Lease, Message, Property, Tenant, Unit
+from db.models import Conversation, Lease, Message, Property, Task, Tenant, Unit
 
 TODAY = date.today()
 

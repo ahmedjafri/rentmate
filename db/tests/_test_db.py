@@ -5,7 +5,8 @@
 # import neomodel
 # from testcontainers.neo4j import Neo4jContainer
 import datetime
-from db.house_tenant_graph import HouseTenantGraph, House, Tenant  
+
+from db.house_tenant_graph import House, HouseTenantGraph, Tenant
 
 
 class TestHouseTenantGraph(unittest.TestCase):
