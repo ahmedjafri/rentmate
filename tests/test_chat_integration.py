@@ -67,6 +67,7 @@ async def _test_app(session_factory):
     with (
         patch("main.SessionLocal", session_factory),
         patch("handlers.deps.SessionLocal", session_factory),
+        patch("handlers.chat.SessionLocal", session_factory),
         patch(
             "handlers.chat.require_user",
             AsyncMock(return_value={"id": "test-user", "email": "test@test.com"}),

@@ -1,9 +1,12 @@
 import asyncio
-import hashlib as _hb_hashlib
-import json as _json
+import concurrent.futures
+import hashlib
+import json
 import os
-import threading as _hb_threading
-import uuid as _uuid
+import queue
+import threading
+import traceback
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Callable, Dict, Optional
@@ -12,15 +15,29 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
+from backends.local_auth import DEFAULT_USER_ID, resolve_account_id
+from backends.wire import sms_router
 from db.enums import TaskSource
-from db.lib import record_sms_from_quo, route_inbound_to_tenant_chat
-from db.models import Conversation, Message, MessageType, ParticipantType, Task
+from db.lib import (
+    get_or_create_user_ai_conversation,
+    record_sms_from_quo,
+    route_inbound_to_tenant_chat,
+    spawn_task_from_conversation,
+)
+from db.models import Conversation, ConversationType, Message, MessageType, ParticipantType, Task
+from db.session import SessionLocal
 from gql.services import chat_service
 from handlers.deps import get_db, require_user
+from handlers.settings import load_integrations
 from llm.context import build_task_context, load_account_context
 from llm.registry import agent_registry
+from llm.side_effects import process_side_effects
+from llm.tools import active_conversation_id, pending_suggestion_messages
+from llm.tracing import log_trace
 
 router = APIRouter()
 
@@ -39,12 +56,8 @@ _active_chats: Dict[str, _RunningChat] = {}
 QUO_API_KEY = os.getenv("QUO_API_KEY", "")
 PHONE_WHITELIST = [p.strip() for p in os.getenv("PHONE_WHITELIST", "").split(",") if p.strip()]
 
-
 def is_in_whitelist(number: str) -> bool:
     return any(allowed in number for allowed in PHONE_WHITELIST)
-
-
-
 
 async def chat_with_agent(
     agent_id: str,
@@ -91,8 +104,7 @@ async def chat_with_agent(
         user_message = conversation_history.pop()["content"]
 
     # Queue for bridging progress from the sync agent thread to async SSE
-    import queue as _queue
-    progress_queue: _queue.Queue[str] = _queue.Queue()
+    progress_queue: queue.Queue[str] = queue.Queue()
     progress_events: list[str] = []
 
     # Pretty tool name mapping
@@ -117,7 +129,6 @@ async def chat_with_agent(
 
     def _tool_progress(event_type: str, tool_name: str, preview: str | None, args: dict | None, **kwargs):
         """Hermes tool_progress_callback: (event_type, tool_name, preview, args, **kw)"""
-        from llm.tracing import log_trace
         label = _TOOL_LABELS.get(tool_name, tool_name)
         if event_type == "tool.started":
             hint = ""
@@ -153,7 +164,7 @@ async def chat_with_agent(
                         hint = f": {', '.join(l for l in labels if l)}" if labels else ""
             msg = f"{label}{hint}"
             progress_events.append(msg)
-            progress_queue.put(msg)
+            progressqueue.put(msg)
             log_trace("tool_call", _trace_source, msg, task_id=_trace_task_id,
                       tool_name=tool_name, detail=args)
         elif event_type == "tool.completed":
@@ -164,7 +175,7 @@ async def chat_with_agent(
                     error_detail = error_detail[:120] + "…"
                 msg = f"{label}: error" + (f" — {error_detail}" if error_detail else "")
                 progress_events.append(msg)
-                progress_queue.put(msg)
+                progressqueue.put(msg)
                 log_trace("error", _trace_source, msg, task_id=_trace_task_id,
                           tool_name=tool_name, detail={"error": str(error_detail)})
             else:
@@ -216,7 +227,6 @@ async def chat_with_agent(
     agent._build_api_kwargs = _patched_build_api_kwargs
 
     async def _run_with_progress():
-        import queue as _q
         loop = asyncio.get_event_loop()
         task = loop.run_in_executor(
             None,
@@ -229,15 +239,15 @@ async def chat_with_agent(
         # Drain progress queue while agent runs
         while not task.done():
             try:
-                msg = progress_queue.get_nowait()
+                msg = progressqueue.get_nowait()
                 if msg and on_progress:
                     await on_progress(msg)
-            except _q.Empty:
+            except queue.Empty:
                 pass
             await asyncio.sleep(0.1)
         # Drain remaining
-        while not progress_queue.empty():
-            msg = progress_queue.get_nowait()
+        while not progressqueue.empty():
+            msg = progressqueue.get_nowait()
             if msg and on_progress:
                 await on_progress(msg)
         return task.result()
@@ -264,7 +274,6 @@ async def chat_with_agent(
         return reply
     return str(result)
 
-
 def _normalize_phone(num: str) -> str:
     """Ensure phone number has +1 prefix for US numbers."""
     digits = ''.join(c for c in num if c.isdigit())
@@ -275,7 +284,6 @@ def _normalize_phone(num: str) -> str:
     if num.startswith('+'):
         return num
     return f"+{digits}"
-
 
 async def send_sms_reply(from_num: str, to_num: str, text: str, api_key: str | None = None):
     key = api_key or _get_quo_api_key()
@@ -300,20 +308,15 @@ async def send_sms_reply(from_num: str, to_num: str, text: str, api_key: str | N
         )
         print(f"[sms] Quo response: {response.status_code} {response.text[:200]}")
 
-
 def _get_quo_api_key() -> str:
     """Get Quo (OpenPhone) API key from integrations config or env var."""
-    from handlers.settings import load_integrations
     cfg = load_integrations().get("quo", {})
     return cfg.get("api_key") or QUO_API_KEY
 
-
 def _get_quo_from_number() -> str:
     """Get the outbound phone number from Quo config."""
-    from handlers.settings import load_integrations
     cfg = load_integrations().get("quo", {})
     return cfg.get("from_number") or ""
-
 
 async def send_email_reply(conv, body: str, inbound_meta: dict):
     """Send an email reply via Gmail. Requires GmailClient to be configured."""
@@ -333,7 +336,6 @@ async def send_email_reply(conv, body: str, inbound_meta: dict):
     except Exception as e:
         print(f"[send_email_reply] Failed: {e}")
 
-
 async def send_via_channel(conv, reply: str, inbound_meta: dict):
     """Dispatch an agent reply to the appropriate outbound channel."""
     if conv.channel_type == "sms":
@@ -346,7 +348,6 @@ async def send_via_channel(conv, reply: str, inbound_meta: dict):
         await send_email_reply(conv=conv, body=reply, inbound_meta=inbound_meta)
     # channel_type == None (manual/internal): no automated outbound
 
-
 # ─── Pydantic models ──────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
@@ -354,10 +355,8 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[str] = None
     task_id: Optional[str] = None
 
-
 class AssessRequest(BaseModel):
     task_id: str
-
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
@@ -366,7 +365,6 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
 
     Returns True if the message was processed, False if skipped.
     """
-    from backends.wire import sms_router
     resolved = sms_router.resolve(db, from_number, to_number)
     if not resolved:
         print(f"[sms] Sender not resolved for from={from_number} to={to_number}")
@@ -379,7 +377,6 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
 
     # ── Vendor inbound SMS ────────────────────────────────────────────
     if entity_type == "vendor":
-        from db.models import ConversationType, Message as MsgModel, ParticipantType as PT
 
         vendor = entity
         conv = chat_service.get_or_create_external_conversation(
@@ -389,10 +386,10 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
             vendor_id=str(vendor.id),
         )
         now = datetime.now(UTC)
-        db.add(MsgModel(
-            id=str(_uuid.uuid4()),
+        db.add(Message(
+            id=str(uuid.uuid4()),
             conversation_id=conv.id,
-            sender_type=PT.EXTERNAL_CONTACT,
+            sender_type=ParticipantType.EXTERNAL_CONTACT,
             sender_external_contact_id=str(vendor.id),
             body=body,
             message_type=MessageType.MESSAGE,
@@ -432,11 +429,9 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
     db.commit()
 
     from llm.client import call_agent
-    from llm.side_effects import process_side_effects
     context = build_task_context(db, conv.id)
     messages = chat_service.build_agent_message_history(db, conv_id=conv.id, user_message=body, context=context, exclude_last=True)
 
-    from backends.local_auth import resolve_account_id
     agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
     session_key = f"sms:{conv.id}"
 
@@ -444,7 +439,7 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
 
     now = datetime.now(UTC)
     ai_msg = Message(
-        id=str(_uuid.uuid4()),
+        id=str(uuid.uuid4()),
         conversation_id=conv.id,
         sender_type=ParticipantType.ACCOUNT_USER,
         body=agent_resp.reply,
@@ -459,7 +454,6 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
 
     await send_via_channel(conv, agent_resp.reply, inbound_meta=sender_meta)
     return True
-
 
 @router.post("/quo-webhook")
 async def handle_message(
@@ -488,8 +482,6 @@ async def handle_message(
     await process_inbound_sms(db, from_number, to_number, body)
     return {"status": "ok"}
 
-
-
 @router.post("/chat/send")
 async def chat_endpoint(
     body: ChatRequest,
@@ -503,7 +495,6 @@ async def chat_endpoint(
     or omit both to auto-create a user_ai conversation.
     """
     await require_user(request)
-    from handlers.deps import SessionLocal
     _SL = SessionLocal.session_factory
 
     # ── Resolve conversation + context ────────────────────────────────────
@@ -517,7 +508,6 @@ async def chat_endpoint(
             raise HTTPException(status_code=404, detail="Task has no AI conversation")
         context = build_task_context(db, body.task_id)
     else:
-        from db.lib import get_or_create_user_ai_conversation
         context = load_account_context(db)
         if body.conversation_id:
             conv = chat_service.get_or_create_conversation(db, body.conversation_id)
@@ -539,7 +529,7 @@ async def chat_endpoint(
                 print(f"[chat] DB write failed (no-ai path): {e}")
             finally:
                 write_db.close()
-            yield f"data: {_json.dumps({'type': 'done', 'reply': None, 'conversation_id': conv_id})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'reply': None, 'conversation_id': conv_id})}\n\n"
 
         return StreamingResponse(
             _no_ai(),
@@ -563,10 +553,9 @@ async def chat_endpoint(
     else:
         messages_payload = chat_service.build_agent_message_history(db, conv_id=conv_id, user_message=body.message, context=context)
 
-    from backends.local_auth import resolve_account_id
     agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
     session_key = f"task:{body.task_id}" if body.task_id else f"chat:{conv_id}"
-    stream_id = str(_uuid.uuid4())
+    stream_id = str(uuid.uuid4())
     user_message = body.message
 
     # ── SSE generator ─────────────────────────────────────────────────────
@@ -585,8 +574,6 @@ async def chat_endpoint(
 
         async def run_and_persist() -> tuple[str, str, list[dict]]:
             from llm.client import call_agent
-            from llm.side_effects import process_side_effects
-            from llm.tools import active_conversation_id
             token = active_conversation_id.set(conv_id)
             try:
                 # Persist user message BEFORE running the agent so it gets an
@@ -594,7 +581,7 @@ async def chat_endpoint(
                 pre_db = _SL()
                 try:
                     pre_db.add(Message(
-                        id=str(_uuid.uuid4()),
+                        id=str(uuid.uuid4()),
                         conversation_id=conv_id,
                         sender_type=ParticipantType.ACCOUNT_USER,
                         body=user_message,
@@ -620,7 +607,7 @@ async def chat_endpoint(
                     trace_lines = [l for l in running.progress_log if l != "Thinking\u2026"]
                     if trace_lines:
                         write_db.add(Message(
-                            id=str(_uuid.uuid4()),
+                            id=str(uuid.uuid4()),
                             conversation_id=conv_id,
                             sender_type=ParticipantType.ACCOUNT_USER,
                             body="\n".join(trace_lines),
@@ -631,7 +618,7 @@ async def chat_endpoint(
                         ))
                     # Persist AI reply
                     ai_msg = Message(
-                        id=str(_uuid.uuid4()),
+                        id=str(uuid.uuid4()),
                         conversation_id=conv_id,
                         sender_type=ParticipantType.ACCOUNT_USER,
                         body=agent_resp.reply,
@@ -651,16 +638,14 @@ async def chat_endpoint(
                         db_conv.updated_at = now
                     write_db.commit()
                     print(f"[chat] Persisted AI reply ({len(agent_resp.reply)} chars) to {conv_id}")
-                    from llm.tracing import log_trace as _lt
-                    _lt("llm_reply", "chat", agent_resp.reply[:200],
+                    log_trace("llm_reply", "chat", agent_resp.reply[:200],
                         task_id=body.task_id, conversation_id=conv_id)
                     return agent_resp.reply, ai_msg.id, flushed_suggestions
                 except Exception as e:
                     write_db.rollback()
                     print(f"[chat] DB write failed: {e}")
-                    import traceback
                     traceback.print_exc()
-                    return agent_resp.reply, str(_uuid.uuid4()), []
+                    return agent_resp.reply, str(uuid.uuid4()), []
                 finally:
                     write_db.close()
             finally:
@@ -671,31 +656,31 @@ async def chat_endpoint(
 
         try:
             # Emit stream_id so the client can reconnect
-            yield f"data: {_json.dumps({'type': 'stream_id', 'stream_id': stream_id})}\n\n"
+            yield f"data: {json.dumps({'type': 'stream_id', 'stream_id': stream_id})}\n\n"
 
             while not running.task.done():
                 try:
                     text = await asyncio.wait_for(queue.get(), timeout=0.1)
-                    yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
+                    yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
                 except asyncio.TimeoutError:
                     pass
 
             while not queue.empty():
                 text = queue.get_nowait()
-                yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
+                yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
 
             try:
                 reply, msg_id, suggestion_msgs = running.task.result()
             except Exception as exc:
                 print(f"[chat] SSE task failed: {exc!r}")
-                yield f"data: {_json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
                 return
 
             done_payload: dict = {'type': 'done', 'reply': reply, 'message_id': msg_id, 'conversation_id': conv_id}
             if suggestion_msgs:
                 done_payload['suggestion_messages'] = suggestion_msgs
             print(f"[chat] SSE done: reply={len(reply or '')} chars, msg_id={msg_id}")
-            yield f"data: {_json.dumps(done_payload)}\n\n"
+            yield f"data: {json.dumps(done_payload)}\n\n"
         finally:
             if queue in running.subscribers:
                 running.subscribers.remove(queue)
@@ -706,22 +691,17 @@ async def chat_endpoint(
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
-
 NO_RESPONSE_SENTINEL = "[NO_RESPONSE]"
-
 
 # ─── Agent heartbeat ─────────────────────────────────────────────────────────
 
-_heartbeat_locks: dict[str, _hb_threading.Lock] = {}
-_heartbeat_locks_lock = _hb_threading.Lock()
+_heartbeat_locks: dict[str, threading.Lock] = {}
+_heartbeat_locks_lock = threading.Lock()
 _heartbeat_state: dict[str, str] = {}  # task_id → context hash from last run
-
 
 def _compute_heartbeat_hash(task) -> str:
     """Hash task state + latest message timestamps using a short-lived session."""
-    from sqlalchemy import text
 
-    from handlers.deps import SessionLocal
     db = SessionLocal.session_factory()
     try:
         parts = []
@@ -744,10 +724,9 @@ def _compute_heartbeat_hash(task) -> str:
             "SELECT COUNT(*) FROM suggestions WHERE task_id = :tid AND status = 'pending'"
         ), {"tid": task.id}).scalar()
         parts.append(f"suggestions:{count}")
-        return _hb_hashlib.md5("|".join(parts).encode()).hexdigest()
+        return hashlib.md5("|".join(parts).encode()).hexdigest()
     finally:
         db.close()
-
 
 def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
     """Run the agent against a task and let it respond/act.
@@ -760,7 +739,7 @@ def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
     # Per-task lock prevents concurrent heartbeats for the same task
     with _heartbeat_locks_lock:
         if task_id not in _heartbeat_locks:
-            _heartbeat_locks[task_id] = _hb_threading.Lock()
+            _heartbeat_locks[task_id] = threading.Lock()
         lock = _heartbeat_locks[task_id]
 
     if not lock.acquire(blocking=False):
@@ -771,18 +750,9 @@ def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
     finally:
         lock.release()
 
-
 def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | None:
-    import asyncio as _hb_asyncio
-    import json as _hb_json
 
-    from backends.local_auth import DEFAULT_USER_ID
-    from handlers.deps import SessionLocal
     from llm.client import call_agent
-    from llm.registry import agent_registry
-    from llm.side_effects import process_side_effects
-    from llm.tools import active_conversation_id, pending_suggestion_messages
-    from llm.tracing import log_trace
 
     db = SessionLocal.session_factory()
     try:
@@ -808,7 +778,6 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
         if ext_conv_id:
             ext_conv = db.query(Conversation).filter_by(id=ext_conv_id).first()
             if ext_conv:
-                from sqlalchemy.orm.attributes import flag_modified
                 extra = dict(ext_conv.extra or {})
                 extra["ai_typing"] = True
                 ext_conv.extra = extra
@@ -820,7 +789,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
         # Gather progress steps
         steps_text = ""
         if task.steps:
-            steps_text = "\n\nTask progress steps:\n" + _hb_json.dumps(task.steps, indent=2)
+            steps_text = "\n\nTask progress steps:\n" + _hbjson.dumps(task.steps, indent=2)
 
         # Gather external conversation messages
         ext_msgs_text = ""
@@ -876,13 +845,12 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
         # Run agent in a dedicated thread with its own event loop so we
         # don't conflict with the main uvloop (heartbeat_loop calls us from
         # within the running async loop).
-        import concurrent.futures
         _agent_result = [None, None]  # [resp, pending]
 
         def _run_in_thread():
             _conv_token = active_conversation_id.set(conv_id)
             _pending_token = pending_suggestion_messages.set([])
-            _loop = _hb_asyncio.new_event_loop()
+            _loop = asyncio.new_event_loop()
             try:
                 _agent_result[0] = _loop.run_until_complete(
                     call_agent(agent_id, session_key=session_key, messages=messages_payload)
@@ -918,7 +886,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
 
             # AI reply to AI conversation
             ai_msg = Message(
-                id=str(_uuid.uuid4()),
+                id=str(uuid.uuid4()),
                 conversation_id=conv_id,
                 sender_type=ParticipantType.ACCOUNT_USER,
                 body=resp.reply,
@@ -959,7 +927,6 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
         except Exception as e:
             write_db.rollback()
             print(f"\033[31m[heartbeat] DB write failed for task {task_id}: {e}\033[0m")
-            import traceback
             traceback.print_exc()
             return resp.reply
         finally:
@@ -972,7 +939,6 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
                     pass
     except Exception as e:
         print(f"\033[31m[heartbeat] Failed for task {task_id}: {e}\033[0m")
-        import traceback
         traceback.print_exc()
         log_trace("error", "heartbeat", f"Heartbeat failed: {e}", task_id=task_id)
         return None
@@ -991,7 +957,6 @@ ASSESS_PROMPT = (
     f"reply with exactly: {NO_RESPONSE_SENTINEL}"
 )
 
-
 @router.post("/chat/assess")
 async def assess_task_endpoint(
     body: AssessRequest,
@@ -1005,7 +970,6 @@ async def assess_task_endpoint(
     nothing is persisted and the client receives ``reply: null``.
     """
     await require_user(request)
-    from handlers.deps import SessionLocal
     _SL = SessionLocal.session_factory
 
     task_obj = db.query(Task).filter_by(id=body.task_id).first()
@@ -1024,16 +988,14 @@ async def assess_task_endpoint(
     if ext_conv_id:
         ext_conv = db.query(Conversation).filter_by(id=ext_conv_id).first()
         if ext_conv:
-            from sqlalchemy.orm.attributes import flag_modified
             extra = dict(ext_conv.extra or {})
             extra["ai_typing"] = True
             ext_conv.extra = extra
             flag_modified(ext_conv, "extra")
     # Gather progress steps and external conversation for the assess prompt
-    import json as _assess_json
     steps_text = ""
     if task_obj.steps:
-        steps_text = "\n\nTask progress steps:\n" + _assess_json.dumps(task_obj.steps, indent=2)
+        steps_text = "\n\nTask progress steps:\n" + _assessjson.dumps(task_obj.steps, indent=2)
 
     ext_msgs_text = ""
     if ext_conv_id:
@@ -1073,10 +1035,9 @@ async def assess_task_endpoint(
         "content": ASSESS_PROMPT + steps_text + ext_msgs_text,
     })
 
-    from backends.local_auth import resolve_account_id
     agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
     session_key = f"task:{body.task_id}"
-    stream_id = str(_uuid.uuid4())
+    stream_id = str(uuid.uuid4())
 
     async def generate():
         queue: asyncio.Queue = asyncio.Queue()
@@ -1092,8 +1053,6 @@ async def assess_task_endpoint(
 
         async def run_and_persist() -> tuple[str | None, str | None, list[dict]]:
             from llm.client import call_agent
-            from llm.side_effects import process_side_effects
-            from llm.tools import active_conversation_id
             token = active_conversation_id.set(conv_id)
             try:
                 # NOTE: We do NOT persist a user message — the assess prompt is
@@ -1112,7 +1071,7 @@ async def assess_task_endpoint(
                     trace_lines = [l for l in running.progress_log if l != "Thinking\u2026"]
                     if trace_lines:
                         write_db.add(Message(
-                            id=str(_uuid.uuid4()),
+                            id=str(uuid.uuid4()),
                             conversation_id=conv_id,
                             sender_type=ParticipantType.ACCOUNT_USER,
                             body="\n".join(trace_lines),
@@ -1125,7 +1084,7 @@ async def assess_task_endpoint(
                     # messages are sent through the message_person tool /
                     # suggestion flow, not directly from the assess endpoint.
                     ai_msg = Message(
-                        id=str(_uuid.uuid4()),
+                        id=str(uuid.uuid4()),
                         conversation_id=conv_id,
                         sender_type=ParticipantType.ACCOUNT_USER,
                         body=agent_resp.reply,
@@ -1143,16 +1102,14 @@ async def assess_task_endpoint(
                         db_conv.updated_at = now
                     write_db.commit()
                     print(f"[assess] Persisted AI reply ({len(agent_resp.reply)} chars) to AI conv {conv_id}")
-                    from llm.tracing import log_trace as _lt2
-                    _lt2("llm_reply", "assess", agent_resp.reply[:200],
+                    log_trace("llm_reply", "assess", agent_resp.reply[:200],
                          task_id=body.task_id, conversation_id=conv_id)
                     return agent_resp.reply, ai_msg.id, flushed_suggestions
                 except Exception as e:
                     write_db.rollback()
                     print(f"[assess] DB write failed: {e}")
-                    import traceback
                     traceback.print_exc()
-                    return agent_resp.reply, str(_uuid.uuid4()), []
+                    return agent_resp.reply, str(uuid.uuid4()), []
                 finally:
                     write_db.close()
             finally:
@@ -1169,30 +1126,30 @@ async def assess_task_endpoint(
         running.task = asyncio.create_task(run_and_persist())
 
         try:
-            yield f"data: {_json.dumps({'type': 'stream_id', 'stream_id': stream_id})}\n\n"
+            yield f"data: {json.dumps({'type': 'stream_id', 'stream_id': stream_id})}\n\n"
 
             while not running.task.done():
                 try:
                     text = await asyncio.wait_for(queue.get(), timeout=0.1)
-                    yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
+                    yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
                 except asyncio.TimeoutError:
                     pass
 
             while not queue.empty():
                 text = queue.get_nowait()
-                yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
+                yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
 
             try:
                 reply, msg_id, suggestion_msgs = running.task.result()
             except Exception as exc:
                 print(f"[assess] SSE task failed: {exc!r}")
-                yield f"data: {_json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
                 return
 
             done_payload: dict = {'type': 'done', 'reply': reply, 'message_id': msg_id, 'conversation_id': conv_id}
             if suggestion_msgs:
                 done_payload['suggestion_messages'] = suggestion_msgs
-            yield f"data: {_json.dumps(done_payload)}\n\n"
+            yield f"data: {json.dumps(done_payload)}\n\n"
         finally:
             if queue in running.subscribers:
                 running.subscribers.remove(queue)
@@ -1203,7 +1160,6 @@ async def assess_task_endpoint(
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
-
 @router.get("/chat/task-context/{task_id}")
 async def get_task_context(
     task_id: str,
@@ -1213,7 +1169,6 @@ async def get_task_context(
     """Return the full context string the agent receives for a task."""
     await require_user(request)
     return {"context": build_task_context(db, task_id)}
-
 
 @router.get("/chat/conversations")
 async def list_chat_conversations(
@@ -1232,18 +1187,15 @@ async def list_chat_conversations(
         for c in convs
     ]
 
-
 @router.post("/chat/new")
 async def create_new_chat(
     request: Request,
     db: Session = Depends(get_db),
 ):
     await require_user(request)
-    from db.lib import get_or_create_user_ai_conversation
     conv = get_or_create_user_ai_conversation(db, account_id="default", user_id="default", session_key=None)
     db.commit()
     return {"id": conv.id, "title": conv.subject}
-
 
 class SpawnTaskRequest(BaseModel):
     parent_conversation_id: str
@@ -1254,7 +1206,6 @@ class SpawnTaskRequest(BaseModel):
     task_mode: str = "autonomous"
     source: str = TaskSource.MANUAL
 
-
 @router.post("/chat/task/spawn")
 async def spawn_task_endpoint(
     body: SpawnTaskRequest,
@@ -1262,7 +1213,6 @@ async def spawn_task_endpoint(
     db: Session = Depends(get_db),
 ):
     await require_user(request)
-    from db.lib import spawn_task_from_conversation
     task = spawn_task_from_conversation(
         db,
         parent_conversation_id=body.parent_conversation_id,
@@ -1284,7 +1234,6 @@ async def spawn_task_endpoint(
         "urgency": task.urgency,
     }
 
-
 @router.get("/chat/stream/{stream_id}")
 async def chat_stream_reconnect(stream_id: str, request: Request):
     """Reconnect to an in-flight chat and receive its remaining SSE events.
@@ -1298,7 +1247,7 @@ async def chat_stream_reconnect(stream_id: str, request: Request):
 
     if not running:
         async def idle():
-            yield f"data: {_json.dumps({'type': 'idle'})}\n\n"
+            yield f"data: {json.dumps({'type': 'idle'})}\n\n"
         return StreamingResponse(
             idle(),
             media_type="text/event-stream",
@@ -1312,27 +1261,27 @@ async def chat_stream_reconnect(stream_id: str, request: Request):
     async def generate():
         try:
             for text in buffered:
-                yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
+                yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
 
             while not running.task.done():
                 try:
                     text = await asyncio.wait_for(sub.get(), timeout=0.1)
-                    yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
+                    yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
                 except asyncio.TimeoutError:
                     pass
 
             while not sub.empty():
                 text = sub.get_nowait()
-                yield f"data: {_json.dumps({'type': 'progress', 'text': text})}\n\n"
+                yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
 
             try:
                 reply, msg_id = running.task.result()
                 done_payload: dict = {'type': 'done', 'reply': reply, 'message_id': msg_id}
                 if actions:
                     done_payload['actions'] = actions
-                yield f"data: {_json.dumps(done_payload)}\n\n"
+                yield f"data: {json.dumps(done_payload)}\n\n"
             except Exception:
-                yield f"data: {_json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
         finally:
             if sub in running.subscribers:
                 running.subscribers.remove(sub)
