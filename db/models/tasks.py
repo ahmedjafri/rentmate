@@ -25,6 +25,7 @@ class Task(Base):
     priority     = Column(String(20),  nullable=True)
     confidential = Column(Boolean,     nullable=False, default=False)
     steps        = Column(JSON,        nullable=True)   # ordered list of progress steps
+    notes        = Column(String,      nullable=True)   # task-scoped agent notes (quotes, findings)
     last_message_at = Column(DateTime, nullable=True)
     channel_type = Column(String(20),  nullable=True)
 

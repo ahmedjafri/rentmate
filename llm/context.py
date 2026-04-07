@@ -90,6 +90,10 @@ def build_task_context(db: Session, task_id: str) -> str:
     if context_msgs:
         lines.append(f"Description: {context_msgs[0].body}")
 
+    # Task-scoped notes (quotes, findings, scheduling)
+    if task.notes:
+        lines.append(f"\nTask notes:\n{task.notes}")
+
     # Property context (include ID so the agent can use it for save_memory)
     prop: Optional[Property] = None
     unit_obj: Optional[Unit] = None

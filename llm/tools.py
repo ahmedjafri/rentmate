@@ -788,7 +788,7 @@ class CreateVendorTool(Tool):
 
 
 class SaveMemoryTool(Tool):
-    """Save a context note for an entity (property, unit, tenant, vendor) or general."""
+    """Save a note — either task-scoped or permanent entity context."""
 
     @property
     def name(self) -> str:
@@ -797,11 +797,10 @@ class SaveMemoryTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Save a context note to long-term memory. Notes persist across "
-            "conversations. Attach notes to a specific entity (property, unit, "
-            "tenant, vendor) or save as general memory. Use this to remember "
-            "preferences, quirks, maintenance history, vendor reliability notes, "
-            "or anything the property manager tells you to remember."
+            "Save a note. Use scope='task' (default) for task-specific observations "
+            "like quotes, scheduling details, assessment findings. Use scope='entity' "
+            "for permanent knowledge about an entity that applies across all tasks "
+            "(vendor specialties, tenant preferences, property recurring issues)."
         )
 
     @property
@@ -814,30 +813,60 @@ class SaveMemoryTool(Tool):
                     "type": "string",
                     "description": "The note to save (concise, one topic per note).",
                 },
+                "scope": {
+                    "type": "string",
+                    "enum": ["task", "entity"],
+                    "description": "Where to save: 'task' for this task only (default), 'entity' for permanent entity knowledge.",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID (required when scope='task'). Use the Task ID from context.",
+                },
                 "entity_type": {
                     "type": "string",
                     "enum": ["property", "unit", "tenant", "vendor", "general"],
-                    "description": "What type of entity this note is about. Use 'general' for preferences and global notes.",
+                    "description": "Entity type (required when scope='entity').",
                 },
                 "entity_id": {
                     "type": "string",
-                    "description": "ID of the entity (property/unit/tenant/vendor). Required unless entity_type is 'general'.",
+                    "description": "Entity ID (required when scope='entity').",
                 },
                 "entity_label": {
                     "type": "string",
-                    "description": "Human-readable label (e.g. '16617 3rd Dr SE', 'Unit 3B', 'Handyman Rob'). Stored for display.",
+                    "description": "Human-readable label for display.",
                 },
             },
         }
 
     async def execute(self, **kwargs: Any) -> str:
         content = kwargs["content"]
+        scope = kwargs.get("scope", "task")
         entity_type = kwargs.get("entity_type", "general")
         entity_id = kwargs.get("entity_id", "")
         entity_label = kwargs.get("entity_label", "")
+        task_id = kwargs.get("task_id", "")
 
         from handlers.deps import SessionLocal
         from datetime import UTC, datetime
+
+        # Task-scoped notes
+        if scope == "task":
+            if not task_id:
+                return json.dumps({"status": "error", "message": "task_id is required for scope='task'"})
+            db = SessionLocal.session_factory()
+            try:
+                from db.models import Task as TaskModel
+                task = db.query(TaskModel).filter_by(id=task_id).first()
+                if not task:
+                    return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
+                now = datetime.now(UTC).strftime("%Y-%m-%d")
+                entry = f"[{now}] {content}"
+                existing = task.notes or ""
+                task.notes = f"{existing}\n{entry}".strip()
+                db.commit()
+                return json.dumps({"status": "ok", "message": "Task note saved."})
+            finally:
+                db.close()
 
         if entity_type == "general" or not entity_id:
             # General notes go to agent_memory table
