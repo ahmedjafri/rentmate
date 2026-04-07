@@ -63,7 +63,7 @@ class TestChatEndpoint(unittest.TestCase):
     def test_returns_reply(self):
         with (
             patch("handlers.chat.load_account_context", return_value="Account context"),
-            patch("handlers.chat.chat_with_agent", new_callable=AsyncMock, return_value="Hi there!"),
+            patch("llm.client.chat_with_agent", new_callable=AsyncMock, return_value="Hi there!"),
         ):
             response = self.client.post(
                 "/chat/send",
@@ -79,7 +79,7 @@ class TestChatEndpoint(unittest.TestCase):
     def test_preserves_conversation_id(self):
         with (
             patch("handlers.chat.load_account_context", return_value="ctx"),
-            patch("handlers.chat.chat_with_agent", new_callable=AsyncMock, return_value="reply"),
+            patch("llm.client.chat_with_agent", new_callable=AsyncMock, return_value="reply"),
         ):
             response = self.client.post(
                 "/chat/send",
@@ -93,7 +93,7 @@ class TestChatEndpoint(unittest.TestCase):
     def test_agent_error_returns_error_event(self):
         with (
             patch("handlers.chat.load_account_context", return_value="ctx"),
-            patch("handlers.chat.chat_with_agent", new_callable=AsyncMock, side_effect=RuntimeError("boom")),
+            patch("llm.client.chat_with_agent", new_callable=AsyncMock, side_effect=RuntimeError("boom")),
         ):
             response = self.client.post(
                 "/chat/send",
@@ -115,7 +115,7 @@ class TestChatEndpoint(unittest.TestCase):
 
         with (
             patch("handlers.chat.load_account_context", return_value="system-ctx"),
-            patch("handlers.chat.chat_with_agent", side_effect=_fake_chat),
+            patch("llm.client.chat_with_agent", side_effect=_fake_chat),
         ):
             self.client.post(
                 "/chat/send",

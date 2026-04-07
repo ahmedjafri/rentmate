@@ -4,7 +4,7 @@ Integration tests for the /chat/send SSE endpoint.
 The real FastAPI app is exercised end-to-end against an in-memory SQLite
 database.  Only two things are mocked:
 
-  1. ``handlers.chat.chat_with_agent`` — replaces the LLM call so tests are
+  1. ``llm.client.chat_with_agent`` — replaces the LLM call so tests are
      fast and deterministic.  The mock can optionally call ``on_progress`` to
      simulate the reasoning-trace events that a real tool-using agent emits.
 
@@ -149,7 +149,7 @@ class TestGenericChat:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "handlers.chat.chat_with_agent",
+                    "llm.client.chat_with_agent",
                     AsyncMock(return_value="Hello from RentMate!"),
                 ):
                     async with client.stream(
@@ -176,7 +176,7 @@ class TestGenericChat:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "handlers.chat.chat_with_agent",
+                    "llm.client.chat_with_agent",
                     AsyncMock(return_value="Got it."),
                 ):
                     async with client.stream(
@@ -201,7 +201,7 @@ class TestTaskChatSSE:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "handlers.chat.chat_with_agent",
+                    "llm.client.chat_with_agent",
                     AsyncMock(return_value="All good."),
                 ):
                     async with client.stream(
@@ -227,7 +227,7 @@ class TestTaskChatSSE:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "handlers.chat.chat_with_agent",
+                    "llm.client.chat_with_agent",
                     AsyncMock(return_value=reply_text),
                 ):
                     async with client.stream(
@@ -261,7 +261,7 @@ class TestTaskChatSSE:
 
         async def _run():
             async with _test_app(session_factory) as client:
-                with patch("handlers.chat.chat_with_agent", side_effect=fake_agent):
+                with patch("llm.client.chat_with_agent", side_effect=fake_agent):
                     async with client.stream(
                         "POST",
                         "/chat/send",
@@ -287,7 +287,7 @@ class TestTaskChatSSE:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "handlers.chat.chat_with_agent",
+                    "llm.client.chat_with_agent",
                     AsyncMock(side_effect=RuntimeError("LLM unavailable")),
                 ):
                     async with client.stream(
@@ -309,7 +309,7 @@ class TestTaskChatSSE:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "handlers.chat.chat_with_agent",
+                    "llm.client.chat_with_agent",
                     AsyncMock(return_value=reply_text),
                 ):
                     async with client.stream(
@@ -346,7 +346,7 @@ class TestTaskChatSSE:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "handlers.chat.chat_with_agent",
+                    "llm.client.chat_with_agent",
                     AsyncMock(return_value="irrelevant"),
                 ):
                     resp = await client.post(
