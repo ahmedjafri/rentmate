@@ -1,28 +1,75 @@
-"""Service for reading autonomy and other app-level settings."""
+"""Service for reading and writing app-level settings from the database."""
 import json
-import os
-from pathlib import Path
+from datetime import UTC, datetime
 
 from db.enums import SuggestionOption, TaskCategory
+from db.models import AppSetting
+from db.session import SessionLocal
 
-_DATA_DIR = Path(os.environ.get("RENTMATE_DATA_DIR", str(Path(__file__).parent.parent.parent / "data")))
-_SETTINGS_FILE = _DATA_DIR / "settings.json"
 _DEFAULT_AUTONOMY = {c.value: "suggest" for c in TaskCategory}
 
 
+# ── generic get/set ──────────────────────────────────────────────────────────
+
+
+def get_setting(key: str) -> dict | None:
+    """Read a setting by key. Returns parsed JSON or None."""
+    db = SessionLocal.session_factory()
+    try:
+        row = db.query(AppSetting).filter_by(key=key).first()
+        if row and row.value:
+            return json.loads(row.value)
+        return None
+    finally:
+        db.close()
+
+
+def set_setting(key: str, *, value: dict) -> None:
+    """Write a setting by key (upsert)."""
+    db = SessionLocal.session_factory()
+    try:
+        row = db.query(AppSetting).filter_by(key=key).first()
+        now = datetime.now(UTC)
+        if row:
+            row.value = json.dumps(value)
+            row.updated_at = now
+        else:
+            db.add(AppSetting(key=key, value=json.dumps(value), updated_at=now))
+        db.commit()
+    finally:
+        db.close()
+
+
 def load_app_settings() -> dict:
-    """Read the app settings JSON file."""
-    if _SETTINGS_FILE.exists():
-        try:
-            return json.loads(_SETTINGS_FILE.read_text())
-        except Exception:
-            pass
-    return {}
+    """Read all settings as a merged dict."""
+    db = SessionLocal.session_factory()
+    try:
+        rows = db.query(AppSetting).all()
+        result = {}
+        for row in rows:
+            if row.value:
+                try:
+                    result[row.key] = json.loads(row.value)
+                except Exception:
+                    result[row.key] = row.value
+        return result
+    finally:
+        db.close()
+
+
+def save_app_settings(data: dict) -> None:
+    """Write multiple settings at once (merge with existing)."""
+    for key, value in data.items():
+        set_setting(key, value=value)
+
+
+# ── autonomy ─────────────────────────────────────────────────────────────────
 
 
 def get_autonomy_settings() -> dict:
     """Return the autonomy settings dict (category → level)."""
-    return load_app_settings().get("autonomy", _DEFAULT_AUTONOMY)
+    return get_setting("autonomy") or dict(_DEFAULT_AUTONOMY)
+
 
 _AUTONOMY_MODES: dict[str, tuple[str, str]] = {
     "manual":     ("manual",           "suggested"),
@@ -42,6 +89,22 @@ def get_task_mode_for_category(category: str | None) -> tuple[str, str]:
     """Return (task_mode, task_status) for a category based on its autonomy level."""
     level = get_autonomy_for_category(category)
     return _AUTONOMY_MODES.get(level, _DEFAULT_MODE)
+
+
+# ── integrations ─────────────────────────────────────────────────────────────
+
+
+def get_integrations() -> dict:
+    """Return all integration settings."""
+    return get_setting("integrations") or {}
+
+
+def save_integrations(data: dict) -> None:
+    """Save integration settings."""
+    set_setting("integrations", value=data)
+
+
+# ── suggestion options ───────────────────────────────────────────────────────
 
 
 _DEFAULT_OPTIONS = [

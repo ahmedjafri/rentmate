@@ -1,4 +1,3 @@
-import json
 import os
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -6,14 +5,18 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from gql.services.settings_service import get_autonomy_settings, load_app_settings  # noqa: F401 — re-exported
+from gql.services.settings_service import (  # noqa: F401 — re-exported
+    get_autonomy_settings,
+    get_integrations,
+    load_app_settings,
+    save_app_settings,
+    save_integrations,
+)
 from handlers.deps import require_user
 
 router = APIRouter()
 
 _ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
-_DATA_DIR = Path(os.environ.get("RENTMATE_DATA_DIR", str(Path(__file__).parent.parent / "data")))
-_SETTINGS_FILE = _DATA_DIR / "settings.json"
 
 
 def read_env_file() -> dict:
@@ -52,28 +55,12 @@ def write_env_file(updates: dict):
         f.write("\n".join(lines) + "\n")
 
 
-def _save_app_settings(data: dict):
-    _SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _SETTINGS_FILE.write_text(json.dumps(data, indent=2))
-
-
-_INTEGRATIONS_FILE = _DATA_DIR / "integrations.json"
-
 _SECRET_FIELDS = {"token", "bridge_token", "api_key"}
 
 
 def load_integrations() -> dict:
-    if _INTEGRATIONS_FILE.exists():
-        try:
-            return json.loads(_INTEGRATIONS_FILE.read_text())
-        except Exception:
-            pass
-    return {}
-
-
-def _save_integrations(data: dict):
-    _INTEGRATIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _INTEGRATIONS_FILE.write_text(json.dumps(data, indent=2))
+    """Read integrations from DB. Re-exported from settings_service."""
+    return get_integrations()
 
 
 _SECRET_MASK = "\u2022" * 8  # ••••••••
@@ -161,13 +148,13 @@ async def update_settings(body: SettingsBody, request: Request):
     if body.autonomy is not None:
         stored = load_app_settings()
         stored["autonomy"] = body.autonomy
-        _save_app_settings(stored)
+        save_app_settings(stored)
 
     return {"ok": True}
 
 
 @router.get("/settings/integrations")
-async def get_integrations(request: Request):
+async def get_integrations_endpoint(request: Request):
     await require_user(request)
     stored = load_integrations()
     return _mask_integrations(stored)
@@ -242,7 +229,7 @@ async def register_quo_webhook(request: Request):
     quo = stored.get("quo", {})
     quo["webhook_url"] = webhook_url
     stored["quo"] = quo
-    _save_integrations(stored)
+    save_integrations(stored)
     return {
         "ok": True,
         "webhook_url": webhook_url,
@@ -272,7 +259,7 @@ async def update_integrations(body: IntegrationsBody, request: Request):
                 ch_data[field] = value
         stored[ch_name] = ch_data
 
-    _save_integrations(stored)
+    save_integrations(stored)
 
     from llm.registry import agent_registry
     await agent_registry.restart_channels_async(stored)

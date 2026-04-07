@@ -24,6 +24,7 @@ from .messaging import (
     ParticipantType,
 )
 from .rental import Lease, Property, Tenant, Unit
+from .settings import AppSetting
 from .suggestions import Suggestion
 from .tasks import Task, TaskNumberSequence
 
@@ -49,6 +50,7 @@ __all__ = [
     "DocumentTag",
     "AgentMemory",
     "AgentTrace",
+    "AppSetting",
     "AutomationRevision",
     "TaskCategory",
     "Urgency",
