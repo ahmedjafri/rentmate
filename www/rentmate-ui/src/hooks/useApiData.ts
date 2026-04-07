@@ -238,6 +238,7 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
       conversationType: lc.conversationType,
       lastMessageAt: lc.lastMessageAt,
       messageCount: lc.messageCount,
+      participants: lc.participants ?? [],
     })),
   };
 }
@@ -378,7 +379,7 @@ interface ApiTask {
   aiConversationId?: string | null;
   parentConversationId?: string | null;
   externalConversationId?: string | null;
-  linkedConversations?: { uid: string; label: string; conversationType: string; lastMessageAt?: string; messageCount: number }[];
+  linkedConversations?: { uid: string; label: string; conversationType: string; lastMessageAt?: string; messageCount: number; participants?: { name: string; participantType: string; entityId?: string | null }[] }[];
 }
 
 interface ApiSuggestion {

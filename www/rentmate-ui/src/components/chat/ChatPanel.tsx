@@ -938,39 +938,37 @@ export function ChatPanel() {
             <TabsContent key={lc.uid} value={lc.uid} className="hidden data-[state=active]:flex flex-1 flex-col min-h-0 mt-0">
               {/* Participant chips + portal links */}
               <div className="flex items-center gap-1.5 px-3 py-1.5 border-b bg-muted/20 shrink-0 flex-wrap">
-                {activeTask.participants.filter(p => p.type === lc.conversationType).length === 0 ? (
+                {(lc.participants ?? []).length === 0 ? (
                   <span className="text-[11px] text-muted-foreground italic">No external participants yet</span>
                 ) : (
-                  activeTask.participants
-                    .filter(p => p.type === lc.conversationType)
-                    .map((p, idx) => {
-                      // Find portal URL for this participant
-                      let portalUrl: string | undefined;
-                      if (p.type === 'vendor') {
-                        const v = vendors.find(v => v.id === activeTask.assignedVendorId);
-                        portalUrl = v?.portalUrl;
-                      } else if (p.type === 'tenant') {
-                        const t = tenants.find(t => p.name.includes(t.name.split(' ')[0]));
-                        portalUrl = t?.portalUrl;
-                      }
-                      return (
-                        <Badge key={p.id ?? `${p.name}-${idx}`} variant="secondary" className="text-[10px] rounded-lg gap-1">
-                          <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted-foreground/20 text-[9px] font-bold">
-                            {p.name.charAt(0).toUpperCase()}
-                          </span>
-                          {p.name}
-                          {portalUrl && (
-                            <button
-                              className="ml-0.5 text-primary/60 hover:text-primary transition-colors"
-                              title="Copy portal link"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                navigator.clipboard.writeText(portalUrl!);
-                                toast.success(`${p.type === 'vendor' ? 'Vendor' : 'Tenant'} portal link copied`);
-                              }}
-                            >
-                              <LinkIcon className="h-3 w-3" />
-                            </button>
+                  (lc.participants ?? []).map((p, idx) => {
+                    // Find portal URL for this participant
+                    let portalUrl: string | undefined;
+                    if (p.participantType === 'vendor') {
+                      const v = vendors.find(v => v.id === p.entityId);
+                      portalUrl = v?.portalUrl;
+                    } else if (p.participantType === 'tenant') {
+                      const t = tenants.find(t => t.id === p.entityId);
+                      portalUrl = t?.portalUrl;
+                    }
+                    return (
+                      <Badge key={p.entityId ?? `${p.name}-${idx}`} variant="secondary" className="text-[10px] rounded-lg gap-1">
+                        <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted-foreground/20 text-[9px] font-bold">
+                          {p.name.charAt(0).toUpperCase()}
+                        </span>
+                        {p.name}
+                        {portalUrl && (
+                          <button
+                            className="ml-0.5 text-primary/60 hover:text-primary transition-colors"
+                            title="Copy portal link"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigator.clipboard.writeText(portalUrl!);
+                              toast.success(`${p.participantType === 'vendor' ? 'Vendor' : 'Tenant'} portal link copied`);
+                            }}
+                          >
+                            <LinkIcon className="h-3 w-3" />
+                          </button>
                           )}
                         </Badge>
                       );

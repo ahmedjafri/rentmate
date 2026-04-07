@@ -367,6 +367,14 @@ class ChatMessageType:
 
 
 @strawberry.type
+@strawberry.type
+class ConversationParticipantType:
+    """A participant in a conversation."""
+    name: str
+    participant_type: str  # "tenant" | "vendor"
+    entity_id: typing.Optional[str] = None
+
+@strawberry.type
 class LinkedConversationType:
     """Summary of a conversation linked to a task."""
     uid: str
@@ -374,17 +382,36 @@ class LinkedConversationType:
     conversation_type: str
     last_message_at: typing.Optional[str] = None
     message_count: int = 0
+    participants: typing.List[ConversationParticipantType] = strawberry.field(default_factory=list)
 
     @classmethod
     def from_sql(cls, conv: typing.Any, label: str) -> "LinkedConversationType":
         msgs = getattr(conv, "messages", []) or []
         last_msg = max(msgs, key=lambda m: m.sent_at, default=None) if msgs else None
+
+        # Build participant list from conversation participants
+        parts: list[ConversationParticipantType] = []
+        for p in getattr(conv, "participants", []) or []:
+            if not p.is_active:
+                continue
+            if p.tenant_id and p.tenant:
+                name = f"{p.tenant.first_name} {p.tenant.last_name}".strip()
+                parts.append(ConversationParticipantType(
+                    name=name, participant_type="tenant", entity_id=str(p.tenant_id),
+                ))
+            elif p.external_contact_id and p.external_contact:
+                parts.append(ConversationParticipantType(
+                    name=p.external_contact.name, participant_type="vendor",
+                    entity_id=str(p.external_contact_id),
+                ))
+
         return cls(
             uid=str(conv.id),
             label=label,
             conversation_type=conv.conversation_type or "task_ai",
             last_message_at=_utc_iso(last_msg.sent_at) if last_msg else None,
             message_count=len(msgs),
+            participants=parts,
         )
 
 

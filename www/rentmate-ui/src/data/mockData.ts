@@ -15,12 +15,19 @@ export interface TaskParticipant {
   id?: string;
 }
 
+export interface ConversationParticipant {
+  name: string;
+  participantType: string;
+  entityId?: string | null;
+}
+
 export interface LinkedConversation {
   uid: string;
   label: string;
   conversationType: string;
   lastMessageAt?: string | null;
   messageCount: number;
+  participants: ConversationParticipant[];
 }
 
 export interface ActionDeskTask {
