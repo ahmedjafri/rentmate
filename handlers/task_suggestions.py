@@ -561,6 +561,12 @@ class AttachEntitySuggestionExecutor(SuggestionExecutor):
             task.parent_conversation_id = ext_convo.id
         elif not task.external_conversation_id:
             task.external_conversation_id = ext_convo.id
+        # Ensure tenant has a portal token for the portal link
+        from db.models import Tenant
+        from gql.services.tenant_service import TenantService
+        tenant = self.db.get(Tenant, tenant_id)
+        if tenant:
+            TenantService.ensure_portal_token(self.db, tenant)
 
 
 class MessagePersonSuggestionExecutor(SuggestionExecutor):
@@ -611,6 +617,12 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
                             task.parent_conversation_id = ext_convo.id
                         elif not task.external_conversation_id:
                             task.external_conversation_id = ext_convo.id
+                    # Ensure tenant has a portal token
+                    from db.models import Tenant as TenantModel
+                    from gql.services.tenant_service import TenantService
+                    t_obj = self.db.get(TenantModel, entity_id)
+                    if t_obj:
+                        TenantService.ensure_portal_token(self.db, t_obj)
 
                 # Find the conversation to send to
                 conv_id = self._resolve_conversation_for_entity(task, entity_type)
