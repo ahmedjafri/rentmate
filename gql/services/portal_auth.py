@@ -52,19 +52,34 @@ def validate_portal_jwt(token: str, expected_type: str) -> dict:
 def ensure_portal_token(entity, db: "Session | None" = None) -> str:
     """Ensure an entity has a portal_token in its extra JSON field.
 
-    If ``db`` is provided and a new token is generated, commits immediately
-    so the token is persisted even in read-only query contexts.
+    If a new token is generated and ``db`` is provided, persists via a
+    separate session to avoid breaking the caller's transaction.
     """
     extra = dict(entity.extra or {})
     if not extra.get("portal_token"):
-        extra["portal_token"] = generate_portal_token()
+        token = generate_portal_token()
+        extra["portal_token"] = token
         entity.extra = extra
         flag_modified(entity, "extra")
-        if db is not None:
+        # Persist in a separate session so we don't break the caller's
+        if db is None:
+            return extra["portal_token"]
+        try:
+            from handlers.deps import SessionLocal
+            write_db = SessionLocal.session_factory()
             try:
-                db.commit()
-            except Exception:
-                db.rollback()
+                from sqlalchemy import update
+                model_cls = type(entity)
+                write_db.execute(
+                    update(model_cls)
+                    .where(model_cls.id == entity.id)
+                    .values(extra=extra)
+                )
+                write_db.commit()
+            finally:
+                write_db.close()
+        except Exception:
+            pass
     return extra["portal_token"]
 
 

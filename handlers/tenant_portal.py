@@ -41,20 +41,45 @@ def tenant_me(request: Request):
 
 
 def _tenant_tasks(db, tenant_id: str) -> list:
-    """Find tasks linked to this tenant via lease → unit → task."""
-    # Find units the tenant has active leases on
+    """Find tasks linked to this tenant via unit, property, or conversation."""
+    task_ids: set[str] = set()
+
+    # Via lease → unit → task
     leases = db.execute(
         select(Lease).where(Lease.tenant_id == tenant_id)
     ).scalars().all()
     unit_ids = {l.unit_id for l in leases if l.unit_id}
-    if not unit_ids:
+    property_ids = {l.property_id for l in leases if l.property_id}
+
+    if unit_ids:
+        for t in db.execute(select(Task).where(Task.unit_id.in_(unit_ids))).scalars():
+            task_ids.add(t.id)
+
+    # Via property (tasks without unit_id but on tenant's property)
+    if property_ids:
+        for t in db.execute(select(Task).where(
+            Task.property_id.in_(property_ids), Task.unit_id.is_(None),
+        )).scalars():
+            task_ids.add(t.id)
+
+    # Via conversation participant (tenant is on a linked conversation)
+    participant_convos = db.execute(
+        select(ConversationParticipant.conversation_id).where(
+            ConversationParticipant.tenant_id == tenant_id,
+            ConversationParticipant.is_active.is_(True),
+        )
+    ).scalars().all()
+    if participant_convos:
+        conv_set = set(participant_convos)
+        for t in db.execute(select(Task)).scalars():
+            if t.parent_conversation_id in conv_set or t.external_conversation_id in conv_set:
+                task_ids.add(t.id)
+
+    if not task_ids:
         return []
 
     tasks = db.execute(
-        select(Task).where(
-            Task.unit_id.in_(unit_ids),
-            Task.task_status.notin_(["dismissed", "cancelled"]),
-        )
+        select(Task).where(Task.id.in_(task_ids))
     ).scalars().all()
     return [
         {
@@ -66,6 +91,7 @@ def _tenant_tasks(db, tenant_id: str) -> list:
             "created_at": t.created_at.isoformat() + "Z",
         }
         for t in tasks
+        if t.task_status not in ("dismissed", "cancelled")
     ]
 
 
