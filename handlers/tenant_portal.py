@@ -146,20 +146,39 @@ def _task_messages_for_tenant(db, task: Task, tenant_id: str) -> list:
 
 
 def _verify_tenant_task(db, task_id: str, tenant_id: str) -> Task:
-    """Load a task and verify the tenant has access via lease."""
+    """Load a task and verify the tenant has access."""
     task = db.execute(select(Task).where(Task.id == task_id)).scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    # Verify tenant has a lease on this task's unit
+
+    # Check via unit lease
     if task.unit_id:
         lease = db.execute(
-            select(Lease).where(
-                Lease.tenant_id == tenant_id,
-                Lease.unit_id == task.unit_id,
-            )
+            select(Lease).where(Lease.tenant_id == tenant_id, Lease.unit_id == task.unit_id)
         ).scalars().first()
         if lease:
             return task
+
+    # Check via property lease (task without unit_id)
+    if task.property_id:
+        lease = db.execute(
+            select(Lease).where(Lease.tenant_id == tenant_id, Lease.property_id == task.property_id)
+        ).scalars().first()
+        if lease:
+            return task
+
+    # Check via conversation participant
+    for cid in [task.parent_conversation_id, task.external_conversation_id]:
+        if cid:
+            participant = db.execute(
+                select(ConversationParticipant).where(
+                    ConversationParticipant.conversation_id == cid,
+                    ConversationParticipant.tenant_id == tenant_id,
+                )
+            ).scalar_one_or_none()
+            if participant:
+                return task
+
     raise HTTPException(status_code=404, detail="Task not found")
 
 
