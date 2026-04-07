@@ -87,7 +87,7 @@ Authentication uses Supabase JWTs validated per-request in `get_context()`. The 
 **`db/lib.py`** — Legacy DB helpers (SMS recording, tenant upserts). Predates the service layer.
 
 **`llm/`** — AI agent:
-- `client.py` — `chat_with_agent()` initializes the Hermes agent, runs conversations, bridges progress events. `call_agent()` dispatches to hosted or local agent.
+- `client.py` — `chat_with_agent()` initializes the AI agent, runs conversations, bridges progress events. `call_agent()` dispatches to hosted or local agent.
 - `tools.py` — Agent tools (propose_task, close_task, message_person, attach_entity, etc.)
 - `registry.py` — Agent registry, tool registration, system prompt building from `agents/template/SOUL.md`
 

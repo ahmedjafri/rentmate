@@ -26,7 +26,7 @@ def _soul_version(text: str) -> int:
 
 
 def _register_rentmate_tools():
-    """Register RentMate-specific tools with the Hermes tool registry."""
+    """Register RentMate-specific tools with the agent tool registry."""
     from tools.registry import registry
 
     from llm.tools import (
@@ -57,7 +57,7 @@ def _register_rentmate_tools():
             "parameters": tool.parameters,
         }
 
-        # Async handler — Hermes bridges it via _run_async when is_async=True
+        # Async handler — bridged via _run_async when is_async=True
         async def _handler(args, _tool=tool, **kwargs):
             return await _tool.execute(**args)
 
@@ -83,23 +83,23 @@ class AgentRegistry:
     def populate_all_agents(self, db: Session):
         agent_dir = DATA_DIR / DEFAULT_USER_ID
         self._write_workspace(agent_dir, db, DEFAULT_USER_ID)
-        print("[hermes] Workspace populated")
+        print("[agent] Workspace populated")
 
     def start_gateway(self, account_id: str | None = None):
-        """Register RentMate tools with Hermes (once). No persistent loop needed."""
+        """Register RentMate tools (once). No persistent loop needed."""
         with self._lock:
             if not self._tools_registered:
                 _register_rentmate_tools()
                 self._tools_registered = True
-                print("[hermes] RentMate tools registered")
+                print("[agent] RentMate tools registered")
             aid = account_id or DEFAULT_USER_ID
             self._ready[aid] = True
-            print(f"[hermes] Agent ready for account {aid[:8]}…")
+            print(f"[agent] Agent ready for account {aid[:8]}…")
 
     def stop_gateway(self, account_id: str | None = None):
         aid = account_id or DEFAULT_USER_ID
         self._ready.pop(aid, None)
-        print(f"[hermes] Agent stopped for account {aid[:8]}…")
+        print(f"[agent] Agent stopped for account {aid[:8]}…")
 
     def is_healthy(self, account_id: str | None = None) -> bool:
         aid = account_id or DEFAULT_USER_ID
@@ -113,7 +113,7 @@ class AgentRegistry:
         return account_id
 
     def get_loop(self, account_id: str | None = None):
-        """Backward compat — returns None (no persistent loop in Hermes mode)."""
+        """Backward compat — returns None (no persistent loop)."""
         return None
 
     def build_system_prompt(self, account_id: str) -> str:
@@ -126,7 +126,7 @@ class AgentRegistry:
                 content = path.read_text()
                 parts.append(content)
                 if filename == "SOUL.md":
-                    print(f"[hermes] SOUL.md: {len(content)} chars, v{_soul_version(content)}")
+                    print(f"[agent] SOUL.md: {len(content)} chars, v{_soul_version(content)}")
         # Inject persistent memory from DB
         from llm.memory_store import DbMemoryStore
         memory_context = DbMemoryStore(account_id).get_memory_context()
@@ -134,7 +134,7 @@ class AgentRegistry:
             parts.append(memory_context)
         return "\n\n---\n\n".join(parts)
 
-    # ─── Channel management (Telegram/WhatsApp — not Hermes-specific) ────────
+    # ─── Channel management (Telegram/WhatsApp) ────────
 
     async def restart_channels_async(self, integrations: dict, account_id: str = DEFAULT_USER_ID):
         """Placeholder — channel management is handled separately from the agent."""
@@ -143,7 +143,7 @@ class AgentRegistry:
         any_enabled = tg.get("enabled", False) or wa.get("enabled", False)
         if not any_enabled:
             return
-        print("[hermes] External chat channels not yet supported in Hermes mode")
+        print("[agent] External chat channels not yet supported")
 
     # ─── DB helpers for workspace files ───────────────────────────────────────
 
@@ -192,7 +192,7 @@ class AgentRegistry:
                         if new_v > old_v:
                             db_content = src.read_text()
                             self._db_write_file(db, agent_id, filename, db_content)
-                            print(f"[hermes] SOUL.md upgraded: v{old_v} → v{new_v}")
+                            print(f"[agent] SOUL.md upgraded: v{old_v} → v{new_v}")
                 dest.write_text(db_content)
                 continue
             src = TEMPLATE_DIR / filename

@@ -1,10 +1,10 @@
 """RentMate agent client.
 
 When ``RENTMATE_AGENT_URL`` is set, agent calls go to the hosted service.
-Otherwise, falls back to the local Hermes agent.
+Otherwise, falls back to the local agent.
 
 ``chat_with_agent`` is the core LLM execution function — it initializes
-the Hermes agent, runs a conversation, and bridges progress events.
+the AI agent, runs a conversation, and bridges progress events.
 """
 import asyncio
 import json
@@ -54,7 +54,7 @@ async def chat_with_agent(
     messages: list[dict],
     on_progress: Optional[Callable] = None,
 ) -> str:
-    """Run the Hermes agent with the given messages and return its text reply."""
+    """Run the AI agent with the given messages and return its text reply."""
     from run_agent import AIAgent  # noqa: F401 — optional dep
 
     model = os.getenv("LLM_MODEL", "anthropic/claude-haiku-4-5-20251001")
@@ -160,8 +160,8 @@ async def chat_with_agent(
     def _step_callback(iteration: int, prev_tools: list | None, **kwargs):
         pass  # progress is emitted via _tool_progress
 
-    print(f"[hermes] model={actual_model} provider={provider} base_url={api_base}")
-    print(f"[hermes] system_prompt={len(system_message)} chars, history={len(conversation_history)} msgs, user_message={len(user_message)} chars")
+    print(f"[agent] model={actual_model} provider={provider} base_url={api_base}")
+    print(f"[agent] system_prompt={len(system_message)} chars, history={len(conversation_history)} msgs, user_message={len(user_message)} chars")
 
     agent = AIAgent(
         base_url=api_base,
@@ -177,7 +177,7 @@ async def chat_with_agent(
         skip_memory=True,
         tool_progress_callback=_tool_progress,
         step_callback=_step_callback,
-        verbose_logging=bool(os.getenv("HERMES_VERBOSE")),
+        verbose_logging=bool(os.getenv("AGENT_VERBOSE")),
     )
     agent._tool_use_enforcement = True
 
@@ -217,14 +217,14 @@ async def chat_with_agent(
     result = await _run_with_progress()
 
     if isinstance(result, dict):
-        print(f"[hermes] api_calls={result.get('api_calls', '?')} "
+        print(f"[agent] api_calls={result.get('api_calls', '?')} "
               f"completed={result.get('completed', '?')} "
               f"input_tokens={result.get('input_tokens', '?')} "
               f"output_tokens={result.get('output_tokens', '?')} "
               f"progress_events={len(progress_events)}")
         if progress_events:
             for evt in progress_events:
-                print(f"[hermes]   progress: {evt}")
+                print(f"[agent]   progress: {evt}")
         reply = result.get("final_response", "")
         if not reply:
             msgs = result.get("messages", [])

@@ -1,4 +1,4 @@
-"""Unit tests for llm/registry.py — AgentRegistry (Hermes Agent implementation)."""
+"""Unit tests for llm/registry.py — AgentRegistry."""
 
 import tempfile
 import threading
