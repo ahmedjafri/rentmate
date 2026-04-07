@@ -120,7 +120,7 @@ class TestIntegrationsEndpoint(unittest.TestCase):
     def test_post_integrations_saves_and_restarts_channels(self):
         with (
             patch("handlers.settings.load_integrations", return_value={}),
-            patch("handlers.settings._save_integrations") as mock_save,
+            patch("handlers.settings.save_integrations") as mock_save,
             patch("llm.registry.agent_registry.restart_channels_async", new_callable=AsyncMock) as mock_restart,
         ):
             response = self.client.post(
@@ -142,7 +142,7 @@ class TestIntegrationsEndpoint(unittest.TestCase):
 
         with (
             patch("handlers.settings.load_integrations", return_value=stored),
-            patch("handlers.settings._save_integrations", side_effect=capture_save),
+            patch("handlers.settings.save_integrations", side_effect=capture_save),
             patch("llm.registry.agent_registry.restart_channels_async", new_callable=AsyncMock),
         ):
             self.client.post(
@@ -156,7 +156,7 @@ class TestIntegrationsEndpoint(unittest.TestCase):
     def test_post_settings_autonomy(self):
         with (
             patch("handlers.settings.load_app_settings", return_value={}),
-            patch("handlers.settings._save_app_settings") as mock_save,
+            patch("handlers.settings.save_app_settings") as mock_save,
         ):
             response = self.client.post(
                 "/settings",

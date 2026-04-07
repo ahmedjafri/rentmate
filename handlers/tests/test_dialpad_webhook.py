@@ -74,7 +74,8 @@ class TestQuoWebhook(unittest.TestCase):
 
         # Agent was called with the right session key and messages
         mock_chat.assert_called_once()
-        _, call_session, call_messages = mock_chat.call_args.args
+        call_session = mock_chat.call_args.kwargs.get("session_key", mock_chat.call_args.args[1] if len(mock_chat.call_args.args) > 1 else None)
+        call_messages = mock_chat.call_args.kwargs.get("messages", mock_chat.call_args.args[2] if len(mock_chat.call_args.args) > 2 else None)
         self.assertIn("sms:", call_session)
         self.assertEqual(call_messages[-1]["role"], "user")
         self.assertEqual(call_messages[-1]["content"], "Hello, how can I help?")
@@ -139,7 +140,7 @@ class TestQuoWebhook(unittest.TestCase):
         self.assertEqual(mock_chat.call_count, 2)
 
         # Second call included the first message as history
-        _, _, messages = mock_chat.call_args.args
+        messages = mock_chat.call_args.kwargs.get("messages")
         user_msgs = [m for m in messages if m["role"] == "user"]
         self.assertGreaterEqual(len(user_msgs), 2)
         self.assertEqual(messages[-1]["content"], "Message2")

@@ -365,7 +365,7 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
 
     Returns True if the message was processed, False if skipped.
     """
-    resolved = sms_router.resolve(db, from_number, to_number)
+    resolved = sms_router.resolve(db, from_number=from_number, to_number=to_number)
     if not resolved:
         print(f"[sms] Sender not resolved for from={from_number} to={to_number}")
         return False

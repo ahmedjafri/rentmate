@@ -427,7 +427,7 @@ def run_data_audit(
         check_params = {k: v for k, v in checks.get(builtin_key, {}).items()
                         if k not in ("enabled", "interval_hours")}
         try:
-            total += run_script(db, script, params=check_params, dry_run=dry_run)
+            total += run_script(db, script_yaml=script, params=check_params, dry_run=dry_run)
         except Exception as exc:
             logger.exception("Error running built-in DSL script for %r: %s", builtin_key, exc)
 
@@ -448,7 +448,7 @@ def run_data_audit(
             check_params = {k: v for k, v in checks.get(custom_key, {}).items()
                             if k not in ("enabled", "interval_hours")}
             try:
-                total += run_script(db, script, params=check_params, dry_run=dry_run)
+                total += run_script(db, script_yaml=script, params=check_params, dry_run=dry_run)
             except Exception as exc:
                 logger.exception("Error running DSL script for %r: %s", custom_key, exc)
 

@@ -95,36 +95,36 @@ class TestScopeProperty:
     def test_creates_task_for_each_property(self, db):
         _prop(db, address="100 Elm")
         _prop(db, address="200 Oak")
-        n = run_script(db, self.SIMPLE)
+        n = run_script(db, script_yaml=self.SIMPLE)
         assert n == 2
 
     def test_subject_renders_address_field(self, db):
         _prop(db, address="555 Maple Ave")
-        run_script(db, self.SIMPLE)
+        run_script(db, script_yaml=self.SIMPLE)
         assert any("555 Maple Ave" in s for s in _subjects(db))
 
     def test_body_renders_template(self, db):
         _prop(db, address="42 Pine")
-        run_script(db, self.SIMPLE)
+        run_script(db, script_yaml=self.SIMPLE)
         task = _open_tasks(db)[0]
         assert "42 Pine" in _body(db, task)
 
     def test_category_and_urgency_set(self, db):
         _prop(db)
-        run_script(db, self.SIMPLE)
+        run_script(db, script_yaml=self.SIMPLE)
         task = _open_tasks(db)[0]
         assert task.category == "compliance"
         assert task.urgency == "low"
 
     def test_property_id_set_on_task(self, db):
         p = _prop(db)
-        run_script(db, self.SIMPLE)
+        run_script(db, script_yaml=self.SIMPLE)
         task = _open_tasks(db)[0]
         assert task.property_id == p.id
         assert task.unit_id is None
 
     def test_empty_db_returns_zero(self, db):
-        assert run_script(db, self.SIMPLE) == 0
+        assert run_script(db, script_yaml=self.SIMPLE) == 0
 
     def test_scope_filter_exists_relation(self, db):
         """Filter {exists: units} — only properties that have at least one unit."""
@@ -143,7 +143,7 @@ class TestScopeProperty:
         p1 = _prop(db, address="With Unit")
         p2 = _prop(db, address="No Unit")
         _unit(db, p1)
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 1
         assert any("With Unit" in s for s in _subjects(db))
         assert not any("No Unit" in s for s in _subjects(db))
@@ -165,7 +165,7 @@ class TestScopeProperty:
         p1 = _prop(db, address="With Unit")
         p2 = _prop(db, address="No Unit")
         _unit(db, p1)
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 1
         assert any("No Unit" in s for s in _subjects(db))
 
@@ -186,7 +186,7 @@ class TestScopeProperty:
         """)
         _prop(db, address="Complete")        # has city
         _prop(db, address="Incomplete", city=None)
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 1
         assert any("Incomplete" in s for s in _subjects(db))
 
@@ -211,7 +211,7 @@ class TestScopeProperty:
         _prop(db, address="Good")
         _prop(db, address="No City", city=None)
         _prop(db, address="No State", state=None)
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 2
 
     def test_multiple_conditions_and_logic(self, db):
@@ -233,7 +233,7 @@ class TestScopeProperty:
         """)
         _prop(db, address="Only City Missing", city=None)   # state present → skip
         _prop(db, address="Both Missing", city=None, state=None)
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 1
         assert any("Both Missing" in s for s in _subjects(db))
 
@@ -257,7 +257,7 @@ class TestScopeProperty:
         _unit(db, p1, "A")
         _unit(db, p2, "A")
         _unit(db, p2, "B")
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 1
         assert any("Two Units" in s for s in _subjects(db))
 
@@ -288,7 +288,7 @@ class TestScopeUnit:
         u2 = _unit(db, p, "2B")
         t = _tenant(db, phone="555-1")
         _lease(db, p, u2, t)     # active lease
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 1
         assert any("2A" in s for s in _subjects(db))
         assert not any("2B" in s for s in _subjects(db))
@@ -318,7 +318,7 @@ class TestScopeUnit:
         t2 = _tenant(db, first="B", phone="2")
         _lease(db, p, u1, t1, end=TODAY - timedelta(days=5))   # 5 days vacant → skip
         _lease(db, p, u2, t2, end=TODAY - timedelta(days=40))  # 40 days → trigger
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 1
         assert any("Long" in s for s in _subjects(db))
 
@@ -339,7 +339,7 @@ class TestScopeUnit:
         """)
         p = _prop(db)
         u = _unit(db, p)
-        run_script(db, script)
+        run_script(db, script_yaml=script)
         task = _open_tasks(db)[0]
         assert task.unit_id == u.id
         assert task.property_id == p.id
@@ -370,7 +370,7 @@ class TestScopeUnit:
             t = _tenant(db, first=u.label, phone=u.label)
             _lease(db, p, u, t, end=TODAY - timedelta(days=days))
 
-        run_script(db, script)
+        run_script(db, script_yaml=script)
         tasks_by_label = {t.title.split(": ")[1]: t.urgency for t in _open_tasks(db)}
         assert tasks_by_label["H"] == "high"
         assert tasks_by_label["M"] == "medium"
@@ -400,11 +400,11 @@ class TestScopeUnit:
         _lease(db, p, u, t, end=TODAY - timedelta(days=10))  # 10 days vacant
 
         # threshold=14 → skip
-        n = run_script(db, script, params={"min_vacancy_days": 14})
+        n = run_script(db, script_yaml=script, params={"min_vacancy_days": 14})
         assert n == 0
 
         # threshold=5 → trigger
-        n = run_script(db, script, params={"min_vacancy_days": 5})
+        n = run_script(db, script_yaml=script, params={"min_vacancy_days": 5})
         assert n == 1
 
     def test_template_uses_property_dot_notation(self, db):
@@ -424,7 +424,7 @@ class TestScopeUnit:
         """)
         p = _prop(db, address="99 Spruce")
         _unit(db, p, "3C")
-        run_script(db, script)
+        run_script(db, script_yaml=script)
         assert any("3C" in s and "99 Spruce" in s for s in _subjects(db))
 
 
@@ -456,7 +456,7 @@ class TestScopeLease:
         _lease(db, p, u, t_late, status="late")
         u2 = _unit(db, p, "2A")
         _lease(db, p, u2, t_ok, status="current")
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 1
         assert any("Late Payer" in s for s in _subjects(db))
         assert not any("Good Payer" in s for s in _subjects(db))
@@ -485,7 +485,7 @@ class TestScopeLease:
         _lease(db, p, u, t, end=TODAY + timedelta(days=20))
 
         # warn_days=30 → catches 20-day lease
-        n = run_script(db, script, params={"warn_days": 30})
+        n = run_script(db, script_yaml=script, params={"warn_days": 30})
         assert n == 1
         assert any("Soon" in s and "20d" in s for s in _subjects(db))
 
@@ -511,7 +511,7 @@ class TestScopeLease:
         u = _unit(db, p)
         t = _tenant(db, phone="x")
         _lease(db, p, u, t, end=TODAY + timedelta(days=40))
-        n = run_script(db, script, params={"warn_days": 30})
+        n = run_script(db, script_yaml=script, params={"warn_days": 30})
         assert n == 0
 
     def test_days_until_end_in_urgency(self, db):
@@ -537,7 +537,7 @@ class TestScopeLease:
             t = _tenant(db, first=label, phone=label)
             _lease(db, p, u, t, end=TODAY + timedelta(days=days))
 
-        run_script(db, script)
+        run_script(db, script_yaml=script)
         tasks = {t.title: t.urgency for t in _open_tasks(db)}
         assert tasks["Expiring: 20d"] == "high"
         assert tasks["Expiring: 50d"] == "medium"
@@ -561,7 +561,7 @@ class TestScopeLease:
         u = _unit(db, p)
         t = _tenant(db, phone="x")
         _lease(db, p, u, t, status="overdue")
-        run_script(db, script)
+        run_script(db, script_yaml=script)
         task = _open_tasks(db)[0]
         assert task.unit_id == u.id
         assert task.property_id == p.id
@@ -585,7 +585,7 @@ class TestScopeLease:
         u = _unit(db, p)
         t = _tenant(db, first="Omar", last="Hassan", phone="x")
         _lease(db, p, u, t, status="late")
-        run_script(db, script)
+        run_script(db, script_yaml=script)
         task = _open_tasks(db)[0]
         assert "Omar Hassan" in _body(db, task)
 
@@ -614,7 +614,7 @@ class TestScopeTenant:
         """)
         _tenant(db, first="Bad",  last="A")          # no contact → flag
         _tenant(db, first="Good", last="B", phone="1") # has phone → skip
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 1
         assert any("Bad A" in s for s in _subjects(db))
 
@@ -636,7 +636,7 @@ class TestScopeTenant:
                 body: "Missing: {{first_name}} {{last_name}}"
         """)
         _tenant(db, first="Wei", last="Zhang")
-        run_script(db, script)
+        run_script(db, script_yaml=script)
         task = _open_tasks(db)[0]
         assert "Wei Zhang" in _body(db, task)
 
@@ -656,7 +656,7 @@ class TestScopeTenant:
         """)
         _tenant(db, first="NoEmail")
         _tenant(db, first="HasEmail", email="e@x.com")
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 1
         assert any("HasEmail" in s for s in _subjects(db))
 
@@ -686,28 +686,28 @@ class TestOperators:
     def test_equals(self, db):
         _prop(db, address="A", city="Portland")
         _prop(db, address="B", city="Seattle")
-        n = run_script(db, self._script_for_op("city", "equals", "Portland"))
+        n = run_script(db, script_yaml=self._script_for_op("city", "equals", "Portland"))
         assert n == 1
         assert any("A" in s for s in _subjects(db))
 
     def test_not_equals(self, db):
         _prop(db, address="A", city="Portland")
         _prop(db, address="B", city="Seattle")
-        n = run_script(db, self._script_for_op("city", "not_equals", "Portland"))
+        n = run_script(db, script_yaml=self._script_for_op("city", "not_equals", "Portland"))
         assert n == 1
         assert any("B" in s for s in _subjects(db))
 
     def test_exists_with_value(self, db):
         _prop(db, address="HasCity", city="X")
         _prop(db, address="NoCity", city=None)
-        n = run_script(db, self._script_for_op("city", "exists"))
+        n = run_script(db, script_yaml=self._script_for_op("city", "exists"))
         assert n == 1
         assert any("HasCity" in s for s in _subjects(db))
 
     def test_not_exists_with_null(self, db):
         _prop(db, address="HasCity", city="X")
         _prop(db, address="NoCity", city=None)
-        n = run_script(db, self._script_for_op("city", "not_exists"))
+        n = run_script(db, script_yaml=self._script_for_op("city", "not_exists"))
         assert n == 1
         assert any("NoCity" in s for s in _subjects(db))
 
@@ -731,7 +731,7 @@ class TestOperators:
             u = _unit(db, p, label)
             t = _tenant(db, first=label, phone=label)
             _lease(db, p, u, t, status=status)
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 2
 
     def test_gt_operator(self, db):
@@ -754,7 +754,7 @@ class TestOperators:
         _unit(db, p, "Without")
         t = _tenant(db, phone="x")
         _lease(db, p, u_with, t)
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 1
         assert any("With" in s for s in _subjects(db))
 
@@ -780,7 +780,7 @@ class TestOperators:
         t2 = _tenant(db, first="F", phone="2")
         _lease(db, p, u1, t1, end=TODAY - timedelta(days=1))
         _lease(db, p, u2, t2, end=TODAY + timedelta(days=10))
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 1
 
     def test_contains_operator_string(self, db):
@@ -800,7 +800,7 @@ class TestOperators:
         """)
         _prop(db, address="100 Maple Ave")
         _prop(db, address="200 Oak St")
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 1
         assert any("Maple" in s for s in _subjects(db))
 
@@ -823,7 +823,7 @@ class TestTemplateRendering:
                 body: ""
         """)
         _prop(db)
-        run_script(db, script)
+        run_script(db, script_yaml=script)
         assert any(str(TODAY) in s for s in _subjects(db))
 
     def test_params_in_template(self, db):
@@ -838,7 +838,7 @@ class TestTemplateRendering:
                 body: ""
         """)
         _prop(db)
-        run_script(db, script, params={"interval_hours": 24})
+        run_script(db, script_yaml=script, params={"interval_hours": 24})
         assert any("24h" in s for s in _subjects(db))
 
     def test_nested_dot_notation_lease_tenant(self, db):
@@ -860,7 +860,7 @@ class TestTemplateRendering:
         u = _unit(db, p)
         t = _tenant(db, first="Priya", last="Patel", phone="x")
         _lease(db, p, u, t, status="late")
-        run_script(db, script)
+        run_script(db, script_yaml=script)
         assert any("Priya Patel" in s for s in _subjects(db))
 
     def test_missing_template_var_renders_empty(self, db):
@@ -875,7 +875,7 @@ class TestTemplateRendering:
                 body: ""
         """)
         _prop(db)
-        run_script(db, script)
+        run_script(db, script_yaml=script)
         assert any("Review " in s for s in _subjects(db))
 
     def test_today_plus_arithmetic(self, db):
@@ -901,8 +901,8 @@ class TestTemplateRendering:
         u = _unit(db, p)
         t = _tenant(db, phone="x")
         _lease(db, p, u, t, end=TODAY + timedelta(days=25))
-        assert run_script(db, script, params={"warn_days": 30}) == 1
-        assert run_script(db, script, params={"warn_days": 20}) == 0  # already deduped or outside
+        assert run_script(db, script_yaml=script, params={"warn_days": 30}) == 1
+        assert run_script(db, script_yaml=script, params={"warn_days": 20}) == 0  # already deduped or outside
 
 
 # ===========================================================================
@@ -925,12 +925,12 @@ class TestUrgencyExpressions:
 
     def test_static_urgency_low(self, db):
         _prop(db)
-        run_script(db, self._urgency_script("low"))
+        run_script(db, script_yaml=self._urgency_script("low"))
         assert _open_tasks(db)[0].urgency == "low"
 
     def test_static_urgency_critical(self, db):
         _prop(db)
-        run_script(db, self._urgency_script("critical"))
+        run_script(db, script_yaml=self._urgency_script("critical"))
         assert _open_tasks(db)[0].urgency == "critical"
 
     def test_conditional_urgency_using_unit_count(self, db):
@@ -951,7 +951,7 @@ class TestUrgencyExpressions:
         _unit(db, p_small, "A")
         for lbl in ("A", "B", "C"):
             _unit(db, p_large, lbl)
-        run_script(db, script)
+        run_script(db, script_yaml=script)
         tasks = {t.title: t.urgency for t in _open_tasks(db)}
         assert tasks["U Small"] == "medium"
         assert tasks["U Large"] == "high"
@@ -976,37 +976,37 @@ class TestDeduplication:
 
     def test_same_script_twice_no_duplicate(self, db):
         _prop(db)
-        run_script(db, self.SCRIPT)
-        n2 = run_script(db, self.SCRIPT)
+        run_script(db, script_yaml=self.SCRIPT)
+        n2 = run_script(db, script_yaml=self.SCRIPT)
         assert n2 == 0
         assert len(_open_tasks(db)) == 1
 
     def test_suggested_status_blocks(self, db):
         _prop(db)
-        run_script(db, self.SCRIPT)
+        run_script(db, script_yaml=self.SCRIPT)
         task = _open_tasks(db)[0]
         assert task.task_status == "suggested"
-        assert run_script(db, self.SCRIPT) == 0
+        assert run_script(db, script_yaml=self.SCRIPT) == 0
 
     def test_resolved_allows_recreation(self, db):
         _prop(db)
-        run_script(db, self.SCRIPT)
+        run_script(db, script_yaml=self.SCRIPT)
         _open_tasks(db)[0].task_status = "resolved"
         db.flush()
-        n = run_script(db, self.SCRIPT)
+        n = run_script(db, script_yaml=self.SCRIPT)
         assert n == 1
 
     def test_cancelled_allows_recreation(self, db):
         _prop(db)
-        run_script(db, self.SCRIPT)
+        run_script(db, script_yaml=self.SCRIPT)
         _open_tasks(db)[0].task_status = "cancelled"
         db.flush()
-        assert run_script(db, self.SCRIPT) == 1
+        assert run_script(db, script_yaml=self.SCRIPT) == 1
 
     def test_different_subjects_not_deduped(self, db):
         _prop(db, address="A")
         _prop(db, address="B")
-        n = run_script(db, self.SCRIPT)
+        n = run_script(db, script_yaml=self.SCRIPT)
         assert n == 2
 
 
@@ -1018,7 +1018,7 @@ class TestErrorHandling:
 
     def test_bad_yaml_returns_zero(self, db):
         _prop(db)
-        n = run_script(db, "::invalid: [yaml")
+        n = run_script(db, script_yaml="::invalid: [yaml")
         assert n == 0
 
     def test_unknown_resource_returns_zero(self, db):
@@ -1033,7 +1033,7 @@ class TestErrorHandling:
                 body: ""
         """)
         _prop(db)
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 0
 
     def test_missing_resource_key_returns_zero(self, db):
@@ -1047,7 +1047,7 @@ class TestErrorHandling:
                 body: ""
         """)
         _prop(db)
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 0
 
     def test_unknown_action_type_creates_no_tasks(self, db):
@@ -1059,7 +1059,7 @@ class TestErrorHandling:
                 to: tenant
         """)
         _prop(db)
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 0
 
     def test_no_actions_returns_zero(self, db):
@@ -1069,7 +1069,7 @@ class TestErrorHandling:
             actions: []
         """)
         _prop(db)
-        n = run_script(db, script)
+        n = run_script(db, script_yaml=script)
         assert n == 0
 
 

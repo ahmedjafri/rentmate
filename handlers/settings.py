@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from gql.services.settings_service import (  # noqa: F401 — re-exported
+    _DEFAULT_AUTONOMY,
     get_autonomy_settings,
     get_integrations,
     load_app_settings,
