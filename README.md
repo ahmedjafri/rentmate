@@ -88,7 +88,7 @@ db/
   └── lib.py            — Business logic
 
 llm/
-  ├── agent.py          — LangGraph AI agent
+  ├── client.py         — Hermes AI agent + tool progress
   └── document_processor.py — PDF extraction + embedding
 ```
 

@@ -10,7 +10,7 @@ Orientation for coding agents (Claude Code, Copilot, etc.) contributing to this 
 
 RentMate is an AI-driven property management assistant. It handles tenant communications, maintenance triage, lease lifecycle events, and automation — so landlords can own property without it owning their time.
 
-The stack: FastAPI + Strawberry GraphQL backend, React/Vite frontend, SQLAlchemy ORM on Supabase Postgres, LangGraph + LiteLLM AI agent.
+The stack: FastAPI + Strawberry GraphQL backend, React/Vite frontend, SQLAlchemy ORM on Supabase Postgres, Hermes Agent + LiteLLM AI agent.
 
 ---
 
@@ -53,7 +53,7 @@ Defines the YAML automation language used by the Automations feature.
 | Business logic | `db/lib.py` | All DB operations; multi-tenant scoping lives here |
 | ORM models | `db/models.py` | `Account → Property → Unit → Lease → Tenant`; messaging layer |
 | GraphQL | `gql/` | Strawberry schema; queries scoped to authenticated user's account |
-| AI agent | `llm/` | LangGraph + LiteLLM; system prompt in `llm/.context/index.md` |
+| AI agent | `llm/` | Hermes Agent + LiteLLM; system prompt in `agents/template/SOUL.md` |
 | Automation DSL | `automations/` + `db/dsl_runner.py` | Built-in checks in `automations/*.json` |
 | HTTP handlers | `handlers/` | `handlers/chat.py` owns Quo webhook + agent invocation |
 | Frontend | `www/rentmate-ui/` | React/Vite; built to `dist/` served statically by FastAPI |

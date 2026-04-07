@@ -87,8 +87,9 @@ Authentication uses Supabase JWTs validated per-request in `get_context()`. The 
 **`db/lib.py`** — Legacy DB helpers (SMS recording, tenant upserts). Predates the service layer.
 
 **`llm/`** — AI agent:
-- `llm.py` — Initializes `ChatLiteLLM` with DeepSeek (`deepseek/deepseek-chat`), loads system prompt from `llm/.context/index.md`
-- `agent.py` — `RentMateAgent` built with LangGraph: LLM node → conditional tool call → tool node loop. `run_agent()` accepts a context string + conversation history list and returns the agent's text response.
+- `client.py` — `chat_with_agent()` initializes the Hermes agent, runs conversations, bridges progress events. `call_agent()` dispatches to hosted or local agent.
+- `tools.py` — Agent tools (propose_task, close_task, message_person, attach_entity, etc.)
+- `registry.py` — Agent registry, tool registration, system prompt building from `agents/template/SOUL.md`
 
 ### Frontend (`www/rentmate/`)
 
