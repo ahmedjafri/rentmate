@@ -861,8 +861,8 @@ class SaveMemoryTool(Tool):
                     return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
                 now = datetime.now(UTC).strftime("%Y-%m-%d")
                 entry = f"[{now}] {content}"
-                existing = task.notes or ""
-                task.notes = f"{existing}\n{entry}".strip()
+                existing = task.context or ""
+                task.context = f"{existing}\n{entry}".strip()
                 db.commit()
                 return json.dumps({"status": "ok", "message": "Task note saved."})
             finally:

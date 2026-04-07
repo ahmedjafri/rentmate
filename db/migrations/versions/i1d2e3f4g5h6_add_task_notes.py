@@ -17,8 +17,8 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column('tasks', sa.Column('notes', sa.String(), nullable=True))
+    op.add_column('tasks', sa.Column('context', sa.String(), nullable=True))
 
 
 def downgrade():
-    op.drop_column('tasks', 'notes')
+    op.drop_column('tasks', 'context')

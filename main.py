@@ -63,6 +63,7 @@ _MIGRATE_COLS = [
     ("units",          "context",            "TEXT"),
     ("tenants",        "context",            "TEXT"),
     ("external_contacts", "context",         "TEXT"),
+    ("tasks",             "context",         "TEXT"),
 ]
 
 
