@@ -717,18 +717,35 @@ _heartbeat_locks_lock = _hb_threading.Lock()
 _heartbeat_state: dict[str, str] = {}  # task_id → context hash from last run
 
 
-def _compute_heartbeat_hash(db, task) -> str:
-    """Hash the full task context + latest message timestamps."""
-    context = build_task_context(db, task.id)
-    parts = [context]
-    for conv_id in [task.ai_conversation_id, task.external_conversation_id, task.parent_conversation_id]:
-        if conv_id:
-            last_msg = db.query(Message.sent_at).filter(
-                Message.conversation_id == conv_id
-            ).order_by(Message.sent_at.desc()).first()
-            if last_msg:
-                parts.append(f"{conv_id}:{last_msg[0].isoformat()}")
-    return _hb_hashlib.md5("".join(parts).encode()).hexdigest()
+def _compute_heartbeat_hash(task) -> str:
+    """Hash task state + latest message timestamps using a short-lived session."""
+    from handlers.deps import SessionLocal
+    from sqlalchemy import text
+    db = SessionLocal.session_factory()
+    try:
+        parts = []
+        # Task scalar fields that affect context
+        row = db.execute(text(
+            "SELECT task_status, task_mode, steps, context FROM tasks WHERE id = :id"
+        ), {"id": task.id}).first()
+        if row:
+            parts.append(f"{row[0]}|{row[1]}|{row[2] or ''}|{row[3] or ''}")
+        # Latest message timestamp from each linked conversation
+        for conv_id in [task.ai_conversation_id, task.external_conversation_id, task.parent_conversation_id]:
+            if conv_id:
+                ts = db.execute(text(
+                    "SELECT MAX(sent_at) FROM messages WHERE conversation_id = :cid"
+                ), {"cid": conv_id}).scalar()
+                if ts:
+                    parts.append(f"{conv_id}:{ts}")
+        # Pending suggestion count
+        count = db.execute(text(
+            "SELECT COUNT(*) FROM suggestions WHERE task_id = :tid AND status = 'pending'"
+        ), {"tid": task.id}).scalar()
+        parts.append(f"suggestions:{count}")
+        return _hb_hashlib.md5("|".join(parts).encode()).hexdigest()
+    finally:
+        db.close()
 
 
 def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
@@ -775,7 +792,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
             return None
 
         # Change detection: skip if nothing changed since last heartbeat
-        current_hash = _compute_heartbeat_hash(db, task)
+        current_hash = _compute_heartbeat_hash(task)
         if _heartbeat_state.get(task_id) == current_hash:
             print(f"\033[33m[heartbeat] Skipping task {task_id} — no changes since last run\033[0m")
             log_trace("heartbeat", "heartbeat", "Skipped — no context changes", task_id=task_id)
@@ -783,6 +800,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
 
         conv_id = conv.id
         ext_conv_id = task.external_conversation_id
+        parent_conv_id = task.parent_conversation_id
 
         # Set typing indicator on external conversation
         if ext_conv_id:
@@ -920,14 +938,14 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
                 db_conv.updated_at = now
             write_db.commit()
 
-            # Store hash so next heartbeat knows nothing changed
-            # (recompute since agent may have modified task state)
+            # Recompute hash after agent run so next heartbeat knows the state
             try:
-                fresh_db = SessionLocal.session_factory()
-                fresh_task = fresh_db.query(Task).filter_by(id=task_id).first()
-                if fresh_task:
-                    _heartbeat_state[task_id] = _compute_heartbeat_hash(fresh_db, fresh_task)
-                fresh_db.close()
+                class _Ref:
+                    pass
+                _ref = _Ref()
+                _ref.id, _ref.ai_conversation_id = task_id, conv_id
+                _ref.external_conversation_id, _ref.parent_conversation_id = ext_conv_id, parent_conv_id
+                _heartbeat_state[task_id] = _compute_heartbeat_hash(_ref)
             except Exception:
                 pass
 
