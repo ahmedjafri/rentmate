@@ -953,8 +953,22 @@ export function ChatPanel() {
                             title="Copy portal link"
                             onClick={(e) => {
                               e.stopPropagation();
-                              navigator.clipboard.writeText(p.portalUrl!);
-                              toast.success(`${p.participantType === 'vendor' ? 'Vendor' : 'Tenant'} portal link copied`);
+                              try {
+                                if (navigator.clipboard?.writeText) {
+                                  navigator.clipboard.writeText(p.portalUrl!);
+                                } else {
+                                  const ta = document.createElement('textarea');
+                                  ta.value = p.portalUrl!;
+                                  ta.style.cssText = 'position:fixed;left:-9999px';
+                                  document.body.appendChild(ta);
+                                  ta.select();
+                                  document.execCommand('copy');
+                                  document.body.removeChild(ta);
+                                }
+                                toast.success(`${p.participantType === 'vendor' ? 'Vendor' : 'Tenant'} portal link copied`);
+                              } catch {
+                                toast.error('Failed to copy link');
+                              }
                             }}
                           >
                             <LinkIcon className="h-3 w-3" />
