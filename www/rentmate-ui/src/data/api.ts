@@ -145,7 +145,7 @@ const TASK_FIELDS = `
     conversationType
     lastMessageAt
     messageCount
-    participants { name participantType entityId }
+    participants { name participantType entityId portalUrl }
   }
   messages {
     uid

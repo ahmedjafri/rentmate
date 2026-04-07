@@ -373,6 +373,7 @@ class ConversationParticipantType:
     name: str
     participant_type: str  # "tenant" | "vendor"
     entity_id: typing.Optional[str] = None
+    portal_url: typing.Optional[str] = None
 
 @strawberry.type
 class LinkedConversationType:
@@ -395,14 +396,18 @@ class LinkedConversationType:
             if not p.is_active:
                 continue
             if p.tenant_id and p.tenant:
+                from gql.services.tenant_service import TenantService
                 name = f"{p.tenant.first_name} {p.tenant.last_name}".strip()
                 parts.append(ConversationParticipantType(
                     name=name, participant_type="tenant", entity_id=str(p.tenant_id),
+                    portal_url=TenantService.get_portal_url(p.tenant),
                 ))
             elif p.external_contact_id and p.external_contact:
+                from gql.services.vendor_service import VendorService
                 parts.append(ConversationParticipantType(
                     name=p.external_contact.name, participant_type="vendor",
                     entity_id=str(p.external_contact_id),
+                    portal_url=VendorService.get_portal_url(p.external_contact),
                 ))
 
         return cls(

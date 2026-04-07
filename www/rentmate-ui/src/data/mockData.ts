@@ -19,6 +19,7 @@ export interface ConversationParticipant {
   name: string;
   participantType: string;
   entityId?: string | null;
+  portalUrl?: string | null;
 }
 
 export interface LinkedConversation {

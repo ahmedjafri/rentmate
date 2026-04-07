@@ -379,7 +379,7 @@ interface ApiTask {
   aiConversationId?: string | null;
   parentConversationId?: string | null;
   externalConversationId?: string | null;
-  linkedConversations?: { uid: string; label: string; conversationType: string; lastMessageAt?: string; messageCount: number; participants?: { name: string; participantType: string; entityId?: string | null }[] }[];
+  linkedConversations?: { uid: string; label: string; conversationType: string; lastMessageAt?: string; messageCount: number; participants?: { name: string; participantType: string; entityId?: string | null; portalUrl?: string | null }[] }[];
 }
 
 interface ApiSuggestion {

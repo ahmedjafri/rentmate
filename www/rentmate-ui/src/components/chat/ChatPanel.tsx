@@ -40,7 +40,7 @@ function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }
 }
 
 export function ChatPanel() {
-  const { chatPanel, closeChat, openChat, suggestions, actionDeskTasks, vendors, tenants, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, addDocument, replaceDocument, removeDocument, refreshData } = useApp();
+  const { chatPanel, closeChat, openChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, addDocument, replaceDocument, removeDocument, refreshData } = useApp();
   const [dismissConfirm, setDismissConfirm] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -941,29 +941,19 @@ export function ChatPanel() {
                 {(lc.participants ?? []).length === 0 ? (
                   <span className="text-[11px] text-muted-foreground italic">No external participants yet</span>
                 ) : (
-                  (lc.participants ?? []).map((p, idx) => {
-                    // Find portal URL for this participant
-                    let portalUrl: string | undefined;
-                    if (p.participantType === 'vendor') {
-                      const v = vendors.find(v => v.id === p.entityId);
-                      portalUrl = v?.portalUrl;
-                    } else if (p.participantType === 'tenant') {
-                      const t = tenants.find(t => t.id === p.entityId);
-                      portalUrl = t?.portalUrl;
-                    }
-                    return (
+                  (lc.participants ?? []).map((p, idx) => (
                       <Badge key={p.entityId ?? `${p.name}-${idx}`} variant="secondary" className="text-[10px] rounded-lg gap-1">
                         <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted-foreground/20 text-[9px] font-bold">
                           {p.name.charAt(0).toUpperCase()}
                         </span>
                         {p.name}
-                        {portalUrl && (
+                        {p.portalUrl && (
                           <button
                             className="ml-0.5 text-primary/60 hover:text-primary transition-colors"
                             title="Copy portal link"
                             onClick={(e) => {
                               e.stopPropagation();
-                              navigator.clipboard.writeText(portalUrl!);
+                              navigator.clipboard.writeText(p.portalUrl!);
                               toast.success(`${p.participantType === 'vendor' ? 'Vendor' : 'Tenant'} portal link copied`);
                             }}
                           >
@@ -971,8 +961,7 @@ export function ChatPanel() {
                           </button>
                           )}
                         </Badge>
-                      );
-                    })
+                    ))
                 )}
               </div>
               <ScrollArea className="flex-1 overflow-x-hidden">
