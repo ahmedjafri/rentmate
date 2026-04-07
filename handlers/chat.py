@@ -739,6 +739,15 @@ def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
         if not conv:
             return None
 
+        # Skip if there are already pending suggestions for this task
+        from db.models import Suggestion
+        pending_count = db.query(Suggestion).filter(
+            Suggestion.task_id == task_id,
+            Suggestion.status == "pending",
+        ).count()
+        if pending_count > 0:
+            return None
+
         conv_id = conv.id
         ext_conv_id = task.external_conversation_id
 

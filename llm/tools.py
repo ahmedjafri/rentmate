@@ -68,9 +68,23 @@ def _create_suggestion(
     """
     from handlers.deps import SessionLocal
     from gql.services import suggestion_service, chat_service
+    from db.models import Suggestion
 
     db = SessionLocal.session_factory()
     try:
+        # Deduplicate: skip if a pending suggestion with the same action already exists for this task
+        if task_id and action_payload and action_payload.get("action"):
+            from sqlalchemy import select
+            existing = db.execute(
+                select(Suggestion).where(
+                    Suggestion.task_id == task_id,
+                    Suggestion.status == "pending",
+                )
+            ).scalars().all()
+            for s in existing:
+                if (s.action_payload or {}).get("action") == action_payload["action"]:
+                    return s.id  # reuse existing suggestion
+
         suggestion = suggestion_service.create_suggestion(
             db,
             title=title,
