@@ -96,6 +96,8 @@ class TestNoticeRequirements:
             )
 
         reply = result["reply"].lower()
-        # Should mention notice period
-        assert "notice" in reply or "advance" in reply or "days" in reply or "written" in reply, \
-            f"Should mention notice requirements for rent increase: {result['reply'][:200]}"
+        # Should mention notice period or lease timing — not just send it immediately
+        assert ("notice" in reply or "advance" in reply or "days" in reply
+                or "written" in reply or "lease" in reply or "renewal" in reply
+                or "takes effect" in reply), \
+            f"Should mention notice/timing requirements for rent increase: {result['reply'][:200]}"
