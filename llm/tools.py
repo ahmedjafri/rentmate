@@ -67,8 +67,8 @@ def _create_suggestion(
     that conversation so the suggestion appears inline in the chat.
     """
     from db.models import Suggestion
+    from db.session import SessionLocal
     from gql.services import suggestion_service
-    from handlers.deps import SessionLocal
 
     db = SessionLocal.session_factory()
     try:
@@ -144,7 +144,7 @@ def _create_suggestion(
 def _get_task_title(task_id: str) -> str:
     """Look up a task's title for use in suggestion headlines."""
     from db.models import Task
-    from handlers.deps import SessionLocal
+    from db.session import SessionLocal
 
     db = SessionLocal.session_factory()
     try:
@@ -220,7 +220,7 @@ class ProposeTaskTool(Tool):
         vendor_id = kwargs["vendor_id"]
 
         from db.models import ExternalContact
-        from handlers.deps import SessionLocal
+        from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
             vendor = db.query(ExternalContact).filter_by(id=vendor_id).first()
@@ -294,7 +294,7 @@ class CloseTaskTool(Tool):
         from datetime import UTC, datetime
 
         from db.models import Task as TaskModel
-        from handlers.deps import SessionLocal
+        from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
             task = db.query(TaskModel).filter_by(id=task_id).first()
@@ -358,7 +358,7 @@ class SetModeTool(Tool):
         mode = kwargs["mode"]
 
         from db.models import Task as TaskModel
-        from handlers.deps import SessionLocal
+        from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
             task = db.query(TaskModel).filter_by(id=task_id).first()
@@ -374,7 +374,7 @@ class SetModeTool(Tool):
 def _get_task_category(task_id: str) -> str | None:
     """Look up a task's category for autonomy checks."""
     from db.models import Task
-    from handlers.deps import SessionLocal
+    from db.session import SessionLocal
     db = SessionLocal.session_factory()
     try:
         task = db.query(Task).filter_by(id=task_id).first()
@@ -390,7 +390,7 @@ def _auto_execute_suggestion(suggestion_id: str, action: str) -> str | None:
     The executor's ``send_autonomous_message`` commits internally, so we
     don't add our own commit — just close the session when done.
     """
-    from handlers.deps import SessionLocal
+    from db.session import SessionLocal
     from handlers.task_suggestions import SuggestionExecutor
     db = SessionLocal.session_factory()
     try:
@@ -452,7 +452,7 @@ class AttachEntityToTaskTool(Tool):
         task_title = _get_task_title(task_id)
 
         from db.models import ExternalContact, Property, Tenant, Unit
-        from handlers.deps import SessionLocal
+        from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
             if entity_type == "vendor":
@@ -547,7 +547,7 @@ class MessageExternalPersonTool(Tool):
         task_title = _get_task_title(task_id)
 
         from db.models import ExternalContact, Tenant
-        from handlers.deps import SessionLocal
+        from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
             if entity_type == "vendor":
@@ -636,7 +636,7 @@ class LookupVendorsTool(Tool):
 
     async def execute(self, **kwargs: Any) -> str:
         from db.models import ExternalContact
-        from handlers.deps import SessionLocal
+        from db.session import SessionLocal
 
         vendor_type = kwargs.get("vendor_type")
         query = (kwargs.get("query") or "").strip().lower()
@@ -718,7 +718,7 @@ class UpdateStepsTool(Tool):
         from sqlalchemy.orm.attributes import flag_modified
 
         from db.models import Task
-        from handlers.deps import SessionLocal
+        from db.session import SessionLocal
 
         db = SessionLocal.session_factory()
         try:
@@ -765,9 +765,9 @@ class CreateVendorTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        from db.session import SessionLocal
         from gql.services.vendor_service import VendorService
         from gql.types import CreateVendorInput
-        from handlers.deps import SessionLocal
 
         db = SessionLocal.session_factory()
         try:
@@ -851,7 +851,7 @@ class SaveMemoryTool(Tool):
 
         from datetime import UTC, datetime
 
-        from handlers.deps import SessionLocal
+        from db.session import SessionLocal
 
         # Task-scoped notes
         if scope == "task":
@@ -971,7 +971,7 @@ class RecallMemoryTool(Tool):
             return json.dumps({"notes": [], "message": f"Unknown entity type: {entity_type}"})
 
         import db.models as models
-        from handlers.deps import SessionLocal
+        from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
             model_cls = getattr(models, model_name)
@@ -1051,7 +1051,7 @@ class EditMemoryTool(Tool):
         if not model_name:
             return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
 
-        from handlers.deps import SessionLocal
+        from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
             import db.models as models

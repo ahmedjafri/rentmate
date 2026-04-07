@@ -15,7 +15,7 @@ class DbMemoryStore:
         self.agent_id = agent_id
 
     def _get_db(self):
-        from handlers.deps import SessionLocal
+        from db.session import SessionLocal
         return SessionLocal.session_factory()
 
     # ── General notes (agent_memory table) ───────────────────────────────

@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 DIRS = ["db", "gql", "backends", "llm", "handlers"]
-EXCLUDE = {"__pycache__", "migrations", "tests", ".venv"}
+EXCLUDE = {"__pycache__", "migrations", "tests", ".venv", ".claude"}
 
 
 def _should_check(path: Path) -> bool:
@@ -88,6 +88,33 @@ def check_lazy_imports(path: Path, tree: ast.Module) -> list[str]:
     return errors
 
 
+def check_handler_imports(path: Path, tree: ast.Module) -> list[str]:
+    """No code outside handlers/ (except tests, scripts, main.py) should import from handlers/."""
+    errors = []
+    path_str = str(path)
+    # Skip files that are allowed to import handlers
+    if any(path_str.startswith(p) for p in ("handlers/", "tests/", "scripts/", "evals/")):
+        return errors
+    if path.name in ("main.py", "conftest.py", "serve.py"):
+        return errors
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("handlers"):
+            names = ", ".join(a.name for a in node.names)
+            errors.append(
+                f"{path}:{node.lineno}: imports from handlers/ — use db.session or gql.services instead: "
+                f"from {node.module} import {names}"
+            )
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith("handlers"):
+                    errors.append(
+                        f"{path}:{node.lineno}: imports handlers/ — move dependency to db/ or gql/: "
+                        f"import {alias.name}"
+                    )
+    return errors
+
+
 def check_private_imports(path: Path, tree: ast.Module) -> list[str]:
     """Find imports of private symbols from core directories."""
     errors = []
@@ -145,7 +172,7 @@ def main():
                 continue
             all_errors.extend(check_lazy_imports(rel, tree))
 
-    # Check private imports from ALL Python files
+    # Check private imports + handler dependency violations from ALL Python files
     for py_file in sorted(ROOT.rglob("*.py")):
         if not _should_check(py_file):
             continue
@@ -156,6 +183,7 @@ def main():
         except SyntaxError:
             continue
         all_errors.extend(check_private_imports(rel, tree))
+        all_errors.extend(check_handler_imports(rel, tree))
 
     if all_errors:
         print(f"\n{len(all_errors)} violation(s) found:\n")

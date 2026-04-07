@@ -22,7 +22,7 @@ def log_trace(
     """Persist a trace entry. Best-effort — never raises."""
     try:
         from db.models import AgentTrace
-        from handlers.deps import SessionLocal
+        from db.session import SessionLocal
 
         if isinstance(detail, dict):
             detail = json.dumps(detail, default=str)
