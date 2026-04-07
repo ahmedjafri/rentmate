@@ -397,10 +397,6 @@ class LinkedConversationType:
                 continue
             if p.tenant_id and p.tenant:
                 from gql.services.tenant_service import TenantService
-                from gql.services import portal_auth
-                from sqlalchemy.orm import object_session
-                _sess = object_session(p.tenant)
-                portal_auth.ensure_portal_token(p.tenant, db=_sess)
                 name = f"{p.tenant.first_name} {p.tenant.last_name}".strip()
                 parts.append(ConversationParticipantType(
                     name=name, participant_type="tenant", entity_id=str(p.tenant_id),
@@ -408,10 +404,6 @@ class LinkedConversationType:
                 ))
             elif p.external_contact_id and p.external_contact:
                 from gql.services.vendor_service import VendorService
-                from gql.services import portal_auth as _pa
-                from sqlalchemy.orm import object_session as _os
-                _sess2 = _os(p.external_contact)
-                _pa.ensure_portal_token(p.external_contact, db=_sess2)
                 parts.append(ConversationParticipantType(
                     name=p.external_contact.name, participant_type="vendor",
                     entity_id=str(p.external_contact_id),
