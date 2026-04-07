@@ -675,9 +675,9 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
     def _dispatch_sms(self, to_phone: str, body: str) -> None:
         """Dispatch an SMS via Quo (best-effort, non-blocking)."""
         try:
-            from handlers.chat import _get_quo_api_key, _get_quo_from_number, send_sms_reply
-            api_key = _get_quo_api_key()
-            from_num = _get_quo_from_number()
+            from gql.services.sms_service import get_quo_api_key, get_quo_from_number, send_sms_reply
+            api_key = get_quo_api_key()
+            from_num = get_quo_from_number()
             if api_key:
                 import asyncio
                 try:

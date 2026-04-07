@@ -13,7 +13,8 @@ from db.models import (
     Tenant,
 )
 from db.utils import normalize_phone
-from handlers.chat import is_in_whitelist, send_sms_reply
+from gql.services.sms_service import send_sms_reply
+from handlers.chat import is_in_whitelist
 from handlers.deps import get_db
 from llm.client import AgentResponse
 from main import app

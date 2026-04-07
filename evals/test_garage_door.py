@@ -199,7 +199,7 @@ def scenario(db):
 @pytest.fixture
 def mock_sms():
     """Capture SMS calls without sending."""
-    with patch("handlers.chat.send_sms_reply", new_callable=AsyncMock) as mock:
+    with patch("gql.services.sms_service.send_sms_reply", new_callable=AsyncMock) as mock:
         yield mock
 
 

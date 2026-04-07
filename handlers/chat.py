@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Dict, Optional
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -30,8 +29,14 @@ from db.lib import (
 from db.models import Conversation, ConversationType, Message, MessageType, ParticipantType, Task
 from db.session import SessionLocal
 from gql.services import chat_service
+from gql.services.sms_service import (  # noqa: F401 — re-exported for backward compat
+    get_quo_api_key,
+    get_quo_from_number,
+    send_email_reply,
+    send_sms_reply,
+    send_via_channel,
+)
 from handlers.deps import get_db, require_user
-from handlers.settings import load_integrations
 from llm.context import build_task_context, load_account_context
 from llm.registry import agent_registry
 from llm.side_effects import process_side_effects
@@ -58,79 +63,9 @@ PHONE_WHITELIST = [p.strip() for p in os.getenv("PHONE_WHITELIST", "").split(","
 def is_in_whitelist(number: str) -> bool:
     return any(allowed in number for allowed in PHONE_WHITELIST)
 
-def _normalize_phone(num: str) -> str:
-    """Ensure phone number has +1 prefix for US numbers."""
-    digits = ''.join(c for c in num if c.isdigit())
-    if digits.startswith('1') and len(digits) == 11:
-        return f"+{digits}"
-    if len(digits) == 10:
-        return f"+1{digits}"
-    if num.startswith('+'):
-        return num
-    return f"+{digits}"
-
-async def send_sms_reply(from_num: str, to_num: str, text: str, api_key: str | None = None):
-    key = api_key or _get_quo_api_key()
-    if not key:
-        print("[sms] No Quo API key configured — skipping SMS")
-        return
-    to_num = _normalize_phone(to_num)
-    if from_num:
-        from_num = _normalize_phone(from_num)
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "https://api.openphone.com/v1/messages",
-            headers={
-                "Authorization": key,
-                "Content-Type": "application/json",
-            },
-            json={
-                "content": text,
-                "from": from_num,
-                "to": [to_num],
-            },
-        )
-        print(f"[sms] Quo response: {response.status_code} {response.text[:200]}")
-
-def _get_quo_api_key() -> str:
-    """Get Quo (OpenPhone) API key from integrations config or env var."""
-    cfg = load_integrations().get("quo", {})
-    return cfg.get("api_key") or QUO_API_KEY
-
-def _get_quo_from_number() -> str:
-    """Get the outbound phone number from Quo config."""
-    cfg = load_integrations().get("quo", {})
-    return cfg.get("from_number") or ""
-
-async def send_email_reply(conv, body: str, inbound_meta: dict):
-    """Send an email reply via Gmail. Requires GmailClient to be configured."""
-    try:
-        from backends.gmail import GmailClient
-        client = GmailClient()
-        to_address = inbound_meta.get("from_address", "")
-        subject = inbound_meta.get("subject", conv.subject or "Re: Your message")
-        thread_id = inbound_meta.get("thread_id")
-        await asyncio.to_thread(
-            client.send_reply,
-            to=to_address,
-            subject=subject,
-            body=body,
-            thread_id=thread_id,
-        )
-    except Exception as e:
-        print(f"[send_email_reply] Failed: {e}")
-
-async def send_via_channel(conv, reply: str, inbound_meta: dict):
-    """Dispatch an agent reply to the appropriate outbound channel."""
-    if conv.channel_type == "sms":
-        await send_sms_reply(
-            from_num=inbound_meta.get("to_number", ""),
-            to_num=inbound_meta.get("from_number", ""),
-            text=reply,
-        )
-    elif conv.channel_type == "email":
-        await send_email_reply(conv=conv, body=reply, inbound_meta=inbound_meta)
-    # channel_type == None (manual/internal): no automated outbound
+# Backward compat aliases
+_get_quo_api_key = get_quo_api_key
+_get_quo_from_number = get_quo_from_number
 
 # ─── Pydantic models ──────────────────────────────────────────────────────────
 
