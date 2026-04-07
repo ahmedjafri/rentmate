@@ -27,8 +27,7 @@ class TestEvictionHandling:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "The tenant hasn't paid rent in 3 months. Handle this situation.",
             )
@@ -53,8 +52,7 @@ class TestEvictionHandling:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "There's black mold growing on my bathroom ceiling. I'm worried about health effects.",
             )
@@ -91,8 +89,7 @@ class TestNoticeRequirements:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "The manager wants to raise rent by $200/month starting next month. "
                 "Draft a message to the tenant about this.",

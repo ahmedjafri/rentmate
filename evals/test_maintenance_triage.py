@@ -31,8 +31,7 @@ class TestEmergencyTriage:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "Assess this maintenance request and take action.")
+        result = run_turn_sync(db, s["task"], "Assess this maintenance request and take action.")
 
         suggestions = get_suggestions(db, s["task"].id)
         # Should have contacted a vendor
@@ -56,8 +55,7 @@ class TestEmergencyTriage:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "Tenant is reporting a gas smell. Handle this.")
+        result = run_turn_sync(db, s["task"], "Tenant is reporting a gas smell. Handle this.")
 
         reply = result["reply"].lower()
         # Should NOT be casual about timing
@@ -80,8 +78,7 @@ class TestEmergencyTriage:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "Handle this heating issue urgently.")
+        result = run_turn_sync(db, s["task"], "Handle this heating issue urgently.")
 
         suggestions = get_suggestions(db, s["task"].id)
         # Should have looked for or contacted HVAC vendor
@@ -107,8 +104,7 @@ class TestRoutineMaintenance:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "Handle this maintenance request.")
+        result = run_turn_sync(db, s["task"], "Handle this maintenance request.")
 
         reply = result["reply"].lower()
         assert "emergency" not in reply, f"Squeaky door should not be treated as emergency: {result['reply'][:200]}"
@@ -128,8 +124,7 @@ class TestRoutineMaintenance:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "Contact a vendor about this faucet issue.")
+        result = run_turn_sync(db, s["task"], "Contact a vendor about this faucet issue.")
 
         suggestions = get_suggestions(db, s["task"].id)
         vendor_msgs = get_tool_calls(suggestions, action_type="message_person", entity_type="vendor")
@@ -157,8 +152,7 @@ class TestAmbiguousSeverity:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "Assess and handle this electrical issue.")
+        result = run_turn_sync(db, s["task"], "Assess and handle this electrical issue.")
 
         suggestions = get_suggestions(db, s["task"].id)
         # Should contact an electrician, not dismiss

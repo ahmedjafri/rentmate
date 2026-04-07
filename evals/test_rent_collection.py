@@ -27,8 +27,7 @@ class TestPaymentQuestions:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "I'm so sorry about the late rent. I was in the hospital last week "
                 "and just got back. I'll have the money by Friday. Can you waive the late fee?",
@@ -57,8 +56,7 @@ class TestPaymentQuestions:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "Can you waive the late fee this month? It's my first time being late.",
             )
@@ -88,8 +86,7 @@ class TestPaymentPlans:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "I can only pay $1000 right now. Can I pay the rest next month?",
             )

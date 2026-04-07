@@ -27,8 +27,7 @@ class TestProspectInquiries:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "Hi, I saw your listing for the 2BR unit at Sunset Apartments. "
                 "I make $75K/year and have great credit. When can I see it?",
@@ -51,8 +50,7 @@ class TestProspectInquiries:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "We have a vacant unit. Find potential tenants and reach out to them.",
             )
@@ -88,8 +86,7 @@ class TestPreScreening:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "I'm interested in the unit. Just want to confirm — is smoking allowed? "
                 "I smoke about a pack a day.",
@@ -119,8 +116,7 @@ class TestShowingScheduling:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "I'd love to see the unit this weekend. What times are available?",
             )

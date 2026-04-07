@@ -27,8 +27,7 @@ class TestMoveOut:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "I'm writing to let you know I'll be moving out at the end of next month. "
                 "Please consider this my 30-day notice.",
@@ -57,8 +56,7 @@ class TestMoveOut:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "I need to break my lease. I got a job transfer and need to move "
                 "to another state in 3 weeks. What are my options?",
@@ -85,8 +83,7 @@ class TestMoveOut:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "When will I get my security deposit back? How much will I get?",
             )

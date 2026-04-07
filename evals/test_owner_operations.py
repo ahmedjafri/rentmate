@@ -32,8 +32,7 @@ class TestOwnerEscalation:
         task.context = "[2026-04-07] Big Fix Co quoted $3,500 for main sewer line repair."
         db.flush()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "The vendor quoted $3,500 for the sewer line repair. Should we proceed?",
             )
@@ -62,8 +61,7 @@ class TestVacancyTurnover:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, s["task"],
                 "Previous tenant moved out of Unit 3B. Coordinate the turnover process.",
             )

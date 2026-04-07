@@ -283,10 +283,22 @@ async def run_agent_turn(db, task, user_message):
 
 
 def run_turn_sync(db, task, user_message):
-    """Synchronous wrapper for run_agent_turn."""
+    """Synchronous wrapper for run_agent_turn.
+
+    Automatically patches db.session.SessionLocal so tools use the test session.
+    """
+    from unittest.mock import MagicMock
+
+    # Create a mock SessionLocal whose session_factory() returns the test db
+    mock_sl = MagicMock()
+    mock_sl.session_factory.return_value = db
+    mock_sl.return_value = db
+
     loop = asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(run_agent_turn(db, task, user_message))
+        with patch("db.session.SessionLocal", mock_sl), \
+             patch("handlers.deps.SessionLocal", mock_sl):
+            return loop.run_until_complete(run_agent_turn(db, task, user_message))
     finally:
         loop.close()
 

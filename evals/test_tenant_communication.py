@@ -29,8 +29,7 @@ class TestLeaseQuestions:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "Tenant asks: When is rent due and how much is it?")
+        result = run_turn_sync(db, s["task"], "Tenant asks: When is rent due and how much is it?")
 
         reply = result["reply"].lower()
         # Should mention rent amount from lease data
@@ -51,8 +50,7 @@ class TestLeaseQuestions:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "Tenant asks: What are the specific rules for getting my security deposit back? What deductions are typical?")
+        result = run_turn_sync(db, s["task"], "Tenant asks: What are the specific rules for getting my security deposit back? What deductions are typical?")
 
         reply = result["reply"].lower()
         # Should NOT tell tenant to check their lease
@@ -76,8 +74,7 @@ class TestLeaseQuestions:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "How much is the late fee if I pay rent 3 days late?")
+        result = run_turn_sync(db, s["task"], "How much is the late fee if I pay rent 3 days late?")
 
         reply = result["reply"].lower()
         bad_phrases = ["check your lease", "refer to your", "look at your", "review your documents"]
@@ -104,8 +101,7 @@ class TestCommonQuestions:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "Can I get a dog? What's the pet policy here?")
+        result = run_turn_sync(db, s["task"], "Can I get a dog? What's the pet policy here?")
 
         # Should provide some response (even if escalating)
         assert len(result["reply"]) > 20, "Should provide a substantive response"
@@ -133,8 +129,7 @@ class TestCommonQuestions:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "I want to sublet my apartment for 2 months while I'm traveling. Is that okay?")
+        result = run_turn_sync(db, s["task"], "I want to sublet my apartment for 2 months while I'm traveling. Is that okay?")
 
         reply = result["reply"].lower()
         # Should NOT just say "yes, go ahead"
@@ -160,8 +155,7 @@ class TestTenantTone:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "What day is trash pickup?")
+        result = run_turn_sync(db, s["task"], "What day is trash pickup?")
 
         reply = result["reply"]
         filler = ["Great question", "I'd be happy to help", "Thank you for reaching out",

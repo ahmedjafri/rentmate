@@ -51,8 +51,7 @@ class TestVendorNegotiation:
                     "Looked at it. Need full replacement. Quote: $4,200 installed.",
                     ParticipantType.EXTERNAL_CONTACT)
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, task,
                 "Premium Plumbing quoted $4,200 for water heater replacement. Review and respond.",
             )
@@ -90,8 +89,7 @@ class TestRepeatReports:
         ]
         db.flush()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, task,
                 "I reported the sink leak 2 days ago and nobody has come yet! "
                 "The water damage is getting worse.",
@@ -132,8 +130,7 @@ class TestTenantFollowUp:
         ]
         db.flush()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, task,
                 "Any update on my AC repair? It's been a few days.",
             )

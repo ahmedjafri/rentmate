@@ -49,8 +49,7 @@ class TestSchedulingProtocol:
         add_message(db, vendor_conv.id, "Quick Fix", "I can come Thursday at 10am.",
                     ParticipantType.EXTERNAL_CONTACT)
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, task,
                 "Quick Fix replied about the window repair. Review and respond.",
             )
@@ -88,8 +87,7 @@ class TestOneTaskPerIssue:
         task.context = "[2026-04-07] Vendor A quoted $800 for kitchen sink repair."
         db.flush()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(
+        result = run_turn_sync(
                 db, task,
                 "We need a second quote for this plumbing repair. Find another vendor.",
             )
@@ -128,8 +126,7 @@ class TestVendorCommunication:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "Contact the plumber about this toilet issue.")
+        result = run_turn_sync(db, s["task"], "Contact the plumber about this toilet issue.")
 
         suggestions = get_suggestions(db, s["task"].id)
         vendor_msgs = get_tool_calls(suggestions, action_type="message_person", entity_type="vendor")
@@ -161,8 +158,7 @@ class TestVendorCommunication:
         )
         s = sb.build()
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
-            result = run_turn_sync(db, s["task"], "Contact a roofer about this leak.")
+        result = run_turn_sync(db, s["task"], "Contact a roofer about this leak.")
 
         suggestions = get_suggestions(db, s["task"].id)
         vendor_msgs = get_tool_calls(suggestions, action_type="message_person", entity_type="vendor")
