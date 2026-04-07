@@ -3,15 +3,16 @@
 Tests scenarios that require multiple agent turns with simulated
 external replies in between.
 """
+
 import pytest
-from unittest.mock import patch
 
 from db.models import (
-    Conversation, ConversationType, ParticipantType,
+    ConversationType,
+    ParticipantType,
 )
 from evals.conftest import (
-    add_message, run_turn_sync, get_suggestions, get_tool_calls,
-    assert_no_pii_leak,
+    add_message,
+    run_turn_sync,
 )
 
 

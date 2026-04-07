@@ -3,10 +3,10 @@
 Tests escalation to owner, vacancy turnover coordination,
 and status update generation.
 """
-import pytest
-from unittest.mock import patch
 
-from evals.conftest import run_turn_sync, get_suggestions, judge_message
+import pytest
+
+from evals.conftest import run_turn_sync
 
 
 @pytest.mark.eval

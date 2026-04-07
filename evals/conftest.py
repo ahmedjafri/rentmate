@@ -19,7 +19,6 @@ from db.models import (
     Base,
     Conversation,
     ConversationType,
-    ExternalContact,
     Lease,
     Message,
     MessageType,
@@ -257,10 +256,10 @@ def build_messages(db, task, user_message):
 
 async def run_agent_turn(db, task, user_message):
     """Run one agent turn and return structured results."""
+    from backends.local_auth import DEFAULT_USER_ID
     from llm.client import call_agent
     from llm.registry import agent_registry
     from llm.tools import active_conversation_id, pending_suggestion_messages
-    from backends.local_auth import DEFAULT_USER_ID
 
     messages = build_messages(db, task, user_message)
     agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)

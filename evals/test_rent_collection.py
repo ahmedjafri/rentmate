@@ -3,10 +3,10 @@
 Tests the agent's handling of payment questions, late fees,
 hardship requests, and payment plan negotiation.
 """
-import pytest
-from unittest.mock import patch
 
-from evals.conftest import run_turn_sync, get_suggestions, judge_message
+import pytest
+
+from evals.conftest import judge_message, run_turn_sync
 
 
 @pytest.mark.eval

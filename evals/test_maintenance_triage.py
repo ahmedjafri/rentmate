@@ -3,12 +3,14 @@
 Tests the agent's ability to classify urgency, coordinate vendors,
 and follow proper tenant/vendor communication protocols.
 """
+
 import pytest
-from unittest.mock import patch
 
 from evals.conftest import (
-    run_turn_sync, get_suggestions, get_tool_calls,
-    assert_no_pii_leak, judge_message,
+    assert_no_pii_leak,
+    get_suggestions,
+    get_tool_calls,
+    run_turn_sync,
 )
 
 

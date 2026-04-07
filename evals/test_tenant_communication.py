@@ -3,11 +3,11 @@
 Tests the agent's ability to answer common tenant questions accurately,
 escalate when info is missing, and maintain professional tone.
 """
+
 import pytest
-from unittest.mock import patch
 
 from evals.conftest import (
-    run_turn_sync, get_suggestions, get_tool_calls, judge_message,
+    run_turn_sync,
 )
 
 

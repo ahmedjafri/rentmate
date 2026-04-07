@@ -3,10 +3,10 @@
 Tests prospect inquiries, pre-screening, showing scheduling,
 and the agent's boundaries around new tenant outreach.
 """
-import pytest
-from unittest.mock import patch
 
-from evals.conftest import run_turn_sync, get_suggestions, judge_message
+import pytest
+
+from evals.conftest import get_suggestions, run_turn_sync
 
 
 @pytest.mark.eval

@@ -3,11 +3,14 @@
 Tests vendor lookup, assignment, communication quality,
 and multi-vendor coordination.
 """
+
 import pytest
-from unittest.mock import patch
 
 from evals.conftest import (
-    run_turn_sync, get_suggestions, get_tool_calls, assert_no_pii_leak,
+    assert_no_pii_leak,
+    get_suggestions,
+    get_tool_calls,
+    run_turn_sync,
 )
 
 

@@ -3,15 +3,19 @@
 Tests that the agent follows proper coordination protocols:
 tenant-first scheduling, no PII leaks, one-task-per-issue.
 """
+
 import pytest
-from unittest.mock import patch
 
 from db.models import (
-    Conversation, ConversationType, Message, MessageType, ParticipantType,
+    ConversationType,
+    ParticipantType,
 )
 from evals.conftest import (
-    add_message, run_turn_sync, get_suggestions, get_tool_calls,
+    add_message,
     assert_no_pii_leak,
+    get_suggestions,
+    get_tool_calls,
+    run_turn_sync,
 )
 
 

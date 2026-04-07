@@ -3,10 +3,10 @@
 Tests the agent's handling of hostile tenants, prompt injection,
 fair housing compliance, and out-of-scope requests.
 """
-import pytest
-from unittest.mock import patch
 
-from evals.conftest import run_turn_sync, get_suggestions, judge_message
+import pytest
+
+from evals.conftest import get_suggestions, judge_message, run_turn_sync
 
 
 @pytest.mark.eval
