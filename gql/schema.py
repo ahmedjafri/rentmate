@@ -448,7 +448,7 @@ class Mutation(AuthMutation):
     ) -> SuggestionType:
         _current_user(info)
         db = _session(info)
-        from handlers.task_suggestions import SuggestionExecutor
+        from gql.services.task_suggestions import SuggestionExecutor
         executor = SuggestionExecutor.for_suggestion(db, uid)
         suggestion, _task = executor.execute(uid, action, edited_body=edited_body)
         db.commit()

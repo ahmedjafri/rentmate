@@ -391,7 +391,7 @@ def _auto_execute_suggestion(suggestion_id: str, action: str) -> str | None:
     don't add our own commit — just close the session when done.
     """
     from db.session import SessionLocal
-    from handlers.task_suggestions import SuggestionExecutor
+    from gql.services.task_suggestions import SuggestionExecutor
     db = SessionLocal.session_factory()
     try:
         executor = SuggestionExecutor.for_suggestion(db, suggestion_id)

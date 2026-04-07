@@ -30,15 +30,15 @@ from db.models import (
 )
 from gql.services import chat_service, settings_service
 from gql.services.task_service import TaskService
-from gql.types import VENDOR_TYPES as _VENDOR_TYPES, CreateTaskInput
-from handlers.default_automations import _CHECK_META, _DEFAULT_AUTOMATION_CONFIG
-from handlers.deps import SessionLocal, extract_json, require_user
-from handlers.settings import get_autonomy_settings
-from handlers.task_suggestions import (
+from gql.services.task_suggestions import (
     CreateTaskSuggestionExecutor,
     ReplyInTaskSuggestionExecutor,
     SuggestionExecutor,
 )
+from gql.types import VENDOR_TYPES as _VENDOR_TYPES, CreateTaskInput
+from handlers.default_automations import _CHECK_META, _DEFAULT_AUTOMATION_CONFIG
+from handlers.deps import SessionLocal, extract_json, require_user
+from handlers.settings import get_autonomy_settings
 
 router = APIRouter()
 _logger = logging.getLogger("rentmate.audit")
