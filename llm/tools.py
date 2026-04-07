@@ -218,6 +218,25 @@ class ProposeTaskTool(Tool):
     async def execute(self, **kwargs: Any) -> str:
         vendor_id = kwargs["vendor_id"]
 
+        # If called from within a task context (heartbeat or task chat), refuse —
+        # use attach_entity + message_person on the current task instead
+        conv_id = active_conversation_id.get()
+        if conv_id:
+            from handlers.deps import SessionLocal as _SL2
+            from db.models import Task as _T2
+            _db2 = _SL2.session_factory()
+            try:
+                _existing = _db2.query(_T2).filter(_T2.ai_conversation_id == conv_id).first()
+                if _existing:
+                    return json.dumps({
+                        "status": "error",
+                        "message": "Cannot create a new task from within an existing task. "
+                                   "Use attach_entity to add another vendor to this task, "
+                                   "then message_person to contact them.",
+                    })
+            finally:
+                _db2.close()
+
         from handlers.deps import SessionLocal
         from db.models import ExternalContact
         db = SessionLocal.session_factory()
