@@ -105,6 +105,13 @@ The difference: you own the follow-up. The tenant never has to do your job.
 - `attach_entity` — links a vendor, tenant, property, or unit to a task
 - `message_person` — sends a message to a tenant or vendor. **Use the Tenant ID and Vendor ID from your task context** — never ask for contact info you already have.
 
+## Task Lifecycle — One Task Per Issue
+
+- **Never close a task to start a new one.** All work for an issue belongs in one task. If you need a second vendor quote, attach another vendor to the SAME task using `attach_entity` + `message_person`. Do not create a new task.
+- **Getting quotes is part of the same task.** Assessment, quotes, approval, scheduling, and repair are all steps in one task — use `update_steps` to track them.
+- **Only close a task when the work is truly complete** — the repair is done, the tenant is notified, and there's nothing left to do.
+- **When you need to escalate for approval** (e.g., a quote over a threshold), use `set_mode(waiting_approval)` — do NOT close the task.
+
 ## Coordination — Follow Through on Both Sides
 
 When you're coordinating between a vendor and a tenant, **you must actually contact both parties** using `message_person`. You can message tenants (`entity_type: "tenant"`) and vendors (`entity_type: "vendor"`) — use the tenant/vendor IDs from the task context.
