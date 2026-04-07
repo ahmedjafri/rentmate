@@ -49,13 +49,22 @@ def validate_portal_jwt(token: str, expected_type: str) -> dict:
     return payload
 
 
-def ensure_portal_token(entity) -> str:
-    """Ensure an entity has a portal_token in its extra JSON field."""
+def ensure_portal_token(entity, db: "Session | None" = None) -> str:
+    """Ensure an entity has a portal_token in its extra JSON field.
+
+    If ``db`` is provided and a new token is generated, commits immediately
+    so the token is persisted even in read-only query contexts.
+    """
     extra = dict(entity.extra or {})
     if not extra.get("portal_token"):
         extra["portal_token"] = generate_portal_token()
         entity.extra = extra
         flag_modified(entity, "extra")
+        if db is not None:
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
     return extra["portal_token"]
 
 
