@@ -8,6 +8,8 @@
     "dev:dummy-data": "rm -f /tmp/rentmate_dummy.db && RENTMATE_DB_PATH=/tmp/rentmate_dummy.db poetry run python scripts/seed_dummy_data.py && RENTMATE_DB_PATH=/tmp/rentmate_dummy.db npm run dev --prefix www/rentmate-ui",
     "build": "npm run build --prefix www/rentmate-ui",
     "start": "poetry run uvicorn main:app --host 0.0.0.0 --port 8000",
+    "lint": "poetry run ruff check . && poetry run python scripts/lint_kwargs.py",
+    "lint:fix": "poetry run ruff check . --fix",
     "test": "poetry run pytest && npm run test:ui",
     "test:ui": "npm test --prefix www/rentmate-ui",
     "test:install": "bash tests/test-install.sh",
