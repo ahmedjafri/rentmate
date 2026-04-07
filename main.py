@@ -179,7 +179,7 @@ async def lifespan(app: FastAPI):
         automations.seed_automations()
 
     asyncio.create_task(automations.audit_loop())
-    asyncio.create_task(automations.reply_scanner_loop())
+    asyncio.create_task(automations.heartbeat_loop())
 
     if os.getenv("GMAIL_CLIENT_ID"):
         asyncio.create_task(_gmail_poll_loop())

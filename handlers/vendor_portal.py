@@ -188,6 +188,14 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
     task.last_message_at = now
     db.commit()
 
+    # Trigger agent heartbeat in background
+    import threading
+    _task_id = str(task.id)
+    _hint = f"{vendor.name} sent a message: {body.body.strip()[:100]}"
+    threading.Thread(
+        target=_run_heartbeat, args=(_task_id, _hint), daemon=True,
+    ).start()
+
     return {
         "id": str(msg.id),
         "body": msg.body,
@@ -196,3 +204,11 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
         "is_ai": False,
         "sent_at": msg.sent_at.isoformat() + "Z",
     }
+
+
+def _run_heartbeat(task_id: str, hint: str):
+    try:
+        from handlers.chat import agent_task_heartbeat
+        agent_task_heartbeat(task_id, hint=hint)
+    except Exception as e:
+        print(f"[vendor-portal] Heartbeat failed: {e}")

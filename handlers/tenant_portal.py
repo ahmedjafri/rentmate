@@ -251,6 +251,15 @@ def tenant_send_message(task_id: str, msg: SendMessageBody, request: Request):
     db.add(message)
     db.commit()
     db.refresh(message)
+
+    # Trigger agent heartbeat in background
+    import threading
+    _task_id = str(task.id)
+    _hint = f"{tenant_name} sent a message: {msg.body.strip()[:100]}"
+    threading.Thread(
+        target=_run_heartbeat, args=(_task_id, _hint), daemon=True,
+    ).start()
+
     return {
         "id": str(message.id),
         "body": message.body,
@@ -259,3 +268,11 @@ def tenant_send_message(task_id: str, msg: SendMessageBody, request: Request):
         "is_ai": False,
         "sent_at": message.sent_at.isoformat() + "Z",
     }
+
+
+def _run_heartbeat(task_id: str, hint: str):
+    try:
+        from handlers.chat import agent_task_heartbeat
+        agent_task_heartbeat(task_id, hint=hint)
+    except Exception as e:
+        print(f"[tenant-portal] Heartbeat failed: {e}")

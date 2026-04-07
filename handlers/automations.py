@@ -403,20 +403,55 @@ def _scan_for_reply_suggestions(db) -> int:
     return created
 
 
-async def reply_scanner_loop():
-    """Background loop: scan for unread external messages and create reply Suggestions."""
+async def heartbeat_loop():
+    """Background loop: run agent_task_heartbeat for autonomous tasks with unresponded messages."""
     _POLL_SECONDS = 60
     while True:
         await asyncio.sleep(_POLL_SECONDS)
         db = SessionLocal.session_factory()
         try:
-            n = _scan_for_reply_suggestions(db)
-            if n:
-                db.commit()
-                _logger.info("Reply scanner: created %d suggestion(s)", n)
+            from handlers.chat import agent_task_heartbeat
+            # Find autonomous tasks with external conversations
+            tasks = db.execute(
+                sa_select(Task).where(
+                    Task.task_mode == "autonomous",
+                    Task.task_status.in_(["active", "suggested"]),
+                    Task.external_conversation_id.isnot(None) | Task.parent_conversation_id.isnot(None),
+                )
+            ).scalars().all()
+
+            triggered = 0
+            for task in tasks:
+                # Check if the last message on any linked conversation is from an external party
+                for conv_id in [task.external_conversation_id, task.parent_conversation_id]:
+                    if not conv_id:
+                        continue
+                    last_msg = db.execute(
+                        sa_select(Message)
+                        .where(Message.conversation_id == conv_id,
+                               Message.message_type == MessageType.MESSAGE)
+                        .order_by(Message.sent_at.desc())
+                        .limit(1)
+                    ).scalar_one_or_none()
+                    if not last_msg:
+                        continue
+                    # Skip if last message is from the AI or property manager
+                    if last_msg.is_ai or last_msg.sender_type == ParticipantType.ACCOUNT_USER:
+                        continue
+                    # Run heartbeat for this task
+                    sender = last_msg.sender_name or "Someone"
+                    hint = f"{sender} sent a message that may need a response."
+                    try:
+                        agent_task_heartbeat(str(task.id), hint=hint)
+                        triggered += 1
+                    except Exception as exc:
+                        _logger.exception("Heartbeat failed for task %s: %s", task.id, exc)
+                    break  # only trigger once per task
+
+            if triggered:
+                _logger.info("Heartbeat loop: triggered %d task(s)", triggered)
         except Exception as exc:
-            db.rollback()
-            _logger.exception("Reply scanner error: %s", exc)
+            _logger.exception("Heartbeat loop error: %s", exc)
         finally:
             db.close()
 

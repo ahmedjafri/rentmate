@@ -707,6 +707,189 @@ async def chat_endpoint(
 
 NO_RESPONSE_SENTINEL = "[NO_RESPONSE]"
 
+
+# ─── Agent heartbeat ─────────────────────────────────────────────────────────
+
+def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
+    """Run the agent against a task and let it respond/act.
+
+    This is the core primitive for driving autonomous tasks forward.
+    Called when external messages arrive or periodically by the heartbeat loop.
+
+    Returns the agent reply text, or None if no response was needed.
+    """
+    import asyncio as _hb_asyncio
+    import json as _hb_json
+    from handlers.deps import SessionLocal
+    from llm.client import call_agent
+    from llm.tools import active_conversation_id, pending_suggestion_messages
+    from llm.registry import agent_registry
+    from llm.side_effects import process_side_effects
+    from llm.tracing import log_trace
+    from backends.local_auth import DEFAULT_USER_ID
+
+    db = SessionLocal.session_factory()
+    try:
+        task = db.query(Task).filter_by(id=task_id).first()
+        if not task:
+            return None
+        if task.task_mode != "autonomous":
+            return None
+        conv = task.ai_conversation
+        if not conv:
+            return None
+
+        conv_id = conv.id
+        ext_conv_id = task.external_conversation_id
+
+        # Set typing indicator on external conversation
+        if ext_conv_id:
+            ext_conv = db.query(Conversation).filter_by(id=ext_conv_id).first()
+            if ext_conv:
+                from sqlalchemy.orm.attributes import flag_modified
+                extra = dict(ext_conv.extra or {})
+                extra["ai_typing"] = True
+                ext_conv.extra = extra
+                flag_modified(ext_conv, "extra")
+
+        # Build context + message history
+        context = build_task_context(db, task_id)
+
+        # Gather progress steps
+        steps_text = ""
+        if task.steps:
+            steps_text = "\n\nTask progress steps:\n" + _hb_json.dumps(task.steps, indent=2)
+
+        # Gather external conversation messages
+        ext_msgs_text = ""
+        if ext_conv_id:
+            ext_conv_obj = db.query(Conversation).filter_by(id=ext_conv_id).first()
+            if ext_conv_obj:
+                ext_msgs = sorted(
+                    [m for m in (ext_conv_obj.messages or [])
+                     if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
+                    key=lambda m: m.sent_at,
+                )[-20:]
+                if ext_msgs:
+                    lines = [f"[{m.sender_name or 'Unknown'}]: {m.body}" for m in ext_msgs]
+                    ext_msgs_text = "\n\nExternal conversation (with vendor/tenant):\n" + "\n".join(lines)
+
+        # Gather tenant conversation messages
+        tenant_msgs_text = ""
+        if task.parent_conversation_id and task.parent_conversation_id != ext_conv_id:
+            parent_conv = db.query(Conversation).filter_by(id=task.parent_conversation_id).first()
+            if parent_conv:
+                t_msgs = sorted(
+                    [m for m in (parent_conv.messages or [])
+                     if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
+                    key=lambda m: m.sent_at,
+                )[-20:]
+                if t_msgs:
+                    lines = [f"[{m.sender_name or 'Unknown'}]: {m.body}" for m in t_msgs]
+                    tenant_msgs_text = "\n\nTenant conversation:\n" + "\n".join(lines)
+
+        # Build AI conversation history
+        all_msgs = [
+            m for m in (conv.messages or [])
+            if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)
+        ]
+        msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
+        messages_payload = [{"role": "system", "content": context}]
+        messages_payload += [
+            {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
+            for m in msg_rows
+        ]
+
+        # The hint (or default) is the "user" message that triggers the agent
+        default_hint = "Check this task for anything that needs attention."
+        user_msg = (hint or default_hint) + steps_text + ext_msgs_text + tenant_msgs_text
+        messages_payload.append({"role": "user", "content": user_msg})
+
+        db.commit()  # flush typing indicator + detach ORM objects
+
+        # Run agent
+        agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
+        session_key = f"task:{task_id}"
+
+        conv_token = active_conversation_id.set(conv_id)
+        pending_token = pending_suggestion_messages.set([])
+
+        loop = _hb_asyncio.new_event_loop()
+        try:
+            resp = loop.run_until_complete(call_agent(agent_id, session_key, messages_payload))
+        finally:
+            loop.close()
+
+        pending = pending_suggestion_messages.get() or []
+        active_conversation_id.reset(conv_token)
+        pending_suggestion_messages.reset(pending_token)
+
+        # Check if agent said no response needed
+        if resp.reply.strip().startswith(NO_RESPONSE_SENTINEL):
+            # Clear typing indicator
+            if ext_conv_id:
+                chat_service.clear_typing_indicator(db, ext_conv_id)
+            log_trace("heartbeat", "heartbeat", f"No response needed for task {task_id}",
+                      task_id=task_id)
+            return None
+
+        # Persist results
+        write_db = SessionLocal.session_factory()
+        try:
+            now = datetime.now(UTC)
+
+            # AI reply to AI conversation
+            ai_msg = Message(
+                id=str(_uuid.uuid4()),
+                conversation_id=conv_id,
+                sender_type=ParticipantType.ACCOUNT_USER,
+                body=resp.reply,
+                message_type=MessageType.MESSAGE,
+                sender_name="RentMate",
+                is_ai=True,
+                sent_at=now,
+            )
+            write_db.add(ai_msg)
+
+            # Side effects (suggestion messages)
+            side_effects = resp.side_effects + [
+                {"type": "suggestion_message", **p} for p in pending
+            ]
+            flushed = process_side_effects(write_db, side_effects, conv_id, now)
+
+            db_conv = write_db.query(Conversation).filter_by(id=conv_id).first()
+            if db_conv:
+                db_conv.updated_at = now
+            write_db.commit()
+
+            log_trace("heartbeat", "heartbeat",
+                      f"Agent replied ({len(resp.reply)} chars): {resp.reply[:100]}",
+                      task_id=task_id, conversation_id=conv_id)
+
+            return resp.reply
+        except Exception as e:
+            write_db.rollback()
+            print(f"[heartbeat] DB write failed for task {task_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return resp.reply
+        finally:
+            write_db.close()
+            # Clear typing indicator
+            if ext_conv_id:
+                try:
+                    chat_service.clear_typing_indicator(db, ext_conv_id)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[heartbeat] Failed for task {task_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        log_trace("error", "heartbeat", f"Heartbeat failed: {e}", task_id=task_id)
+        return None
+    finally:
+        db.close()
+
 ASSESS_PROMPT = (
     "Autonomous mode was just enabled for this task. "
     "Review the full conversation — including messages from external participants "
