@@ -777,7 +777,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
         # Change detection: skip if nothing changed since last heartbeat
         current_hash = _compute_heartbeat_hash(db, task)
         if _heartbeat_state.get(task_id) == current_hash:
-            print(f"[heartbeat] Skipping task {task_id} — no changes since last run")
+            print(f"\033[33m[heartbeat] Skipping task {task_id} — no changes since last run\033[0m")
             log_trace("heartbeat", "heartbeat", "Skipped — no context changes", task_id=task_id)
             return None
 
@@ -938,7 +938,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
             return resp.reply
         except Exception as e:
             write_db.rollback()
-            print(f"[heartbeat] DB write failed for task {task_id}: {e}")
+            print(f"\033[31m[heartbeat] DB write failed for task {task_id}: {e}\033[0m")
             import traceback
             traceback.print_exc()
             return resp.reply
@@ -951,7 +951,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
                 except Exception:
                     pass
     except Exception as e:
-        print(f"[heartbeat] Failed for task {task_id}: {e}")
+        print(f"\033[31m[heartbeat] Failed for task {task_id}: {e}\033[0m")
         import traceback
         traceback.print_exc()
         log_trace("error", "heartbeat", f"Heartbeat failed: {e}", task_id=task_id)

@@ -208,9 +208,13 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
 
 def _run_heartbeat(task_id: str, hint: str):
     import time
+    print(f"\033[33m[heartbeat] Triggering for task {task_id}: {hint}\033[0m")
     time.sleep(1)  # let the request session close before accessing DB
     try:
         from handlers.chat import agent_task_heartbeat
-        agent_task_heartbeat(task_id, hint=hint)
+        result = agent_task_heartbeat(task_id, hint=hint)
+        print(f"\033[33m[heartbeat] Result for task {task_id}: {'replied' if result else 'no response'}\033[0m")
     except Exception as e:
-        print(f"[vendor-portal] Heartbeat failed: {e}")
+        print(f"\033[31m[heartbeat] Failed for task {task_id}: {e}\033[0m")
+        import traceback
+        traceback.print_exc()
