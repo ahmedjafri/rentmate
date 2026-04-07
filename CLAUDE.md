@@ -100,9 +100,34 @@ Browser extension for TenantCloud (`app.tenantcloud.com`). `content.js` injects 
 
 ## Code Quality Rules
 
-Before finishing any frontend change:
+### Before finishing ANY change:
+1. Run `poetry run ruff check .` and fix all errors (use `--fix` for auto-fixable issues like import sorting)
+2. Run `poetry run python scripts/lint_kwargs.py` and fix any new violations you introduced
+3. Run `poetry run pytest tests/` and ensure all tests pass
+
+### Before finishing any frontend change:
 1. Run `npx tsc --noEmit` and fix all type errors
 2. Verify every used identifier (especially icon imports from lucide-react) is present in the import list — Vite/tsc won't catch missing runtime bindings that exist globally elsewhere
+
+### Python lint rules (enforced by ruff + scripts/lint_kwargs.py)
+
+**Import hygiene:**
+- All imports MUST be at the top of the file — no lazy imports inside functions. If you need to avoid a circular import, refactor the dependency instead.
+- No unused imports (F401) — remove imports you don't use.
+- Imports must be sorted and consolidated (isort rules).
+
+**Keyword-only parameters:**
+- Public functions (not `_` prefixed) in `db/`, `gql/`, `backends/`, `llm/`, `handlers/` with 3+ parameters (after self/cls) must use keyword-only arguments. Put `*,` after the first parameter:
+  ```python
+  # Good
+  def fetch_tasks(db, *, category=None, status=None, source=None): ...
+
+  # Bad
+  def fetch_tasks(db, category=None, status=None, source=None): ...
+  ```
+
+**Private imports:**
+- Do not import private symbols (prefixed with `_`) from `db/`, `gql/`, `backends/`, `llm/` modules. If you need the functionality, make it public or refactor.
 
 ### Key design patterns
 
