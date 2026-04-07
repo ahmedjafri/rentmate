@@ -15,14 +15,9 @@ Covers:
 
 from datetime import date, timedelta
 
-import pytest
-
 from db.audit import EXPIRY_WARN_DAYS, run_data_audit
 from db.models import (
-    Base,
-    Conversation,
     Lease,
-    Message,
     Property,
     Task,
     Tenant,

@@ -9,15 +9,14 @@ from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
 import yaml
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select as sa_select
-from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from db.audit import run_data_audit
-from db.enums import AgentSource, AutomationSource, TaskCategory, TaskSource
+from db.enums import AutomationSource, TaskCategory, TaskSource
 from db.models import (
     AutomationRevision,
     Conversation,
@@ -29,11 +28,11 @@ from db.models import (
     Suggestion,
     Task,
 )
-from gql.services import chat_service, settings_service, suggestion_service
+from gql.services import chat_service, settings_service
 from gql.services.task_service import TaskService
 from gql.types import VENDOR_TYPES as _VENDOR_TYPES, CreateTaskInput
 from handlers.default_automations import _CHECK_META, _DEFAULT_AUTOMATION_CONFIG
-from handlers.deps import SessionLocal, extract_json, get_db, require_user
+from handlers.deps import SessionLocal, extract_json, require_user
 from handlers.settings import get_autonomy_settings
 from handlers.task_suggestions import (
     CreateTaskSuggestionExecutor,

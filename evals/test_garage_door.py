@@ -25,9 +25,7 @@ from sqlalchemy.pool import StaticPool
 from db.models import (
     Base,
     Conversation,
-    ConversationParticipant,
     ConversationType,
-    ExternalContact,
     Lease,
     Message,
     MessageType,

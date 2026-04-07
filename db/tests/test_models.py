@@ -1,7 +1,6 @@
 # tests/test_models.py
 from datetime import date, timedelta
 
-import pytest
 from sqlalchemy import select
 
 from db.models import (

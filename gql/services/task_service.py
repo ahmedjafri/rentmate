@@ -7,8 +7,6 @@ from db.models import (
     Conversation,
     ConversationType,
     ExternalContact,
-    Message,
-    ParticipantType as PT,
     Task,
     TaskNumberSequence,
 )

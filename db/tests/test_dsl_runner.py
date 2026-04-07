@@ -18,11 +18,9 @@ Covers:
 import textwrap
 from datetime import date, timedelta
 
-import pytest
-
 from db.audit import run_data_audit
 from db.dsl_runner import run_script
-from db.models import Conversation, Lease, Message, Property, Task, Tenant, Unit
+from db.models import Lease, Message, Property, Task, Tenant, Unit
 
 TODAY = date.today()
 

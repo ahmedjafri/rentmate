@@ -27,7 +27,7 @@ from handlers import (
     vendor_invite,
     vendor_portal,
 )
-from handlers.deps import SessionLocal, engine, require_user
+from handlers.deps import SessionLocal, engine
 from handlers.settings import load_integrations, read_env_file
 from llm.registry import agent_registry
 
@@ -286,14 +286,12 @@ async def _gmail_poll_loop():
 
 def _handle_gmail_batch():
     """Synchronous handler for a single Gmail poll cycle."""
-    import uuid as _uuid
-    from datetime import datetime as _dt
 
     from sqlalchemy import func
 
     from backends.gmail import GmailClient
     from db.lib import route_inbound_to_task
-    from db.models import Conversation, Message, MessageType, ParticipantType, Tenant
+    from db.models import Message, MessageType, ParticipantType, Tenant
 
     gmail = GmailClient()
     try:

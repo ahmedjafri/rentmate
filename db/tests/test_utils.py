@@ -1,5 +1,4 @@
 """Tests for db/utils.py phone normalization."""
-import pytest
 
 from db.utils import normalize_phone
 

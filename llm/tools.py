@@ -67,7 +67,7 @@ def _create_suggestion(
     that conversation so the suggestion appears inline in the chat.
     """
     from db.models import Suggestion
-    from gql.services import chat_service, suggestion_service
+    from gql.services import suggestion_service
     from handlers.deps import SessionLocal
 
     db = SessionLocal.session_factory()

@@ -26,7 +26,6 @@ from .models import (
     Property,
     Task,
     Tenant,
-    Unit,
 )
 
 logger = logging.getLogger("rentmate.audit")

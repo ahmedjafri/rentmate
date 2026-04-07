@@ -21,9 +21,8 @@ Covers:
 from datetime import date, timedelta
 
 import pytest
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import sessionmaker
 
 from db.models import (
     Base,

@@ -15,7 +15,7 @@ Covers:
 import pytest
 from fastapi import HTTPException
 
-from db.models import Conversation, ExternalContact
+from db.models import Conversation
 from gql.schema import schema
 from gql.services.task_service import TaskService
 from gql.services.vendor_service import VendorService

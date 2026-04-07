@@ -56,7 +56,6 @@ ignore = [
     "E501",   # line too long (handled by formatter)
     "E701",   # multiple statements on one line (used in compact patterns)
     "E741",   # ambiguous variable names
-    "F401",   # unused imports (too noisy during development)
     "F821",   # undefined name (false positives from conditional imports)
 ]
 

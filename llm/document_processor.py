@@ -1,9 +1,7 @@
 # llm/document_processor.py
 
 import os
-import uuid
 from datetime import UTC, datetime
-from functools import lru_cache
 from io import BytesIO
 
 import litellm

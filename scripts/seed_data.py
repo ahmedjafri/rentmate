@@ -10,7 +10,7 @@ under the first AccountUser found in the database.
 """
 import os
 import sys
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from db.models import Account, AccountUser, Lease, Property, Tenant, Unit
+from db.models import AccountUser, Lease, Property, Tenant, Unit
 
 DB_URI = os.environ.get("SUPABASE_DB_URI")
 if not DB_URI:

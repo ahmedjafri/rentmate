@@ -9,7 +9,6 @@ Required environment variables:
 """
 
 import base64
-import email as _email_lib
 import os
 from email.mime.text import MIMEText
 from typing import Optional

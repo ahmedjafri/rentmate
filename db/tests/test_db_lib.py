@@ -1,6 +1,5 @@
 # test_db_lib.py
 
-import pytest
 
 from db.lib import (
     add_message,

@@ -6,19 +6,14 @@ Validates the full lifecycle that a property manager and vendor go through
 when an automation suggests a task with a vendor assignment.
 """
 import os
-import uuid
-from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from db.models import (
-    Base,
     Conversation,
     ConversationParticipant,
     ConversationType,
-    ExternalContact,
     Message,
     MessageType,
     ParticipantType,
@@ -27,7 +22,6 @@ from db.models import (
 from gql.schema import schema
 from gql.services.vendor_service import VendorService
 from gql.types import CreateVendorInput
-from handlers.deps import get_db
 from main import app
 
 FAKE_USER = {"id": "test-user-id", "email": "admin@test.com"}

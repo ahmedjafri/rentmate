@@ -6,21 +6,21 @@ import threading as _hb_threading
 import uuid as _uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from db.enums import TaskSource
-from db.lib import get_conversation_with_messages, record_sms_from_quo, route_inbound_to_tenant_chat
+from db.lib import record_sms_from_quo, route_inbound_to_tenant_chat
 from db.models import Conversation, Message, MessageType, ParticipantType, Task
 from gql.services import chat_service
 from handlers.deps import get_db, require_user
 from llm.context import build_task_context, load_account_context
-from llm.registry import DATA_DIR, agent_registry
+from llm.registry import agent_registry
 
 router = APIRouter()
 

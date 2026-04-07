@@ -7,7 +7,7 @@ work that belongs above the service layer per the project's architecture rules.
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.enums import AgentSource, AutomationSource, SuggestionSource
+from db.enums import AgentSource, SuggestionSource
 from db.models import (
     Conversation,
     ConversationType,

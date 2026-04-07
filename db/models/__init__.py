@@ -48,6 +48,7 @@ __all__ = [
     "DocumentTask",
     "DocumentTag",
     "AgentMemory",
+    "AgentTrace",
     "AutomationRevision",
     "TaskCategory",
     "Urgency",

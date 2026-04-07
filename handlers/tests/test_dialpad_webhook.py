@@ -1,6 +1,5 @@
 import unittest
 import unittest.mock
-import uuid
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx

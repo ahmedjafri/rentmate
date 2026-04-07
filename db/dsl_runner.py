@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 from sqlalchemy.orm import Session
 
-from db.enums import TaskCategory, TaskSource, Urgency
+from db.enums import TaskSource, Urgency
 
 from .models import (
     Conversation,

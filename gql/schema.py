@@ -18,7 +18,7 @@ from db.queries import (
 )
 
 from .auth_mutations import Mutation as AuthMutation
-from .services import chat_service, suggestion_service
+from .services import chat_service
 from .services.document_service import DocumentService
 from .services.property_service import PropertyService
 from .services.task_service import TaskService
@@ -141,9 +141,9 @@ class Query:
     ) -> typing.List[SuggestionType]:
         _current_user(info)
         from sqlalchemy import select as sa_select
-        from sqlalchemy.orm import joinedload, selectinload
+        from sqlalchemy.orm import joinedload
 
-        from db.models import Conversation, Message, Suggestion
+        from db.models import Conversation, Suggestion
         db = _session(info)
         q = sa_select(Suggestion).options(
             joinedload(Suggestion.ai_conversation).selectinload(Conversation.messages),
