@@ -9,7 +9,7 @@ database.  Only two things are mocked:
      simulate the reasoning-trace events that a real tool-using agent emits.
 
   2. ``handlers.chat.require_user`` — bypasses the JWT validation check so
-     tests don't need a live Supabase instance.
+     tests don't need external auth.
 
 All other layers (FastAPI routing, SSE generation, DB writes, context
 building) run for real against the test database.

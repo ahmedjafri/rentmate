@@ -15,7 +15,7 @@ def resolve_account_id(user: dict | None = None) -> str:
     """Resolve the account_id from a user token payload.
 
     For local auth this always returns DEFAULT_ACCOUNT_ID.
-    For Supabase auth, this would look up the AccountUser table.
+    In production, this would look up the AccountUser table.
     """
     return DEFAULT_ACCOUNT_ID
 

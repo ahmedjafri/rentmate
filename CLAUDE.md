@@ -25,7 +25,7 @@ poetry run alembic revision --autogenerate -m "description"  # generate migratio
 poetry run alembic upgrade head                               # apply migrations
 ```
 
-Migrations live in `db/migrations/versions/`. The `alembic.ini` `sqlalchemy.url` is a placeholder; the real URL comes from the `SUPABASE_DB_URI` env var.
+Migrations live in `db/migrations/versions/`. The `alembic.ini` `sqlalchemy.url` is a placeholder; the real URL is configured via the DB engine in `db/session.py`.
 
 ### Frontend
 ```bash
@@ -39,9 +39,6 @@ npm run dev:fe     # Vite dev server only (port 8080, proxies to backend on 8002
 ## Environment Variables
 
 Required at runtime:
-- `SUPABASE_URL` — Supabase project URL
-- `SUPABASE_SECRET_KEY` — Supabase service role secret key
-- `SUPABASE_DB_URI` — Direct Postgres connection string (`postgresql+psycopg2://...`)
 - `DEEPSEEK_API_KEY` — Used by LiteLLM for the AI agent
 
 ## Architecture
@@ -68,11 +65,11 @@ Key rules:
 - `/suggest-reply` — Called by the Chrome extension to get an AI-suggested reply
 - `/*` — Catch-all serves the React SPA from `www/rentmate/dist/`
 
-Authentication uses Supabase JWTs validated per-request in `get_context()`. The resolved user is passed into GraphQL resolvers via context.
+Authentication uses JWTs validated per-request in `get_context()`. The resolved user is passed into GraphQL resolvers via context.
 
-**`db/models/`** — SQLAlchemy ORM models (PostgreSQL via Supabase):
+**`db/models/`** — SQLAlchemy ORM models (SQLite):
 - `Account` → `Property` → `Unit` → `Lease` → `Tenant` (core rental hierarchy)
-- `AccountUser` — links Supabase `auth.users` to an `Account` with a role (`admin`, `manager`, `tenant`)
+- `AccountUser` — links users to an `Account` with a role (`admin`, `manager`, `tenant`)
 - `Conversation` / `ConversationParticipant` / `Message` / `MessageReceipt` — messaging layer, participants can be tenants, account users, or external contacts (vendors)
 
 **`gql/services/`** — Business logic services:

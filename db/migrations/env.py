@@ -13,17 +13,14 @@ from db.models import Base  # <-- your SQLAlchemy models Base
 # Alembic Config object
 config = context.config
 
-# Override sqlalchemy.url with SUPABASE_DB_URI from environment
-supabase_db_uri = os.getenv("SUPABASE_DB_URI")
-if supabase_db_uri:
-    config.set_main_option("sqlalchemy.url", supabase_db_uri)
+# Override sqlalchemy.url from environment if set
+db_uri = os.getenv("DATABASE_URL")
+if db_uri:
+    config.set_main_option("sqlalchemy.url", db_uri)
 else:
-    # Fallback: rely on alembic.ini sqlalchemy.url if not set
-    url_in_config = config.get_main_option("sqlalchemy.url", "")
-    if not url_in_config:
-        raise RuntimeError(
-            "No SUPABASE_DB_URI env var set and no sqlalchemy.url in alembic.ini"
-        )
+    # Fallback: use the SQLite path from db/session.py
+    from db.session import DB_PATH
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{DB_PATH}")
 
 # Logging
 if config.config_file_name is not None:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Seed test data into the RentMate Supabase database.
+Seed test data into the RentMate database.
 
 Usage:
     poetry run python scripts/seed_data.py
@@ -8,26 +8,18 @@ Usage:
 Creates 3 Seattle-area properties, units, 8 tenants, and leases
 under the first AccountUser found in the database.
 """
-import os
 import sys
 from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import select
 
 from db.models import AccountUser, Lease, Property, Tenant, Unit
+from db.session import SessionLocal
 
-DB_URI = os.environ.get("SUPABASE_DB_URI")
-if not DB_URI:
-    print("ERROR: SUPABASE_DB_URI not set")
-    sys.exit(1)
-
-engine = create_engine(DB_URI)
-Session = sessionmaker(bind=engine)
-db = Session()
+db = SessionLocal.session_factory()
 
 # ------------------------------------------------------------------
 # Resolve account
