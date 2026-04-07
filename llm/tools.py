@@ -164,12 +164,13 @@ class ProposeTaskTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Propose a new task for the property manager to review. "
-            "The proposal appears in the action desk for approval. "
-            "You MUST provide a vendor_id — use lookup_vendors first to find "
-            "a suitable vendor for the task. Include a draft_message for the "
-            "vendor if appropriate. Always include steps — the ordered plan "
-            "for completing this task (3-6 steps)."
+            "Propose a new task for a genuinely separate issue. "
+            "IMPORTANT: If you already have a task open and need another vendor "
+            "(e.g. second quote), do NOT create a new task — use attach_entity "
+            "to add the vendor to the current task, then message_person to contact them. "
+            "Only use propose_task for a completely different issue. "
+            "You MUST provide a vendor_id — use lookup_vendors first. "
+            "Include a draft_message and steps (3-6 steps)."
         )
 
     @property
@@ -217,25 +218,6 @@ class ProposeTaskTool(Tool):
 
     async def execute(self, **kwargs: Any) -> str:
         vendor_id = kwargs["vendor_id"]
-
-        # If called from within a task context (heartbeat or task chat), refuse —
-        # use attach_entity + message_person on the current task instead
-        conv_id = active_conversation_id.get()
-        if conv_id:
-            from handlers.deps import SessionLocal as _SL2
-            from db.models import Task as _T2
-            _db2 = _SL2.session_factory()
-            try:
-                _existing = _db2.query(_T2).filter(_T2.ai_conversation_id == conv_id).first()
-                if _existing:
-                    return json.dumps({
-                        "status": "error",
-                        "message": "Cannot create a new task from within an existing task. "
-                                   "Use attach_entity to add another vendor to this task, "
-                                   "then message_person to contact them.",
-                    })
-            finally:
-                _db2.close()
 
         from handlers.deps import SessionLocal
         from db.models import ExternalContact
