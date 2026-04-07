@@ -5,11 +5,34 @@ from datetime import UTC, datetime
 from io import BytesIO
 
 import litellm
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 from sqlalchemy.orm import Session
 
 from db.models import Document
+
+
+def _split_text(text: str, *, chunk_size: int = 800, overlap: int = 100) -> list[str]:
+    """Split text into overlapping chunks, breaking at paragraph/sentence boundaries."""
+    if not text:
+        return []
+    separators = ["\n\n", "\n", ". ", " "]
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        if end >= len(text):
+            chunks.append(text[start:].strip())
+            break
+        # Try to break at a natural boundary
+        best_break = end
+        for sep in separators:
+            idx = text.rfind(sep, start, end)
+            if idx > start:
+                best_break = idx + len(sep)
+                break
+        chunks.append(text[start:best_break].strip())
+        start = best_break - overlap
+    return [c for c in chunks if c]
 
 
 def _get_session_factory():
@@ -112,8 +135,7 @@ async def process_document(document_id: str) -> None:
         }
 
         # 3. Chunk the text
-        splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
-        chunks = splitter.split_text(raw_text) if raw_text else []
+        chunks = _split_text(raw_text, chunk_size=800, overlap=100) if raw_text else []
 
         # 4. Store chunks in vector backend
         if chunks:
