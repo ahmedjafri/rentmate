@@ -811,18 +811,33 @@ def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
         agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
         session_key = f"task:{task_id}"
 
-        conv_token = active_conversation_id.set(conv_id)
-        pending_token = pending_suggestion_messages.set([])
+        # Run agent in a dedicated thread with its own event loop so we
+        # don't conflict with the main uvloop (heartbeat_loop calls us from
+        # within the running async loop).
+        import concurrent.futures
+        _agent_result = [None, None]  # [resp, pending]
 
-        loop = _hb_asyncio.new_event_loop()
-        try:
-            resp = loop.run_until_complete(call_agent(agent_id, session_key, messages_payload))
-        finally:
-            loop.close()
+        def _run_in_thread():
+            _conv_token = active_conversation_id.set(conv_id)
+            _pending_token = pending_suggestion_messages.set([])
+            _loop = _hb_asyncio.new_event_loop()
+            try:
+                _agent_result[0] = _loop.run_until_complete(
+                    call_agent(agent_id, session_key, messages_payload)
+                )
+                _agent_result[1] = pending_suggestion_messages.get() or []
+            finally:
+                _loop.close()
+                active_conversation_id.reset(_conv_token)
+                pending_suggestion_messages.reset(_pending_token)
 
-        pending = pending_suggestion_messages.get() or []
-        active_conversation_id.reset(conv_token)
-        pending_suggestion_messages.reset(pending_token)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(_run_in_thread).result(timeout=300)
+
+        resp = _agent_result[0]
+        pending = _agent_result[1] or []
+        if not resp:
+            return None
 
         # Check if agent said no response needed
         if resp.reply.strip().startswith(NO_RESPONSE_SENTINEL):
