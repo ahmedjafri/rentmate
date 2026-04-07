@@ -175,17 +175,6 @@ function TracesPanel() {
             </button>
             {expandedId === t.id && t.detail && (
               <div className="px-3 pb-2">
-                <div className="flex justify-end mb-1">
-                  <button
-                    className="text-[9px] text-muted-foreground hover:text-foreground"
-                    onClick={() => copyText(
-                      `[${t.timestamp}] ${t.trace_type} (${t.source}) ${t.summary}\n${parseDetail(t.detail)}`,
-                      'Trace copied'
-                    )}
-                  >
-                    Copy
-                  </button>
-                </div>
                 <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono max-h-48 overflow-y-auto">
                   {parseDetail(t.detail)}
                 </pre>

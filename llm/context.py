@@ -163,6 +163,23 @@ def build_task_context(db: Session, task_id: str) -> str:
         lines.append("")
         lines.extend(context_notes)
 
+    # Pending suggestions — so the agent knows what's already queued
+    from db.models import Suggestion
+    pending_suggestions = db.query(Suggestion).filter(
+        Suggestion.task_id == task.id,
+        Suggestion.status == "pending",
+    ).all()
+    if pending_suggestions:
+        lines.append("")
+        lines.append("Pending suggestions (already queued, do NOT duplicate):")
+        for s in pending_suggestions:
+            action = (s.action_payload or {}).get("action", "unknown")
+            draft = (s.action_payload or {}).get("draft_message", "")
+            entry = f"  - [{action}] {s.title or 'untitled'}"
+            if draft:
+                entry += f" — draft: {draft[:80]}"
+            lines.append(entry)
+
     # Only include the full account overview if the task doesn't already
     # have property context — avoids dumping all properties when only one
     # is relevant.
