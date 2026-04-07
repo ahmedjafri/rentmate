@@ -4,7 +4,11 @@ from datetime import UTC, datetime
 
 from db.enums import SuggestionOption, TaskCategory
 from db.models import AppSetting
-from db.session import SessionLocal
+from db.models.base import Base
+from db.session import SessionLocal, engine
+
+# Ensure app_settings table exists (may not if DB was created before this model)
+Base.metadata.create_all(engine, tables=[AppSetting.__table__], checkfirst=True)
 
 _DEFAULT_AUTONOMY = {c.value: "suggest" for c in TaskCategory}
 
