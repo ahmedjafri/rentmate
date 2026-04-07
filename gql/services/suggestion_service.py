@@ -1,7 +1,7 @@
 """Service for creating and acting on Suggestions."""
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from db.enums import (
@@ -22,7 +22,6 @@ from db.models import (
 
 
 def _get_account_id(sess: Session, property_id: str | None, unit_id: str | None) -> str:
-    from sqlalchemy import text
     try:
         if property_id:
             res = sess.execute(text("SELECT account_id FROM properties WHERE id = :id"), {"id": property_id}).fetchone()

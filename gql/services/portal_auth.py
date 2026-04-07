@@ -8,9 +8,11 @@ import secrets
 from datetime import UTC, datetime, timedelta
 
 import jwt
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
+
+from db.session import SessionLocal
 
 _JWT_SECRET = os.getenv("JWT_SECRET", "rentmate-local-secret")
 _JWT_ALGORITHM = "HS256"
@@ -64,10 +66,8 @@ def ensure_portal_token(entity, db: "Session | None" = None) -> str:
         if db is None:
             return extra["portal_token"]
         try:
-            from handlers.deps import SessionLocal
             write_db = SessionLocal.session_factory()
             try:
-                from sqlalchemy import update
                 model_cls = type(entity)
                 write_db.execute(
                     update(model_cls)

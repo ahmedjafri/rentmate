@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from db.enums import TaskCategory
+from gql.services.settings_service import get_autonomy_settings, load_app_settings  # noqa: F401 — re-exported
 from handlers.deps import require_user
 
 router = APIRouter()
@@ -14,8 +14,6 @@ router = APIRouter()
 _ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
 _DATA_DIR = Path(os.environ.get("RENTMATE_DATA_DIR", str(Path(__file__).parent.parent / "data")))
 _SETTINGS_FILE = _DATA_DIR / "settings.json"
-
-_DEFAULT_AUTONOMY = {c.value: "suggest" for c in TaskCategory}
 
 
 def read_env_file() -> dict:
@@ -54,22 +52,9 @@ def write_env_file(updates: dict):
         f.write("\n".join(lines) + "\n")
 
 
-def load_app_settings() -> dict:
-    if _SETTINGS_FILE.exists():
-        try:
-            return json.loads(_SETTINGS_FILE.read_text())
-        except Exception:
-            pass
-    return {}
-
-
 def _save_app_settings(data: dict):
     _SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     _SETTINGS_FILE.write_text(json.dumps(data, indent=2))
-
-
-def get_autonomy_settings() -> dict:
-    return load_app_settings().get("autonomy", _DEFAULT_AUTONOMY)
 
 
 _INTEGRATIONS_FILE = _DATA_DIR / "integrations.json"

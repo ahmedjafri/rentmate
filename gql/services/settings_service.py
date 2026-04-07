@@ -1,8 +1,28 @@
-"""Service for reading autonomy and other app-level settings.
+"""Service for reading autonomy and other app-level settings."""
+import json
+import os
+from pathlib import Path
 
-Keeps the handler layer from reaching into settings internals directly.
-"""
 from db.enums import SuggestionOption, TaskCategory
+
+_DATA_DIR = Path(os.environ.get("RENTMATE_DATA_DIR", str(Path(__file__).parent.parent.parent / "data")))
+_SETTINGS_FILE = _DATA_DIR / "settings.json"
+_DEFAULT_AUTONOMY = {c.value: "suggest" for c in TaskCategory}
+
+
+def load_app_settings() -> dict:
+    """Read the app settings JSON file."""
+    if _SETTINGS_FILE.exists():
+        try:
+            return json.loads(_SETTINGS_FILE.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def get_autonomy_settings() -> dict:
+    """Return the autonomy settings dict (category → level)."""
+    return load_app_settings().get("autonomy", _DEFAULT_AUTONOMY)
 
 _AUTONOMY_MODES: dict[str, tuple[str, str]] = {
     "manual":     ("manual",           "suggested"),
@@ -14,7 +34,6 @@ _DEFAULT_MODE = _AUTONOMY_MODES["suggest"]
 
 def get_autonomy_for_category(category: TaskCategory | str | None) -> str:
     """Return the autonomy level ('manual', 'suggest', or 'autonomous') for a category."""
-    from handlers.settings import get_autonomy_settings
     settings = get_autonomy_settings()
     return settings.get(category or "", "suggest")
 

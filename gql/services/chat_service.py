@@ -2,6 +2,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -13,7 +14,9 @@ from db.models import (
     Message,
     MessageType,
     ParticipantType,
+    Task,
 )
+from db.queries import fetch_conversations
 
 logger = logging.getLogger("rentmate.chat_service")
 
@@ -121,7 +124,6 @@ def persist_user_message_only(db: Session, *, conv_id: str, body: str) -> None:
 
 def list_conversations(db: Session, *, conversation_type: str, limit: int = 50) -> list[Conversation]:
     """Thin wrapper over fetch_conversations."""
-    from db.queries import fetch_conversations
     return fetch_conversations(db, conversation_type=conversation_type, limit=limit)
 
 
@@ -213,9 +215,6 @@ def send_autonomous_message(
     flag_modified(convo, "extra")
 
     if task_id:
-        from sqlalchemy import select
-
-        from db.models import Task
         task = db.execute(select(Task).where(Task.id == task_id)).scalar_one_or_none()
         if task:
             task.last_message_at = now

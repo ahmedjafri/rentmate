@@ -1,12 +1,14 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from db.models import (
     Conversation,
     ConversationType,
     ExternalContact,
+    Suggestion,
     Task,
     TaskNumberSequence,
 )
@@ -14,7 +16,6 @@ from gql.types import CreateTaskInput, UpdateTaskInput
 
 
 def _get_account_id(sess: Session, property_id: str | None, unit_id: str | None) -> str:
-    from sqlalchemy import text
     try:
         if property_id:
             res = sess.execute(text("SELECT account_id FROM properties WHERE id = :id"), {"id": property_id}).fetchone()
@@ -119,7 +120,6 @@ class TaskService:
             raise ValueError(f"Task {uid} not found")
         ai_conv_id = task.ai_conversation_id
         # Delete associated suggestions
-        from db.models import Suggestion
         for s in sess.execute(select(Suggestion).where(Suggestion.task_id == uid)).scalars().all():
             sess.delete(s)
         sess.flush()
@@ -157,7 +157,6 @@ class TaskService:
             extra["assigned_vendor_id"] = vendor_id
             extra["assigned_vendor_name"] = vendor.name
             ai_convo.extra = extra
-            from sqlalchemy.orm.attributes import flag_modified
             flag_modified(ai_convo, "extra")
         sess.flush()
         return task
