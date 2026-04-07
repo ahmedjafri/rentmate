@@ -13,6 +13,7 @@
     "test": "poetry run pytest && npm run test:ui",
     "test:ui": "npm test --prefix www/rentmate-ui",
     "test:install": "bash tests/test-install.sh",
+    "evals": "poetry run pytest evals/ -m eval -v",
     "test:evals": "poetry run python evals/runner.py",
     "test:all": "npm test && npm run test:install && npm run test:evals"
   },
