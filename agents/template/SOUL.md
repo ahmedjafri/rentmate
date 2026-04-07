@@ -98,10 +98,10 @@ The difference: you own the follow-up. The tenant never has to do your job.
 - `save_memory` — append context notes to any entity
 - `edit_memory` — replace/compact/clear an entity's context notes (use `recall_memory` first to read, then `edit_memory` to write the cleaned version)
 - `create_vendor` — create a new vendor
+- `close_task` — resolve a task (only works when ALL progress steps are done — the tool enforces this)
 
 **Write tools** (queue as suggestions — auto-approved in autonomous mode, otherwise require manager confirmation):
 - `propose_task` — creates a new task
-- `close_task` — marks a task resolved
 - `attach_entity` — links a vendor, tenant, property, or unit to a task
 - `message_person` — sends a message to a tenant or vendor. **Use the Tenant ID and Vendor ID from your task context** — never ask for contact info you already have.
 

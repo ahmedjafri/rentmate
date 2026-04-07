@@ -264,7 +264,7 @@ class ProposeTaskTool(Tool):
 
 
 class CloseTaskTool(Tool):
-    """Propose closing a task for manager confirmation."""
+    """Resolve a task when all work is complete."""
 
     @property
     def name(self) -> str:
@@ -273,8 +273,8 @@ class CloseTaskTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Propose closing a task. The manager will see a confirmation "
-            "in the action desk before the task is actually closed."
+            "Resolve a task. Only works if all progress steps are marked done "
+            "(or the task has no steps). The task is archived as resolved, not deleted."
         )
 
     @property
@@ -283,25 +283,43 @@ class CloseTaskTool(Tool):
             "type": "object",
             "required": ["task_id"],
             "properties": {
-                "task_id": {"type": "string", "description": "ID of the task to close"},
+                "task_id": {"type": "string", "description": "ID of the task to resolve"},
             },
         }
 
     async def execute(self, **kwargs: Any) -> str:
         task_id = kwargs["task_id"]
-        task_title = _get_task_title(task_id)
-        options = [
-            SuggestionOption(key="close", label="Close Task", action="close_task", variant="default"),
-            SuggestionOption(key="keep", label="Keep Open", action="reject_task", variant="ghost"),
-        ]
-        sid = _create_suggestion(
-            title=f"Close task: {task_title}",
-            ai_context="The agent recommends closing this task.",
-            options=options,
-            action_payload={"action": "close_task"},
-            task_id=task_id,
-        )
-        return json.dumps({"status": "ok", "suggestion_id": sid, "message": "Close request created for manager confirmation."})
+
+        from handlers.deps import SessionLocal
+        from db.models import Task as TaskModel
+        from datetime import UTC, datetime
+        db = SessionLocal.session_factory()
+        try:
+            task = db.query(TaskModel).filter_by(id=task_id).first()
+            if not task:
+                return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
+
+            # Enforce: all progress steps must be done before closing
+            steps = task.steps or []
+            incomplete = [
+                s.get("label", "unnamed step")
+                for s in steps
+                if isinstance(s, dict) and s.get("status") not in ("done", "completed")
+            ]
+            if incomplete:
+                return json.dumps({
+                    "status": "error",
+                    "message": f"Cannot close task — {len(incomplete)} step(s) still incomplete: {', '.join(incomplete)}. "
+                               "Complete all steps before closing.",
+                })
+
+            task.task_status = "resolved"
+            if not task.resolved_at:
+                task.resolved_at = datetime.now(UTC)
+            db.commit()
+            return json.dumps({"status": "ok", "message": "Task resolved."})
+        finally:
+            db.close()
 
 
 class SetModeTool(Tool):
