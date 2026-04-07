@@ -1,6 +1,6 @@
 """RentMate agent tool classes.
 
-Includes suggestion tools (propose_task, close_task, set_mode, attach_vendor).
+Includes suggestion tools (propose_task, close_task, set_mode, attach_entity, message_person).
 
 When a tool creates a suggestion during a chat, it queues a SUGGESTION message
 via ``pending_suggestion_messages``.  The chat handler flushes these *after*
@@ -68,9 +68,23 @@ def _create_suggestion(
     """
     from handlers.deps import SessionLocal
     from gql.services import suggestion_service, chat_service
+    from db.models import Suggestion
 
-    db = SessionLocal()
+    db = SessionLocal.session_factory()
     try:
+        # Deduplicate: skip if a pending suggestion with the same action already exists for this task
+        if task_id and action_payload and action_payload.get("action"):
+            from sqlalchemy import select
+            existing = db.execute(
+                select(Suggestion).where(
+                    Suggestion.task_id == task_id,
+                    Suggestion.status == "pending",
+                )
+            ).scalars().all()
+            for s in existing:
+                if (s.action_payload or {}).get("action") == action_payload["action"]:
+                    return s.id  # reuse existing suggestion
+
         suggestion = suggestion_service.create_suggestion(
             db,
             title=title,
@@ -91,7 +105,9 @@ def _create_suggestion(
         if conv_id:
             body_parts = [title]
             if action_payload:
-                if action_payload.get("vendor_name"):
+                if action_payload.get("entity_name"):
+                    body_parts.append(f"{(action_payload.get('entity_type') or 'entity').title()}: {action_payload['entity_name']}")
+                elif action_payload.get("vendor_name"):
                     body_parts.append(f"Vendor: {action_payload['vendor_name']}")
                 if action_payload.get("draft_message"):
                     body_parts.append(f"Draft: {action_payload['draft_message'][:200]}")
@@ -110,6 +126,16 @@ def _create_suggestion(
             })
 
         db.commit()
+
+        # Trace suggestion creation
+        from llm.tracing import log_trace
+        log_trace(
+            "suggestion_created", "agent", title,
+            task_id=task_id,
+            suggestion_id=suggestion.id,
+            detail=action_payload,
+        )
+
         return suggestion.id
     finally:
         db.close()
@@ -120,7 +146,7 @@ def _get_task_title(task_id: str) -> str:
     from handlers.deps import SessionLocal
     from db.models import Task
 
-    db = SessionLocal()
+    db = SessionLocal.session_factory()
     try:
         task = db.query(Task).filter_by(id=task_id).first()
         return task.title if task else task_id
@@ -138,12 +164,13 @@ class ProposeTaskTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Propose a new task for the property manager to review. "
-            "The proposal appears in the action desk for approval. "
-            "You MUST provide a vendor_id — use lookup_vendors first to find "
-            "a suitable vendor for the task. Include a draft_message for the "
-            "vendor if appropriate. Always include steps — the ordered plan "
-            "for completing this task (3-6 steps)."
+            "Propose a new task for a genuinely separate issue. "
+            "IMPORTANT: If you already have a task open and need another vendor "
+            "(e.g. second quote), do NOT create a new task — use attach_entity "
+            "to add the vendor to the current task, then message_person to contact them. "
+            "Only use propose_task for a completely different issue. "
+            "You MUST provide a vendor_id — use lookup_vendors first. "
+            "Include a draft_message and steps (3-6 steps)."
         )
 
     @property
@@ -194,7 +221,7 @@ class ProposeTaskTool(Tool):
 
         from handlers.deps import SessionLocal
         from db.models import ExternalContact
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             vendor = db.query(ExternalContact).filter_by(id=vendor_id).first()
             vendor_name = vendor.name if vendor else "Vendor"
@@ -238,7 +265,7 @@ class ProposeTaskTool(Tool):
 
 
 class CloseTaskTool(Tool):
-    """Propose closing a task for manager confirmation."""
+    """Resolve a task when all work is complete."""
 
     @property
     def name(self) -> str:
@@ -247,8 +274,8 @@ class CloseTaskTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Propose closing a task. The manager will see a confirmation "
-            "in the action desk before the task is actually closed."
+            "Resolve a task. Only works if all progress steps are marked done "
+            "(or the task has no steps). The task is archived as resolved, not deleted."
         )
 
     @property
@@ -257,29 +284,47 @@ class CloseTaskTool(Tool):
             "type": "object",
             "required": ["task_id"],
             "properties": {
-                "task_id": {"type": "string", "description": "ID of the task to close"},
+                "task_id": {"type": "string", "description": "ID of the task to resolve"},
             },
         }
 
     async def execute(self, **kwargs: Any) -> str:
         task_id = kwargs["task_id"]
-        task_title = _get_task_title(task_id)
-        options = [
-            SuggestionOption(key="close", label="Close Task", action="close_task", variant="default"),
-            SuggestionOption(key="keep", label="Keep Open", action="reject_task", variant="ghost"),
-        ]
-        sid = _create_suggestion(
-            title=f"Close task: {task_title}",
-            ai_context="The agent recommends closing this task.",
-            options=options,
-            action_payload={"action": "close_task"},
-            task_id=task_id,
-        )
-        return json.dumps({"status": "ok", "suggestion_id": sid, "message": "Close request created for manager confirmation."})
+
+        from handlers.deps import SessionLocal
+        from db.models import Task as TaskModel
+        from datetime import UTC, datetime
+        db = SessionLocal.session_factory()
+        try:
+            task = db.query(TaskModel).filter_by(id=task_id).first()
+            if not task:
+                return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
+
+            # Enforce: all progress steps must be done before closing
+            steps = task.steps or []
+            incomplete = [
+                s.get("label", "unnamed step")
+                for s in steps
+                if isinstance(s, dict) and s.get("status") not in ("done", "completed")
+            ]
+            if incomplete:
+                return json.dumps({
+                    "status": "error",
+                    "message": f"Cannot close task — {len(incomplete)} step(s) still incomplete: {', '.join(incomplete)}. "
+                               "Complete all steps before closing.",
+                })
+
+            task.task_status = "resolved"
+            if not task.resolved_at:
+                task.resolved_at = datetime.now(UTC)
+            db.commit()
+            return json.dumps({"status": "ok", "message": "Task resolved."})
+        finally:
+            db.close()
 
 
 class SetModeTool(Tool):
-    """Propose changing a task's operating mode."""
+    """Change a task's operating mode directly."""
 
     @property
     def name(self) -> str:
@@ -288,8 +333,8 @@ class SetModeTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Propose changing a task's operating mode (autonomous, manual, "
-            "or waiting_approval). The manager must approve the change."
+            "Change a task's operating mode (autonomous, manual, "
+            "or waiting_approval). Takes effect immediately."
         )
 
     @property
@@ -310,96 +355,251 @@ class SetModeTool(Tool):
     async def execute(self, **kwargs: Any) -> str:
         task_id = kwargs["task_id"]
         mode = kwargs["mode"]
-        task_title = _get_task_title(task_id)
-        options = [
-            SuggestionOption(key="approve", label=f"Switch to {mode}", action="set_mode", variant="default"),
-            SuggestionOption(key="reject", label="Keep Current", action="reject_task", variant="ghost"),
-        ]
-        sid = _create_suggestion(
-            title=f"Change mode to {mode}: {task_title}",
-            ai_context=f"The agent recommends changing this task's mode to '{mode}'.",
-            options=options,
-            action_payload={"action": "set_mode", "mode": mode},
-            task_id=task_id,
-        )
-        return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Mode change to '{mode}' created for manager confirmation."})
+
+        from handlers.deps import SessionLocal
+        from db.models import Task as TaskModel
+        db = SessionLocal.session_factory()
+        try:
+            task = db.query(TaskModel).filter_by(id=task_id).first()
+            if not task:
+                return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
+            task.task_mode = mode
+            db.commit()
+            return json.dumps({"status": "ok", "message": f"Task mode changed to {mode}."})
+        finally:
+            db.close()
 
 
-class AttachVendorTool(Tool):
-    """Propose attaching a vendor conversation to a task, with an optional draft message."""
+def _get_task_category(task_id: str) -> str | None:
+    """Look up a task's category for autonomy checks."""
+    from handlers.deps import SessionLocal
+    from db.models import Task
+    db = SessionLocal.session_factory()
+    try:
+        task = db.query(Task).filter_by(id=task_id).first()
+        return task.category if task else None
+    finally:
+        db.close()
+
+
+def _auto_execute_suggestion(suggestion_id: str, action: str) -> str | None:
+    """Auto-execute a suggestion when in autonomous mode.
+
+    Returns None on success, or an error message string on failure.
+    The executor's ``send_autonomous_message`` commits internally, so we
+    don't add our own commit — just close the session when done.
+    """
+    from handlers.deps import SessionLocal
+    from handlers.task_suggestions import SuggestionExecutor
+    db = SessionLocal.session_factory()
+    try:
+        executor = SuggestionExecutor.for_suggestion(db, suggestion_id)
+        executor.execute(suggestion_id, action)
+        # Flush any remaining changes (task FK updates, suggestion status)
+        # that weren't committed by inner service calls.
+        if db.new or db.dirty:
+            db.commit()
+        return None
+    except Exception as e:
+        print(f"[auto-execute] Failed suggestion {suggestion_id} action={action}: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return str(e)
+    finally:
+        db.close()
+
+
+class AttachEntityToTaskTool(Tool):
+    """Attach any entity (vendor, tenant, property, unit) to a task."""
 
     @property
     def name(self) -> str:
-        return "attach_vendor"
+        return "attach_entity"
 
     @property
     def description(self) -> str:
         return (
-            "Propose attaching a vendor/contractor conversation to an existing task. "
-            "You MUST provide vendor_id — use lookup_vendors first to find the right "
-            "vendor. An optional draft_message can be included for the manager to "
-            "review and send to the vendor."
+            "Attach an entity to an existing task. For vendors and tenants, this also "
+            "creates/links a conversation. For properties and units, sets the FK on the task. "
+            "Use lookup_vendors first if you need to find a vendor ID."
         )
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "required": ["task_id", "vendor_id"],
+            "required": ["task_id", "entity_id", "entity_type"],
             "properties": {
-                "task_id": {"type": "string", "description": "ID of the task to attach a vendor conversation to"},
-                "vendor_id": {"type": "string", "description": "ID of the vendor (use lookup_vendors to find this)"},
-                "draft_message": {"type": "string", "description": "Optional draft message to send to the vendor on approval"},
+                "task_id": {"type": "string", "description": "ID of the task"},
+                "entity_id": {"type": "string", "description": "ID of the entity to attach"},
+                "entity_type": {
+                    "type": "string",
+                    "enum": ["vendor", "tenant", "property", "unit"],
+                    "description": "Type of entity",
+                },
             },
         }
 
     async def execute(self, **kwargs: Any) -> str:
         task_id = kwargs["task_id"]
-        vendor_id = kwargs["vendor_id"]
-        draft_message = kwargs.get("draft_message")
+        entity_id = kwargs["entity_id"]
+        entity_type = kwargs["entity_type"]
         task_title = _get_task_title(task_id)
 
         from handlers.deps import SessionLocal
-        from db.models import ExternalContact
-        db = SessionLocal()
+        from db.models import ExternalContact, Tenant, Property, Unit
+        db = SessionLocal.session_factory()
         try:
-            vendor = db.query(ExternalContact).filter_by(id=vendor_id).first()
-            vendor_name = vendor.name if vendor else "Vendor"
+            if entity_type == "vendor":
+                entity = db.query(ExternalContact).filter_by(id=entity_id).first()
+                entity_name = entity.name if entity else "Vendor"
+            elif entity_type == "tenant":
+                entity = db.query(Tenant).filter_by(id=entity_id).first()
+                entity_name = f"{entity.first_name} {entity.last_name}".strip() if entity else "Tenant"
+            elif entity_type == "property":
+                entity = db.query(Property).filter_by(id=entity_id).first()
+                entity_name = entity.name or entity.address_line1 if entity else "Property"
+            elif entity_type == "unit":
+                entity = db.query(Unit).filter_by(id=entity_id).first()
+                entity_name = entity.label if entity else "Unit"
+            else:
+                return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
+
+            if not entity:
+                return json.dumps({"status": "error", "message": f"{entity_type.title()} {entity_id} not found"})
         finally:
             db.close()
 
-        action_payload: dict = {
-            "action": "attach_vendor",
-            "vendor_id": vendor_id,
-            "vendor_name": vendor_name,
+        action_payload = {
+            "action": "attach_entity",
+            "entity_id": entity_id,
+            "entity_type": entity_type,
+            "entity_name": entity_name,
         }
-        if draft_message:
-            action_payload["draft_message"] = draft_message
-
-        if draft_message:
-            options = [
-                SuggestionOption(key="send", label="Send to Vendor", action="attach_vendor_send", variant="default"),
-                SuggestionOption(key="edit", label="Edit Message", action="edit_draft", variant="outline"),
-                SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
-            ]
-            title = f"Contact {vendor_name} for: {task_title}"
-            ai_context = f"The agent recommends contacting {vendor_name} about this task.\n\nDraft message:\n{draft_message}"
-        else:
-            options = [
-                SuggestionOption(key="attach", label=f"Attach {vendor_name}", action="attach_vendor", variant="default"),
-                SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
-            ]
-            title = f"Attach {vendor_name} to: {task_title}"
-            ai_context = f"The agent recommends assigning {vendor_name} to this task."
+        options = [
+            SuggestionOption(key="attach", label=f"Attach {entity_name}", action="attach_entity", variant="default"),
+            SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
+        ]
 
         sid = _create_suggestion(
-            title=title,
-            ai_context=ai_context,
+            title=f"Attach {entity_type}: {entity_name} to {task_title}",
+            ai_context=f"The agent recommends attaching {entity_type} '{entity_name}' to this task.",
             options=options,
             action_payload=action_payload,
             task_id=task_id,
         )
-        return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Vendor suggestion for {vendor_name} created for manager review."})
+
+        # Auto-execute in autonomous mode
+        from gql.services import settings_service
+        category = _get_task_category(task_id)
+        if settings_service.get_autonomy_for_category(category) == "autonomous":
+            err = _auto_execute_suggestion(sid, "attach_entity")
+            if err:
+                return json.dumps({"status": "error", "suggestion_id": sid, "message": f"Failed to attach {entity_name}: {err}. Suggestion saved for manual review."})
+            return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"{entity_type.title()} '{entity_name}' attached to task (auto-approved)."})
+
+        return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Suggestion to attach {entity_name} created for manager review."})
+
+
+class MessageExternalPersonTool(Tool):
+    """Send a message to an external person (tenant or vendor) on a task."""
+
+    @property
+    def name(self) -> str:
+        return "message_person"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Send a message to a tenant or vendor on a task. Use the Tenant ID or Vendor ID "
+            "from the task context — you already have them, do not ask for contact info. "
+            "In autonomous mode, sends immediately via SMS + portal link. "
+            "If the person is not yet linked to the task, a conversation will be created."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["task_id", "entity_id", "entity_type", "draft_message"],
+            "properties": {
+                "task_id": {"type": "string", "description": "ID of the task"},
+                "entity_id": {"type": "string", "description": "ID of the tenant or vendor"},
+                "entity_type": {
+                    "type": "string",
+                    "enum": ["tenant", "vendor"],
+                    "description": "Type of person to message",
+                },
+                "draft_message": {"type": "string", "description": "The message to send"},
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        task_id = kwargs["task_id"]
+        entity_id = kwargs["entity_id"]
+        entity_type = kwargs["entity_type"]
+        draft_message = kwargs["draft_message"]
+        task_title = _get_task_title(task_id)
+
+        from handlers.deps import SessionLocal
+        from db.models import ExternalContact, Tenant
+        db = SessionLocal.session_factory()
+        try:
+            if entity_type == "vendor":
+                entity = db.query(ExternalContact).filter_by(id=entity_id).first()
+                entity_name = entity.name if entity else "Vendor"
+                entity_phone = entity.phone if entity else None
+            elif entity_type == "tenant":
+                entity = db.query(Tenant).filter_by(id=entity_id).first()
+                entity_name = f"{entity.first_name} {entity.last_name}".strip() if entity else "Tenant"
+                entity_phone = entity.phone if entity else None
+            else:
+                return json.dumps({"status": "error", "message": f"Can only message tenants or vendors, not {entity_type}"})
+
+            if not entity:
+                return json.dumps({"status": "error", "message": f"{entity_type.title()} {entity_id} not found"})
+        finally:
+            db.close()
+
+        action_payload = {
+            "action": "message_person",
+            "entity_id": entity_id,
+            "entity_type": entity_type,
+            "entity_name": entity_name,
+            "entity_phone": entity_phone,
+            "draft_message": draft_message,
+        }
+        options = [
+            SuggestionOption(key="send", label=f"Send to {entity_name}", action="message_person_send", variant="default"),
+            SuggestionOption(key="edit", label="Edit Message", action="edit_draft", variant="outline"),
+            SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
+        ]
+
+        sid = _create_suggestion(
+            title=f"Message {entity_name}: {task_title}",
+            ai_context=f"The agent wants to send a message to {entity_name} ({entity_type}).\n\nDraft message:\n{draft_message}",
+            options=options,
+            action_payload=action_payload,
+            task_id=task_id,
+        )
+
+        # Auto-execute in autonomous mode
+        from gql.services import settings_service
+        category = _get_task_category(task_id)
+        if settings_service.get_autonomy_for_category(category) == "autonomous":
+            err = _auto_execute_suggestion(sid, "message_person_send")
+            if err:
+                return json.dumps({"status": "error", "suggestion_id": sid, "message": f"Failed to send message to {entity_name}: {err}. Suggestion saved for manual review."})
+            note = f"Message sent to {entity_name} (auto-approved)."
+            if not entity_phone:
+                note += " Note: no phone number on file, message saved but not delivered via SMS."
+            return json.dumps({"status": "ok", "suggestion_id": sid, "message": note})
+
+        return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Message suggestion for {entity_name} created for manager review."})
 
 
 class LookupVendorsTool(Tool):
@@ -440,7 +640,7 @@ class LookupVendorsTool(Tool):
         vendor_type = kwargs.get("vendor_type")
         query = (kwargs.get("query") or "").strip().lower()
 
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             vendors = db.query(ExternalContact).all()
             results = []
@@ -518,7 +718,7 @@ class UpdateStepsTool(Tool):
         from db.models import Task
         from sqlalchemy.orm.attributes import flag_modified
 
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             task = db.query(Task).filter_by(id=task_id).first()
             if not task:
@@ -567,7 +767,7 @@ class CreateVendorTool(Tool):
         from gql.services.vendor_service import VendorService
         from gql.types import CreateVendorInput
 
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             vendor = VendorService.create_vendor(db, CreateVendorInput(
                 name=kwargs["name"],
@@ -589,7 +789,7 @@ class CreateVendorTool(Tool):
 
 
 class SaveMemoryTool(Tool):
-    """Save a context note for an entity (property, unit, tenant, vendor) or general."""
+    """Save a note — either task-scoped or permanent entity context."""
 
     @property
     def name(self) -> str:
@@ -598,11 +798,10 @@ class SaveMemoryTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Save a context note to long-term memory. Notes persist across "
-            "conversations. Attach notes to a specific entity (property, unit, "
-            "tenant, vendor) or save as general memory. Use this to remember "
-            "preferences, quirks, maintenance history, vendor reliability notes, "
-            "or anything the property manager tells you to remember."
+            "Save a note. Use scope='task' (default) for task-specific observations "
+            "like quotes, scheduling details, assessment findings. Use scope='entity' "
+            "for permanent knowledge about an entity that applies across all tasks "
+            "(vendor specialties, tenant preferences, property recurring issues)."
         )
 
     @property
@@ -615,30 +814,60 @@ class SaveMemoryTool(Tool):
                     "type": "string",
                     "description": "The note to save (concise, one topic per note).",
                 },
+                "scope": {
+                    "type": "string",
+                    "enum": ["task", "entity"],
+                    "description": "Where to save: 'task' for this task only (default), 'entity' for permanent entity knowledge.",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID (required when scope='task'). Use the Task ID from context.",
+                },
                 "entity_type": {
                     "type": "string",
                     "enum": ["property", "unit", "tenant", "vendor", "general"],
-                    "description": "What type of entity this note is about. Use 'general' for preferences and global notes.",
+                    "description": "Entity type (required when scope='entity').",
                 },
                 "entity_id": {
                     "type": "string",
-                    "description": "ID of the entity (property/unit/tenant/vendor). Required unless entity_type is 'general'.",
+                    "description": "Entity ID (required when scope='entity').",
                 },
                 "entity_label": {
                     "type": "string",
-                    "description": "Human-readable label (e.g. '16617 3rd Dr SE', 'Unit 3B', 'Handyman Rob'). Stored for display.",
+                    "description": "Human-readable label for display.",
                 },
             },
         }
 
     async def execute(self, **kwargs: Any) -> str:
         content = kwargs["content"]
+        scope = kwargs.get("scope", "task")
         entity_type = kwargs.get("entity_type", "general")
         entity_id = kwargs.get("entity_id", "")
         entity_label = kwargs.get("entity_label", "")
+        task_id = kwargs.get("task_id", "")
 
         from handlers.deps import SessionLocal
         from datetime import UTC, datetime
+
+        # Task-scoped notes
+        if scope == "task":
+            if not task_id:
+                return json.dumps({"status": "error", "message": "task_id is required for scope='task'"})
+            db = SessionLocal.session_factory()
+            try:
+                from db.models import Task as TaskModel
+                task = db.query(TaskModel).filter_by(id=task_id).first()
+                if not task:
+                    return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
+                now = datetime.now(UTC).strftime("%Y-%m-%d")
+                entry = f"[{now}] {content}"
+                existing = task.context or ""
+                task.context = f"{existing}\n{entry}".strip()
+                db.commit()
+                return json.dumps({"status": "ok", "message": "Task note saved."})
+            finally:
+                db.close()
 
         if entity_type == "general" or not entity_id:
             # General notes go to agent_memory table
@@ -659,7 +888,7 @@ class SaveMemoryTool(Tool):
         if not model_name:
             return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
 
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             import db.models as models
             model_cls = getattr(models, model_name)
@@ -740,7 +969,7 @@ class RecallMemoryTool(Tool):
 
         from handlers.deps import SessionLocal
         import db.models as models
-        db = SessionLocal()
+        db = SessionLocal.session_factory()
         try:
             model_cls = getattr(models, model_name)
             if entity_id:
@@ -762,5 +991,79 @@ class RecallMemoryTool(Tool):
             if not notes:
                 return json.dumps({"notes": [], "message": f"No {entity_type} context found."})
             return json.dumps({"notes": notes, "count": len(notes)})
+        finally:
+            db.close()
+
+
+class EditMemoryTool(Tool):
+    """Replace the entire context for an entity — use to compact, correct, or clean up notes."""
+
+    @property
+    def name(self) -> str:
+        return "edit_memory"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Replace the full context notes for an entity. Use this to remove stale "
+            "entries, compact verbose notes, or correct mistakes. First call recall_memory "
+            "to read the current notes, then call edit_memory with the cleaned-up version. "
+            "Pass an empty string to clear all notes for an entity."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["entity_type", "entity_id", "new_context"],
+            "properties": {
+                "entity_type": {
+                    "type": "string",
+                    "enum": ["property", "unit", "tenant", "vendor"],
+                    "description": "Type of entity whose context to replace.",
+                },
+                "entity_id": {
+                    "type": "string",
+                    "description": "ID of the entity.",
+                },
+                "new_context": {
+                    "type": "string",
+                    "description": "The full replacement context text. Pass empty string to clear.",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        entity_type = kwargs["entity_type"]
+        entity_id = kwargs["entity_id"]
+        new_context = kwargs["new_context"]
+
+        _MODEL_MAP = {
+            "property": "Property",
+            "unit": "Unit",
+            "tenant": "Tenant",
+            "vendor": "ExternalContact",
+        }
+        model_name = _MODEL_MAP.get(entity_type)
+        if not model_name:
+            return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
+
+        from handlers.deps import SessionLocal
+        db = SessionLocal.session_factory()
+        try:
+            import db.models as models
+            model_cls = getattr(models, model_name)
+            entity = db.query(model_cls).filter_by(id=entity_id).first()
+            if not entity:
+                return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
+
+            entity.context = new_context.strip() or None
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(entity, "context")
+            db.commit()
+
+            label = getattr(entity, "name", None) or getattr(entity, "label", None) or entity_type
+            action = "cleared" if not new_context.strip() else "updated"
+            return json.dumps({"status": "ok", "message": f"Context {action} for {label}."})
         finally:
             db.close()

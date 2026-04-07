@@ -1,5 +1,5 @@
 import { useRef, useEffect, useMemo, useState } from 'react';
-import { X, Bot, Sparkles, Users, Zap, ShieldCheck, Hand, Lock, MessageSquare, RotateCcw, Loader2, Trash2, Phone as PhoneIcon } from 'lucide-react';
+import { X, Bot, Sparkles, Users, Zap, ShieldCheck, Hand, Lock, MessageSquare, RotateCcw, Loader2, Trash2, Link as LinkIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -7,13 +7,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ChatMessageBubble } from './ChatMessage';
 import { ChatInput, ChatInputHandle } from './ChatInput';
 import { useApp } from '@/context/AppContext';
-import { ActionDeskTask, ChatMessage, ManagedDocument, categoryLabels, TaskMode } from '@/data/mockData';
+import { ActionDeskTask, ChatMessage, LinkedConversation, ManagedDocument, categoryLabels, TaskMode } from '@/data/mockData';
 import { getToken, authFetch } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SuggestionOptions } from './SuggestionOptions';
 import { ProgressSteps } from './ProgressSteps';
-import { graphqlQuery, TASK_QUERY, SEND_MESSAGE_MUTATION, SEND_SMS_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
+import { graphqlQuery, TASK_QUERY, SEND_MESSAGE_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
 import { apiMessagesToChatThread } from '@/hooks/useApiData';
 
 function authHeaders() {
@@ -45,10 +45,9 @@ export function ChatPanel() {
   const [dismissing, setDismissing] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [activeTaskTab, setActiveTaskTab] = useState<'chat' | 'ai' | 'progress'>('chat');
+  const [activeTaskTab, setActiveTaskTab] = useState<string>('ai');
   const [participantMessages, setParticipantMessages] = useState<ChatMessage[]>([]);
   const [participantLoading, setParticipantLoading] = useState(false);
-  const [sendViaSms, setSendViaSms] = useState(false);
 
   const handleDismiss = async () => {
     if (!chatPanel.taskId) return;
@@ -96,7 +95,7 @@ export function ChatPanel() {
   useEffect(() => {
     setDismissConfirm(false);
     setDeleteConfirm(false);
-    setActiveTaskTab('chat');
+    setActiveTaskTab('ai');
     setParticipantMessages([]);
   }, [chatPanel.taskId]);
 
@@ -234,13 +233,20 @@ export function ChatPanel() {
     }).catch(() => {}).finally(() => { if (showLoading) setParticipantLoading(false); });
   };
 
+  // Determine the non-AI linked conversations
+  const linkedChats: LinkedConversation[] = (activeTask?.linkedConversations ?? []).filter(
+    lc => lc.conversationType !== 'task_ai' && lc.conversationType !== 'suggestion_ai'
+  );
+
+  // Load participant messages when a linked conversation tab is active
   useEffect(() => {
-    const parentId = activeTask?.parentConversationId;
-    if (activeTaskTab !== 'chat' || !parentId) return;
-    loadParticipantMessages(parentId, true);
-    const interval = setInterval(() => loadParticipantMessages(parentId), 5000);
+    if (activeTaskTab === 'ai' || !activeTaskTab) return;
+    // activeTaskTab is a conversation UID
+    const convoId = activeTaskTab;
+    loadParticipantMessages(convoId, true);
+    const interval = setInterval(() => loadParticipantMessages(convoId), 5000);
     return () => clearInterval(interval);
-  }, [activeTaskTab, activeTask?.parentConversationId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeTaskTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reconnect to an in-flight chat when the panel opens.
   // If the agent is still running, stream its remaining progress so the user
@@ -758,13 +764,14 @@ export function ChatPanel() {
                                 senderName: 'RentMate', senderType: 'ai', messageType: 'internal',
                               });
                             }
-                            // Reply goes to external chat (visible to vendor/tenant)
+                            // Reply goes to AI thread — external messages
+                            // are sent via the message_person suggestion flow
                             if (event.reply) {
-                              setParticipantMessages(prev => [...prev, {
+                              addChatMessage({ taskId }, {
                                 id: event.message_id || `msg-${Date.now()}`, role: 'assistant',
                                 content: event.reply, timestamp: new Date(),
                                 senderName: 'RentMate', senderType: 'ai', messageType: 'message',
-                              }]);
+                              });
                             }
                             if (event.suggestion_messages) {
                               for (const sm of event.suggestion_messages) {
@@ -810,12 +817,19 @@ export function ChatPanel() {
       {activeTask ? (
         <Tabs
           value={activeTaskTab}
-          onValueChange={v => setActiveTaskTab(v as 'chat' | 'ai' | 'progress')}
+          onValueChange={v => setActiveTaskTab(v)}
           className="flex-1 flex flex-col min-h-0"
         >
           <TabsList className="shrink-0 mx-3 mt-2 mb-0 h-8 self-start gap-1 bg-muted/50">
-            <TabsTrigger value="chat" className="text-xs h-6 px-3">Chat</TabsTrigger>
             <TabsTrigger value="ai" className="text-xs h-6 px-3">AI</TabsTrigger>
+            {linkedChats.map(lc => (
+              <TabsTrigger key={lc.uid} value={lc.uid} className="text-xs h-6 px-3">
+                {lc.label}
+                {lc.messageCount > 0 && (
+                  <span className="ml-1 text-[9px] text-muted-foreground">{lc.messageCount}</span>
+                )}
+              </TabsTrigger>
+            ))}
             <TabsTrigger value="progress" className="text-xs h-6 px-3">Progress</TabsTrigger>
           </TabsList>
 
@@ -842,6 +856,7 @@ export function ChatPanel() {
                     <ChatMessageBubble
                       key={item.msg.id}
                       message={item.msg}
+                      taskId={chatPanel.taskId}
                       onSuggestionClick={(sid) => openChat({ suggestionId: sid })}
                     />
                   )
@@ -918,74 +933,70 @@ export function ChatPanel() {
             </ScrollArea>
           </TabsContent>
 
-          {/* Chat tab — participant conversation */}
-          <TabsContent value="chat" className="hidden data-[state=active]:flex flex-1 flex-col min-h-0 mt-0">
-            {/* Participant chips */}
-            <div className="flex items-center gap-1.5 px-3 py-1.5 border-b bg-muted/20 shrink-0 flex-wrap">
-              {activeTask.participants.filter(p => p.type === 'tenant' || p.type === 'vendor').length === 0 ? (
-                <span className="text-[11px] text-muted-foreground italic">No external participants yet</span>
-              ) : (
-                activeTask.participants
-                  .filter(p => p.type === 'tenant' || p.type === 'vendor')
-                  .map((p, idx) => (
-                    <Badge key={p.id ?? `${p.name}-${idx}`} variant="secondary" className="text-[10px] rounded-lg gap-1">
-                      <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted-foreground/20 text-[9px] font-bold">
-                        {p.name.charAt(0).toUpperCase()}
-                      </span>
-                      {p.name}
-                    </Badge>
-                  ))
-              )}
-            </div>
-            <ScrollArea className="flex-1 overflow-x-hidden">
-              <div className="p-4 space-y-4 w-full overflow-x-hidden">
-                {participantLoading && (
-                  <div className="flex justify-center py-8">
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                  </div>
-                )}
-                {!participantLoading && !activeTask.parentConversationId && (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Users className="h-8 w-8 mx-auto mb-2 opacity-40" />
-                    <p className="text-sm font-medium">No participant conversation</p>
-                    <p className="text-xs mt-1">This task has no linked conversation with a tenant or vendor.</p>
-                  </div>
-                )}
-                {!participantLoading && activeTask.parentConversationId && participantMessages.length === 0 && (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-40" />
-                    <p className="text-sm font-medium">No messages yet</p>
-                  </div>
-                )}
-                {participantMessages.map(msg => (
-                  <ChatMessageBubble key={msg.id} message={msg} onSuggestionClick={(sid) => openChat({ suggestionId: sid })} />
-                ))}
-                {isTyping && (
-                  <div className="flex items-start gap-2 overflow-hidden text-muted-foreground">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 shrink-0 mt-0.5">
-                      <Bot className="h-3.5 w-3.5 text-primary" />
-                    </div>
-                    <div className="flex-1 min-w-0 overflow-hidden py-2 px-3 rounded-2xl bg-muted">
-                      {progressLog.length === 0 ? (
-                        <div className="flex gap-1 py-0.5">
-                          <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:0ms]" />
-                          <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:150ms]" />
-                          <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:300ms]" />
-                        </div>
-                      ) : (
-                        <div className="space-y-0.5 overflow-hidden">
-                          {progressLog.slice(-3).map((line, i, arr) => (
-                            <p key={i} className={`text-xs truncate ${i === arr.length - 1 ? 'text-muted-foreground' : 'text-muted-foreground/50'}`}>{line}</p>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
+          {/* Linked conversation tabs — one per non-AI conversation */}
+          {linkedChats.map(lc => (
+            <TabsContent key={lc.uid} value={lc.uid} className="hidden data-[state=active]:flex flex-1 flex-col min-h-0 mt-0">
+              {/* Participant chips + portal links */}
+              <div className="flex items-center gap-1.5 px-3 py-1.5 border-b bg-muted/20 shrink-0 flex-wrap">
+                {(lc.participants ?? []).length === 0 ? (
+                  <span className="text-[11px] text-muted-foreground italic">No external participants yet</span>
+                ) : (
+                  (lc.participants ?? []).map((p, idx) => (
+                      <Badge key={p.entityId ?? `${p.name}-${idx}`} variant="secondary" className="text-[10px] rounded-lg gap-1">
+                        <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-muted-foreground/20 text-[9px] font-bold">
+                          {p.name.charAt(0).toUpperCase()}
+                        </span>
+                        {p.name}
+                        {p.portalUrl && (
+                          <button
+                            className="ml-0.5 text-primary/60 hover:text-primary transition-colors"
+                            title="Copy portal link"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              try {
+                                if (navigator.clipboard?.writeText) {
+                                  navigator.clipboard.writeText(p.portalUrl!);
+                                } else {
+                                  const ta = document.createElement('textarea');
+                                  ta.value = p.portalUrl!;
+                                  ta.style.cssText = 'position:fixed;left:-9999px';
+                                  document.body.appendChild(ta);
+                                  ta.select();
+                                  document.execCommand('copy');
+                                  document.body.removeChild(ta);
+                                }
+                                toast.success(`${p.participantType === 'vendor' ? 'Vendor' : 'Tenant'} portal link copied`);
+                              } catch {
+                                toast.error('Failed to copy link');
+                              }
+                            }}
+                          >
+                            <LinkIcon className="h-3 w-3" />
+                          </button>
+                          )}
+                        </Badge>
+                    ))
                 )}
               </div>
-            </ScrollArea>
-            {activeTask.parentConversationId ? (
-              isAutonomous ? (
+              <ScrollArea className="flex-1 overflow-x-hidden">
+                <div className="p-4 space-y-4 w-full overflow-x-hidden">
+                  {participantLoading && (
+                    <div className="flex justify-center py-8">
+                      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                    </div>
+                  )}
+                  {!participantLoading && participantMessages.length === 0 && (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-40" />
+                      <p className="text-sm font-medium">No messages yet</p>
+                    </div>
+                  )}
+                  {participantMessages.map(msg => (
+                    <ChatMessageBubble key={msg.id} message={msg} onSuggestionClick={(sid) => openChat({ suggestionId: sid })} />
+                  ))}
+                </div>
+              </ScrollArea>
+              {isAutonomous ? (
                 <div className="flex items-center gap-2 px-4 py-3 border-t bg-muted/30 shrink-0">
                   <Zap className="h-4 w-4 text-accent shrink-0" />
                   <p className="flex-1 text-xs text-muted-foreground">RentMate is chatting on your behalf.</p>
@@ -1003,21 +1014,6 @@ export function ChatPanel() {
                 </div>
               ) : (
                 <div className="border-t shrink-0">
-                  {activeTask.assignedVendorId && (
-                    <div className="flex items-center gap-1.5 px-3 pt-2">
-                      <input
-                        type="checkbox"
-                        id="sms-toggle"
-                        checked={sendViaSms}
-                        onChange={e => setSendViaSms(e.target.checked)}
-                        className="h-3.5 w-3.5 rounded border-input accent-primary cursor-pointer"
-                      />
-                      <label htmlFor="sms-toggle" className="text-[11px] text-muted-foreground cursor-pointer flex items-center gap-1">
-                        <PhoneIcon className="h-3 w-3" />
-                        Send as SMS
-                      </label>
-                    </div>
-                  )}
                   <ChatInput
                     onSend={async (content) => {
                       const taskId = chatPanel.taskId!;
@@ -1032,27 +1028,19 @@ export function ChatPanel() {
                       };
                       setParticipantMessages(prev => [...prev, msg]);
                       try {
-                        if (sendViaSms && activeTask.assignedVendorId) {
-                          await graphqlQuery(SEND_SMS_MUTATION, {
-                            vendorId: activeTask.assignedVendorId,
-                            body: content,
-                            taskId,
-                          });
-                        } else {
-                          await graphqlQuery(SEND_MESSAGE_MUTATION, {
-                            input: { conversationId: activeTask!.externalConversationId!, body: content },
-                          });
-                        }
+                        await graphqlQuery(SEND_MESSAGE_MUTATION, {
+                          input: { conversationId: lc.uid, body: content },
+                        });
                       } catch {
                         toast.error('Failed to send message');
                       }
                     }}
-                    placeholder={sendViaSms ? "Send SMS to vendor…" : "Reply to participant…"}
+                    placeholder={`Reply in ${lc.label} chat...`}
                   />
                 </div>
-              )
-            ) : null}
-          </TabsContent>
+              )}
+            </TabsContent>
+          ))}
         </Tabs>
       ) : (
         <>

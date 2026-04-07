@@ -104,6 +104,11 @@ class TaskService:
         if not task:
             raise ValueError(f"Task {uid} not found")
         ai_conv_id = task.ai_conversation_id
+        # Delete associated suggestions
+        from db.models import Suggestion
+        for s in sess.execute(select(Suggestion).where(Suggestion.task_id == uid)).scalars().all():
+            sess.delete(s)
+        sess.flush()
         sess.delete(task)
         sess.flush()
         if ai_conv_id:

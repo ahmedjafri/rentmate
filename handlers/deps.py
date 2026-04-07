@@ -13,6 +13,15 @@ _data_dir = os.getenv("RENTMATE_DATA_DIR", "./data")
 DB_PATH = os.getenv("RENTMATE_DB_PATH", f"{_data_dir}/rentmate.db")
 os.makedirs(os.path.dirname(DB_PATH) if os.path.dirname(DB_PATH) else ".", exist_ok=True)
 engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+
+# Enable WAL mode for better concurrent read/write support
+from sqlalchemy import event as _sa_event
+@_sa_event.listens_for(engine, "connect")
+def _set_sqlite_pragma(dbapi_conn, connection_record):
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.close()
+
 SessionLocal = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 
 

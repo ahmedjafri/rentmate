@@ -99,6 +99,7 @@ export const TENANTS_QUERY = `
       paymentStatus
       isActive
       context
+      portalUrl
       extraProperties { key value }
       rents { uid name address }
       leases {
@@ -138,6 +139,14 @@ const TASK_FIELDS = `
   externalConversationId
   steps
   suggestionOptions
+  linkedConversations {
+    uid
+    label
+    conversationType
+    lastMessageAt
+    messageCount
+    participants { name participantType entityId portalUrl }
+  }
   messages {
     uid
     body

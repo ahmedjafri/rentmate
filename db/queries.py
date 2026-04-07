@@ -93,6 +93,8 @@ def fetch_tasks(
         q = q.where(Task.source == source)
     q = q.options(
         selectinload(Task.ai_conversation).selectinload(Conversation.messages),
+        selectinload(Task.parent_conversation).selectinload(Conversation.messages),
+        selectinload(Task.external_conversation).selectinload(Conversation.messages),
         selectinload(Task.unit),
         selectinload(Task.lease).selectinload(Lease.tenant),
         selectinload(Task.lease).selectinload(Lease.unit),
@@ -106,6 +108,8 @@ def fetch_task(db: Session, uid: str) -> Optional[Task]:
         .where(Task.id == uid)
         .options(
             selectinload(Task.ai_conversation).selectinload(Conversation.messages),
+            selectinload(Task.parent_conversation).selectinload(Conversation.messages),
+            selectinload(Task.external_conversation).selectinload(Conversation.messages),
             selectinload(Task.unit),
             selectinload(Task.lease).selectinload(Lease.tenant),
             selectinload(Task.lease).selectinload(Lease.unit),

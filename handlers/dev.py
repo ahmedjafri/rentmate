@@ -312,3 +312,55 @@ async def wipe_chats(request: Request, db: Session = Depends(get_db)):
         db.delete(c)
     db.commit()
     return {"deleted_conversations": len(convos), "unlinked_tasks": len(tasks)}
+
+
+@router.get("/traces")
+async def list_traces(
+    request: Request,
+    db: Session = Depends(get_db),
+    task_id: str | None = None,
+    source: str | None = None,
+    trace_type: str | None = None,
+    limit: int = 100,
+):
+    """Return recent agent traces for debugging."""
+    await require_user(request)
+    from db.models import AgentTrace
+    from sqlalchemy import select
+
+    q = select(AgentTrace).order_by(AgentTrace.timestamp.desc())
+    if task_id:
+        q = q.where(AgentTrace.task_id == task_id)
+    if source:
+        q = q.where(AgentTrace.source == source)
+    if trace_type:
+        q = q.where(AgentTrace.trace_type == trace_type)
+    q = q.limit(min(limit, 500))
+
+    traces = db.execute(q).scalars().all()
+    return [
+        {
+            "id": t.id,
+            "timestamp": t.timestamp.isoformat() + "Z",
+            "trace_type": t.trace_type,
+            "source": t.source,
+            "task_id": t.task_id,
+            "conversation_id": t.conversation_id,
+            "tool_name": t.tool_name,
+            "summary": t.summary,
+            "detail": t.detail,
+            "suggestion_id": t.suggestion_id,
+        }
+        for t in traces
+    ]
+
+
+@router.delete("/traces")
+async def wipe_traces(request: Request, db: Session = Depends(get_db)):
+    """Delete all agent traces."""
+    await require_user(request)
+    from db.models import AgentTrace
+    count = db.query(AgentTrace).count()
+    db.query(AgentTrace).delete()
+    db.commit()
+    return {"deleted_traces": count}

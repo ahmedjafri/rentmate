@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { graphqlQuery, HOUSES_QUERY, TENANTS_QUERY, TASKS_QUERY, VENDORS_QUERY, SUGGESTIONS_QUERY } from '@/data/api';
-import { Property, Tenant, Vendor, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, TaskParticipant } from '@/data/mockData';
+import { Property, Tenant, Vendor, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, TaskParticipant, LinkedConversation } from '@/data/mockData';
 
 interface ApiState {
   properties: Property[];
@@ -91,6 +91,7 @@ export function useApiData(): ApiState {
             paymentStatus: (t.paymentStatus as Tenant['paymentStatus']) ?? 'current',
             isActive: t.isActive ?? false,
             context: t.context,
+            portalUrl: t.portalUrl,
           }))
         : [];
 
@@ -184,6 +185,12 @@ function apiTaskParticipants(t: ApiTask): TaskParticipant[] {
     seen.add(t.assignedVendorName);
   }
 
+  // Add tenant directly if known — don't require them to have sent a message yet
+  if (t.tenantName && !seen.has(t.tenantName)) {
+    participants.push({ type: 'tenant', name: t.tenantName });
+    seen.add(t.tenantName);
+  }
+
   // Add unique non-AI senders from messages
   for (const m of t.messages ?? []) {
     if (m.isAi || !m.senderName || seen.has(m.senderName)) continue;
@@ -225,6 +232,14 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
     aiConversationId: t.aiConversationId ?? null,
     externalConversationId: t.externalConversationId ?? null,
     parentConversationId: t.externalConversationId ?? t.parentConversationId ?? null,
+    linkedConversations: (t.linkedConversations ?? []).map(lc => ({
+      uid: lc.uid,
+      label: lc.label,
+      conversationType: lc.conversationType,
+      lastMessageAt: lc.lastMessageAt,
+      messageCount: lc.messageCount,
+      participants: lc.participants ?? [],
+    })),
   };
 }
 
@@ -318,6 +333,7 @@ interface ApiTenant {
   paymentStatus?: string;
   isActive?: boolean;
   context?: string;
+  portalUrl?: string;
   rents?: { uid: string }[];
 }
 
@@ -363,6 +379,7 @@ interface ApiTask {
   aiConversationId?: string | null;
   parentConversationId?: string | null;
   externalConversationId?: string | null;
+  linkedConversations?: { uid: string; label: string; conversationType: string; lastMessageAt?: string; messageCount: number; participants?: { name: string; participantType: string; entityId?: string | null; portalUrl?: string | null }[] }[];
 }
 
 interface ApiSuggestion {

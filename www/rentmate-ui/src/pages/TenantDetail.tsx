@@ -1,9 +1,12 @@
+import { useState } from 'react';
 import { useParams, Link, useLocation } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EntityContextCard, propertyTopics } from '@/components/context/EntityContextCard';
-import { ArrowLeft, MapPin, Bot, Wrench, User, Clock, MessageCircle, Zap, ShieldCheck, Hand, Lock, Mail, Calendar } from 'lucide-react';
+import { ArrowLeft, MapPin, Bot, Wrench, User, Clock, MessageCircle, Zap, ShieldCheck, Hand, Lock, Mail, Calendar, Link as LinkIcon, Copy, CheckCircle2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { TaskMode, TaskParticipantType, categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
@@ -27,10 +30,40 @@ const tenantTopics = [
   { key: 'note', label: 'Special notes', description: 'Pets, parking, accessibility needs, etc.' },
 ];
 
+function TenantPortalLink({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      toast.success('Tenant portal link copied');
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error('Failed to copy');
+    }
+  };
+  return (
+    <Card className="p-4 rounded-xl">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <LinkIcon className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-xs text-muted-foreground">Tenant Portal Link</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <code className="text-[11px] bg-muted px-2 py-1 rounded truncate max-w-[400px] select-all">
+          {url}
+        </code>
+        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={handleCopy}>
+          {copied ? <CheckCircle2 className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5 text-muted-foreground" />}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 const TenantDetail = () => {
   const { id } = useParams<{ id: string }>();
   const { state: navState } = useLocation();
-  const { tenants, properties, actionDeskTasks, openChat } = useApp();
+  const { tenants, properties, actionDeskTasks, openChat, updateTenant } = useApp();
 
   const tenant = tenants.find(t => t.id === id);
   const backTo = navState?.from === 'tenants'
@@ -80,7 +113,7 @@ const TenantDetail = () => {
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3">
-        <EntityContextCard entityId={tenant.id} entityName={tenant.name} expectedTopics={tenantTopics} autoContext={autoContext} />
+        <EntityContextCard entityId={tenant.id} entityName={tenant.name} entityType="tenant" agentContext={tenant.context} onAgentContextSaved={(ctx) => updateTenant(tenant.id, { context: ctx })} expectedTopics={tenantTopics} autoContext={autoContext} />
         <Card className="p-4 rounded-xl">
           <div className="flex items-center gap-2 mb-1">
             <Calendar className="h-4 w-4 text-muted-foreground" />
@@ -128,6 +161,9 @@ const TenantDetail = () => {
           </div>
         </Card>
       </div>
+
+      {/* Portal link */}
+      {tenant.portalUrl && <TenantPortalLink url={tenant.portalUrl} />}
 
       {/* Related Tasks */}
       {tenantTasks.length > 0 && (

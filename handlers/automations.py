@@ -377,7 +377,7 @@ def _scan_for_reply_suggestions(db) -> int:
                 Suggestion.task_id == task.id,
                 Suggestion.status == "pending",
             )
-        ).scalar_one_or_none()
+        ).scalars().first()
         if existing:
             continue
 
@@ -392,28 +392,71 @@ def _scan_for_reply_suggestions(db) -> int:
             db, task=task, last_msg=last_msg,
             vendor_name=vendor_name, autonomy=autonomy,
         )
-        if executor.generate():
+        suggestion = executor.generate()
+        if suggestion:
             created += 1
+            from llm.tracing import log_trace
+            log_trace("suggestion_created", "reply_scanner",
+                      f"Reply suggestion: {suggestion.title or 'untitled'}",
+                      task_id=str(task.id), suggestion_id=suggestion.id)
 
     return created
 
 
-async def reply_scanner_loop():
-    """Background loop: scan for unread external messages and create reply Suggestions."""
+def _heartbeat_scan():
+    """Scan for autonomous tasks needing attention and run heartbeat (runs in thread)."""
+    from handlers.chat import agent_task_heartbeat
+    db = SessionLocal.session_factory()
+    try:
+        tasks = db.execute(
+            sa_select(Task).where(
+                Task.task_mode == "autonomous",
+                Task.task_status.in_(["active", "suggested"]),
+            )
+        ).scalars().all()
+
+        triggered = 0
+        for task in tasks:
+            for conv_id in [task.external_conversation_id, task.parent_conversation_id]:
+                if not conv_id:
+                    continue
+                last_msg = db.execute(
+                    sa_select(Message)
+                    .where(Message.conversation_id == conv_id,
+                           Message.message_type == MessageType.MESSAGE)
+                    .order_by(Message.sent_at.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                if not last_msg:
+                    continue
+                if last_msg.is_ai or last_msg.sender_type == ParticipantType.ACCOUNT_USER:
+                    continue
+                sender = last_msg.sender_name or "Someone"
+                hint = f"{sender} sent a message that may need a response."
+                try:
+                    agent_task_heartbeat(str(task.id), hint=hint)
+                    triggered += 1
+                except Exception as exc:
+                    _logger.exception("Heartbeat failed for task %s: %s", task.id, exc)
+                break
+
+        if triggered:
+            _logger.info("Heartbeat loop: triggered %d task(s)", triggered)
+    except Exception as exc:
+        _logger.exception("Heartbeat loop error: %s", exc)
+    finally:
+        db.close()
+
+
+async def heartbeat_loop():
+    """Background loop: run heartbeat scan in a thread every 60s."""
     _POLL_SECONDS = 60
     while True:
         await asyncio.sleep(_POLL_SECONDS)
-        db = SessionLocal.session_factory()
         try:
-            n = _scan_for_reply_suggestions(db)
-            if n:
-                db.commit()
-                _logger.info("Reply scanner: created %d suggestion(s)", n)
+            await asyncio.to_thread(_heartbeat_scan)
         except Exception as exc:
-            db.rollback()
-            _logger.exception("Reply scanner error: %s", exc)
-        finally:
-            db.close()
+            _logger.exception("Heartbeat loop error: %s", exc)
 
 
 # ─── pydantic models ──────────────────────────────────────────────────────────

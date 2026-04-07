@@ -227,10 +227,10 @@ class TestTaskVendorFlow:
         assert task.task_status == "resolved"
         assert task.resolved_at is not None
 
-    # -- 6. Reuses existing vendor conversation ---------------------------
+    # -- 6. Each task gets its own vendor conversation --------------------
 
-    def test_second_task_reuses_vendor_conversation(self, db):
-        """Two tasks for the same vendor should share the external conversation."""
+    def test_second_task_gets_fresh_vendor_conversation(self, db):
+        """Two tasks for the same vendor should get separate conversations."""
         client = TestClient(app)
         vendor = self._create_vendor(db)
         self._create_task_via_endpoint(client, db, vendor, subject="Job A")
@@ -238,6 +238,6 @@ class TestTaskVendorFlow:
 
         task_a = db.query(Task).filter(Task.title == "Job A").first()
         task_b = db.query(Task).filter(Task.title == "Job B").first()
-        assert task_a.external_conversation_id == task_b.external_conversation_id, (
-            "Both tasks should reuse the same vendor conversation"
+        assert task_a.external_conversation_id != task_b.external_conversation_id, (
+            "Each task should get its own vendor conversation"
         )

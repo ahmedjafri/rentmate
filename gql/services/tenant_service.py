@@ -1,9 +1,13 @@
 import uuid
 from datetime import UTC, datetime, date as _date
+from typing import Optional, Tuple
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
 from db.models import Tenant as SqlTenant, Lease as SqlLease, Unit as SqlUnit
 from gql.types import CreateTenantWithLeaseInput, AddLeaseForTenantInput
+from gql.services import portal_auth
 
 
 class TenantService:
@@ -80,3 +84,32 @@ class TenantService:
         sess.add(lease)
         sess.commit()
         return tenant, unit, lease
+
+    # ── Portal auth ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _find_by_portal_token(sess: Session, token: str) -> Optional[SqlTenant]:
+        return portal_auth.find_by_portal_token(sess, SqlTenant, token)
+
+    @staticmethod
+    def authenticate_by_token(sess: Session, token: str) -> Tuple[SqlTenant, str]:
+        tenant = TenantService._find_by_portal_token(sess, token)
+        if not tenant:
+            raise ValueError("Invalid portal link")
+        jwt_token = portal_auth.create_portal_jwt("tenant", str(tenant.id))
+        return tenant, jwt_token
+
+    @staticmethod
+    def get_portal_url(tenant: SqlTenant) -> str:
+        token = (tenant.extra or {}).get("portal_token")
+        if not token:
+            return ""
+        return portal_auth.build_portal_url(token)
+
+    @staticmethod
+    def validate_tenant_token(token: str) -> dict:
+        return portal_auth.validate_portal_jwt(token, "tenant")
+
+    @staticmethod
+    def ensure_portal_token(sess: Session, tenant: SqlTenant) -> str:
+        return portal_auth.ensure_portal_token(tenant)

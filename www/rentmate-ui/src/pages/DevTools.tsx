@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Bot, User, ExternalLink, Terminal, Trash2 } from 'lucide-react';
+import { Bot, User, ExternalLink, Terminal, Trash2, Activity, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getToken, authFetch } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -23,6 +23,174 @@ interface ChatEntry {
   text: string;
   taskId?: string;
   taskCreated?: boolean;
+}
+
+interface TraceEntry {
+  id: string;
+  timestamp: string;
+  trace_type: string;
+  source: string;
+  task_id: string | null;
+  tool_name: string | null;
+  summary: string;
+  detail: string | null;
+  suggestion_id: string | null;
+}
+
+const TRACE_COLORS: Record<string, string> = {
+  tool_call: 'bg-blue-100 text-blue-800',
+  tool_result: 'bg-green-100 text-green-800',
+  llm_reply: 'bg-purple-100 text-purple-800',
+  suggestion_created: 'bg-yellow-100 text-yellow-800',
+  suggestion_executed: 'bg-orange-100 text-orange-800',
+  error: 'bg-red-100 text-red-800',
+};
+
+function TracesPanel() {
+  const [traces, setTraces] = useState<TraceEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<string>('');
+
+  const loadTraces = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: '200' });
+      if (filter) params.set('trace_type', filter);
+      const res = await fetch(`/dev/traces?${params}`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (res.ok) setTraces(await res.json());
+    } catch { /* ignore */ } finally {
+      setLoading(false);
+    }
+  }, [filter]);
+
+  useEffect(() => { loadTraces(); }, [loadTraces]);
+
+  // Auto-refresh every 5s
+  useEffect(() => {
+    const id = setInterval(loadTraces, 5000);
+    return () => clearInterval(id);
+  }, [loadTraces]);
+
+  const copyText = (text: string, label: string = 'Copied') => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      toast.success(label);
+    } catch {
+      toast.error('Failed to copy');
+    }
+  };
+
+  const copyAllTraces = () => {
+    const text = traces.map(t =>
+      `[${t.timestamp}] ${t.trace_type} (${t.source}) ${t.summary}${t.detail ? '\n' + t.detail : ''}`
+    ).join('\n\n');
+    copyText(text, `Copied ${traces.length} traces`);
+  };
+
+  const formatTime = (ts: string) => {
+    const d = new Date(ts);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
+
+  const parseDetail = (detail: string | null): string => {
+    if (!detail) return '';
+    try {
+      return JSON.stringify(JSON.parse(detail), null, 2);
+    } catch {
+      return detail;
+    }
+  };
+
+  return (
+    <Card className="p-4 rounded-xl">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Activity className="h-4 w-4 text-muted-foreground" />
+          <h2 className="font-semibold text-sm">Agent Traces</h2>
+          <Badge variant="outline" className="text-[10px]">{traces.length}</Badge>
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            className="text-xs border rounded px-2 py-1 bg-background"
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+          >
+            <option value="">All types</option>
+            <option value="tool_call">Tool calls</option>
+            <option value="tool_result">Tool results</option>
+            <option value="llm_reply">LLM replies</option>
+            <option value="suggestion_created">Suggestions created</option>
+            <option value="suggestion_executed">Suggestions executed</option>
+            <option value="error">Errors</option>
+          </select>
+          <Button variant="ghost" size="sm" onClick={loadTraces} disabled={loading} className="h-7 w-7 p-0">
+            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+          </Button>
+          {traces.length > 0 && (
+            <Button variant="ghost" size="sm" onClick={copyAllTraces} className="h-7 text-[10px] px-2">
+              Copy All
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="max-h-[400px] overflow-y-auto space-y-1">
+        {traces.length === 0 && (
+          <p className="text-sm text-muted-foreground text-center py-8">No traces yet. Agent activity will appear here.</p>
+        )}
+        {traces.map(t => (
+          <div key={t.id} className="border rounded-lg">
+            <button
+              className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-muted/50 transition-colors"
+              onClick={() => setExpandedId(expandedId === t.id ? null : t.id)}
+            >
+              <span className="text-[10px] text-muted-foreground font-mono w-16 shrink-0">
+                {formatTime(t.timestamp)}
+              </span>
+              <Badge className={cn("text-[9px] h-4 px-1.5 shrink-0", TRACE_COLORS[t.trace_type] ?? 'bg-gray-100 text-gray-700')}>
+                {t.trace_type}
+              </Badge>
+              {t.source && (
+                <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">{t.source}</Badge>
+              )}
+              <span className="text-xs truncate flex-1">{t.summary}</span>
+              {t.detail && (
+                expandedId === t.id
+                  ? <ChevronUp className="h-3 w-3 text-muted-foreground shrink-0" />
+                  : <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+              )}
+            </button>
+            {expandedId === t.id && t.detail && (
+              <div className="px-3 pb-2">
+                <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono max-h-48 overflow-y-auto">
+                  {parseDetail(t.detail)}
+                </pre>
+                {t.task_id && (
+                  <p className="text-[10px] text-muted-foreground mt-1">Task: {t.task_id}</p>
+                )}
+                {t.suggestion_id && (
+                  <p className="text-[10px] text-muted-foreground">Suggestion: {t.suggestion_id}</p>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
 }
 
 async function fetchDevHistory(tenantId: string): Promise<{ taskId: string | null; messages: ChatEntry[] }> {
@@ -334,6 +502,9 @@ const DevTools = () => {
           </div>
         </Card>
       </div>
+
+      {/* Traces */}
+      <TracesPanel />
 
       {/* Danger zone */}
       <Card className="p-4 rounded-xl border-destructive/30">

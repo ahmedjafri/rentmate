@@ -1,18 +1,13 @@
-import os
-import secrets
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Optional, Tuple
 
-import jwt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from db.models import ExternalContact
 from gql.types import CreateVendorInput, UpdateVendorInput, VENDOR_TYPES
-
-_JWT_SECRET = os.getenv("JWT_SECRET", "rentmate-local-secret")
-_JWT_ALGORITHM = "HS256"
+from gql.services import portal_auth
 
 
 def _validate_vendor_type(vendor_type: str | None) -> None:
@@ -28,7 +23,7 @@ class VendorService:
         _validate_vendor_type(input.vendor_type)
         if not input.phone:
             raise ValueError("Phone number is required")
-        extra: dict = {"portal_token": secrets.token_urlsafe(6)}
+        extra: dict = {"portal_token": portal_auth.generate_portal_token()}
         vendor = ExternalContact(
             id=str(uuid.uuid4()),
             name=input.name,
@@ -83,58 +78,27 @@ class VendorService:
 
     @staticmethod
     def _find_by_portal_token(sess: Session, token: str) -> Optional[ExternalContact]:
-        """Find vendor by portal_token, with fallback to legacy invite_token."""
-        vendors = sess.execute(select(ExternalContact)).scalars().all()
-        for v in vendors:
-            extra = v.extra or {}
-            if extra.get("portal_token") == token or extra.get("invite_token") == token:
-                return v
-        return None
+        return portal_auth.find_by_portal_token(sess, ExternalContact, token)
 
     @staticmethod
     def authenticate_by_token(sess: Session, token: str) -> Tuple[ExternalContact, str]:
-        """Look up vendor by portal token and return vendor + JWT. No accept step."""
         vendor = VendorService._find_by_portal_token(sess, token)
         if not vendor:
             raise ValueError("Invalid portal link")
-        jwt_token = VendorService._create_vendor_jwt(vendor)
+        jwt_token = portal_auth.create_portal_jwt("vendor", str(vendor.id))
         return vendor, jwt_token
 
     @staticmethod
     def get_portal_url(vendor: ExternalContact) -> str:
-        """Build the public-facing short URL for the vendor's chat portal."""
         token = (vendor.extra or {}).get("portal_token") or (vendor.extra or {}).get("invite_token")
         if not token:
             return ""
-        public_url = os.environ.get("RENTMATE_PUBLIC_URL", "").rstrip("/")
-        if public_url:
-            return f"{public_url}/t/{token}"
-        port = os.environ.get("RENTMATE_PORT", "8000")
-        return f"http://localhost:{port}/t/{token}"
+        return portal_auth.build_portal_url(token)
 
     @staticmethod
     def validate_vendor_token(token: str) -> dict:
-        payload = jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALGORITHM])
-        if payload.get("type") != "vendor":
-            raise ValueError("Not a vendor token")
-        return payload
-
-    @staticmethod
-    def _create_vendor_jwt(vendor: ExternalContact) -> str:
-        payload = {
-            "type": "vendor",
-            "vendor_id": str(vendor.id),
-            "exp": datetime.now(UTC) + timedelta(days=365),
-        }
-        return jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALGORITHM)
+        return portal_auth.validate_portal_jwt(token, "vendor")
 
     @staticmethod
     def ensure_portal_token(sess: Session, vendor: ExternalContact) -> str:
-        """Ensure vendor has a portal_token, migrating from invite_token if needed."""
-        extra = dict(vendor.extra or {})
-        if not extra.get("portal_token"):
-            extra["portal_token"] = secrets.token_urlsafe(6)
-            vendor.extra = extra
-            from sqlalchemy.orm.attributes import flag_modified
-            flag_modified(vendor, "extra")
-        return extra["portal_token"]
+        return portal_auth.ensure_portal_token(vendor)

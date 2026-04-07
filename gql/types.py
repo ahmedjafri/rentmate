@@ -239,6 +239,7 @@ class TenantType:
     payment_status: typing.Optional[str] = None
     is_active: bool = False
     context: typing.Optional[str] = None
+    portal_url: typing.Optional[str] = None
     rents: typing.List[HouseType] = strawberry.field(default_factory=list)
     leases: typing.List["LeaseType"] = strawberry.field(default_factory=list)
     extra_properties: typing.List[ExtraPropertyType] = strawberry.field(default_factory=list)
@@ -285,6 +286,7 @@ class TenantType:
             ExtraPropertyType(key=str(k), value=str(v))
             for k, v in (t.extra or {}).items()
         ]
+        from gql.services.tenant_service import TenantService
         return cls(
             uid=str(t.id),
             name=tenant_display_name(t),
@@ -295,6 +297,7 @@ class TenantType:
             payment_status=active_lease.payment_status if active_lease and hasattr(active_lease, "payment_status") else "current",
             is_active=is_active,
             context=t.context,
+            portal_url=TenantService.get_portal_url(t),
             rents=list(prop_map.values()),
             leases=lease_items,
             extra_properties=extra_properties,
@@ -364,6 +367,60 @@ class ChatMessageType:
 
 
 @strawberry.type
+@strawberry.type
+class ConversationParticipantType:
+    """A participant in a conversation."""
+    name: str
+    participant_type: str  # "tenant" | "vendor"
+    entity_id: typing.Optional[str] = None
+    portal_url: typing.Optional[str] = None
+
+@strawberry.type
+class LinkedConversationType:
+    """Summary of a conversation linked to a task."""
+    uid: str
+    label: str
+    conversation_type: str
+    last_message_at: typing.Optional[str] = None
+    message_count: int = 0
+    participants: typing.List[ConversationParticipantType] = strawberry.field(default_factory=list)
+
+    @classmethod
+    def from_sql(cls, conv: typing.Any, label: str) -> "LinkedConversationType":
+        msgs = getattr(conv, "messages", []) or []
+        last_msg = max(msgs, key=lambda m: m.sent_at, default=None) if msgs else None
+
+        # Build participant list from conversation participants
+        parts: list[ConversationParticipantType] = []
+        for p in getattr(conv, "participants", []) or []:
+            if not p.is_active:
+                continue
+            if p.tenant_id and p.tenant:
+                from gql.services.tenant_service import TenantService
+                name = f"{p.tenant.first_name} {p.tenant.last_name}".strip()
+                parts.append(ConversationParticipantType(
+                    name=name, participant_type="tenant", entity_id=str(p.tenant_id),
+                    portal_url=TenantService.get_portal_url(p.tenant),
+                ))
+            elif p.external_contact_id and p.external_contact:
+                from gql.services.vendor_service import VendorService
+                parts.append(ConversationParticipantType(
+                    name=p.external_contact.name, participant_type="vendor",
+                    entity_id=str(p.external_contact_id),
+                    portal_url=VendorService.get_portal_url(p.external_contact),
+                ))
+
+        return cls(
+            uid=str(conv.id),
+            label=label,
+            conversation_type=conv.conversation_type or "task_ai",
+            last_message_at=_utc_iso(last_msg.sent_at) if last_msg else None,
+            message_count=len(msgs),
+            participants=parts,
+        )
+
+
+@strawberry.type
 class TaskType:
     uid: str
     task_number: typing.Optional[int] = None
@@ -393,6 +450,7 @@ class TaskType:
     external_conversation_id: typing.Optional[str] = None
     steps: typing.Optional[strawberry.scalars.JSON] = None
     suggestion_options: typing.Optional[strawberry.scalars.JSON] = None
+    linked_conversations: typing.List[LinkedConversationType] = strawberry.field(default_factory=list)
 
     @classmethod
     def from_sql(cls, t: typing.Any) -> "TaskType":
@@ -424,6 +482,21 @@ class TaskType:
         # Get extra from the AI conversation
         extra = getattr(ai_convo, 'extra', None) or {} if ai_convo else {}
 
+        # Build linked conversations list
+        linked: list[LinkedConversationType] = []
+        if ai_convo:
+            linked.append(LinkedConversationType.from_sql(ai_convo, "AI"))
+        parent_convo = getattr(t, "parent_conversation", None)
+        if parent_convo:
+            ptype = getattr(parent_convo, "conversation_type", None) or "tenant"
+            plabel = "Tenant" if ptype == "tenant" else "Vendor" if ptype == "vendor" else ptype.replace("_", " ").title()
+            linked.append(LinkedConversationType.from_sql(parent_convo, plabel))
+        ext_convo = getattr(t, "external_conversation", None)
+        if ext_convo and (not parent_convo or ext_convo.id != parent_convo.id):
+            etype = getattr(ext_convo, "conversation_type", None) or "vendor"
+            elabel = "Vendor" if etype == "vendor" else "Tenant" if etype == "tenant" else etype.replace("_", " ").title()
+            linked.append(LinkedConversationType.from_sql(ext_convo, elabel))
+
         return cls(
             uid=str(t.id),
             task_number=t.task_number,
@@ -453,6 +526,7 @@ class TaskType:
             external_conversation_id=str(t.external_conversation_id) if t.external_conversation_id else None,
             steps=t.steps,
             suggestion_options=extra.get('suggestion_options'),
+            linked_conversations=linked,
         )
 
 

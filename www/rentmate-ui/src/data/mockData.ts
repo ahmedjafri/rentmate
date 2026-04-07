@@ -15,6 +15,22 @@ export interface TaskParticipant {
   id?: string;
 }
 
+export interface ConversationParticipant {
+  name: string;
+  participantType: string;
+  entityId?: string | null;
+  portalUrl?: string | null;
+}
+
+export interface LinkedConversation {
+  uid: string;
+  label: string;
+  conversationType: string;
+  lastMessageAt?: string | null;
+  messageCount: number;
+  participants: ConversationParticipant[];
+}
+
 export interface ActionDeskTask {
   id: string;
   taskNumber?: number | null;
@@ -40,6 +56,7 @@ export interface ActionDeskTask {
   assignedVendorName?: string;
   steps?: { key: string; label: string; status: 'pending' | 'active' | 'done'; note?: string }[];
   suggestionOptions?: { key: string; label: string; action: string; variant: string }[];
+  linkedConversations?: LinkedConversation[];
 }
 
 export type ChatMessageType = 'message' | 'internal' | 'approval' | 'context';
@@ -124,6 +141,7 @@ export interface Tenant {
   rentAmount: number;
   paymentStatus: 'current' | 'late' | 'overdue';
   context?: string;
+  portalUrl?: string;
 }
 
 export interface MaintenanceTicket {

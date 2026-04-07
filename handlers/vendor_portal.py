@@ -188,6 +188,14 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
     task.last_message_at = now
     db.commit()
 
+    # Trigger agent heartbeat in background
+    import threading
+    _task_id = str(task.id)
+    _hint = f"{vendor.name} sent a message: {body.body.strip()[:100]}"
+    threading.Thread(
+        target=_run_heartbeat, args=(_task_id, _hint), daemon=True,
+    ).start()
+
     return {
         "id": str(msg.id),
         "body": msg.body,
@@ -196,3 +204,17 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
         "is_ai": False,
         "sent_at": msg.sent_at.isoformat() + "Z",
     }
+
+
+def _run_heartbeat(task_id: str, hint: str):
+    import time
+    print(f"\033[33m[heartbeat] Triggering for task {task_id}: {hint}\033[0m")
+    time.sleep(1)  # let the request session close before accessing DB
+    try:
+        from handlers.chat import agent_task_heartbeat
+        result = agent_task_heartbeat(task_id, hint=hint)
+        print(f"\033[33m[heartbeat] Result for task {task_id}: {'replied' if result else 'no response'}\033[0m")
+    except Exception as e:
+        print(f"\033[31m[heartbeat] Failed for task {task_id}: {e}\033[0m")
+        import traceback
+        traceback.print_exc()

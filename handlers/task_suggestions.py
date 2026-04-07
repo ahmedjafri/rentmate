@@ -47,6 +47,10 @@ class SuggestionExecutor:
             cls = SetModeSuggestionExecutor
         elif action_type == "attach_vendor":
             cls = AttachVendorSuggestionExecutor
+        elif action_type == "attach_entity":
+            cls = AttachEntitySuggestionExecutor
+        elif action_type == "message_person":
+            cls = MessagePersonSuggestionExecutor
         elif action_type == "update_steps":
             cls = UpdateStepsSuggestionExecutor
         elif suggestion.task_id:
@@ -145,10 +149,19 @@ class SuggestionExecutor:
         self, suggestion_id: str, action: str, task: Task | None,
     ) -> Suggestion:
         """Mark the suggestion as accepted/dismissed via the service layer."""
-        return suggestion_service.act_on_suggestion(
+        result = suggestion_service.act_on_suggestion(
             self.db, suggestion_id, action,
             task_id=task.id if task else None,
         )
+        from llm.tracing import log_trace
+        log_trace(
+            "suggestion_executed", "executor",
+            f"Suggestion {action}: {result.title or suggestion_id}",
+            task_id=task.id if task else None,
+            suggestion_id=suggestion_id,
+            detail={"action": action, "status": result.status},
+        )
+        return result
 
 
 class CreateTaskSuggestionExecutor(SuggestionExecutor):
@@ -494,3 +507,180 @@ class UpdateStepsSuggestionExecutor(SuggestionExecutor):
 
         suggestion = self._resolve_suggestion(suggestion_id, action, task)
         return suggestion, task
+
+
+class AttachEntitySuggestionExecutor(SuggestionExecutor):
+    """Execute a suggestion to attach an entity (vendor, tenant, property, unit) to a task."""
+
+    def execute(
+        self,
+        suggestion_id: str,
+        action: str,
+        edited_body: str | None = None,
+    ) -> tuple[Suggestion, Task | None]:
+        suggestion = self._fetch_suggestion(suggestion_id)
+        task = None
+
+        if action == "attach_entity" and suggestion.task_id:
+            payload = suggestion.action_payload or {}
+            entity_id = payload.get("entity_id")
+            entity_type = payload.get("entity_type")
+
+            task = self.db.execute(
+                select(Task).where(Task.id == suggestion.task_id)
+            ).scalar_one_or_none()
+
+            if task and entity_id:
+                if entity_type == "vendor":
+                    self._wire_vendor_conversation(task, suggestion, entity_id)
+                elif entity_type == "tenant":
+                    self._wire_tenant_conversation(task, suggestion, entity_id)
+                elif entity_type == "property":
+                    task.property_id = entity_id
+                elif entity_type == "unit":
+                    from db.models import Unit
+                    unit = self.db.query(Unit).filter_by(id=entity_id).first()
+                    task.unit_id = entity_id
+                    if unit and unit.property_id:
+                        task.property_id = unit.property_id
+
+        suggestion = self._resolve_suggestion(suggestion_id, action, task)
+        return suggestion, task
+
+    def _wire_tenant_conversation(self, task: Task, suggestion: Suggestion, tenant_id: str) -> None:
+        """Create or find the tenant conversation and link it to the task."""
+        ext_convo = chat_service.get_or_create_external_conversation(
+            self.db,
+            conversation_type=ConversationType.TENANT,
+            subject=suggestion.title or "",
+            property_id=suggestion.property_id,
+            unit_id=suggestion.unit_id,
+            tenant_id=tenant_id,
+        )
+        if not task.parent_conversation_id:
+            task.parent_conversation_id = ext_convo.id
+        elif not task.external_conversation_id:
+            task.external_conversation_id = ext_convo.id
+        # Ensure tenant has a portal token for the portal link
+        from db.models import Tenant
+        from gql.services.tenant_service import TenantService
+        tenant = self.db.get(Tenant, tenant_id)
+        if tenant:
+            TenantService.ensure_portal_token(self.db, tenant)
+
+
+class MessagePersonSuggestionExecutor(SuggestionExecutor):
+    """Execute a suggestion to send a message to an external person (tenant or vendor)."""
+
+    def execute(
+        self,
+        suggestion_id: str,
+        action: str,
+        edited_body: str | None = None,
+    ) -> tuple[Suggestion, Task | None]:
+        suggestion = self._fetch_suggestion(suggestion_id)
+        task = None
+
+        if action == "message_person_send" and suggestion.task_id:
+            payload = suggestion.action_payload or {}
+            entity_id = payload.get("entity_id")
+            entity_type = payload.get("entity_type")
+            entity_phone = payload.get("entity_phone")
+            draft = edited_body or payload.get("draft_message")
+
+            task = self.db.execute(
+                select(Task).where(Task.id == suggestion.task_id)
+            ).scalar_one_or_none()
+
+            if task and entity_id and draft:
+                # Wire conversation if not already linked
+                if entity_type == "vendor":
+                    if not task.external_conversation_id:
+                        self._wire_vendor_conversation(task, suggestion, entity_id)
+                elif entity_type == "tenant":
+                    has_tenant_conv = False
+                    if task.parent_conversation_id:
+                        from db.models import Conversation as Conv
+                        pc = self.db.get(Conv, task.parent_conversation_id)
+                        if pc and getattr(pc, "conversation_type", None) == ConversationType.TENANT:
+                            has_tenant_conv = True
+                    if not has_tenant_conv:
+                        ext_convo = chat_service.get_or_create_external_conversation(
+                            self.db,
+                            conversation_type=ConversationType.TENANT,
+                            subject=suggestion.title or "",
+                            property_id=suggestion.property_id,
+                            unit_id=suggestion.unit_id,
+                            tenant_id=entity_id,
+                        )
+                        if not task.parent_conversation_id:
+                            task.parent_conversation_id = ext_convo.id
+                        elif not task.external_conversation_id:
+                            task.external_conversation_id = ext_convo.id
+                    # Ensure tenant has a portal token
+                    from db.models import Tenant as TenantModel
+                    from gql.services.tenant_service import TenantService
+                    t_obj = self.db.get(TenantModel, entity_id)
+                    if t_obj:
+                        TenantService.ensure_portal_token(self.db, t_obj)
+
+                # Find the conversation to send to
+                conv_id = self._resolve_conversation_for_entity(task, entity_type)
+                if conv_id:
+                    chat_service.send_autonomous_message(
+                        self.db, conv_id, draft, task_id=task.id,
+                    )
+                    if entity_phone:
+                        # For tenants, include a portal link in the SMS
+                        sms_body = draft
+                        if entity_type == "tenant":
+                            sms_body = self._append_tenant_portal_link(entity_id, draft)
+                        self._dispatch_sms(entity_phone, sms_body)
+
+        suggestion = self._resolve_suggestion(suggestion_id, action, task)
+        return suggestion, task
+
+    def _resolve_conversation_for_entity(self, task: Task, entity_type: str) -> str | None:
+        """Find the conversation ID for the given entity type on a task."""
+        if entity_type == "vendor":
+            return task.external_conversation_id
+        elif entity_type == "tenant":
+            if task.parent_conversation_id:
+                from db.models import Conversation as Conv
+                pc = self.db.get(Conv, task.parent_conversation_id)
+                if pc and getattr(pc, "conversation_type", None) == ConversationType.TENANT:
+                    return task.parent_conversation_id
+            return task.external_conversation_id
+        return None
+
+    def _append_tenant_portal_link(self, tenant_id: str, draft: str) -> str:
+        """Ensure tenant has a portal token and append the link to the SMS body."""
+        try:
+            from db.models import Tenant
+            from gql.services.tenant_service import TenantService
+            tenant = self.db.get(Tenant, tenant_id)
+            if tenant:
+                TenantService.ensure_portal_token(self.db, tenant)
+                self.db.flush()
+                portal_url = TenantService.get_portal_url(tenant)
+                if portal_url:
+                    return f"{draft}\n\nReply here: {portal_url}"
+        except Exception:
+            pass
+        return draft
+
+    def _dispatch_sms(self, to_phone: str, body: str) -> None:
+        """Dispatch an SMS via Quo (best-effort, non-blocking)."""
+        try:
+            from handlers.chat import send_sms_reply, _get_quo_api_key, _get_quo_from_number
+            api_key = _get_quo_api_key()
+            from_num = _get_quo_from_number()
+            if api_key:
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(send_sms_reply(from_num, to_phone, body, api_key))
+                except RuntimeError:
+                    pass
+        except Exception:
+            pass

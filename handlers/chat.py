@@ -100,14 +100,22 @@ async def chat_with_agent(
         "close_task": "Closing task",
         "set_mode": "Changing mode",
         "attach_vendor": "Assigning vendor",
+        "attach_entity": "Attaching to task",
+        "message_person": "Sending message",
         "create_vendor": "Creating vendor",
         "update_steps": "Updating progress",
         "save_memory": "Saving note",
         "recall_memory": "Checking memory",
+        "edit_memory": "Editing memory",
     }
+
+    # Extract task_id from session_key for tracing (e.g. "task:abc-123")
+    _trace_task_id = session_key.split(":", 1)[1] if session_key.startswith("task:") else None
+    _trace_source = "assess" if session_key.startswith("eval:") else ("chat" if not _trace_task_id else "chat")
 
     def _tool_progress(event_type: str, tool_name: str, preview: str | None, args: dict | None, **kwargs):
         """Hermes tool_progress_callback: (event_type, tool_name, preview, args, **kw)"""
+        from llm.tracing import log_trace
         label = _TOOL_LABELS.get(tool_name, tool_name)
         if event_type == "tool.started":
             hint = ""
@@ -127,15 +135,42 @@ async def chat_with_agent(
                     et = args.get("entity_type")
                     if et:
                         hint = f" ({et})"
+                elif tool_name == "attach_entity":
+                    etype = args.get("entity_type", "")
+                    hint = f" ({etype})" if etype else ""
+                elif tool_name == "message_person":
+                    etype = args.get("entity_type", "")
+                    draft = args.get("draft_message", "")
+                    hint = f" → {etype}"
+                    if draft:
+                        hint += f": {draft[:80]}"
+                elif tool_name == "update_steps":
+                    steps = args.get("steps")
+                    if steps and isinstance(steps, list):
+                        labels = [s.get("label", "") for s in steps[:3] if isinstance(s, dict)]
+                        hint = f": {', '.join(l for l in labels if l)}" if labels else ""
             msg = f"{label}{hint}"
             progress_events.append(msg)
             progress_queue.put(msg)
+            log_trace("tool_call", _trace_source, msg, task_id=_trace_task_id,
+                      tool_name=tool_name, detail=args)
         elif event_type == "tool.completed":
             is_error = kwargs.get("is_error", False)
             if is_error:
-                msg = f"{label}: error"
+                error_detail = kwargs.get("error", "") or kwargs.get("result", "")
+                if isinstance(error_detail, str) and len(error_detail) > 120:
+                    error_detail = error_detail[:120] + "…"
+                msg = f"{label}: error" + (f" — {error_detail}" if error_detail else "")
                 progress_events.append(msg)
                 progress_queue.put(msg)
+                log_trace("error", _trace_source, msg, task_id=_trace_task_id,
+                          tool_name=tool_name, detail={"error": str(error_detail)})
+            else:
+                result = kwargs.get("result", "")
+                if isinstance(result, str) and len(result) > 500:
+                    result = result[:500] + "…"
+                log_trace("tool_result", _trace_source, f"{label} completed",
+                          task_id=_trace_task_id, tool_name=tool_name, detail={"result": result})
 
     def _step_callback(iteration: int, prev_tools: list | None, **kwargs):
         """Hermes step_callback: fires after each API call iteration."""
@@ -466,7 +501,8 @@ async def chat_endpoint(
     or omit both to auto-create a user_ai conversation.
     """
     await require_user(request)
-    from handlers.deps import SessionLocal as _SL
+    from handlers.deps import SessionLocal
+    _SL = SessionLocal.session_factory
 
     # ── Resolve conversation + context ────────────────────────────────────
     task_obj: Task | None = None
@@ -613,6 +649,9 @@ async def chat_endpoint(
                         db_conv.updated_at = now
                     write_db.commit()
                     print(f"[chat] Persisted AI reply ({len(agent_resp.reply)} chars) to {conv_id}")
+                    from llm.tracing import log_trace as _lt
+                    _lt("llm_reply", "chat", agent_resp.reply[:200],
+                        task_id=body.task_id, conversation_id=conv_id)
                     return agent_resp.reply, ai_msg.id, flushed_suggestions
                 except Exception as e:
                     write_db.rollback()
@@ -668,6 +707,276 @@ async def chat_endpoint(
 
 NO_RESPONSE_SENTINEL = "[NO_RESPONSE]"
 
+
+# ─── Agent heartbeat ─────────────────────────────────────────────────────────
+
+import hashlib as _hb_hashlib
+import threading as _hb_threading
+_heartbeat_locks: dict[str, _hb_threading.Lock] = {}
+_heartbeat_locks_lock = _hb_threading.Lock()
+_heartbeat_state: dict[str, str] = {}  # task_id → context hash from last run
+
+
+def _compute_heartbeat_hash(task) -> str:
+    """Hash task state + latest message timestamps using a short-lived session."""
+    from handlers.deps import SessionLocal
+    from sqlalchemy import text
+    db = SessionLocal.session_factory()
+    try:
+        parts = []
+        # Task scalar fields that affect context
+        row = db.execute(text(
+            "SELECT task_status, task_mode, steps, context FROM tasks WHERE id = :id"
+        ), {"id": task.id}).first()
+        if row:
+            parts.append(f"{row[0]}|{row[1]}|{row[2] or ''}|{row[3] or ''}")
+        # Latest message timestamp from each linked conversation
+        for conv_id in [task.ai_conversation_id, task.external_conversation_id, task.parent_conversation_id]:
+            if conv_id:
+                ts = db.execute(text(
+                    "SELECT MAX(sent_at) FROM messages WHERE conversation_id = :cid"
+                ), {"cid": conv_id}).scalar()
+                if ts:
+                    parts.append(f"{conv_id}:{ts}")
+        # Pending suggestion count
+        count = db.execute(text(
+            "SELECT COUNT(*) FROM suggestions WHERE task_id = :tid AND status = 'pending'"
+        ), {"tid": task.id}).scalar()
+        parts.append(f"suggestions:{count}")
+        return _hb_hashlib.md5("|".join(parts).encode()).hexdigest()
+    finally:
+        db.close()
+
+
+def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
+    """Run the agent against a task and let it respond/act.
+
+    This is the core primitive for driving autonomous tasks forward.
+    Called when external messages arrive or periodically by the heartbeat loop.
+
+    Returns the agent reply text, or None if no response was needed.
+    """
+    # Per-task lock prevents concurrent heartbeats for the same task
+    with _heartbeat_locks_lock:
+        if task_id not in _heartbeat_locks:
+            _heartbeat_locks[task_id] = _hb_threading.Lock()
+        lock = _heartbeat_locks[task_id]
+
+    if not lock.acquire(blocking=False):
+        return None  # another heartbeat is already running for this task
+
+    try:
+        return _agent_task_heartbeat_inner(task_id, hint)
+    finally:
+        lock.release()
+
+
+def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | None:
+    import asyncio as _hb_asyncio
+    import json as _hb_json
+    from handlers.deps import SessionLocal
+    from llm.client import call_agent
+    from llm.tools import active_conversation_id, pending_suggestion_messages
+    from llm.registry import agent_registry
+    from llm.side_effects import process_side_effects
+    from llm.tracing import log_trace
+    from backends.local_auth import DEFAULT_USER_ID
+
+    db = SessionLocal.session_factory()
+    try:
+        task = db.query(Task).filter_by(id=task_id).first()
+        if not task:
+            return None
+        conv = task.ai_conversation
+        if not conv:
+            return None
+
+        # Change detection: skip if nothing changed since last heartbeat
+        current_hash = _compute_heartbeat_hash(task)
+        if _heartbeat_state.get(task_id) == current_hash:
+            print(f"\033[33m[heartbeat] Skipping task {task_id} — no changes since last run\033[0m")
+            log_trace("heartbeat", "heartbeat", "Skipped — no context changes", task_id=task_id)
+            return None
+
+        conv_id = conv.id
+        ext_conv_id = task.external_conversation_id
+        parent_conv_id = task.parent_conversation_id
+
+        # Set typing indicator on external conversation
+        if ext_conv_id:
+            ext_conv = db.query(Conversation).filter_by(id=ext_conv_id).first()
+            if ext_conv:
+                from sqlalchemy.orm.attributes import flag_modified
+                extra = dict(ext_conv.extra or {})
+                extra["ai_typing"] = True
+                ext_conv.extra = extra
+                flag_modified(ext_conv, "extra")
+
+        # Build context + message history
+        context = build_task_context(db, task_id)
+
+        # Gather progress steps
+        steps_text = ""
+        if task.steps:
+            steps_text = "\n\nTask progress steps:\n" + _hb_json.dumps(task.steps, indent=2)
+
+        # Gather external conversation messages
+        ext_msgs_text = ""
+        if ext_conv_id:
+            ext_conv_obj = db.query(Conversation).filter_by(id=ext_conv_id).first()
+            if ext_conv_obj:
+                ext_msgs = sorted(
+                    [m for m in (ext_conv_obj.messages or [])
+                     if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
+                    key=lambda m: m.sent_at,
+                )[-20:]
+                if ext_msgs:
+                    lines = [f"[{m.sender_name or 'Unknown'}]: {m.body}" for m in ext_msgs]
+                    ext_msgs_text = "\n\nExternal conversation (with vendor/tenant):\n" + "\n".join(lines)
+
+        # Gather tenant conversation messages
+        tenant_msgs_text = ""
+        if task.parent_conversation_id and task.parent_conversation_id != ext_conv_id:
+            parent_conv = db.query(Conversation).filter_by(id=task.parent_conversation_id).first()
+            if parent_conv:
+                t_msgs = sorted(
+                    [m for m in (parent_conv.messages or [])
+                     if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
+                    key=lambda m: m.sent_at,
+                )[-20:]
+                if t_msgs:
+                    lines = [f"[{m.sender_name or 'Unknown'}]: {m.body}" for m in t_msgs]
+                    tenant_msgs_text = "\n\nTenant conversation:\n" + "\n".join(lines)
+
+        # Build AI conversation history
+        all_msgs = [
+            m for m in (conv.messages or [])
+            if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)
+        ]
+        msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
+        messages_payload = [{"role": "system", "content": context}]
+        messages_payload += [
+            {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
+            for m in msg_rows
+        ]
+
+        # The hint (or default) is the "user" message that triggers the agent
+        default_hint = "Check this task for anything that needs attention."
+        user_msg = (hint or default_hint) + steps_text + ext_msgs_text + tenant_msgs_text
+        messages_payload.append({"role": "user", "content": user_msg})
+
+        db.commit()  # flush typing indicator + detach ORM objects
+
+        # Run agent
+        agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
+        session_key = f"task:{task_id}"
+
+        # Run agent in a dedicated thread with its own event loop so we
+        # don't conflict with the main uvloop (heartbeat_loop calls us from
+        # within the running async loop).
+        import concurrent.futures
+        _agent_result = [None, None]  # [resp, pending]
+
+        def _run_in_thread():
+            _conv_token = active_conversation_id.set(conv_id)
+            _pending_token = pending_suggestion_messages.set([])
+            _loop = _hb_asyncio.new_event_loop()
+            try:
+                _agent_result[0] = _loop.run_until_complete(
+                    call_agent(agent_id, session_key, messages_payload)
+                )
+                _agent_result[1] = pending_suggestion_messages.get() or []
+            finally:
+                _loop.close()
+                active_conversation_id.reset(_conv_token)
+                pending_suggestion_messages.reset(_pending_token)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(_run_in_thread).result(timeout=300)
+
+        resp = _agent_result[0]
+        pending = _agent_result[1] or []
+        if not resp:
+            return None
+
+        # Check if agent said no response needed
+        if resp.reply.strip().startswith(NO_RESPONSE_SENTINEL):
+            # Clear typing indicator
+            if ext_conv_id:
+                chat_service.clear_typing_indicator(db, ext_conv_id)
+            _heartbeat_state[task_id] = current_hash
+            log_trace("heartbeat", "heartbeat", f"No response needed for task {task_id}",
+                      task_id=task_id)
+            return None
+
+        # Persist results
+        write_db = SessionLocal.session_factory()
+        try:
+            now = datetime.now(UTC)
+
+            # AI reply to AI conversation
+            ai_msg = Message(
+                id=str(_uuid.uuid4()),
+                conversation_id=conv_id,
+                sender_type=ParticipantType.ACCOUNT_USER,
+                body=resp.reply,
+                message_type=MessageType.MESSAGE,
+                sender_name="RentMate",
+                is_ai=True,
+                sent_at=now,
+            )
+            write_db.add(ai_msg)
+
+            # Side effects (suggestion messages)
+            side_effects = resp.side_effects + [
+                {"type": "suggestion_message", **p} for p in pending
+            ]
+            flushed = process_side_effects(write_db, side_effects, conv_id, now)
+
+            db_conv = write_db.query(Conversation).filter_by(id=conv_id).first()
+            if db_conv:
+                db_conv.updated_at = now
+            write_db.commit()
+
+            # Recompute hash after agent run so next heartbeat knows the state
+            try:
+                class _Ref:
+                    pass
+                _ref = _Ref()
+                _ref.id, _ref.ai_conversation_id = task_id, conv_id
+                _ref.external_conversation_id, _ref.parent_conversation_id = ext_conv_id, parent_conv_id
+                _heartbeat_state[task_id] = _compute_heartbeat_hash(_ref)
+            except Exception:
+                pass
+
+            log_trace("heartbeat", "heartbeat",
+                      f"Agent replied ({len(resp.reply)} chars): {resp.reply[:100]}",
+                      task_id=task_id, conversation_id=conv_id)
+
+            return resp.reply
+        except Exception as e:
+            write_db.rollback()
+            print(f"\033[31m[heartbeat] DB write failed for task {task_id}: {e}\033[0m")
+            import traceback
+            traceback.print_exc()
+            return resp.reply
+        finally:
+            write_db.close()
+            # Clear typing indicator
+            if ext_conv_id:
+                try:
+                    chat_service.clear_typing_indicator(db, ext_conv_id)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"\033[31m[heartbeat] Failed for task {task_id}: {e}\033[0m")
+        import traceback
+        traceback.print_exc()
+        log_trace("error", "heartbeat", f"Heartbeat failed: {e}", task_id=task_id)
+        return None
+    finally:
+        db.close()
+
 ASSESS_PROMPT = (
     "Autonomous mode was just enabled for this task. "
     "Review the full conversation — including messages from external participants "
@@ -694,7 +1003,8 @@ async def assess_task_endpoint(
     nothing is persisted and the client receives ``reply: null``.
     """
     await require_user(request)
-    from handlers.deps import SessionLocal as _SL
+    from handlers.deps import SessionLocal
+    _SL = SessionLocal.session_factory
 
     task_obj = db.query(Task).filter_by(id=body.task_id).first()
     if not task_obj:
@@ -742,9 +1052,8 @@ async def assess_task_endpoint(
                     + "\n".join(lines)
                 )
 
-    db.commit()
-
-    # Build message history from AI conversation + assess prompt with extras
+    # Build message history BEFORE commit/session close — eagerly extract
+    # all ORM data into plain dicts so the async generator doesn't need the session.
     all_msgs = [
         m for m in (conv.messages or [])
         if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)
@@ -755,6 +1064,8 @@ async def assess_task_endpoint(
         {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
         for m in msg_rows
     ]
+
+    db.commit()
     messages_payload.append({
         "role": "user",
         "content": ASSESS_PROMPT + steps_text + ext_msgs_text,
@@ -808,13 +1119,12 @@ async def assess_task_endpoint(
                             is_ai=True,
                             sent_at=now,
                         ))
-                    # Persist the actual reply to the external conversation
-                    # so the vendor/tenant can see it.  Fall back to AI conv
-                    # if there is no external conversation.
-                    reply_conv_id = ext_conv_id or conv_id
+                    # Persist the reply to the AI conversation. External
+                    # messages are sent through the message_person tool /
+                    # suggestion flow, not directly from the assess endpoint.
                     ai_msg = Message(
                         id=str(_uuid.uuid4()),
-                        conversation_id=reply_conv_id,
+                        conversation_id=conv_id,
                         sender_type=ParticipantType.ACCOUNT_USER,
                         body=agent_resp.reply,
                         message_type=MessageType.MESSAGE,
@@ -826,13 +1136,14 @@ async def assess_task_endpoint(
                     flushed_suggestions = process_side_effects(
                         write_db, agent_resp.side_effects, conv_id, now,
                     )
-                    # Update timestamps on both conversations
-                    for cid in {conv_id, reply_conv_id}:
-                        c = write_db.query(Conversation).filter_by(id=cid).first()
-                        if c:
-                            c.updated_at = now
+                    db_conv = write_db.query(Conversation).filter_by(id=conv_id).first()
+                    if db_conv:
+                        db_conv.updated_at = now
                     write_db.commit()
-                    print(f"[assess] Persisted AI reply ({len(agent_resp.reply)} chars) to {reply_conv_id}")
+                    print(f"[assess] Persisted AI reply ({len(agent_resp.reply)} chars) to AI conv {conv_id}")
+                    from llm.tracing import log_trace as _lt2
+                    _lt2("llm_reply", "assess", agent_resp.reply[:200],
+                         task_id=body.task_id, conversation_id=conv_id)
                     return agent_resp.reply, ai_msg.id, flushed_suggestions
                 except Exception as e:
                     write_db.rollback()
@@ -889,6 +1200,17 @@ async def assess_task_endpoint(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/chat/task-context/{task_id}")
+async def get_task_context(
+    task_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Return the full context string the agent receives for a task."""
+    await require_user(request)
+    return {"context": build_task_context(db, task_id)}
 
 
 @router.get("/chat/conversations")

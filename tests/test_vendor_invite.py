@@ -124,7 +124,8 @@ class TestVendorTypeFromSql:
 
 class TestGetPortalUrl:
 
-    def test_local_url_format(self, db):
+    def test_local_url_format(self, db, monkeypatch):
+        monkeypatch.delenv("RENTMATE_PUBLIC_URL", raising=False)
         vendor = VendorService.create_vendor(db, CreateVendorInput(name="Ivy", phone="555-0045", vendor_type="Plumber"))
         url = VendorService.get_portal_url(vendor)
         assert url.startswith("http://localhost:")

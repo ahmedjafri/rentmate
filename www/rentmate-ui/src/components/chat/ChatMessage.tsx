@@ -1,7 +1,10 @@
 import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
-import { Bot, User, Eye, Lightbulb, Check, X, Send, Pencil, ChevronDown, ChevronUp, CheckCircle2, XCircle, Zap, Building2, Wrench, BookOpen, ArrowUpRight, Loader2 } from 'lucide-react';
+import { Bot, User, Eye, Lightbulb, Check, X, Send, Pencil, ChevronDown, ChevronUp, CheckCircle2, XCircle, Zap, Building2, Wrench, BookOpen, ArrowUpRight, Loader2, Expand } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { getToken } from '@/lib/auth';
 
 function ThinkingChain({ steps, isChain }: { steps: string[]; isChain: boolean }) {
   const [expanded, setExpanded] = useState(false);
@@ -63,6 +66,86 @@ function RelatedTaskLink({ taskId, label }: { taskId: string; label: string }) {
   );
 }
 
+function ContextBubble({ message, taskId }: { message: ChatMessageType; taskId?: string | null }) {
+  const [open, setOpen] = useState(false);
+  const [fullContext, setFullContext] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const showFullContext = async () => {
+    if (!taskId) return;
+    setOpen(true);
+    if (fullContext) return; // already loaded
+    setLoading(true);
+    try {
+      const token = getToken();
+      const res = await fetch(`/chat/task-context/${taskId}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setFullContext(data.context);
+      }
+    } catch { /* ignore */ } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="rounded-xl border border-primary/15 bg-primary/5 p-3 space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5">
+            <BookOpen className="h-3.5 w-3.5 text-primary" />
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-primary">Context</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {taskId && (
+              <button
+                onClick={showFullContext}
+                className="flex items-center gap-1 text-[10px] text-primary/70 hover:text-primary transition-colors"
+              >
+                <Expand className="h-3 w-3" />
+                Full Context
+              </button>
+            )}
+            <span className="text-[10px] text-muted-foreground">{formatMessageTime(message.timestamp)}</span>
+          </div>
+        </div>
+        <p className="text-xs text-foreground leading-relaxed">{message.content}</p>
+        {message.relatedTasks && message.relatedTasks.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {message.relatedTasks.map(ref => (
+              <RelatedTaskLink key={ref.taskId} taskId={ref.taskId} label={ref.label} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <BookOpen className="h-4 w-4" />
+              Agent Context
+            </DialogTitle>
+          </DialogHeader>
+          <ScrollArea className="max-h-[60vh]">
+            {loading ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <pre className="text-xs whitespace-pre-wrap font-mono p-4 bg-muted/50 rounded-lg leading-relaxed">
+                {fullContext || 'No context available'}
+              </pre>
+            )}
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 interface Props {
   message: ChatMessageType;
   onApprove?: (messageId: string) => void;
@@ -70,9 +153,10 @@ interface Props {
   onEdit?: (messageId: string) => void;
   onApprovalAction?: (messageId: string, action: string, editedBody?: string) => Promise<void> | void;
   onSuggestionClick?: (suggestionId: string) => void;
+  taskId?: string | null;
 }
 
-export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onApprovalAction, onSuggestionClick }: Props) {
+export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onApprovalAction, onSuggestionClick, taskId }: Props) {
   const navigate = useNavigate();
   const isAssistant = message.role === 'assistant';
   const msgType = message.messageType || 'message';
@@ -92,25 +176,7 @@ export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onAppr
 
   // Context message — opening summary with optional cross-references
   if (msgType === 'context') {
-    return (
-      <div className="rounded-xl border border-primary/15 bg-primary/5 p-3 space-y-1.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5">
-            <BookOpen className="h-3.5 w-3.5 text-primary" />
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-primary">Context</span>
-          </div>
-          <span className="text-[10px] text-muted-foreground">{formatMessageTime(message.timestamp)}</span>
-        </div>
-        <p className="text-xs text-foreground leading-relaxed">{message.content}</p>
-        {message.relatedTasks && message.relatedTasks.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 pt-1">
-            {message.relatedTasks.map(ref => (
-              <RelatedTaskLink key={ref.taskId} taskId={ref.taskId} label={ref.label} />
-            ))}
-          </div>
-        )}
-      </div>
-    );
+    return <ContextBubble message={message} taskId={taskId} />;
   }
 
   // Internal AI notes — compact, muted, full-width

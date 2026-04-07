@@ -20,7 +20,7 @@ from db.models import Base
 from gql.schema import schema
 from handlers.deps import SessionLocal, engine, require_user
 from handlers.settings import read_env_file, load_integrations
-from handlers import auth, automations, chat, documents, dev, settings, vendor_invite, vendor_portal
+from handlers import auth, automations, chat, documents, dev, settings, vendor_invite, vendor_portal, tenant_invite, tenant_portal
 from llm.registry import agent_registry
 
 # ─── logging ─────────────────────────────────────────────────────────────────
@@ -63,6 +63,7 @@ _MIGRATE_COLS = [
     ("units",          "context",            "TEXT"),
     ("tenants",        "context",            "TEXT"),
     ("external_contacts", "context",         "TEXT"),
+    ("tasks",             "context",         "TEXT"),
 ]
 
 
@@ -179,7 +180,7 @@ async def lifespan(app: FastAPI):
         automations.seed_automations()
 
     asyncio.create_task(automations.audit_loop())
-    asyncio.create_task(automations.reply_scanner_loop())
+    asyncio.create_task(automations.heartbeat_loop())
 
     if os.getenv("GMAIL_CLIENT_ID"):
         asyncio.create_task(_gmail_poll_loop())
@@ -206,6 +207,8 @@ app.include_router(chat.router)
 app.include_router(dev.router, prefix="/dev")
 app.include_router(vendor_invite.router)
 app.include_router(vendor_portal.router)
+app.include_router(tenant_invite.router)
+app.include_router(tenant_portal.router)
 
 app.add_middleware(
     CORSMiddleware,

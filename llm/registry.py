@@ -33,14 +33,16 @@ def _register_rentmate_tools():
     from tools.registry import registry
     from llm.tools import (
         ProposeTaskTool, CloseTaskTool, SetModeTool,
-        AttachVendorTool, LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
-        SaveMemoryTool, RecallMemoryTool,
+        AttachEntityToTaskTool, MessageExternalPersonTool,
+        LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
+        SaveMemoryTool, RecallMemoryTool, EditMemoryTool,
     )
 
     for tool_cls in (
         ProposeTaskTool, CloseTaskTool, SetModeTool,
-        AttachVendorTool, LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
-        SaveMemoryTool, RecallMemoryTool,
+        AttachEntityToTaskTool, MessageExternalPersonTool,
+        LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
+        SaveMemoryTool, RecallMemoryTool, EditMemoryTool,
     ):
         tool = tool_cls()
         # Flat schema — get_definitions() wraps it in {"type":"function","function":...}
