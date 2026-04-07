@@ -710,6 +710,11 @@ NO_RESPONSE_SENTINEL = "[NO_RESPONSE]"
 
 # ─── Agent heartbeat ─────────────────────────────────────────────────────────
 
+import threading as _hb_threading
+_heartbeat_locks: dict[str, _hb_threading.Lock] = {}
+_heartbeat_locks_lock = _hb_threading.Lock()
+
+
 def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
     """Run the agent against a task and let it respond/act.
 
@@ -718,6 +723,22 @@ def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
 
     Returns the agent reply text, or None if no response was needed.
     """
+    # Per-task lock prevents concurrent heartbeats for the same task
+    with _heartbeat_locks_lock:
+        if task_id not in _heartbeat_locks:
+            _heartbeat_locks[task_id] = _hb_threading.Lock()
+        lock = _heartbeat_locks[task_id]
+
+    if not lock.acquire(blocking=False):
+        return None  # another heartbeat is already running for this task
+
+    try:
+        return _agent_task_heartbeat_inner(task_id, hint)
+    finally:
+        lock.release()
+
+
+def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | None:
     import asyncio as _hb_asyncio
     import json as _hb_json
     from handlers.deps import SessionLocal

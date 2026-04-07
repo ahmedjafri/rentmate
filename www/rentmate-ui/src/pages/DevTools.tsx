@@ -74,6 +74,32 @@ function TracesPanel() {
     return () => clearInterval(id);
   }, [loadTraces]);
 
+  const copyText = (text: string, label: string = 'Copied') => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      toast.success(label);
+    } catch {
+      toast.error('Failed to copy');
+    }
+  };
+
+  const copyAllTraces = () => {
+    const text = traces.map(t =>
+      `[${t.timestamp}] ${t.trace_type} (${t.source}) ${t.summary}${t.detail ? '\n' + t.detail : ''}`
+    ).join('\n\n');
+    copyText(text, `Copied ${traces.length} traces`);
+  };
+
   const formatTime = (ts: string) => {
     const d = new Date(ts);
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -113,6 +139,11 @@ function TracesPanel() {
           <Button variant="ghost" size="sm" onClick={loadTraces} disabled={loading} className="h-7 w-7 p-0">
             <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
           </Button>
+          {traces.length > 0 && (
+            <Button variant="ghost" size="sm" onClick={copyAllTraces} className="h-7 text-[10px] px-2">
+              Copy All
+            </Button>
+          )}
         </div>
       </div>
 
@@ -144,6 +175,17 @@ function TracesPanel() {
             </button>
             {expandedId === t.id && t.detail && (
               <div className="px-3 pb-2">
+                <div className="flex justify-end mb-1">
+                  <button
+                    className="text-[9px] text-muted-foreground hover:text-foreground"
+                    onClick={() => copyText(
+                      `[${t.timestamp}] ${t.trace_type} (${t.source}) ${t.summary}\n${parseDetail(t.detail)}`,
+                      'Trace copied'
+                    )}
+                  >
+                    Copy
+                  </button>
+                </div>
                 <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono max-h-48 overflow-y-auto">
                   {parseDetail(t.detail)}
                 </pre>
