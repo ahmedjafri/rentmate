@@ -5,6 +5,18 @@ from sqlalchemy.orm import relationship
 from .base import Base
 
 
+class TaskNumberSequence(Base):
+    """
+    Monotonically increasing task-number counter, one row per account.
+    Only ever incremented — never decremented or reset — so that task
+    numbers are never reused even after tasks are deleted.
+    """
+    __tablename__ = "task_number_sequences"
+
+    account_id  = Column(String(36), primary_key=True)
+    last_number = Column(Integer, nullable=False, default=0)
+
+
 class Task(Base):
     """
     A first-class work-item (task / action-desk item).

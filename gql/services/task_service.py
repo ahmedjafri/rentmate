@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.orm import Session
-from db.models import Task, Conversation, ExternalContact, Message, ParticipantType as PT, ConversationType
+from db.models import Task, TaskNumberSequence, Conversation, ExternalContact, Message, ParticipantType as PT, ConversationType
 from gql.types import CreateTaskInput, UpdateTaskInput
 
 
@@ -43,12 +43,18 @@ class TaskService:
         sess.add(task)
         sess.flush()
 
-        # Assign task_number per account
-        max_num = sess.execute(
-            select(func.coalesce(func.max(Task.task_number), 0))
-            .where(Task.account_id == task.account_id)
-        ).scalar()
-        task.task_number = max_num + 1
+        # Assign task_number from the per-account sequence (monotonically
+        # increasing, never reused even after task deletion).
+        seq = sess.execute(
+            select(TaskNumberSequence)
+            .where(TaskNumberSequence.account_id == task.account_id)
+        ).scalar_one_or_none()
+        if seq is None:
+            seq = TaskNumberSequence(account_id=task.account_id, last_number=0)
+            sess.add(seq)
+            sess.flush()
+        seq.last_number += 1
+        task.task_number = seq.last_number
 
         # Create the primary internal conversation thread for this task
         ai_convo = Conversation(

@@ -1350,3 +1350,44 @@ class TestMigrateSchema:
         doc_cols = {c["name"] for c in inspector.get_columns("documents")}
         for expected in ["sha256_checksum", "suggestion_states", "confirmed_at"]:
             assert expected in doc_cols, f"Missing column in documents: {expected}"
+
+
+# ---------------------------------------------------------------------------
+# Task-number monotonic sequence (never reuse after deletion)
+# ---------------------------------------------------------------------------
+
+class TestTaskNumberNeverReused:
+    """Task numbers must monotonically increase even when tasks are deleted."""
+
+    def test_task_number_not_reused_after_deletion(self, db):
+        from gql.services.task_service import TaskService
+        from gql.types import CreateTaskInput
+
+        inp = CreateTaskInput(title="Task A", source="manual")
+        task_a = TaskService.create_task(db, inp)
+        assert task_a.task_number == 1
+
+        inp2 = CreateTaskInput(title="Task B", source="manual")
+        task_b = TaskService.create_task(db, inp2)
+        assert task_b.task_number == 2
+
+        # Delete task B
+        TaskService.delete_task(db, task_b.id)
+
+        # New task must get 3, not reuse 2
+        inp3 = CreateTaskInput(title="Task C", source="manual")
+        task_c = TaskService.create_task(db, inp3)
+        assert task_c.task_number == 3
+
+    def test_task_number_survives_all_tasks_deleted(self, db):
+        from gql.services.task_service import TaskService
+        from gql.types import CreateTaskInput
+
+        t1 = TaskService.create_task(db, CreateTaskInput(title="T1", source="manual"))
+        assert t1.task_number == 1
+
+        TaskService.delete_task(db, t1.id)
+
+        # All tasks gone — next task must still be 2, not 1
+        t2 = TaskService.create_task(db, CreateTaskInput(title="T2", source="manual"))
+        assert t2.task_number == 2
