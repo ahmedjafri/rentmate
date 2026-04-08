@@ -45,6 +45,54 @@ from llm.tracing import log_trace
 
 router = APIRouter()
 
+
+def _describe_agent_error(exc: Exception) -> str:
+    """Turn an agent exception into a user-facing error message with actionable detail."""
+    msg = str(exc).lower()
+
+    if "connection" in msg or "connect" in msg:
+        # Extract endpoint from the error when possible
+        raw = str(exc)
+        url_hint = ""
+        if "http" in raw:
+            import re as _re
+            m = _re.search(r"(https?://[^\s'\"]+)", raw)
+            if m:
+                url_hint = f" ({m.group(1)})"
+        return (
+            f"Could not reach the AI model endpoint{url_hint}. "
+            "Check that LLM_BASE_URL is correct and the server is running."
+        )
+
+    if "auth" in msg or "401" in msg or "api key" in msg or "api_key" in msg:
+        return (
+            "The AI model rejected the API key. "
+            "Check that LLM_API_KEY is set correctly in Settings > AI Model."
+        )
+
+    if "rate" in msg and "limit" in msg or "429" in msg:
+        return "The AI model is rate-limiting requests. Please wait a moment and try again."
+
+    if "timeout" in msg:
+        return "The AI model took too long to respond. Please try again."
+
+    if "model" in msg and ("not exist" in msg or "not found" in msg or "does not exist" in msg or "invalid" in msg):
+        return (
+            "The AI provider does not recognize the model name. "
+            "Check that LLM_MODEL is valid for your provider in Settings > AI Model."
+        )
+
+    if "404" in msg or "not found" in msg:
+        return (
+            "The AI model endpoint returned 404. "
+            "Check that LLM_MODEL is a valid model name for your provider."
+        )
+
+    # Generic fallback — include the first 200 chars of the real error
+    detail = str(exc)[:200]
+    return f"AI model error: {detail}"
+
+
 # ─── In-flight chat registry ─────────────────────────────────────────────────
 # Tracks agent chats that are still running so reconnecting clients can pick up
 # the live progress stream.  Keyed by a request-scoped stream_id.
@@ -228,10 +276,34 @@ async def chat_endpoint(
         context = build_task_context(db, body.task_id)
     else:
         context = load_account_context(db)
+        # ── Onboarding start detection (must happen before conversation
+        #    lookup so we can tag the conversation with the right subject) ──
+        _is_onboarding_start = body.message.strip() == "[onboarding:start]"
         if body.conversation_id:
             conv = chat_service.get_or_create_conversation(db, body.conversation_id)
         else:
-            conv = get_or_create_user_ai_conversation(db, account_id="default", user_id="default")
+            session_key = "Onboarding" if _is_onboarding_start else None
+            conv = get_or_create_user_ai_conversation(db, account_id="default", user_id="default", session_key=session_key)
+        if _is_onboarding_start:
+            # If the onboarding conversation already has messages, the AI has
+            # already greeted the user — just return the conversation so the
+            # frontend can load the existing history.
+            conv_id = conv.id
+            if conv.messages:
+                db.commit()
+
+                async def _resume_onboarding():
+                    yield f"data: {json.dumps({'type': 'done', 'reply': '', 'message_id': '', 'conversation_id': conv_id})}\n\n"
+
+                return StreamingResponse(
+                    _resume_onboarding(),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                )
+            body.message = (
+                "The user just opened the app for the first time. "
+                "Send a warm welcome and present the onboarding options."
+            )
 
     conv_id = conv.id
     db.commit()
@@ -297,23 +369,25 @@ async def chat_endpoint(
             try:
                 # Persist user message BEFORE running the agent so it gets an
                 # earlier timestamp than any messages the agent creates.
-                pre_db = _SL()
-                try:
-                    pre_db.add(Message(
-                        id=str(uuid.uuid4()),
-                        conversation_id=conv_id,
-                        sender_type=ParticipantType.ACCOUNT_USER,
-                        body=user_message,
-                        message_type=MessageType.MESSAGE,
-                        sender_name="You",
-                        is_ai=False,
-                        sent_at=datetime.now(UTC),
-                    ))
-                    pre_db.commit()
-                except Exception:
-                    pre_db.rollback()
-                finally:
-                    pre_db.close()
+                # Skip for onboarding start — the synthetic prompt isn't a real user message.
+                if not _is_onboarding_start:
+                    pre_db = _SL()
+                    try:
+                        pre_db.add(Message(
+                            id=str(uuid.uuid4()),
+                            conversation_id=conv_id,
+                            sender_type=ParticipantType.ACCOUNT_USER,
+                            body=user_message,
+                            message_type=MessageType.MESSAGE,
+                            sender_name="You",
+                            is_ai=False,
+                            sent_at=datetime.now(UTC),
+                        ))
+                        pre_db.commit()
+                    except Exception:
+                        pre_db.rollback()
+                    finally:
+                        pre_db.close()
 
                 await on_progress("Thinking\u2026")
                 agent_resp = await call_agent(agent_id, session_key=session_key, messages=messages_payload, on_progress=on_progress)
@@ -392,12 +466,25 @@ async def chat_endpoint(
                 reply, msg_id, suggestion_msgs = running.task.result()
             except Exception as exc:
                 print(f"[chat] SSE task failed: {exc!r}")
-                yield f"data: {json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
+                detail = _describe_agent_error(exc)
+                yield f"data: {json.dumps({'type': 'error', 'message': detail})}\n\n"
                 return
 
             done_payload: dict = {'type': 'done', 'reply': reply, 'message_id': msg_id, 'conversation_id': conv_id}
             if suggestion_msgs:
                 done_payload['suggestion_messages'] = suggestion_msgs
+            # Include onboarding state so frontend can update progress without re-fetching
+            try:
+                from gql.services.settings_service import get_onboarding_state as _get_ob
+                _ob_db = _SL()
+                try:
+                    _ob_state = _get_ob(_ob_db)
+                    if _ob_state and _ob_state.get("status") == "active":
+                        done_payload['onboarding'] = _ob_state
+                finally:
+                    _ob_db.close()
+            except Exception:
+                pass
             print(f"[chat] SSE done: reply={len(reply or '')} chars, msg_id={msg_id}")
             yield f"data: {json.dumps(done_payload)}\n\n"
         finally:
@@ -952,6 +1039,45 @@ async def spawn_task_endpoint(
         "category": task.category,
         "urgency": task.urgency,
     }
+
+# ─── Onboarding state ────────────────────────────────────────────────────────
+
+@router.get("/onboarding/state")
+async def get_onboarding_state_endpoint(request: Request, db: Session = Depends(get_db)):
+    """Return current onboarding state, or null if the account already has data."""
+    await require_user(request)
+    from db.models import Document, Property, Tenant
+    from gql.services.settings_service import get_onboarding_state, init_onboarding, is_llm_configured
+
+    state = get_onboarding_state(db)
+    if state is not None:
+        # Backfill configure_llm step for existing onboarding states
+        if "configure_llm" not in state.get("steps", {}):
+            state["steps"]["configure_llm"] = "done" if is_llm_configured() else "pending"
+        return {"onboarding": state, "llm_configured": is_llm_configured()}
+    # No state yet — initialize only if the account is truly empty
+    prop_count = db.query(Property).count()
+    tenant_count = db.query(Tenant).count()
+    doc_count = db.query(Document).count()
+    if prop_count == 0 and tenant_count == 0 and doc_count == 0:
+        state = init_onboarding(db)
+        db.commit()
+        log_trace("onboarding", "chat", "Onboarding initialized")
+        return {"onboarding": state, "llm_configured": is_llm_configured()}
+    return {"onboarding": None, "llm_configured": is_llm_configured()}
+
+
+@router.post("/onboarding/dismiss")
+async def dismiss_onboarding_endpoint(request: Request, db: Session = Depends(get_db)):
+    """Dismiss onboarding permanently."""
+    await require_user(request)
+    from gql.services.settings_service import dismiss_onboarding
+
+    state = dismiss_onboarding(db)
+    db.commit()
+    log_trace("onboarding", "chat", "Onboarding dismissed", detail=state)
+    return {"onboarding": state}
+
 
 @router.get("/chat/stream/{stream_id}")
 async def chat_stream_reconnect(stream_id: str, request: Request):

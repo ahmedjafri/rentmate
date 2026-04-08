@@ -13,6 +13,7 @@ interface Props {
 
 export interface ChatInputHandle {
   insertText: (text: string, fromMessageId?: string) => void;
+  triggerFileUpload: () => void;
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, placeholder = 'Type a message...', onInsertCleared, onFileUpload }, ref) => {
@@ -28,6 +29,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled,
       setInsertedMessageId(fromMessageId ?? null);
       // Focus the textarea after inserting
       setTimeout(() => textareaRef.current?.focus(), 50);
+    },
+    triggerFileUpload: () => {
+      fileInputRef.current?.click();
     },
   }));
 

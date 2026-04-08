@@ -2,6 +2,8 @@
 import json
 from datetime import UTC, datetime
 
+from sqlalchemy.orm import Session
+
 from db.enums import SuggestionOption, TaskCategory
 from db.models import AppSetting
 from db.models.base import Base
@@ -95,6 +97,70 @@ def get_task_mode_for_category(category: str | None) -> tuple[str, str]:
     return _AUTONOMY_MODES.get(level, _DEFAULT_MODE)
 
 
+# ── LLM config ──────────────────────────────────────────────────────────────
+
+
+_LLM_KEY = "llm"
+
+
+def get_llm_settings() -> dict:
+    """Return LLM settings: {api_key, model, base_url}."""
+    return get_setting(_LLM_KEY) or {}
+
+
+def save_llm_settings(*, api_key: str | None = None, model: str | None = None, base_url: str | None = None) -> None:
+    """Persist LLM settings to the database."""
+    current = get_llm_settings()
+    if api_key is not None:
+        current["api_key"] = api_key
+    if model is not None:
+        current["model"] = model
+    if base_url is not None:
+        current["base_url"] = base_url
+    set_setting(_LLM_KEY, value=current)
+
+
+def load_llm_into_env() -> None:
+    """Populate os.environ from DB-stored LLM settings (startup helper)."""
+    import os
+    settings = get_llm_settings()
+    _ENV_MAP = {"api_key": "LLM_API_KEY", "model": "LLM_MODEL", "base_url": "LLM_BASE_URL"}
+    for db_key, env_key in _ENV_MAP.items():
+        val = settings.get(db_key)
+        if val and not os.environ.get(env_key):
+            os.environ[env_key] = val
+
+
+# ── agent integrations ──────────────────────────────────────────────────────
+
+
+_AGENT_INT_KEY = "agent_integrations"
+
+
+def get_agent_integrations() -> dict:
+    """Return agent integration settings: {web_search_enabled, brave_api_key}."""
+    return get_setting(_AGENT_INT_KEY) or {}
+
+
+def save_agent_integrations(*, brave_api_key: str | None = None, web_search_enabled: bool | None = None) -> None:
+    """Persist agent integration settings."""
+    current = get_agent_integrations()
+    if brave_api_key is not None:
+        current["brave_api_key"] = brave_api_key
+    if web_search_enabled is not None:
+        current["web_search_enabled"] = web_search_enabled
+    set_setting(_AGENT_INT_KEY, value=current)
+
+
+def load_agent_integrations_into_env() -> None:
+    """Populate os.environ from DB-stored agent integration settings."""
+    import os
+    settings = get_agent_integrations()
+    brave_key = settings.get("brave_api_key")
+    if brave_key and not os.environ.get("BRAVE_API_KEY"):
+        os.environ["BRAVE_API_KEY"] = brave_key
+
+
 # ── integrations ─────────────────────────────────────────────────────────────
 
 
@@ -121,6 +187,93 @@ _VENDOR_DRAFT_OPTIONS = [
     SuggestionOption(key="edit", label="Edit Message", action="edit_draft", variant="outline"),
     SuggestionOption(key="skip", label="Do not send", action="reject_task", variant="ghost"),
 ]
+
+
+# ── onboarding ──────────────────────────────────────────────────────────────
+
+
+_ONBOARDING_KEY = "onboarding"
+
+_INITIAL_STEPS = {
+    "configure_llm": "pending",
+    "add_property": "pending",
+    "upload_document": "pending",
+    "tell_concerns": "pending",
+}
+
+
+def get_onboarding_state(db: Session) -> dict | None:
+    """Read onboarding state for the current account. Returns None if not set."""
+    row = db.query(AppSetting).filter_by(key=_ONBOARDING_KEY).first()
+    if row and row.value:
+        return json.loads(row.value)
+    return None
+
+
+def _upsert_onboarding(db: Session, *, state: dict) -> dict:
+    """Write onboarding state (upsert)."""
+    now = datetime.now(UTC)
+    row = db.query(AppSetting).filter_by(key=_ONBOARDING_KEY).first()
+    if row:
+        row.value = json.dumps(state)
+        row.updated_at = now
+    else:
+        db.add(AppSetting(key=_ONBOARDING_KEY, value=json.dumps(state), updated_at=now))
+    db.flush()
+    return state
+
+
+def is_llm_configured() -> bool:
+    """Return True if an LLM API key is set (env or DB)."""
+    import os
+    if os.environ.get("LLM_API_KEY"):
+        return True
+    llm = get_llm_settings()
+    return bool(llm.get("api_key"))
+
+
+def init_onboarding(db: Session) -> dict:
+    """Create a fresh onboarding state and persist it."""
+    steps = dict(_INITIAL_STEPS)
+    if is_llm_configured():
+        steps["configure_llm"] = "done"
+    state = {
+        "status": "active",
+        "started_at": datetime.now(UTC).isoformat(),
+        "dismissed_at": None,
+        "path_picked": None,
+        "steps": steps,
+    }
+    return _upsert_onboarding(db, state=state)
+
+
+def update_onboarding_step(db: Session, *, step: str, status: str = "done") -> dict:
+    """Mark an onboarding step as done (or another status). Auto-completes if all done."""
+    state = get_onboarding_state(db) or init_onboarding(db)
+    if step in state["steps"]:
+        state["steps"][step] = status
+    if all(v == "done" for v in state["steps"].values()):
+        state["status"] = "completed"
+    return _upsert_onboarding(db, state=state)
+
+
+def set_onboarding_path(db: Session, *, path: str) -> dict:
+    """Record which onboarding path the user chose."""
+    state = get_onboarding_state(db) or init_onboarding(db)
+    if not state.get("path_picked"):
+        state["path_picked"] = path
+    return _upsert_onboarding(db, state=state)
+
+
+def dismiss_onboarding(db: Session) -> dict:
+    """Mark onboarding as dismissed."""
+    state = get_onboarding_state(db) or init_onboarding(db)
+    state["status"] = "dismissed"
+    state["dismissed_at"] = datetime.now(UTC).isoformat()
+    return _upsert_onboarding(db, state=state)
+
+
+# ── suggestion options ───────────────────────────────────────────────────
 
 
 def build_suggestion_options(

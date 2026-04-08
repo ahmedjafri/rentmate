@@ -4,7 +4,7 @@ import { PageLoader } from '@/components/ui/page-loader';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Link } from 'react-router-dom';
-import { Building2, Users, Wrench, ShieldCheck, Bot, Clock, MessageCircle, Hand, Lock, Zap } from 'lucide-react';
+import { Building2, Users, Wrench, ShieldCheck, Bot, Clock, MessageCircle, Hand, Lock, Zap, Plus } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { TaskMode, TaskParticipantType, categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
@@ -13,6 +13,7 @@ import { ConvRow } from '@/components/chat/ConvRow';
 import { useConversations } from '@/hooks/useConversations';
 import { graphqlQuery, DELETE_CONVERSATION_MUTATION } from '@/data/api';
 import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
 
 const modeConfig: Record<TaskMode, { label: string; icon: React.ElementType; className: string }> = {
   autonomous: { label: 'Autonomous', icon: Zap, className: 'bg-accent/15 text-accent' },
@@ -29,7 +30,7 @@ const participantIcon: Record<TaskParticipantType, React.ElementType> = {
 
 const Index = () => {
   const { properties, tenants, actionDeskTasks, openChat, chatPanel, isLoading } = useApp();
-  const { conversations, loading: convsLoading, refresh, removeConversation } = useConversations('user_ai', 8);
+  const { conversations, loading: convsLoading, refresh, removeConversation } = useConversations('user_ai', 20);
 
   const totalUnits = properties.reduce((a, p) => a + p.units, 0);
   const activeTenants = tenants.filter(t => t.isActive);
@@ -38,10 +39,10 @@ const Index = () => {
     t => t.status === 'active' && (t.mode === 'waiting_approval' || t.mode === 'manual')
   );
 
-  // Auto-open free chat on dashboard mount
+  // Open the chat panel on dashboard mount (no conversation created yet)
   useEffect(() => {
     if (!chatPanel.isOpen) {
-      openChat();
+      openChat({ lazy: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -55,23 +56,24 @@ const Index = () => {
 
   return (
     <div className="flex flex-col md:flex-row h-full">
-      {/* Left column: Chat + past chats (2/3) */}
-      <div className="flex-[2] min-w-0 flex flex-col md:border-r h-full">
-        <div className="flex-1 min-h-0">
-          <ChatPanel embedded />
+      {/* Left column: Conversation list */}
+      <div className="w-72 min-w-[280px] shrink-0 border-r hidden md:flex flex-col h-full">
+        <div className="flex items-center justify-between px-4 py-3 border-b shrink-0">
+          <h2 className="text-sm font-semibold">Chats</h2>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            title="New chat"
+            onClick={() => openChat({ lazy: true })}
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
         </div>
-
-        {/* Recent chats */}
-        <div className="border-t p-4 space-y-2 overflow-auto max-h-[280px] shrink-0">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-muted-foreground">Recent Chats</h3>
-            <Link to="/chats" className="text-xs text-muted-foreground hover:text-foreground transition-colors">
-              View all →
-            </Link>
-          </div>
-          {convsLoading && <p className="text-xs text-muted-foreground text-center py-2">Loading…</p>}
+        <div className="flex-1 overflow-auto p-2 space-y-1.5">
+          {convsLoading && <p className="text-xs text-muted-foreground text-center py-4">Loading…</p>}
           {!convsLoading && conversations.length === 0 && (
-            <p className="text-xs text-muted-foreground text-center py-2">No conversations yet</p>
+            <p className="text-xs text-muted-foreground text-center py-4">No conversations yet</p>
           )}
           {conversations.map(conv => (
             <ConvRow
@@ -93,8 +95,13 @@ const Index = () => {
         </div>
       </div>
 
-      {/* Right column: Stats + Action Desk (1/3) */}
-      <div className="flex-1 min-w-0 overflow-auto hidden md:block">
+      {/* Middle column: Chat */}
+      <div className="flex-[2] min-w-0 flex flex-col h-full">
+        <ChatPanel embedded />
+      </div>
+
+      {/* Right column: Stats + Action Desk */}
+      <div className="w-80 min-w-[300px] shrink-0 overflow-auto hidden lg:block border-l">
         <div className="p-4 space-y-4">
           {/* Welcome */}
           <div className="flex items-center gap-3">

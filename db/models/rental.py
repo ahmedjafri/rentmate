@@ -70,6 +70,12 @@ class Unit(Base, HasAccountId, HasContext):
 
     label = Column(String(100), nullable=False)
 
+    tenant_id = Column(
+        String(36),
+        ForeignKey("tenants.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     __table_args__ = (
         UniqueConstraint(
             "property_id",
@@ -81,6 +87,7 @@ class Unit(Base, HasAccountId, HasContext):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     property = relationship("Property", back_populates="units")
+    tenant = relationship("Tenant", foreign_keys=[tenant_id])
 
     leases = relationship(
         "Lease",

@@ -31,7 +31,8 @@ def _split_text(text: str, *, chunk_size: int = 800, overlap: int = 100) -> list
                 best_break = idx + len(sep)
                 break
         chunks.append(text[start:best_break].strip())
-        start = best_break - overlap
+        # Ensure forward progress: start must advance by at least 1 character
+        start = max(start + 1, best_break - overlap)
     return [c for c in chunks if c]
 
 
@@ -46,7 +47,7 @@ def _set_progress(db: Session, doc: Document, progress: str) -> None:
     db.commit()
 
 
-EXTRACTION_PROMPT = """You are a document parser for a property management app. Extract ALL rental properties and lease records from the document.
+EXTRACTION_PROMPT = """You are a document parser for a property management app. Extract ALL rental properties and lease records from the document, including detailed context that a property manager would need.
 Respond ONLY with a valid JSON object — no markdown fences, no extra text.
 
 {
@@ -61,16 +62,32 @@ Respond ONLY with a valid JSON object — no markdown fences, no extra text.
       "lease_start_date": "YYYY-MM-DD" | null,
       "lease_end_date": "YYYY-MM-DD" | null,
       "monthly_rent": number | null,
-      "property_type": "single_family" | "multi_family" | null
+      "property_type": "single_family" | "multi_family" | null,
+      "property_context": string | null,
+      "unit_context": string | null,
+      "tenant_context": string | null,
+      "lease_context": string | null
     }
   ]
 }
 
+The context fields capture EVERYTHING a property manager needs beyond the structured fields:
+
+- **property_context**: Building details — furnishings provided (appliances, fixtures), safety systems (smoke detectors, sprinklers, fire alarms, CO alarms), yard/grounds responsibilities, landlord contact info, payment address/method, any building-specific rules.
+
+- **unit_context**: Unit-specific details — parking assignment, included utilities (and who pays what), special notes about the unit (e.g. "2 of 3 floors"), keys provided (door, laundry, garage, mailbox), move-in condition notes, furnishings specific to unit.
+
+- **tenant_context**: Tenant-specific rules and restrictions — pet/animal policy, smoking policy, vehicle limits, occupancy limits (max persons, guest policy), subletting rules, insurance requirements, any co-signer info.
+
+- **lease_context**: Financial and legal terms — security deposit amount and breakdown (refundable vs nonrefundable portions), last month's rent paid, pro-rata rent details, late fee structure (amount, grace period, daily penalty), NSF fee, early termination fee, rent increase terms, notice period to vacate, security deposit refund schedule/conditions, payment methods accepted.
+
 Rules:
 - Include one object per property/tenant combination found.
 - For insurance docs, portfolios, or listings with no lease terms, include one entry per property address with null tenant/lease fields.
-- Use "single_family" for single-unit homes/condos, "multi_family" for apartments or multi-unit buildings.
+- Use "single_family" for single-unit homes/condos or when unit is "N/A"/"Main", "multi_family" for apartments or multi-unit buildings.
 - Normalize addresses to "NUMBER STREET CITY STATE ZIP" format.
+- Context fields should be concise bullet points, not full legal text. Capture the key facts a manager needs.
+- Include specific dollar amounts, dates, percentages, and quantities — not vague descriptions.
 
 Document text:
 """
@@ -141,7 +158,7 @@ async def process_document(document_id: str) -> None:
         if chunks:
             _set_progress(db, doc, f"Embedding {len(chunks)} chunks from {n_pages} page(s)…")
             metadatas = [{"doc_id": document_id, "chunk_index": i} for i in range(len(chunks))]
-            vector_backend.add_document(document_id, chunks, metadatas)
+            vector_backend.add_document(document_id, chunks=chunks, metadatas=metadatas)
 
         # 5. LLM extraction pass
         extracted_data = None

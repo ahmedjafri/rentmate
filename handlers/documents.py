@@ -70,7 +70,7 @@ async def upload_document(
     doc_id = str(_uuid.uuid4())
     storage_path = f"documents/{doc_id}/{file.filename}"
 
-    await storage_backend.upload(storage_path, file_bytes, file.content_type or "application/octet-stream")
+    await storage_backend.upload(storage_path, data=file_bytes, content_type=file.content_type or "application/octet-stream")
 
     doc = Document(
         id=doc_id,

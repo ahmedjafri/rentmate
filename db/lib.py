@@ -1139,6 +1139,25 @@ def apply_document_extraction(
                 created.append("lease_updated")
             lease = existing_lease
 
+    # --- Save extracted context to entities ---
+    def _append_context(entity, new_text):
+        if not new_text or not new_text.strip():
+            return
+        existing = entity.context or ""
+        entity.context = (existing + "\n" + new_text.strip()).strip() if existing else new_text.strip()
+
+    if prop and data.get("property_context"):
+        _append_context(prop, data["property_context"])
+    if unit and data.get("unit_context"):
+        _append_context(unit, data["unit_context"])
+    if tenant and data.get("tenant_context"):
+        _append_context(tenant, data["tenant_context"])
+    # Lease doesn't have a context field — store on tenant notes
+    if tenant and data.get("lease_context"):
+        existing_notes = tenant.notes or ""
+        lease_ctx = data["lease_context"].strip()
+        tenant.notes = (existing_notes + "\n" + lease_ctx).strip() if existing_notes else lease_ctx
+
     db.commit()
 
     return {

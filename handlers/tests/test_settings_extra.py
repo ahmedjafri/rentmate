@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from backends.local_auth import DEFAULT_USER_ID
 from handlers.deps import get_db
-from handlers.settings import _mask_integrations, read_env_file, write_env_file
+from handlers.settings import _mask_integrations
 from main import app
 
 
@@ -22,49 +22,6 @@ def make_token():
 
 
 AUTH = {"Authorization": f"Bearer {make_token()}"}
-
-
-# ---------------------------------------------------------------------------
-# read_env_file / write_env_file unit tests
-# ---------------------------------------------------------------------------
-
-class TestEnvFileHelpers:
-    def test_read_env_file_missing_returns_empty(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("handlers.settings._ENV_FILE", str(tmp_path / "no.env"))
-        assert read_env_file() == {}
-
-    def test_read_env_file_parses_key_value(self, tmp_path, monkeypatch):
-        env_file = tmp_path / ".env"
-        env_file.write_text('FOO=bar\nBAZ="quoted"\n# comment\nEMPTY=\n')
-        monkeypatch.setattr("handlers.settings._ENV_FILE", str(env_file))
-        result = read_env_file()
-        assert result["FOO"] == "bar"
-        assert result["BAZ"] == "quoted"
-        assert "comment" not in result
-
-    def test_write_env_file_creates_new_keys(self, tmp_path, monkeypatch):
-        env_file = tmp_path / ".env"
-        monkeypatch.setattr("handlers.settings._ENV_FILE", str(env_file))
-        write_env_file({"NEW_KEY": "new_val"})
-        content = env_file.read_text()
-        assert "NEW_KEY=new_val" in content
-
-    def test_write_env_file_updates_existing_key(self, tmp_path, monkeypatch):
-        env_file = tmp_path / ".env"
-        env_file.write_text("LLM_MODEL=old-model\n")
-        monkeypatch.setattr("handlers.settings._ENV_FILE", str(env_file))
-        write_env_file({"LLM_MODEL": "new-model"})
-        content = env_file.read_text()
-        assert "new-model" in content
-        assert "old-model" not in content
-
-    def test_write_env_file_preserves_unrelated_keys(self, tmp_path, monkeypatch):
-        env_file = tmp_path / ".env"
-        env_file.write_text("KEEP_ME=yes\nLLM_MODEL=old\n")
-        monkeypatch.setattr("handlers.settings._ENV_FILE", str(env_file))
-        write_env_file({"LLM_MODEL": "new"})
-        content = env_file.read_text()
-        assert "KEEP_ME=yes" in content
 
 
 # ---------------------------------------------------------------------------
@@ -168,10 +125,7 @@ class TestIntegrationsEndpoint(unittest.TestCase):
         assert saved_arg["autonomy"]["rent"] == "autonomous"
 
     def test_post_settings_base_url(self):
-        with (
-            patch("handlers.settings.write_env_file"),
-            patch("llm.llm.reconfigure"),
-        ):
+        with patch("llm.llm.reconfigure"):
             response = self.client.post(
                 "/settings",
                 json={"base_url": "http://localhost:11434", "model": "ollama/llama3"},

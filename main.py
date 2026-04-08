@@ -28,8 +28,9 @@ from handlers import (
     vendor_portal,
 )
 from handlers.deps import SessionLocal, engine
-from handlers.settings import load_integrations, read_env_file
+from handlers.settings import load_integrations
 from llm.registry import agent_registry
+from memory_watchdog import set_memory_backstop, start_memory_monitor
 
 _HERE = Path(__file__).parent
 _DIST = _HERE / "www" / "rentmate-ui" / "dist"
@@ -78,9 +79,32 @@ def _ensure_schema():
         return
 
     if is_dev:
-        print("Schema changed — recreating dev database...")
-        Base.metadata.drop_all(engine)
-        Base.metadata.create_all(engine)
+        print("\n⚠  Schema drift detected — database doesn't match models.")
+        print("   Options:")
+        print("     [w] Wipe database and recreate (data will be lost)")
+        print("     [m] Run alembic migrations (poetry run alembic upgrade head)")
+        print("     [q] Quit\n")
+        try:
+            choice = input("   Choice [w/m/q]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            choice = "q"
+        if choice == "w":
+            print("   Wiping and recreating database...")
+            Base.metadata.drop_all(engine)
+            Base.metadata.create_all(engine)
+        elif choice == "m":
+            import subprocess
+            result = subprocess.run(
+                ["poetry", "run", "alembic", "upgrade", "head"],
+                cwd=os.path.dirname(__file__) or ".",
+            )
+            if result.returncode != 0:
+                print("   Migration failed. Please fix and retry.")
+                raise SystemExit(1)
+            print("   Migrations applied successfully.")
+        else:
+            print("   Aborting.")
+            raise SystemExit(0)
     else:
         print("ERROR: Database schema is out of date.")
         print("Run: poetry run alembic upgrade head")
@@ -109,9 +133,6 @@ graphql_app = GraphQLRouter(schema, context_getter=get_context)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── startup ──────────────────────────────────────────────────────────────
-    for key, value in read_env_file().items():
-        if not os.environ.get(key):  # set if missing or empty
-            os.environ[key] = value
 
     # Run DB init and nanobot gateway startup in parallel (both are blocking I/O / imports)
     async def _init_db():
@@ -122,6 +143,11 @@ async def lifespan(app: FastAPI):
         _init_db(),
         asyncio.to_thread(agent_registry.start_gateway),
     )
+
+    # Populate os.environ from DB-stored settings (must run after DB init)
+    from gql.services.settings_service import load_agent_integrations_into_env, load_llm_into_env
+    load_llm_into_env()
+    load_agent_integrations_into_env()
 
     db = SessionLocal()
     try:
@@ -166,6 +192,11 @@ async def lifespan(app: FastAPI):
     # Quo SMS poller: primary channel locally, backup in production
     from handlers.quo_poller import quo_poll_loop
     asyncio.create_task(quo_poll_loop())
+
+    # Memory watchdog: dump heap and exit if RSS exceeds 8GB
+    _data_dir = os.getenv("RENTMATE_DATA_DIR", "./data")
+    set_memory_backstop()
+    start_memory_monitor(_data_dir)
 
     yield
 

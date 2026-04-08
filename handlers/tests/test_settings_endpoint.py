@@ -72,9 +72,8 @@ class TestSettingsEndpoint(unittest.TestCase):
     # POST /settings
     # ------------------------------------------------------------------
 
-    @patch("handlers.settings.write_env_file")
     @patch("llm.llm.reconfigure")
-    def test_post_settings_updates_env_and_reconfigures(self, mock_reconf, mock_write):
+    def test_post_settings_updates_env_and_reconfigures(self, mock_reconf):
         response = self.client.post(
             "/settings",
             json={"api_key": "sk-new", "model": "openai/gpt-4o"},
@@ -86,15 +85,13 @@ class TestSettingsEndpoint(unittest.TestCase):
         self.assertEqual(os.environ.get("LLM_MODEL"), "openai/gpt-4o")
         mock_reconf.assert_called_once()
 
-    @patch("handlers.settings.write_env_file")
-    def test_post_settings_no_body_returns_ok(self, mock_write):
+    def test_post_settings_no_body_returns_ok(self):
         response = self.client.post(
             "/settings",
             json={},
             headers={"Authorization": f"Bearer {make_token()}"},
         )
         self.assertEqual(response.status_code, 200)
-        mock_write.assert_not_called()
 
 
 if __name__ == "__main__":

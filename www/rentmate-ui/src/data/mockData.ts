@@ -59,7 +59,7 @@ export interface ActionDeskTask {
   linkedConversations?: LinkedConversation[];
 }
 
-export type ChatMessageType = 'message' | 'internal' | 'approval' | 'context';
+export type ChatMessageType = 'message' | 'internal' | 'approval' | 'context' | 'error';
 export type ChatSenderType = 'manager' | 'ai' | 'tenant' | 'vendor';
 
 export interface ChatMessageRelatedTask {

@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shutil
@@ -32,14 +33,18 @@ def _register_rentmate_tools():
     from llm.tools import (
         AttachEntityToTaskTool,
         CloseTaskTool,
+        CreatePropertyTool,
+        CreateTenantTool,
         CreateVendorTool,
         EditMemoryTool,
         LookupVendorsTool,
         MessageExternalPersonTool,
         ProposeTaskTool,
+        ReadDocumentTool,
         RecallMemoryTool,
         SaveMemoryTool,
         SetModeTool,
+        UpdateOnboardingTool,
         UpdateStepsTool,
     )
 
@@ -48,6 +53,8 @@ def _register_rentmate_tools():
         AttachEntityToTaskTool, MessageExternalPersonTool,
         LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
         SaveMemoryTool, RecallMemoryTool, EditMemoryTool,
+        CreatePropertyTool, CreateTenantTool, ReadDocumentTool,
+        UpdateOnboardingTool,
     ):
         tool = tool_cls()
         # Flat schema — get_definitions() wraps it in {"type":"function","function":...}
@@ -132,7 +139,30 @@ class AgentRegistry:
         memory_context = DbMemoryStore(account_id).get_memory_context()
         if memory_context:
             parts.append(memory_context)
+        # Inject onboarding addendum if onboarding is active
+        self._maybe_append_onboarding(parts)
         return "\n\n---\n\n".join(parts)
+
+    @staticmethod
+    def _maybe_append_onboarding(parts: list[str]) -> None:
+        """Append ONBOARDING.md to the system prompt if onboarding is active."""
+        from db.session import SessionLocal
+        from gql.services.settings_service import get_onboarding_state
+
+        db = SessionLocal.session_factory()
+        try:
+            state = get_onboarding_state(db)
+            if not state or state.get("status") != "active":
+                return
+            onboarding_path = TEMPLATE_DIR / "ONBOARDING.md"
+            if not onboarding_path.exists():
+                return
+            content = onboarding_path.read_text()
+            content += f"\n\n## Current onboarding state\n```json\n{json.dumps(state, indent=2)}\n```"
+            parts.append(content)
+            print("[agent] Onboarding addendum injected into system prompt")
+        finally:
+            db.close()
 
     # ─── Channel management (Telegram/WhatsApp) ────────
 

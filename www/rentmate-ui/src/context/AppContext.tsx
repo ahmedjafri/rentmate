@@ -64,7 +64,8 @@ interface AppContextType {
   updateDocument: (id: string, updates: Partial<ManagedDocument>) => void;
   replaceDocument: (oldId: string, doc: ManagedDocument) => void;
   removeDocument: (id: string) => void;
-  openChat: (opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; conversationId?: string | null }) => void;
+  openChat: (opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; conversationId?: string | null; lazy?: boolean }) => void;
+  setChatConversationId: (id: string) => void;
   closeChat: () => void;
   setAutonomySettings: (settings: AutonomySettings) => void;
   refreshData: () => void;
@@ -271,7 +272,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActionDeskTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...updates } : t));
   }, []);
 
-  const openChat = useCallback((opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; conversationId?: string | null }) => {
+  const openChat = useCallback((opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; conversationId?: string | null; lazy?: boolean }) => {
     if (opts?.taskId || opts?.suggestionId) {
       setChatPanel({
         isOpen: true,
@@ -294,7 +295,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    // No conversation specified — create a new DB conversation
+    // Lazy mode: just open the panel without creating a conversation.
+    // The backend will auto-create one when the user sends a message.
+    if (opts?.lazy) {
+      setChatPanel({
+        isOpen: true,
+        taskId: null,
+        suggestionId: null,
+        conversationId: null,
+        pageContext: opts?.pageContext ?? null,
+      });
+      return;
+    }
+
+    // Explicit new chat — create a DB conversation
     const t = getToken();
     fetch('/chat/new', {
       method: 'POST',
@@ -317,13 +331,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setChatPanel({ isOpen: false, suggestionId: null, taskId: null, conversationId: null, pageContext: null });
   }, []);
 
+  const setChatConversationId = useCallback((id: string) => {
+    setChatPanel(prev => ({ ...prev, conversationId: id }));
+  }, []);
+
   return (
     <AppContext.Provider value={{
       properties, tenants, vendors, suggestions, tickets, actionDeskTasks, isLoading: apiLoading && actionDeskTasks.length === 0 && properties.length === 0, documents, autonomySettings,
       chatPanel, entityContext, getEntityContext, setEntityContext,
       updateSuggestionStatus, updateSuggestion, addChatMessage, updateTaskMessage, setTaskMessages, updateTask,
       addTask, removeTask,
-      addProperty, updateProperty, removeProperty, addTenant, updateTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, closeChat, setAutonomySettings, refreshData,
+      addProperty, updateProperty, removeProperty, addTenant, updateTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, setChatConversationId, closeChat, setAutonomySettings, refreshData,
     }}>
       {children}
     </AppContext.Provider>

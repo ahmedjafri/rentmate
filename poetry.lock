@@ -1410,6 +1410,27 @@ files = [
 typing-extensions = ">=4.14.0"
 
 [[package]]
+name = "linkify-it-py"
+version = "2.1.0"
+description = "Links recognition library with FULL unicode support."
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "linkify_it_py-2.1.0-py3-none-any.whl", hash = "sha256:0d252c1594ecba2ecedc444053db5d3a9b7ec1b0dd929c8f1d74dce89f86c05e"},
+    {file = "linkify_it_py-2.1.0.tar.gz", hash = "sha256:43360231720999c10e9328dc3691160e27a718e280673d444c38d7d3aaa3b98b"},
+]
+
+[package.dependencies]
+uc-micro-py = "*"
+
+[package.extras]
+benchmark = ["pytest", "pytest-benchmark"]
+dev = ["black", "flake8", "isort", "pre-commit", "pyproject-flake8"]
+doc = ["myst-parser", "sphinx", "sphinx_book_theme"]
+test = ["coverage", "pytest", "pytest-cov"]
+
+[[package]]
 name = "litellm"
 version = "1.77.1"
 description = "Library to easily interface with LLM API providers"
@@ -1476,6 +1497,7 @@ files = [
 ]
 
 [package.dependencies]
+linkify-it-py = {version = ">=1,<3", optional = true, markers = "extra == \"linkify\""}
 mdurl = ">=0.1,<1.0"
 
 [package.extras]
@@ -1559,6 +1581,26 @@ files = [
 ]
 
 [[package]]
+name = "mdit-py-plugins"
+version = "0.5.0"
+description = "Collection of plugins for markdown-it-py"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "mdit_py_plugins-0.5.0-py3-none-any.whl", hash = "sha256:07a08422fc1936a5d26d146759e9155ea466e842f5ab2f7d2266dd084c8dab1f"},
+    {file = "mdit_py_plugins-0.5.0.tar.gz", hash = "sha256:f4918cb50119f50446560513a8e311d574ff6aaed72606ddae6d35716fe809c6"},
+]
+
+[package.dependencies]
+markdown-it-py = ">=2.0.0,<5.0.0"
+
+[package.extras]
+code-style = ["pre-commit"]
+rtd = ["myst-parser", "sphinx-book-theme"]
+testing = ["coverage", "pytest", "pytest-cov", "pytest-regressions"]
+
+[[package]]
 name = "mdurl"
 version = "0.1.2"
 description = "Markdown URL utilities"
@@ -1569,6 +1611,77 @@ files = [
     {file = "mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8"},
     {file = "mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba"},
 ]
+
+[[package]]
+name = "memray"
+version = "1.19.2"
+description = "A memory profiler for Python applications"
+optional = false
+python-versions = ">=3.7.0"
+groups = ["main"]
+files = [
+    {file = "memray-1.19.2-cp310-cp310-macosx_10_14_x86_64.whl", hash = "sha256:50d7130bb0c8609176b3b691c8b67fc92805180166e087549a59e7881ae8cf36"},
+    {file = "memray-1.19.2-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:3643d601c4c1c413a62fb296598ed05dce1e1c3a58ea5c8659ae98ad36ce3a7a"},
+    {file = "memray-1.19.2-cp310-cp310-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:661aca0dbf4c448eef93f2f0bd0852eeefe3de2460e8105c2160c86e308beea5"},
+    {file = "memray-1.19.2-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:d13f33f1fa76165c5596e73bc45a366d58066be567fb131498cd770fa87f5a02"},
+    {file = "memray-1.19.2-cp310-cp310-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:74291aa9bbf54ff2ac5df2665c792d490c576720dd2cbad89af53528bda5443f"},
+    {file = "memray-1.19.2-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:716a1b2569e049d0cb769015e5be9138bd97bd157e67920cc9e215e011fbb9cd"},
+    {file = "memray-1.19.2-cp311-cp311-macosx_10_14_x86_64.whl", hash = "sha256:c8d35a9f5b222165c5aedbfc18b79dc5161a724963a4fca8d1053faa0b571195"},
+    {file = "memray-1.19.2-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:3735567011cc22339aee2c59b5fc94d1bdd4a23f9990e02a2c3cccc9c3cf6de4"},
+    {file = "memray-1.19.2-cp311-cp311-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:ab78af759eebcb8d8ecef173042515711d2dcc9600d5dd446d1592b24a89b7d9"},
+    {file = "memray-1.19.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:f3ae7983297d168cdcc2d05cd93a4934b9b6fe0d341a91ac5b71bf45f9cec06c"},
+    {file = "memray-1.19.2-cp311-cp311-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:08a4316d7a92eb415024b46988844ed0fd44b2d02ca00fa4a21f2481c1f803e6"},
+    {file = "memray-1.19.2-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:dbdb14fd31e2a031312755dc76146aeff9d0889e82ccffe231f1f20f50526f57"},
+    {file = "memray-1.19.2-cp312-cp312-macosx_10_14_x86_64.whl", hash = "sha256:22d4482f559ffa91a9727693e7e338856bee5e316f922839bf8b96e0f9b8a4de"},
+    {file = "memray-1.19.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:4fd1476868177ee8d9f7f85e5a085a20cc3c3a8228a23ced72749265885d55ca"},
+    {file = "memray-1.19.2-cp312-cp312-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:23375d50faa199e1c1bc2e89f08691f6812478fddb49a1b82bebe6ef5a56df2c"},
+    {file = "memray-1.19.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:8ef3d8e4fba0b26280b550278a0660554283135cbccc34e2d49ba82a1945eb61"},
+    {file = "memray-1.19.2-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:a4d6cf9597ae5d60f7893a0b7b6b9af9c349121446b3c1e7b9ac1d8b5d45a505"},
+    {file = "memray-1.19.2-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:716a0a0e9048d21da98f9107fa030a76138eb694a16a81ad15eace54fddef4cd"},
+    {file = "memray-1.19.2-cp313-cp313-macosx_10_14_x86_64.whl", hash = "sha256:13aa87ad34cc88b3f31f7205e0a4543c391032e8600dc0c0cbf22555ff816d97"},
+    {file = "memray-1.19.2-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:d6b249618a3e4fa8e10291445a2b2dfaf6f188e7cc1765966aac8fb52cb22066"},
+    {file = "memray-1.19.2-cp313-cp313-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:34985e5e638ef8d4d54de8173c5e4481c478930f545bd0eb4738a631beb63d04"},
+    {file = "memray-1.19.2-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:ee0fcfafd1e8535bdc0d0ed75bcdd48d436a6f62d467df91871366cbb3bbaebc"},
+    {file = "memray-1.19.2-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:846185c393ff0dc6bca55819b1c83b510b77d8d561b7c0c50f4873f69579e35d"},
+    {file = "memray-1.19.2-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:8cc31327ed71e9f6ef7e9ed558e764f0e9c3f01da13ad8547734eb65fbeade1d"},
+    {file = "memray-1.19.2-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:410377c0eae8d544421f74b919a18e119279fe1a2fa5ff381404b55aeb4c6514"},
+    {file = "memray-1.19.2-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:a53dc4032581ed075fcb62a4acc0ced14fb90a8269159d4e53dfac7af269c255"},
+    {file = "memray-1.19.2-cp314-cp314-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:a7630865fbf3823aa2d1a6f7536f7aec88cf8ccf5b2498aad44adbc733f6bd2e"},
+    {file = "memray-1.19.2-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:c23e2b4be22a23cf5cae08854549e3460869a36c5f4bedc739b646ac97da4a60"},
+    {file = "memray-1.19.2-cp314-cp314-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:95b6c02ca7f8555b5bee1c54c50cbbcf2033e07ebca95dade2ac3a27bb36b320"},
+    {file = "memray-1.19.2-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:907470e2684568eb91a993ae69a08b1430494c8f2f6ef489b4b78519d9dae3d0"},
+    {file = "memray-1.19.2-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:124138f35fea36c434256c417f1b8cb32f78769f208530c1e56bf2c2b7654120"},
+    {file = "memray-1.19.2-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:240192dc98ff0b3501055521bfd73566d339808b11bd5af10865afe6ae18abef"},
+    {file = "memray-1.19.2-cp314-cp314t-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:edb7a3c2a9e97fb409b352f6c316598c7c0c3c22732e73704d25b9eb75ae2f2d"},
+    {file = "memray-1.19.2-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:b6a43db4c1466446a905a77944813253231ac0269f758c6c6bc03ceb1821c1b6"},
+    {file = "memray-1.19.2-cp314-cp314t-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:cf951dae8d27d502fbc549f6784460a70cce05b1e71bf5446d8692a74051f14f"},
+    {file = "memray-1.19.2-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:8033b78232555bb1856b3298bef2898ec8b334d3d465c1822c665206d1fa910a"},
+    {file = "memray-1.19.2-cp38-cp38-macosx_10_14_x86_64.whl", hash = "sha256:40feab802855fd21b56abc0bf916ff013515fd50c77bc70530d686dcfcab7c2c"},
+    {file = "memray-1.19.2-cp38-cp38-macosx_11_0_arm64.whl", hash = "sha256:d8dde0b6714efad49cfd16584c94d8565363878318ee93ad7995c3510850568c"},
+    {file = "memray-1.19.2-cp38-cp38-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:efbbb9375101fcb036a958fd97cf6b99f2f7112d19fe0a4f05bb14425b4b91af"},
+    {file = "memray-1.19.2-cp38-cp38-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:31704c3dc06ae3781ba6fcd8194caae126c172e54a18eddb1e9802ed6b22e821"},
+    {file = "memray-1.19.2-cp38-cp38-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:cb5c90111e0229243a8dc39a2042c59406a45c6d63913834d7ae45eeb97501b5"},
+    {file = "memray-1.19.2-cp38-cp38-musllinux_1_2_x86_64.whl", hash = "sha256:2c836c63854f16e72cc4a5bcbb459871f64b4738ba115d1e5eb0258c7a708230"},
+    {file = "memray-1.19.2-cp39-cp39-macosx_10_14_x86_64.whl", hash = "sha256:f82ee0a0b50a04894dacfbe49db1c259fa8a19efb094514b0100e9916d3b1c55"},
+    {file = "memray-1.19.2-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:5b1c58a54372707b3977c079ef93e751109f0bfe566adc7bd640971d123d8d11"},
+    {file = "memray-1.19.2-cp39-cp39-manylinux2014_i686.manylinux_2_17_i686.whl", hash = "sha256:fa236140320ef1b8801cd289962fd81a2d7e59484cc3ecdbc851d1b5c321795e"},
+    {file = "memray-1.19.2-cp39-cp39-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:816baeda8e62fddf99c900bdc9e748339dba65df091a7c7ceb0f4f9544c2e7ec"},
+    {file = "memray-1.19.2-cp39-cp39-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:a1532d5dcf8036ec55e43ab6d6b1ff4e70b11a3902dd1c8396b6d2a24ec69d98"},
+    {file = "memray-1.19.2-cp39-cp39-musllinux_1_2_x86_64.whl", hash = "sha256:86060df2e8e18cc867335c50bf92deb973d4dff856bdb565e17fc86ca7a6619b"},
+    {file = "memray-1.19.2.tar.gz", hash = "sha256:680cb90ac4564d140673ac9d8b7a7e07a8405bd1fb8f933da22616f93124ca84"},
+]
+
+[package.dependencies]
+jinja2 = ">=2.9"
+rich = ">=11.2.0"
+textual = ">=0.41.0"
+
+[package.extras]
+benchmark = ["asv"]
+dev = ["Cython", "IPython", "asv", "black", "bump2version", "check-manifest", "flake8", "furo", "greenlet ; python_version < \"3.14\"", "ipython", "isort", "mypy", "packaging", "pytest", "pytest-cov", "pytest-textual-snapshot", "setuptools", "sphinx", "sphinx-argparse", "textual (>=0.43,!=0.65.2,!=0.66)", "towncrier"]
+docs = ["IPython", "bump2version", "furo", "sphinx", "sphinx-argparse", "towncrier"]
+lint = ["black", "check-manifest", "flake8", "isort", "mypy"]
+test = ["Cython", "greenlet ; python_version < \"3.14\"", "ipython", "packaging", "pytest", "pytest-cov", "pytest-textual-snapshot", "setuptools", "textual (>=0.43,!=0.65.2,!=0.66)"]
 
 [[package]]
 name = "msgpack"
@@ -1836,6 +1949,18 @@ typing-extensions = ">=4.10,<5"
 
 [package.extras]
 aiohttp = ["aiohttp", "httpx-aiohttp (>=0.1.9)"]
+
+[[package]]
+name = "platformdirs"
+version = "4.9.4"
+description = "A small Python package for determining appropriate platform-specific dirs, e.g. a `user data dir`."
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "platformdirs-4.9.4-py3-none-any.whl", hash = "sha256:68a9a4619a666ea6439f2ff250c12a853cd1cbd5158d258bd824a7df6be2f868"},
+    {file = "platformdirs-4.9.4.tar.gz", hash = "sha256:1ec356301b7dc906d83f371c8f487070e99d3ccf9e501686456394622a01a934"},
+]
 
 [[package]]
 name = "pluggy"
@@ -3061,6 +3186,29 @@ trino = ["trino"]
 weaviate = ["weaviate-client (>=4)"]
 
 [[package]]
+name = "textual"
+version = "8.2.3"
+description = "Modern Text User Interface framework"
+optional = false
+python-versions = "<4.0,>=3.9"
+groups = ["main"]
+files = [
+    {file = "textual-8.2.3-py3-none-any.whl", hash = "sha256:5008ac581bebf1f6fa0520404261844a231e5715fdbddd10ca73916a3af48ca2"},
+    {file = "textual-8.2.3.tar.gz", hash = "sha256:beea7b86b03b03558a2224f0cc35252e60ef8b0c4353b117b2f40972902d976a"},
+]
+
+[package.dependencies]
+markdown-it-py = {version = ">=2.1.0", extras = ["linkify"]}
+mdit-py-plugins = "*"
+platformdirs = ">=3.6.0,<5"
+pygments = ">=2.19.2,<3.0.0"
+rich = ">=14.2.0"
+typing-extensions = ">=4.4.0,<5.0.0"
+
+[package.extras]
+syntax = ["tree-sitter (>=0.25.0) ; python_version >= \"3.10\"", "tree-sitter-bash (>=0.23.0) ; python_version >= \"3.10\"", "tree-sitter-css (>=0.23.0) ; python_version >= \"3.10\"", "tree-sitter-go (>=0.23.0) ; python_version >= \"3.10\"", "tree-sitter-html (>=0.23.0) ; python_version >= \"3.10\"", "tree-sitter-java (>=0.23.0) ; python_version >= \"3.10\"", "tree-sitter-javascript (>=0.23.0) ; python_version >= \"3.10\"", "tree-sitter-json (>=0.24.0) ; python_version >= \"3.10\"", "tree-sitter-markdown (>=0.3.0) ; python_version >= \"3.10\"", "tree-sitter-python (>=0.23.0) ; python_version >= \"3.10\"", "tree-sitter-regex (>=0.24.0) ; python_version >= \"3.10\"", "tree-sitter-rust (>=0.23.0) ; python_version >= \"3.10\"", "tree-sitter-sql (>=0.3.11) ; python_version >= \"3.10\"", "tree-sitter-toml (>=0.6.0) ; python_version >= \"3.10\"", "tree-sitter-xml (>=0.7.0) ; python_version >= \"3.10\"", "tree-sitter-yaml (>=0.6.0) ; python_version >= \"3.10\""]
+
+[[package]]
 name = "tiktoken"
 version = "0.11.0"
 description = "tiktoken is a fast BPE tokeniser for use with OpenAI's models"
@@ -3189,6 +3337,21 @@ files = [
 
 [package.dependencies]
 typing-extensions = ">=4.12.0"
+
+[[package]]
+name = "uc-micro-py"
+version = "2.0.0"
+description = "Micro subset of unicode data files for linkify-it-py projects."
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "uc_micro_py-2.0.0-py3-none-any.whl", hash = "sha256:3603a3859af53e5a39bc7677713c78ea6589ff188d70f4fee165db88e22b242c"},
+    {file = "uc_micro_py-2.0.0.tar.gz", hash = "sha256:c53691e495c8db60e16ffc4861a35469b0ba0821fe409a8a7a0a71864d33a811"},
+]
+
+[package.extras]
+test = ["coverage", "pytest", "pytest-cov"]
 
 [[package]]
 name = "urllib3"
@@ -3563,4 +3726,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "aa8cd2bdb276f9a4349b02fdb6b4ea6169a714afdc30ed4897038217375d23d0"
+content-hash = "084a7400e549f410e5042b230e20219760175dcad5af2733f9223ad677b89dfc"

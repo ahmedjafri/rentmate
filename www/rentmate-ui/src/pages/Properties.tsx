@@ -183,7 +183,8 @@ const Properties = () => {
 
       <div className="grid gap-4 md:grid-cols-2">
         {sortedProperties.map((property) => {
-          const propertyTenants = tenants.filter(t => t.propertyId === property.id && t.isActive);
+          const propertyTenants = tenants.filter(t => t.propertyId === property.id);
+          const activeTenantCount = propertyTenants.filter(t => t.isActive).length;
           const openTaskCount = actionDeskTasks.filter(t => t.propertyId === property.id && t.status === 'active').length;
           const isSingleFamily = property.propertyType === 'single_family';
           const src = property.source ?? 'manual';
@@ -232,7 +233,7 @@ const Properties = () => {
                   <div className="flex items-center gap-2">
                     <Users className="h-4 w-4 text-muted-foreground" />
                     <div>
-                      <p className="text-sm font-medium">{propertyTenants.length}</p>
+                      <p className="text-sm font-medium">{activeTenantCount}/{propertyTenants.length}</p>
                       <p className="text-[11px] text-muted-foreground">Tenants</p>
                     </div>
                   </div>

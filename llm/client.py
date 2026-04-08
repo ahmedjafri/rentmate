@@ -42,6 +42,10 @@ _TOOL_LABELS = {
     "save_memory": "Saving note",
     "recall_memory": "Checking memory",
     "edit_memory": "Editing memory",
+    "create_property": "Creating property",
+    "create_tenant": "Creating tenant",
+    "read_document": "Reading document",
+    "update_onboarding": "Updating setup progress",
 }
 
 
@@ -67,7 +71,7 @@ async def chat_with_agent(
     if "/" in model and not api_base:
         provider_prefix, _, model_name = model.partition("/")
         _PROVIDER_BASES = {
-            "deepseek": ("https://api.deepseek.com/v1", None),
+            "deepseek": ("https://api.deepseek.com", None),
             "anthropic": ("https://api.anthropic.com/v1", "anthropic"),
         }
         if provider_prefix in _PROVIDER_BASES:
@@ -232,8 +236,23 @@ async def chat_with_agent(
                 if m.get("role") == "assistant" and m.get("content"):
                     reply = m["content"]
                     break
+        # The agent library returns API errors as normal text replies
+        # rather than raising exceptions.  Detect these and re-raise so
+        # the SSE error path fires (red bubble, not blue).
+        if reply and _is_agent_error_reply(reply):
+            raise RuntimeError(reply)
         return reply
     return str(result)
+
+
+def _is_agent_error_reply(reply: str) -> bool:
+    """Return True if the agent reply is actually an API/infrastructure error."""
+    _ERROR_PREFIXES = (
+        "API call failed",
+        "Operation interrupted",
+        "I apologize, but I encountered repeated errors",
+    )
+    return reply.startswith(_ERROR_PREFIXES)
 
 
 # ─── Public API ──────────────────────────────────────────────────────────────

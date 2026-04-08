@@ -343,8 +343,14 @@ class Mutation(AuthMutation):
     def create_property(self, info, input: CreatePropertyInput) -> HouseType:
         _current_user(info)
         prop, units = PropertyService.create_property(
-            _session(info), input.address, input.property_type, input.name,
-            input.city, input.state, input.postal_code, input.unit_labels,
+            _session(info),
+            address=input.address,
+            property_type=input.property_type,
+            name=input.name,
+            city=input.city,
+            state=input.state,
+            postal_code=input.postal_code,
+            unit_labels=input.unit_labels,
         )
         return HouseType.from_new(prop, units)
 

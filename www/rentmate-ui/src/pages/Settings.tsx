@@ -3,7 +3,7 @@ import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { AutonomySlider } from '@/components/suggestions/AutonomySlider';
 import { SuggestionCategory, AutonomyLevel } from '@/data/mockData';
-import { Shield, Bot, Terminal, MessageSquare, Lock, Puzzle, Globe, Phone } from 'lucide-react';
+import { Shield, Bot, Terminal, MessageSquare, Lock, Puzzle, Globe, Phone, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -80,6 +80,8 @@ const SettingsPage = () => {
   const [agentFiles, setAgentFiles] = useState<AgentFile[]>([]);
   const [agentFileContents, setAgentFileContents] = useState<Record<string, string>>({});
   const [savingFile, setSavingFile] = useState<string | null>(null);
+  const [llmTesting, setLlmTesting] = useState(false);
+  const [llmTestResult, setLlmTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   useEffect(() => {
     const headers = { Authorization: `Bearer ${getToken()}` };
@@ -254,6 +256,27 @@ const SettingsPage = () => {
     }
   };
 
+  const handleTestLlm = async () => {
+    setLlmTesting(true);
+    setLlmTestResult(null);
+    try {
+      const res = await fetch('/settings/llm/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setLlmTestResult({ ok: true, message: `Connected — model replied "${data.reply}" in ${data.elapsed}s` });
+      } else {
+        setLlmTestResult({ ok: false, message: data.error || 'Connection failed' });
+      }
+    } catch {
+      setLlmTestResult({ ok: false, message: 'Request failed — is the server running?' });
+    } finally {
+      setLlmTesting(false);
+    }
+  };
+
   const handleSaveAgentIntegrations = async () => {
     try {
       const res = await fetch('/settings/agent/integrations', {
@@ -298,6 +321,68 @@ const SettingsPage = () => {
         <p className="text-sm text-muted-foreground">Configure RentMate</p>
       </div>
 
+      {/* LLM Backend Config */}
+      <Card className="p-6 rounded-xl">
+        <div className="flex items-center gap-2 mb-1">
+          <Bot className="h-5 w-5 text-primary" />
+          <h2 className="text-lg font-bold">AI Model</h2>
+        </div>
+        <p className="text-sm text-muted-foreground mb-6">
+          Configure the language model backend for your AI property manager.
+        </p>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="llm-api-key">API Key</Label>
+            <Input
+              id="llm-api-key"
+              type="password"
+              placeholder="Leave blank to keep existing key"
+              value={llmConfig.apiKey}
+              onChange={(e) => setLlmConfig(prev => ({ ...prev, apiKey: e.target.value }))}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="llm-model">Model</Label>
+            <Input
+              id="llm-model"
+              placeholder="e.g. anthropic/claude-haiku-4-5-20251001"
+              value={llmConfig.model}
+              onChange={(e) => setLlmConfig(prev => ({ ...prev, model: e.target.value }))}
+            />
+            <p className="text-xs text-muted-foreground">
+              Format: <code className="text-[11px]">provider/model-name</code>. For known providers
+              (openai, anthropic, deepseek) the API endpoint is resolved automatically.
+              For custom or local servers, set the Base URL below and use just the model name.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="llm-base-url">Base URL <span className="text-muted-foreground font-normal">(optional — for self-hosted or custom endpoints)</span></Label>
+            <Input
+              id="llm-base-url"
+              placeholder="e.g. http://localhost:11434/v1"
+              value={llmConfig.baseUrl}
+              onChange={(e) => setLlmConfig(prev => ({ ...prev, baseUrl: e.target.value }))}
+            />
+            <p className="text-xs text-muted-foreground">
+              Leave blank for cloud providers. Set this for Ollama, vLLM, or any OpenAI-compatible server.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={handleSaveLlmConfig} className="flex-1">Save</Button>
+            <Button variant="outline" onClick={handleTestLlm} disabled={llmTesting} className="gap-1.5">
+              {llmTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Test Model
+            </Button>
+          </div>
+          {llmTestResult && (
+            <div className={`flex items-start gap-2 p-3 rounded-lg text-sm ${llmTestResult.ok ? 'bg-accent/10 text-accent' : 'bg-destructive/10 text-destructive'}`}>
+              {llmTestResult.ok ? <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" /> : <XCircle className="h-4 w-4 mt-0.5 shrink-0" />}
+              <span className="break-all">{llmTestResult.message}</span>
+            </div>
+          )}
+        </div>
+      </Card>
+
       {/* Autonomy Controls */}
       <Card className="p-6 rounded-xl">
         <div className="flex items-center gap-2 mb-1">
@@ -321,51 +406,6 @@ const SettingsPage = () => {
           )}
         </div>
         <Button onClick={handleSaveAutonomy} className="w-full mt-6">Save Autonomy Settings</Button>
-      </Card>
-
-      {/* LLM Backend Config */}
-      <Card className="p-6 rounded-xl">
-        <div className="flex items-center gap-2 mb-1">
-          <Bot className="h-5 w-5 text-primary" />
-          <h2 className="text-lg font-bold">LLM Backend</h2>
-        </div>
-        <p className="text-sm text-muted-foreground mb-6">
-          Configure the language model backend for your AI property manager.
-        </p>
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="llm-api-key">API Key</Label>
-            <Input
-              id="llm-api-key"
-              type="password"
-              placeholder="Leave blank to keep existing key"
-              value={llmConfig.apiKey}
-              onChange={(e) => setLlmConfig(prev => ({ ...prev, apiKey: e.target.value }))}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="llm-model">LiteLLM Model String</Label>
-            <Input
-              id="llm-model"
-              placeholder="e.g. openai/gpt-4o-mini"
-              value={llmConfig.model}
-              onChange={(e) => setLlmConfig(prev => ({ ...prev, model: e.target.value }))}
-            />
-            <p className="text-xs text-muted-foreground">
-              LiteLLM model string, e.g. openai/gpt-4o-mini, anthropic/claude-haiku-4-5, groq/llama-3.1-8b-instant.
-            </p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="llm-base-url">Base URL <span className="text-muted-foreground font-normal">(optional)</span></Label>
-            <Input
-              id="llm-base-url"
-              placeholder="https://api.openai.com/v1"
-              value={llmConfig.baseUrl}
-              onChange={(e) => setLlmConfig(prev => ({ ...prev, baseUrl: e.target.value }))}
-            />
-          </div>
-          <Button onClick={handleSaveLlmConfig} className="w-full">Save LLM Configuration</Button>
-        </div>
       </Card>
 
       {/* Chat Integrations */}

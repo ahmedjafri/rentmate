@@ -179,6 +179,32 @@ export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onAppr
     return <ContextBubble message={message} taskId={taskId} />;
   }
 
+  // Error message — red warning style, not a normal AI bubble
+  if (msgType === 'error') {
+    return (
+      <div className="flex items-start gap-2.5">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-destructive/15 text-destructive border border-destructive/25">
+          <XCircle className="h-3.5 w-3.5" />
+        </div>
+        <div className="max-w-[85%] min-w-0 overflow-hidden rounded-2xl rounded-tl-md px-4 py-2.5 text-sm bg-destructive/10 border border-destructive/20">
+          <p className="text-[10px] font-semibold mb-1 text-destructive">Error</p>
+          <p className="text-sm text-foreground break-words">{message.content}</p>
+          <div className="flex items-center justify-between mt-1.5">
+            <a
+              href="https://github.com/ahmedjafri/rentmate/issues"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[11px] text-destructive/70 hover:text-destructive underline underline-offset-2"
+            >
+              Report issue
+            </a>
+            <span className="text-[10px] text-muted-foreground">{formatMessageTime(message.timestamp)}</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Internal AI notes — compact, muted, full-width
   if (isAssistant && msgType === 'internal') {
     const steps = message.content.split('\n').filter(Boolean);

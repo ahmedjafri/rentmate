@@ -16,7 +16,7 @@ const paymentConfig = {
 const Tenants = () => {
   const { tenants, properties, isLoading } = useApp();
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<'all' | 'active' | 'inactive'>('active');
+  const [filter, setFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
   const propertyMap = useMemo(() =>
     Object.fromEntries(properties.map(p => [p.id, p])),

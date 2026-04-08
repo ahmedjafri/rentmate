@@ -13,6 +13,9 @@ import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SuggestionOptions } from './SuggestionOptions';
 import { ProgressSteps } from './ProgressSteps';
+import { OnboardingChips, OnboardingChoice } from './OnboardingChips';
+import { OnboardingProgress } from './OnboardingProgress';
+import { useOnboarding } from '@/hooks/useOnboarding';
 import { graphqlQuery, TASK_QUERY, SEND_MESSAGE_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
 import { apiMessagesToChatThread } from '@/hooks/useApiData';
 
@@ -40,7 +43,7 @@ function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }
 }
 
 export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
-  const { chatPanel, closeChat, openChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, addDocument, replaceDocument, removeDocument, refreshData } = useApp();
+  const { chatPanel, closeChat, openChat, setChatConversationId, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, addDocument, replaceDocument, removeDocument, refreshData } = useApp();
   const [dismissConfirm, setDismissConfirm] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -48,6 +51,8 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const [activeTaskTab, setActiveTaskTab] = useState<string>('ai');
   const [participantMessages, setParticipantMessages] = useState<ChatMessage[]>([]);
   const [participantLoading, setParticipantLoading] = useState(false);
+  const onboarding = useOnboarding();
+  const onboardingStartedRef = useRef(false);
 
   const handleDismiss = async () => {
     if (!chatPanel.taskId) return;
@@ -121,7 +126,8 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const activeConversationId = chatPanel.conversationId;
 
   useEffect(() => {
-    if (!activeConversationId || activeTask || activeSuggestion) { setConvMessages([]); return; }
+    if (activeTask || activeSuggestion) { setConvMessages([]); return; }
+    if (!activeConversationId) { setConvMessages([]); onboardingStartedRef.current = false; return; }
     graphqlQuery<{ conversationMessages: Array<{ uid: string; body: string; messageType: string; senderName: string; senderType: string | null; isAi: boolean; isSystem: boolean; draftReply?: string; suggestionId?: string; sentAt: string }> }>(
       CONVERSATION_MESSAGES_QUERY, { uid: activeConversationId }
     ).then(result => {
@@ -207,6 +213,43 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
     const interval = setInterval(() => loadTaskMessages(taskId), 5000);
     return () => clearInterval(interval);
   }, [chatPanel.taskId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Trigger onboarding opening message when fresh account detected
+  useEffect(() => {
+    if (
+      !onboarding.isActive ||
+      onboarding.state?.path_picked ||
+      onboarding.loading ||
+      chatPanel.taskId ||
+      chatPanel.suggestionId ||
+      convMessages.length > 0 ||
+      isTyping ||
+      onboardingStartedRef.current
+    ) return;
+
+    onboardingStartedRef.current = true;
+
+    if (!onboarding.llmConfigured) {
+      // LLM not configured — inject a canned welcome without calling the AI
+      const welcomeMsg: ChatMessage = {
+        id: `msg-onboard-welcome-${Date.now()}`,
+        role: 'assistant',
+        content: "Welcome to RentMate! I'm your AI property management assistant.\n\nBefore we get started, you'll need to connect an AI model so I can help you. You can use any OpenAI-compatible API — OpenAI, Anthropic, DeepSeek, a local Ollama server, or any other provider.",
+        timestamp: new Date(),
+        senderName: 'RentMate',
+        senderType: 'ai',
+        messageType: 'message',
+      };
+      setConvMessages(prev => [...prev, welcomeMsg]);
+    } else {
+      // LLM is configured — ask the AI to send a welcome only if no AI
+      // messages exist yet (avoids duplicate welcome on page reload)
+      const hasAiMessage = convMessages.some(m => m.role === 'assistant');
+      if (!hasAiMessage) {
+        callAI('[onboarding:start]');
+      }
+    }
+  }, [onboarding.isActive, onboarding.loading, onboarding.llmConfigured, onboarding.state?.path_picked, chatPanel.taskId, chatPanel.suggestionId, convMessages.length, isTyping]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load + poll participant messages when chat tab is active
   const loadParticipantMessages = (convoId: string, showLoading = false) => {
@@ -336,7 +379,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
     return () => controller.abort();
   }, [chatPanel.taskId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const addAiMessage = (content: string, context: { taskId?: string | null; suggestionId?: string | null }) => {
+  const addAiMessage = (content: string, context: { taskId?: string | null; suggestionId?: string | null; messageType?: ChatMessage['messageType'] }) => {
     const msg: ChatMessage = {
       id: `msg-${Date.now()}`,
       role: 'assistant',
@@ -344,9 +387,9 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
       timestamp: new Date(),
       senderName: 'RentMate',
       senderType: 'ai',
-      messageType: 'message',
+      messageType: context.messageType ?? 'message',
     };
-    if (activeConversationId && !context.taskId && !context.suggestionId) {
+    if (!context.taskId && !context.suggestionId) {
       setConvMessages(prev => [...prev, msg]);
     } else {
       addChatMessage(context, msg);
@@ -397,7 +440,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
         let sseError: Error | null = null;
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
-          let event: { type: string; text?: string; reply?: string; stream_id?: string; message?: string; conversation_id?: string; suggestion_messages?: Array<{ id: string; body: string; suggestion_id?: string }> };
+          let event: { type: string; text?: string; reply?: string; stream_id?: string; message?: string; conversation_id?: string; suggestion_messages?: Array<{ id: string; body: string; suggestion_id?: string }>; onboarding?: Parameters<typeof onboarding.update>[0] };
           try { event = JSON.parse(line.slice(6)); } catch { continue; }
 
           if (event.type === 'stream_id') {
@@ -408,6 +451,10 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
           } else if (event.type === 'done') {
             receivedDone = true;
             activeStreamIdRef.current = null;
+            // Capture the conversation ID from the backend when we didn't have one
+            if (event.conversation_id && !activeConversationId && !taskId) {
+              setChatConversationId(event.conversation_id);
+            }
             // Only persist the thinking trace if there were actual tool-call
             // steps beyond the initial "Thinking…" placeholder.
             const traceLines = progressLines.filter(l => l !== 'Thinking\u2026');
@@ -423,13 +470,15 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
               };
               if (taskId) {
                 addChatMessage({ taskId }, thinkingMsg);
-              } else if (activeConversationId && !suggestionId) {
+              } else if (!suggestionId) {
                 setConvMessages(prev => [...prev, thinkingMsg]);
               } else {
                 addChatMessage({ suggestionId }, thinkingMsg);
               }
             }
-            addAiMessage(event.reply!, { taskId, suggestionId });
+            if (event.reply) {
+              addAiMessage(event.reply, { taskId, suggestionId });
+            }
             // Append any suggestion messages the agent created (flushed
             // after the AI reply so they appear below it).
             if (event.suggestion_messages) {
@@ -444,7 +493,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
                   messageType: 'suggestion',
                   suggestionId: sm.suggestion_id,
                 };
-                if (activeConversationId && !taskId && !suggestionId) {
+                if (!taskId && !suggestionId) {
                   setConvMessages(prev => [...prev, sugMsg]);
                 } else {
                   addChatMessage({ taskId, suggestionId }, sugMsg);
@@ -453,6 +502,10 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
             }
             // Refresh data so new suggestions created by agent tools appear
             refreshData();
+            // Update onboarding progress from SSE payload
+            if (event.onboarding) {
+              onboarding.update(event.onboarding);
+            }
           } else if (event.type === 'error') {
             activeStreamIdRef.current = null;
             sseError = new Error(event.message ?? 'AI unavailable');
@@ -476,11 +529,40 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
       activeStreamIdRef.current = null;
       console.error('Chat error:', e);
       const errorMsg = e instanceof Error ? e.message : "I'm having trouble connecting right now.";
-      addAiMessage(errorMsg, { taskId, suggestionId });
+      addAiMessage(errorMsg, { taskId, suggestionId, messageType: 'error' });
       toast.error('RentMate is unavailable right now.');
     } finally {
       setIsTyping(false);
       setProgressLog([]);
+    }
+  };
+
+  const handleOnboardingFileUpload = async (file: File) => {
+    const tempId = `uploading-${Date.now()}`;
+    const tempDoc: ManagedDocument = {
+      id: tempId,
+      fileName: file.name,
+      fileType: file.type,
+      fileSize: file.size,
+      documentType: 'lease',
+      status: 'uploading',
+      uploadedAt: new Date(),
+      tags: [],
+    };
+    addDocument(tempDoc);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('document_type', 'lease');
+      const res = await authFetch('/api/upload-document', { method: 'POST', body: formData });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { document_id } = await res.json();
+      replaceDocument(tempId, { ...tempDoc, id: document_id, status: 'analyzing' });
+      // Notify the agent asynchronously — don't block the upload spinner
+      setTimeout(() => handleSend(`I've uploaded a document: ${file.name}`), 0);
+    } catch {
+      removeDocument(tempId);
+      toast.error('Failed to upload file. Please try again.');
     }
   };
 
@@ -545,7 +627,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
       senderType: 'manager',
       messageType: 'message',
     };
-    if (activeConversationId && !chatPanel.taskId && !chatPanel.suggestionId) {
+    if (!chatPanel.taskId && !chatPanel.suggestionId) {
       setConvMessages(prev => [...prev, userMsg]);
     } else {
       addChatMessage(
@@ -1051,10 +1133,14 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
         </Tabs>
       ) : (
         <>
+          {/* Onboarding progress strip */}
+          {onboarding.isActive && onboarding.state && (
+            <OnboardingProgress steps={onboarding.state.steps} onDismiss={onboarding.dismiss} />
+          )}
           {/* Messages (non-task) */}
           <ScrollArea className="flex-1 overflow-x-hidden" ref={scrollRef}>
             <div className="p-4 space-y-4 w-full overflow-x-hidden">
-              {messages.length === 0 && !isTyping && (
+              {messages.length === 0 && !isTyping && !onboarding.isActive && (
                 <div className="text-center py-8 text-muted-foreground">
                   <Bot className="h-8 w-8 mx-auto mb-2 opacity-40" />
                   <p className="text-sm font-medium">
@@ -1121,6 +1207,32 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
                   </div>
                 </div>
               )}
+              {/* Onboarding chips — show after first AI message when no path picked */}
+              {onboarding.isActive && !onboarding.state?.path_picked && !isTyping &&
+                messages.length > 0 && messages[messages.length - 1].role === 'assistant' && (
+                <OnboardingChips
+                  llmNotConfigured={!onboarding.llmConfigured}
+                  onSelect={(choice) => {
+                    if (choice === 'configure_llm') {
+                      window.location.href = '/settings';
+                      return;
+                    }
+                    if (choice === 'upload') {
+                      chatInputRef.current?.triggerFileUpload();
+                      return;
+                    }
+                    const textMap: Record<OnboardingChoice, string> = {
+                      upload: '',
+                      manual: 'I want to add a property manually',
+                      prose: 'Let me tell you about my portfolio',
+                      skip: "I'll skip for now and explore on my own",
+                      configure_llm: '',
+                    };
+                    handleSend(textMap[choice]);
+                  }}
+                  disabled={isTyping}
+                />
+              )}
             </div>
           </ScrollArea>
           {activeSuggestion && activeSuggestion.status === 'pending' ? (
@@ -1138,7 +1250,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
               }}
             />
           ) : (
-            <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} />
+            <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} onFileUpload={onboarding.isActive ? handleOnboardingFileUpload : undefined} />
           )}
         </>
       )}

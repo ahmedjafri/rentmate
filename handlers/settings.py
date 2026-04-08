@@ -7,53 +7,19 @@ from pydantic import BaseModel
 
 from gql.services.settings_service import (  # noqa: F401 — re-exported
     _DEFAULT_AUTONOMY,
+    get_agent_integrations,
     get_autonomy_settings,
     get_integrations,
+    get_llm_settings,
     load_app_settings,
+    save_agent_integrations,
     save_app_settings,
     save_integrations,
+    save_llm_settings,
 )
 from handlers.deps import require_user
 
 router = APIRouter()
-
-_ENV_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
-
-
-def read_env_file() -> dict:
-    result = {}
-    if not os.path.exists(_ENV_FILE):
-        return result
-    with open(_ENV_FILE) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                result[k.strip()] = v.strip().strip('"').strip("'")
-    return result
-
-
-def write_env_file(updates: dict):
-    lines = []
-    handled = set()
-    if os.path.exists(_ENV_FILE):
-        with open(_ENV_FILE) as f:
-            for line in f:
-                stripped = line.rstrip("\n")
-                if stripped and not stripped.startswith("#") and "=" in stripped:
-                    k = stripped.split("=", 1)[0].strip()
-                    if k in updates:
-                        lines.append(f"{k}={updates[k]}")
-                        handled.add(k)
-                    else:
-                        lines.append(stripped)
-                else:
-                    lines.append(stripped)
-    for k, v in updates.items():
-        if k not in handled:
-            lines.append(f"{k}={v}")
-    with open(_ENV_FILE, "w") as f:
-        f.write("\n".join(lines) + "\n")
 
 
 _SECRET_FIELDS = {"token", "bridge_token", "api_key"}
@@ -117,10 +83,11 @@ class SettingsBody(BaseModel):
 async def get_settings(request: Request):
     await require_user(request)
     stored = load_app_settings()
+    llm = get_llm_settings()
     return {
-        "api_key": _SECRET_MASK if os.getenv("LLM_API_KEY") else "",
-        "model": os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
-        "base_url": os.getenv("LLM_BASE_URL", ""),
+        "api_key": _SECRET_MASK if llm.get("api_key") else "",
+        "model": llm.get("model", "openai/gpt-4o-mini"),
+        "base_url": llm.get("base_url", ""),
         "autonomy": stored.get("autonomy", _DEFAULT_AUTONOMY),
     }
 
@@ -129,29 +96,108 @@ async def get_settings(request: Request):
 async def update_settings(body: SettingsBody, request: Request):
     await require_user(request)
 
-    # LLM config — persisted to .env
-    env_updates = {}
+    # LLM config — persisted to DB, cached in os.environ
+    has_llm_update = False
     if body.api_key:
         os.environ["LLM_API_KEY"] = body.api_key
-        env_updates["LLM_API_KEY"] = body.api_key
+        has_llm_update = True
     if body.model is not None:
         os.environ["LLM_MODEL"] = body.model
-        env_updates["LLM_MODEL"] = body.model
+        has_llm_update = True
     if body.base_url is not None:
         os.environ["LLM_BASE_URL"] = body.base_url
-        env_updates["LLM_BASE_URL"] = body.base_url
-    if env_updates:
-        write_env_file(env_updates)
+        has_llm_update = True
+    if has_llm_update:
+        save_llm_settings(
+            api_key=body.api_key or None,
+            model=body.model,
+            base_url=body.base_url,
+        )
         from llm import llm as llm_module
         llm_module.reconfigure()
+        # Mark onboarding step done if active
+        from gql.services.settings_service import get_onboarding_state, is_llm_configured, update_onboarding_step
+        from handlers.deps import SessionLocal as _SL
+        if body.api_key and is_llm_configured():
+            _db = _SL()
+            try:
+                _state = get_onboarding_state(_db)
+                if _state and _state.get("status") == "active":
+                    update_onboarding_step(_db, step="configure_llm")
+                    _db.commit()
+            finally:
+                _db.close()
 
-    # Autonomy settings — persisted to data/settings.json
+    # Autonomy settings — persisted to DB
     if body.autonomy is not None:
         stored = load_app_settings()
         stored["autonomy"] = body.autonomy
         save_app_settings(stored)
 
     return {"ok": True}
+
+
+@router.post("/settings/llm/test")
+async def test_llm(request: Request):
+    """Send a tiny completion request to verify the LLM config works.
+
+    Uses the same provider-mapping logic as the real agent path so the test
+    accurately reflects whether chat will succeed.
+    """
+    await require_user(request)
+    import time
+
+    from openai import OpenAI
+
+    model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
+    api_key = os.getenv("LLM_API_KEY", "")
+    base_url = os.getenv("LLM_BASE_URL") or None
+
+    if not api_key:
+        return {"ok": False, "error": "No API key configured."}
+
+    # Mirror the provider mapping from llm/client.py so the test hits the
+    # same endpoint the agent will use.
+    actual_model = model
+    if "/" in model and not base_url:
+        provider_prefix, _, model_name = model.partition("/")
+        _PROVIDER_BASES = {
+            "deepseek": "https://api.deepseek.com",
+            "anthropic": "https://api.anthropic.com/v1",
+            "openai": "https://api.openai.com/v1",
+        }
+        if provider_prefix in _PROVIDER_BASES:
+            base_url = _PROVIDER_BASES[provider_prefix]
+            actual_model = model_name
+
+    # Default base_url for the OpenAI client
+    if not base_url:
+        base_url = "https://api.openai.com/v1"
+
+    t0 = time.time()
+    try:
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=15)
+        resp = client.chat.completions.create(
+            model=actual_model,
+            messages=[{"role": "user", "content": "Reply with exactly: OK"}],
+            max_tokens=5,
+        )
+        elapsed = round(time.time() - t0, 2)
+        reply = (resp.choices[0].message.content or "").strip()
+        return {
+            "ok": True,
+            "model": f"{actual_model} via {base_url}",
+            "reply": reply,
+            "elapsed": elapsed,
+        }
+    except Exception as e:
+        elapsed = round(time.time() - t0, 2)
+        return {
+            "ok": False,
+            "model": f"{actual_model} via {base_url}",
+            "error": str(e)[:300],
+            "elapsed": elapsed,
+        }
 
 
 @router.get("/settings/integrations")
@@ -276,10 +322,9 @@ class AgentIntegrationsBody(BaseModel):
 
 
 @router.get("/settings/agent/integrations")
-async def get_agent_integrations(request: Request):
+async def get_agent_integrations_endpoint(request: Request):
     await require_user(request)
-    stored = load_app_settings()
-    agent_int = stored.get("agent_integrations", {})
+    agent_int = get_agent_integrations()
     return {
         "brave_api_key": "",  # never echo the key back
         "web_search_enabled": agent_int.get("web_search_enabled", False),
@@ -290,19 +335,13 @@ async def get_agent_integrations(request: Request):
 async def update_agent_integrations(body: AgentIntegrationsBody, request: Request):
     await require_user(request)
 
-    env_updates = {}
     if body.brave_api_key:
         os.environ["BRAVE_API_KEY"] = body.brave_api_key
-        env_updates["BRAVE_API_KEY"] = body.brave_api_key
 
-    stored = load_app_settings()
-    agent_int = stored.get("agent_integrations", {})
-    agent_int["web_search_enabled"] = body.web_search_enabled
-    stored["agent_integrations"] = agent_int
-    _save_app_settings(stored)
-
-    if env_updates:
-        write_env_file(env_updates)
+    save_agent_integrations(
+        brave_api_key=body.brave_api_key or None,
+        web_search_enabled=body.web_search_enabled,
+    )
 
     # Restart the agent loop so it picks up the new config
     from llm.registry import agent_registry

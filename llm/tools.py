@@ -1070,3 +1070,441 @@ class EditMemoryTool(Tool):
             return json.dumps({"status": "ok", "message": f"Context {action} for {label}."})
         finally:
             db.close()
+
+
+class CreatePropertyTool(Tool):
+    """Create a new property with optional units — used during onboarding or manual setup."""
+
+    @property
+    def name(self) -> str:
+        return "create_property"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Create a new property with optional units. Provide at minimum an address. "
+            "Optionally specify property name, city, state, postal_code, property_type "
+            "(single_family or multi_family), and unit_labels (list of strings like "
+            "['1A', '1B', '2A']). If unit_count is provided instead of labels, units "
+            "will be auto-labeled (Unit 1, Unit 2, etc.)."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["address"],
+            "properties": {
+                "address": {"type": "string", "description": "Street address of the property"},
+                "name": {"type": "string", "description": "Optional display name for the property"},
+                "city": {"type": "string", "description": "City"},
+                "state": {"type": "string", "description": "State abbreviation (e.g. WA, CA)"},
+                "postal_code": {"type": "string", "description": "ZIP/postal code"},
+                "property_type": {
+                    "type": "string",
+                    "enum": ["single_family", "multi_family"],
+                    "description": "Property type (default: multi_family)",
+                },
+                "unit_labels": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Explicit unit labels like ['1A', '1B', '2A']",
+                },
+                "unit_count": {
+                    "type": "integer",
+                    "description": "Number of units (auto-labeled). Ignored if unit_labels provided.",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        from db.session import SessionLocal
+        from gql.services.property_service import PropertyService
+        from gql.services.settings_service import (
+            get_onboarding_state,
+            set_onboarding_path,
+            update_onboarding_step,
+        )
+        from llm.tracing import log_trace
+
+        address = kwargs["address"]
+        unit_labels = kwargs.get("unit_labels")
+        unit_count = kwargs.get("unit_count")
+
+        # Auto-generate labels from count if no explicit labels
+        if not unit_labels and unit_count and unit_count > 0:
+            unit_labels = [f"Unit {i}" for i in range(1, unit_count + 1)]
+
+        # Infer property type: single unit (or none specified) → single_family
+        property_type = kwargs.get("property_type")
+        if not property_type:
+            effective_units = len(unit_labels) if unit_labels else (unit_count or 1)
+            property_type = "single_family" if effective_units <= 1 else "multi_family"
+
+        db = SessionLocal.session_factory()
+        try:
+            prop, units = PropertyService.create_property(
+                db,
+                address=address,
+                property_type=property_type,
+                name=kwargs.get("name"),
+                city=kwargs.get("city"),
+                state=kwargs.get("state"),
+                postal_code=kwargs.get("postal_code"),
+                unit_labels=unit_labels,
+            )
+
+            # Update onboarding progress if active
+            onboarding = get_onboarding_state(db)
+            if onboarding and onboarding.get("status") == "active":
+                update_onboarding_step(db, step="add_property")
+                if not onboarding.get("path_picked"):
+                    set_onboarding_path(db, path="manual")
+                log_trace(
+                    "onboarding", "tool", "First property created",
+                    tool_name="create_property",
+                    detail={"property_id": prop.id, "address": address},
+                )
+
+            db.commit()
+
+            unit_str = ", ".join(u.label for u in units) if units else "none"
+            return json.dumps({
+                "status": "ok",
+                "property_id": str(prop.id),
+                "address": prop.address_line1,
+                "name": prop.name,
+                "units": [{"id": str(u.id), "label": u.label} for u in units],
+                "message": f"Created property '{prop.name or prop.address_line1}' with {len(units)} unit(s): {unit_str}",
+            })
+        except Exception as e:
+            db.rollback()
+            return json.dumps({"status": "error", "message": str(e)})
+        finally:
+            db.close()
+
+
+class CreateTenantTool(Tool):
+    """Create a tenant and optionally a lease for them."""
+
+    @property
+    def name(self) -> str:
+        return "create_tenant"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Create a new tenant. Pass whatever information you have — only "
+            "first_name and last_name are required. If property_id and unit_id "
+            "are provided the tenant is linked to that unit. If lease dates and "
+            "rent are also provided a full lease record is created. Any extra "
+            "context (e.g. pet policy, move-in notes, partial lease details) "
+            "can be passed in the 'notes' field and saved to the tenant's "
+            "permanent context."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["first_name", "last_name"],
+            "properties": {
+                "first_name": {"type": "string", "description": "Tenant first name"},
+                "last_name": {"type": "string", "description": "Tenant last name"},
+                "email": {"type": "string", "description": "Email address"},
+                "phone": {"type": "string", "description": "Phone number"},
+                "property_id": {"type": "string", "description": "Property ID to attach lease to"},
+                "unit_id": {"type": "string", "description": "Unit ID within the property"},
+                "lease_start": {"type": "string", "description": "Lease start date (YYYY-MM-DD)"},
+                "lease_end": {"type": "string", "description": "Lease end date (YYYY-MM-DD)"},
+                "rent_amount": {"type": "number", "description": "Monthly rent amount"},
+                "notes": {"type": "string", "description": "Context or notes about this tenant to save permanently"},
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        from db.models import Tenant as SqlTenant
+        from db.session import SessionLocal
+
+        first_name = kwargs["first_name"]
+        last_name = kwargs["last_name"]
+
+        db = SessionLocal.session_factory()
+        try:
+            import uuid
+            from datetime import UTC, datetime
+
+            # Check for existing tenant by name
+            from sqlalchemy import func
+            existing = (
+                db.query(SqlTenant)
+                .filter(
+                    func.lower(SqlTenant.first_name) == first_name.lower(),
+                    func.lower(SqlTenant.last_name) == last_name.lower(),
+                )
+                .first()
+            )
+            if existing:
+                return json.dumps({
+                    "status": "already_exists",
+                    "tenant_id": str(existing.id),
+                    "message": f"Tenant {first_name} {last_name} already exists.",
+                })
+
+            # Always create the tenant first
+            tenant = SqlTenant(
+                id=str(uuid.uuid4()),
+                first_name=first_name,
+                last_name=last_name,
+                email=kwargs.get("email"),
+                phone=kwargs.get("phone"),
+                created_at=datetime.now(UTC),
+            )
+            db.add(tenant)
+            db.flush()
+
+            result: dict[str, Any] = {
+                "status": "ok",
+                "tenant_id": str(tenant.id),
+                "message": f"Created tenant {first_name} {last_name}.",
+            }
+
+            # Link tenant to unit if property_id + unit_id provided
+            unit = None
+            if kwargs.get("property_id") and kwargs.get("unit_id"):
+                from sqlalchemy import select
+
+                from db.models import Unit as SqlUnit
+                unit = db.execute(
+                    select(SqlUnit).where(
+                        SqlUnit.id == kwargs["unit_id"],
+                        SqlUnit.property_id == kwargs["property_id"],
+                    )
+                ).scalar_one_or_none()
+                if unit:
+                    unit.tenant_id = tenant.id
+                    result["unit_label"] = unit.label
+                    result["message"] = f"Created tenant {first_name} {last_name} on {unit.label}."
+
+            # Create lease if we have enough detail (dates required)
+            if unit and kwargs.get("lease_start") and kwargs.get("lease_end"):
+                from datetime import date as _date
+
+                from db.models import Lease as SqlLease
+                lease = SqlLease(
+                    id=str(uuid.uuid4()),
+                    tenant_id=tenant.id,
+                    unit_id=unit.id,
+                    property_id=kwargs["property_id"],
+                    start_date=_date.fromisoformat(kwargs["lease_start"]),
+                    end_date=_date.fromisoformat(kwargs["lease_end"]),
+                    rent_amount=kwargs.get("rent_amount", 0),
+                    payment_status="current",
+                    created_at=datetime.now(UTC),
+                )
+                db.add(lease)
+                result["lease_id"] = str(lease.id)
+                result["message"] = f"Created tenant {first_name} {last_name} with lease on {unit.label}."
+
+            # Capture any partial lease info that didn't make it into a record
+            partial_bits = []
+            if kwargs.get("rent_amount") and "lease_id" not in result:
+                partial_bits.append(f"rent ${kwargs['rent_amount']}/mo")
+            if kwargs.get("lease_start") and "lease_id" not in result:
+                partial_bits.append(f"start {kwargs['lease_start']}")
+            if kwargs.get("lease_end") and "lease_id" not in result:
+                partial_bits.append(f"end {kwargs['lease_end']}")
+
+            # Combine explicit notes + partial lease info into tenant context
+            context_parts = []
+            notes = kwargs.get("notes", "").strip()
+            if notes:
+                context_parts.append(notes)
+            if partial_bits:
+                context_parts.append(f"Lease info (partial): {', '.join(partial_bits)}")
+
+            if context_parts:
+                from sqlalchemy.orm.attributes import flag_modified
+                new_ctx = "\n".join(context_parts)
+                existing_ctx = tenant.context or ""
+                tenant.context = (existing_ctx + "\n" + new_ctx).strip() if existing_ctx else new_ctx
+                flag_modified(tenant, "context")
+
+            db.commit()
+            return json.dumps(result)
+        except Exception as e:
+            db.rollback()
+            import traceback
+            print(f"[create_tenant] ERROR: {e}")
+            traceback.print_exc()
+            return json.dumps({"status": "error", "message": str(e)})
+        finally:
+            db.close()
+
+
+class ReadDocumentTool(Tool):
+    """Read uploaded document content, search document text, or list recent documents."""
+
+    @property
+    def name(self) -> str:
+        return "read_document"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Access uploaded documents. Use document_id to read a specific document's "
+            "extracted data and raw text. Use query to search across all document text "
+            "via semantic similarity. Use list_recent to see what documents exist."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "string",
+                    "description": "Look up a specific document by ID",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Search document text for relevant content (semantic search)",
+                },
+                "list_recent": {
+                    "type": "boolean",
+                    "description": "List the most recent uploaded documents",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        from db.models import Document
+        from db.session import SessionLocal
+
+        db = SessionLocal.session_factory()
+        try:
+            # --- Read specific document ---
+            if kwargs.get("document_id"):
+                doc = db.query(Document).filter_by(id=kwargs["document_id"]).first()
+                if not doc:
+                    return json.dumps({"status": "error", "message": "Document not found"})
+                raw_preview = (doc.raw_text or "")[:3000]
+                return json.dumps({
+                    "status": "ok",
+                    "document": {
+                        "id": doc.id,
+                        "filename": doc.filename,
+                        "document_type": doc.document_type,
+                        "status": doc.status,
+                        "extracted_data": doc.extracted_data,
+                        "extraction_meta": doc.extraction_meta,
+                        "raw_text_preview": raw_preview,
+                        "raw_text_chars": len(doc.raw_text or ""),
+                    },
+                })
+
+            # --- Search document chunks ---
+            if kwargs.get("query"):
+                from backends.wire import vector_backend
+                results = vector_backend.query(kwargs["query"], n_results=5)
+                return json.dumps({
+                    "status": "ok",
+                    "matches": results,
+                })
+
+            # --- List recent documents ---
+            if kwargs.get("list_recent"):
+                docs = (
+                    db.query(Document)
+                    .order_by(Document.created_at.desc())
+                    .limit(10)
+                    .all()
+                )
+                items = []
+                for doc in docs:
+                    extracted = doc.extracted_data or {}
+                    leases = extracted.get("leases", []) if isinstance(extracted, dict) else []
+                    items.append({
+                        "id": doc.id,
+                        "filename": doc.filename,
+                        "status": doc.status,
+                        "document_type": doc.document_type,
+                        "leases_found": len(leases),
+                        "created_at": doc.created_at.isoformat() if doc.created_at else None,
+                    })
+                return json.dumps({"status": "ok", "documents": items})
+
+            return json.dumps({"status": "error", "message": "Provide document_id, query, or list_recent"})
+        except Exception as e:
+            return json.dumps({"status": "error", "message": str(e)})
+        finally:
+            db.close()
+
+
+class UpdateOnboardingTool(Tool):
+    """Mark onboarding steps done or dismiss onboarding entirely."""
+
+    @property
+    def name(self) -> str:
+        return "update_onboarding"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Update onboarding progress. Either mark a specific step as done "
+            "(add_property, upload_document, tell_concerns) or dismiss onboarding "
+            "entirely when the user wants to skip."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "step": {
+                    "type": "string",
+                    "enum": ["add_property", "upload_document", "tell_concerns"],
+                    "description": "The step to mark as done",
+                },
+                "dismiss": {
+                    "type": "boolean",
+                    "description": "Set to true to dismiss onboarding entirely",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        from db.session import SessionLocal
+        from gql.services.settings_service import (
+            dismiss_onboarding,
+            get_onboarding_state,
+            update_onboarding_step,
+        )
+        from llm.tracing import log_trace
+
+        step = kwargs.get("step")
+        dismiss = kwargs.get("dismiss", False)
+
+        db = SessionLocal.session_factory()
+        try:
+            if dismiss:
+                state = dismiss_onboarding(db)
+                db.commit()
+                log_trace("onboarding", "tool", "Onboarding dismissed by agent", detail=state)
+                return json.dumps({"status": "ok", "message": "Onboarding dismissed."})
+
+            if step:
+                state = get_onboarding_state(db)
+                if not state or state.get("status") != "active":
+                    return json.dumps({"status": "ok", "message": "Onboarding is not active."})
+                update_onboarding_step(db, step=step)
+                db.commit()
+                log_trace("onboarding", "tool", f"Step '{step}' marked done", detail={"step": step})
+                return json.dumps({"status": "ok", "message": f"Step '{step}' marked as done."})
+
+            return json.dumps({"status": "ok", "message": "No action taken."})
+        except Exception as e:
+            db.rollback()
+            return json.dumps({"status": "error", "message": str(e)})
+        finally:
+            db.close()
