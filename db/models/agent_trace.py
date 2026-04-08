@@ -1,10 +1,10 @@
 """Persistent trace log for agent tool calls, LLM responses, and suggestion lifecycle."""
 from sqlalchemy import Column, DateTime, String, Text
 
-from db.models.base import Base
+from db.models.base import Base, HasAccountId
 
 
-class AgentTrace(Base):
+class AgentTrace(Base, HasAccountId):
     __tablename__ = "agent_traces"
 
     id = Column(String(36), primary_key=True)

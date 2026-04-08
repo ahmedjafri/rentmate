@@ -1,11 +1,11 @@
 # RentMate
 
 [![Tests](https://github.com/ahmedjafri/rentmate/actions/workflows/test.yml/badge.svg)](https://github.com/ahmedjafri/rentmate/actions/workflows/test.yml)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![License: FSL-1.1-Apache-2.0](https://img.shields.io/badge/License-FSL--1.1--Apache--2.0-blue.svg)](LICENSE)
 
 > **Pre-alpha software** — This project is under active development and is not ready for production use. APIs, database schemas, and features may change without notice.
 
-An open-source, agent-first property management platform.
+A fair-source, agent-first property management platform.
 
 ## Why RentMate
 
@@ -44,10 +44,17 @@ npm install              # installs Python deps (poetry) + frontend
 cp .env.example .env
 # Edit .env — set LLM_API_KEY to any OpenAI-compatible key
 
-npm run dev              # starts API (port 8002) + Vite dev server
+npm run db:migrate       # apply database migrations
+npm start                # starts API (port 8000)
 ```
 
-Open [http://localhost:8002](http://localhost:8002) and log in with the password from `RENTMATE_PASSWORD` (default: `rentmate`).
+For development:
+```bash
+npm run dev              # starts API (port 8002) + Vite dev server
+                         # auto-recreates DB when schema changes
+```
+
+Open [http://localhost:8002](http://localhost:8002) (dev) or [http://localhost:8000](http://localhost:8000) (prod) and log in with the password from `RENTMATE_PASSWORD` (default: `rentmate`).
 
 ## Environment Variables
 
@@ -98,4 +105,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-AGPL-3.0 — see [LICENSE](LICENSE).
+FSL-1.1-Apache-2.0 — see [LICENSE](LICENSE). Companies under $10MM revenue may self-host freely.

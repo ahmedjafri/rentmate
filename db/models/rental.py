@@ -14,10 +14,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
-from .base import Base, HasContext
+from .base import Base, HasAccountId, HasContext
 
 
-class Property(Base, HasContext):
+class Property(Base, HasAccountId, HasContext):
     """
     A property managed by the landlord.
     """
@@ -53,7 +53,7 @@ class Property(Base, HasContext):
     )
 
 
-class Unit(Base, HasContext):
+class Unit(Base, HasAccountId, HasContext):
     """
     A rentable unit within a property.
     """
@@ -89,7 +89,7 @@ class Unit(Base, HasContext):
     )
 
 
-class Tenant(Base, HasContext):
+class Tenant(Base, HasAccountId, HasContext):
     """
     A tenant/contact.
     """
@@ -119,7 +119,7 @@ class Tenant(Base, HasContext):
         return [lease.unit for lease in self.leases if lease.unit is not None]
 
 
-class Lease(Base):
+class Lease(Base, HasAccountId):
     """
     A lease agreement between a tenant and a unit.
     """

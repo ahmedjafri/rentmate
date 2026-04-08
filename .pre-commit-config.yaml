@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: check-migrations
+        name: Check Alembic migrations are up to date
+        entry: bash scripts/check_migrations.sh
+        language: system
+        pass_filenames: false
+        files: ^db/models/

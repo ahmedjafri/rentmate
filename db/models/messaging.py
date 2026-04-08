@@ -16,7 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
-from .base import Base, HasContext
+from .base import Base, HasAccountId, HasContext
 
 
 class ParticipantType(str, Enum):
@@ -42,7 +42,7 @@ class MessageType(str, Enum):
     THREAD     = "thread"    # deprecated — use MESSAGE
 
 
-class ExternalContact(Base, HasContext):
+class ExternalContact(Base, HasAccountId, HasContext):
     """
     Non-auth contacts (e.g., maintenance vendors).
     """
@@ -56,11 +56,10 @@ class ExternalContact(Base, HasContext):
     role_label = Column(String(100), nullable=True)
     notes = Column(Text, nullable=True)
     extra = Column(JSON, nullable=True)
-    account_id = Column(String(36), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
-class Conversation(Base):
+class Conversation(Base, HasAccountId):
     """
     A message thread (1:1 or group).
     Optionally tied to a task and/or a property/unit/lease for context.

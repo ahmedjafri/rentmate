@@ -2,10 +2,10 @@ from datetime import datetime
 
 from sqlalchemy import JSON, Column, DateTime, String
 
-from .base import Base
+from .base import Base, HasAccountId
 
 
-class AutomationRevision(Base):
+class AutomationRevision(Base, HasAccountId):
     """
     A snapshot of the automation config, stored as a linked list (git-like versioning).
     """

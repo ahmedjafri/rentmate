@@ -132,6 +132,14 @@ setup_env() {
     fi
 }
 
+# ── Database setup ────────────────────────────────────────────────────────────
+
+setup_database() {
+    info "Running database migrations..."
+    npm run db:migrate --prefix "$INSTALL_DIR"
+    ok "Database migrated"
+}
+
 # ── Build frontend ────────────────────────────────────────────────────────────
 
 build_frontend() {
@@ -157,8 +165,9 @@ print_next_steps() {
         echo ""
     fi
 
-    echo -e "  Start:   ${BOLD}cd ${INSTALL_DIR} && npm run dev${NC}"
-    echo -e "  Open:    ${CYAN}http://localhost:8002${NC}  (password: rentmate)"
+    echo -e "  Start:   ${BOLD}cd ${INSTALL_DIR} && npm run db:migrate && npm start${NC}"
+    echo -e "  Open:    ${CYAN}http://localhost:8000${NC}  (password: rentmate)"
+    echo -e "  Dev:     ${BOLD}npm run dev${NC}  (auto-recreates DB on schema change)"
     echo -e "  Docs:    ${CYAN}https://github.com/ahmedjafri/rentmate${NC}"
     echo ""
 }
@@ -179,6 +188,7 @@ main() {
     clone_or_update
     install_deps
     setup_env
+    setup_database
     build_frontend
 
     print_next_steps

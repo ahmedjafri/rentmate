@@ -91,6 +91,8 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
   const navigate = useNavigate();
   const pageCtx = usePageContext();
 
+  const location = useLocation();
+  const isDashboard = location.pathname === '/';
   const pendingSuggestions = suggestions.filter(s => s.status === 'pending');
   const attentionCount = pendingSuggestions.length;
 
@@ -173,7 +175,7 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
             <main className="flex-1 overflow-auto">
               {children}
             </main>
-            {chatPanel.isOpen && <ChatPanel />}
+            {chatPanel.isOpen && !isDashboard && <ChatPanel />}
           </div>
         </div>
       </div>

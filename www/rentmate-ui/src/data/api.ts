@@ -385,6 +385,23 @@ export const UPDATE_ENTITY_CONTEXT_MUTATION = `
   }
 `;
 
+export const CONVERSATIONS_QUERY = `
+  query GetConversations($conversationType: String!, $limit: Int) {
+    conversations(conversationType: $conversationType, limit: $limit) {
+      uid
+      conversationType
+      title
+      lastMessageAt
+      updatedAt
+      lastMessageBody
+      lastMessageSenderName
+      propertyName
+      participantCount
+      unreadCount
+    }
+  }
+`;
+
 export const ASSIGN_VENDOR_TO_TASK_MUTATION = `
   mutation AssignVendorToTask($taskId: String!, $vendorId: String!) {
     assignVendorToTask(taskId: $taskId, vendorId: $vendorId) {

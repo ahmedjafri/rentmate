@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import relationship
 
-from .base import Base
+from .base import Base, HasAccountId
 
 
 class TaskNumberSequence(Base):
@@ -19,7 +19,7 @@ class TaskNumberSequence(Base):
     last_number = Column(Integer, nullable=False, default=0)
 
 
-class Task(Base):
+class Task(Base, HasAccountId):
     """
     A first-class work-item (task / action-desk item).
     Owns task metadata; links directly to its AI conversation thread.
@@ -28,7 +28,6 @@ class Task(Base):
 
     id           = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     task_number  = Column(Integer, nullable=True, index=True)   # assigned at insert, per-account
-    account_id   = Column(String(36), nullable=False)           # required (NOT NULL)
 
     title        = Column(String(500), nullable=True)
     task_status  = Column(String(20),  nullable=True)

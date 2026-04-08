@@ -25,11 +25,13 @@ RUN NO_CLONE=1 RENTMATE_DIR=/rentmate bash install.sh
 ENV PATH="/root/.local/bin:$PATH"
 
 # Verify build artifacts
-RUN test -d /rentmate/www/rentmate/dist \
+RUN test -d /rentmate/www/rentmate-ui/dist \
     || (echo "FAIL: frontend dist/ missing after install" && exit 1)
 RUN test -f /rentmate/.env \
     || (echo "FAIL: .env missing after install" && exit 1)
-RUN poetry run python -c "import fastapi, sqlalchemy, chromadb" \
+RUN test -f /rentmate/data/rentmate.db \
+    || (echo "FAIL: database not created after install" && exit 1)
+RUN poetry run python -c "import fastapi, sqlalchemy" \
     || (echo "FAIL: required Python packages not importable" && exit 1)
 
 # Default: start the server so the test runner can probe it

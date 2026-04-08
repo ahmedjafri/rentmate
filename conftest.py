@@ -33,11 +33,32 @@ def _no_llm_suggestion(request):
 
 def pytest_addoption(parser):
     parser.addoption("--pdf", action="store", default=None, help="Path to PDF for document extraction tests")
+    parser.addoption("--postgres", action="store_true", default=False, help="Run tests against a real Postgres container via testcontainers")
+
+
+@pytest.fixture(scope="session")
+def _pg_engine(request):
+    """Session-scoped Postgres engine via testcontainers (only created when --postgres is passed)."""
+    if not request.config.getoption("--postgres"):
+        yield None
+        return
+    from testcontainers.postgres import PostgresContainer
+
+    with PostgresContainer("postgres:16-alpine") as pg:
+        eng = create_engine(pg.get_connection_url())
+        Base.metadata.create_all(eng)
+        yield eng
+        eng.dispose()
 
 
 @pytest.fixture
-def engine():
-    """Fresh in-memory SQLite database per test — guarantees zero cross-test contamination."""
+def engine(request, _pg_engine):
+    """Per-test database engine. Uses Postgres when --postgres is passed, otherwise in-memory SQLite."""
+    if _pg_engine is not None:
+        # Re-use the session-scoped Postgres engine; tables are already created.
+        # Per-test isolation is handled by the transaction rollback in the `db` fixture.
+        return _pg_engine
+
     eng = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},

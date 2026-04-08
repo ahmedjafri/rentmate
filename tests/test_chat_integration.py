@@ -43,9 +43,6 @@ def _make_engine():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    import main as _main
-    with patch.object(_main, "engine", engine):
-        _main._migrate_schema()
     return engine
 
 

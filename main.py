@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
+from sqlalchemy import inspect as sa_inspect
 from strawberry.fastapi import GraphQLRouter
 
 from db.models import Base
@@ -46,78 +46,45 @@ _gql_logger = logging.getLogger("rentmate.gql")
 
 # ─── database ────────────────────────────────────────────────────────────────
 
-_MIGRATE_COLS = [
-    ("documents",      "sha256_checksum",   "TEXT"),
-    ("documents",      "suggestion_states",  "TEXT"),
-    ("documents",      "confirmed_at",       "DATETIME"),
-    ("documents",      "extraction_meta",    "TEXT"),
-    ("conversations",  "conversation_type",        "VARCHAR(20)"),
-    ("conversations",  "parent_conversation_id",   "VARCHAR(36)"),
-    ("conversations",  "ai_initiated",             "BOOLEAN NOT NULL DEFAULT 0"),
-    ("conversations",  "extra",                    "TEXT"),
-    ("tasks",          "task_number",              "INTEGER"),
-    ("tasks",          "ai_conversation_id",       "VARCHAR(36)"),
-    ("tasks",          "parent_conversation_id",   "VARCHAR(36)"),
-    ("tasks",          "external_conversation_id", "VARCHAR(36)"),
-    ("tasks",          "resolved_at",              "TIMESTAMP"),
-    ("tasks",          "steps",                    "TEXT"),
-    ("messages",       "message_type",       "VARCHAR(20)"),
-    ("messages",       "sender_name",        "VARCHAR(255)"),
-    ("messages",       "is_ai",              "BOOLEAN NOT NULL DEFAULT 0"),
-    ("messages",       "draft_reply",        "TEXT"),
-    ("messages",       "approval_status",    "VARCHAR(20)"),
-    ("messages",       "related_task_ids",   "TEXT"),
-    ("leases",         "payment_status",     "VARCHAR(20) DEFAULT 'current'"),
-    ("properties",     "property_type",      "VARCHAR(20) DEFAULT 'multi_family'"),
-    ("properties",     "source",             "VARCHAR(20)"),
-    ("properties",     "context",            "TEXT"),
-    ("units",          "context",            "TEXT"),
-    ("tenants",        "context",            "TEXT"),
-    ("external_contacts", "context",         "TEXT"),
-    ("tasks",             "context",         "TEXT"),
-]
 
+def _ensure_schema():
+    """Manage DB schema based on environment.
 
-def _migrate_schema():
-    """Add columns that may be missing from older schema versions."""
-    new_cols = _MIGRATE_COLS
-    tables = {t for t, _, _ in new_cols}
-    with engine.connect() as conn:
-        # Detect DB dialect and query existing columns in one pass per table
-        dialect = engine.dialect.name
-        existing: set[tuple[str, str]] = set()
-        if dialect == "sqlite":
-            present_tables: set[str] = set()
-            try:
-                rows = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
-                present_tables = {row[0] for row in rows}
-            except Exception:
-                pass
-            for table in tables:
-                if table not in present_tables:
-                    # Mark all columns as already "existing" so we don't try ALTER
-                    for _, col, _ in new_cols:
-                        existing.add((table, col))
-                    continue
-                try:
-                    rows = conn.execute(text(f"PRAGMA table_info({table})"))
-                    for row in rows:
-                        existing.add((table, row[1]))
-                except Exception:
-                    pass
-        else:
-            result = conn.execute(text("""
-                SELECT table_name, column_name
-                FROM information_schema.columns
-                WHERE table_schema = 'public'
-                AND table_name = ANY(:tables)
-            """), {"tables": list(tables)})
-            existing = {(row[0], row[1]) for row in result}
+    Development (RENTMATE_ENV=development): auto-recreate if schema drifted.
+    Production (default): require explicit `alembic upgrade head`.
+    """
+    is_dev = os.getenv("RENTMATE_ENV") == "development"
+    inspector = sa_inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    model_tables = set(Base.metadata.tables.keys())
 
-        for table, col, typ in new_cols:
-            if (table, col) not in existing:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {typ}"))
-                conn.commit()
+    if not existing_tables or existing_tables == {"alembic_version"}:
+        Base.metadata.create_all(engine)
+        return
+
+    # Check for schema drift (missing tables or columns)
+    needs_update = False
+    for table_name in model_tables:
+        if table_name not in existing_tables:
+            needs_update = True
+            break
+        existing_cols = {c["name"] for c in inspector.get_columns(table_name)}
+        model_cols = {c.name for c in Base.metadata.tables[table_name].columns}
+        if not model_cols.issubset(existing_cols):
+            needs_update = True
+            break
+
+    if not needs_update:
+        return
+
+    if is_dev:
+        print("Schema changed — recreating dev database...")
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+    else:
+        print("ERROR: Database schema is out of date.")
+        print("Run: poetry run alembic upgrade head")
+        raise SystemExit(1)
 
 # ─── GraphQL ─────────────────────────────────────────────────────────────────
 
@@ -148,9 +115,8 @@ async def lifespan(app: FastAPI):
 
     # Run DB init and nanobot gateway startup in parallel (both are blocking I/O / imports)
     async def _init_db():
-        await asyncio.to_thread(Base.metadata.create_all, engine)
-        await asyncio.to_thread(_migrate_schema)
-        print("Database tables created/migrated")
+        await asyncio.to_thread(_ensure_schema)
+        print("Database schema ready")
 
     await asyncio.gather(
         _init_db(),

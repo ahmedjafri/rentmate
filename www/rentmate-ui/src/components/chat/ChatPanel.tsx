@@ -39,7 +39,7 @@ function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }
   return modeConfig[task.mode];
 }
 
-export function ChatPanel() {
+export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const { chatPanel, closeChat, openChat, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, addDocument, replaceDocument, removeDocument, refreshData } = useApp();
   const [dismissConfirm, setDismissConfirm] = useState(false);
   const [dismissing, setDismissing] = useState(false);
@@ -596,7 +596,12 @@ export function ChatPanel() {
       : 'Ask RentMate anything...';
 
   return (
-    <div className="fixed inset-0 z-50 bg-card flex flex-col overflow-hidden md:static md:inset-auto md:z-auto md:w-[320px] lg:w-[380px] md:border-l md:shrink-0 md:h-full">
+    <div className={cn(
+      "flex flex-col overflow-hidden bg-card",
+      embedded
+        ? "h-full w-full"
+        : "fixed inset-0 z-50 md:static md:inset-auto md:z-auto md:w-[320px] lg:w-[380px] md:border-l md:shrink-0 md:h-full"
+    )}>
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b bg-card shrink-0">
         <div className="flex items-center gap-2 min-w-0">
@@ -668,9 +673,11 @@ export function ChatPanel() {
               )}
             </>
           )}
-          <Button variant="ghost" size="icon" onClick={closeChat} className="h-7 w-7 rounded-lg shrink-0 hover:bg-muted hover:text-muted-foreground">
-            <X className="h-4 w-4" />
-          </Button>
+          {!embedded && (
+            <Button variant="ghost" size="icon" onClick={closeChat} className="h-7 w-7 rounded-lg shrink-0 hover:bg-muted hover:text-muted-foreground">
+              <X className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </div>
 

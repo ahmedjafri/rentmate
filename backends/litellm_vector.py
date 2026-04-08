@@ -9,15 +9,15 @@ import uuid
 
 import litellm
 from sqlalchemy import Column, String, Text, create_engine, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-from db.models.base import Base
+_VectorBase = declarative_base()
 
 _data_dir = os.getenv("RENTMATE_DATA_DIR", "./data")
 _DB_PATH = os.path.join(_data_dir, "vectors.db")
 
 
-class DocumentChunk(Base):
+class DocumentChunk(_VectorBase):
     __tablename__ = "document_chunks"
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     doc_id = Column(String(36), nullable=False, index=True)
@@ -32,7 +32,7 @@ class LiteLLMVectorBackend:
     def __init__(self):
         os.makedirs(os.path.dirname(_DB_PATH) or ".", exist_ok=True)
         self._engine = create_engine(f"sqlite:///{_DB_PATH}")
-        Base.metadata.create_all(self._engine, tables=[DocumentChunk.__table__], checkfirst=True)
+        _VectorBase.metadata.create_all(self._engine, checkfirst=True)
         self._Session = sessionmaker(bind=self._engine)
         self._model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 

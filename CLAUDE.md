@@ -29,9 +29,15 @@ Tests use `testcontainers` to spin up a real Postgres instance — no manual DB 
 ```bash
 poetry run alembic revision --autogenerate -m "description"  # generate migration
 poetry run alembic upgrade head                               # apply migrations
+poetry run alembic check                                      # verify models match migrations
+npm run db:reset                                              # delete dev DB (recreated on next startup)
 ```
 
-Migrations live in `db/migrations/versions/`. The `alembic.ini` `sqlalchemy.url` is a placeholder; the real URL comes from the engine in `db/session.py`.
+Dev mode (`npm run dev` / `run.sh dev`) auto-recreates the DB when schema changes — no manual migration needed.
+Production (`npm start`) requires explicit `alembic upgrade head` before startup.
+
+A pre-commit hook and CI both verify that model changes have corresponding migration files.
+Migrations live in `db/migrations/versions/`.
 
 ### Frontend
 ```bash

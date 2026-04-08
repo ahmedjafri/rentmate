@@ -4,10 +4,10 @@ from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, Index, String, Text
 
-from .base import Base
+from .base import Base, HasAccountId
 
 
-class AgentMemory(Base):
+class AgentMemory(Base, HasAccountId):
     __tablename__ = "agent_memory"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

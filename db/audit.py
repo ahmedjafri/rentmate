@@ -26,6 +26,7 @@ from .models import (
     Property,
     Task,
     Tenant,
+    Unit,
 )
 
 logger = logging.getLogger("rentmate.audit")
@@ -77,19 +78,16 @@ def _task_exists(
 
 
 def _get_account_id(db: Session, property_id: Optional[str], unit_id: Optional[str]) -> str:
-    from sqlalchemy import text
+    """Lookup the account that owns a property/unit."""
     try:
         if property_id:
-            res = db.execute(text("SELECT account_id FROM properties WHERE id = :id"), {"id": property_id}).fetchone()
-            if res and res[0]:
-                return res[0]
+            prop = db.query(Property).filter(Property.id == property_id).first()
+            if prop and prop.account_id:
+                return prop.account_id
         if unit_id:
-            res = db.execute(text("SELECT account_id FROM units WHERE id = :id"), {"id": unit_id}).fetchone()
-            if res and res[0]:
-                return res[0]
-        res = db.execute(text("SELECT id FROM hosted_accounts LIMIT 1")).fetchone()
-        if res and res[0]:
-            return res[0]
+            unit = db.query(Unit).filter(Unit.id == unit_id).first()
+            if unit and unit.account_id:
+                return unit.account_id
     except Exception:
         pass
     return "00000000-0000-0000-0000-000000000001"

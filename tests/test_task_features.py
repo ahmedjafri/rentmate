@@ -1,7 +1,7 @@
 # tests/test_task_features.py
 """
 Comprehensive tests for the unified Task model, GraphQL queries/mutations,
-DocumentTag, DocumentTask models, and _migrate_schema() column additions.
+and DocumentTag/DocumentTask models.
 
 Covers:
 - tasks query (no filter, category filter, status filter, comma-separated status, source filter)
@@ -15,17 +15,15 @@ Covers:
 - confirmDocument mutation
 - DocumentTask model (create, unique constraint)
 - DocumentTag model (create)
-- _migrate_schema() idempotent column additions
 """
 
 from datetime import date, timedelta
 
 import pytest
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from db.models import (
-    Base,
     Conversation,
     Document,
     DocumentTag,
@@ -875,18 +873,22 @@ class TestSendMessageMutation:
         fetched_task = db.execute(select(Task).where(Task.id == task.id)).scalar_one()
         assert msg.conversation_id == fetched_task.ai_conversation_id
 
-    def test_send_message_to_nonexistent_conversation(self, db):
+    def test_send_message_to_orphan_conversation(self, db):
+        """Sending a message to a conversation not linked to any task should still succeed."""
+        conv = Conversation(subject="Orphan chat")
+        db.add(conv)
+        db.flush()
+
         result = schema.execute_sync(
             self.SEND_MSG_MUTATION,
             context_value=_gql_context(db),
             variable_values={
                 "input": {
-                    "conversationId": "bad-convo-id",
+                    "conversationId": conv.id,
                     "body": "This should still work (creates message row)",
                 }
             },
         )
-        # send_message doesn't validate conversation existence — it just inserts
         assert result.errors is None
 
     def test_send_multiple_messages_shows_in_tasks_query(self, db):
@@ -1239,112 +1241,8 @@ class TestDocumentTagModel:
 
 
 # ---------------------------------------------------------------------------
-# _migrate_schema() — idempotent column additions
+# _ensure_schema() — startup schema management (see test_startup.py for full coverage)
 # ---------------------------------------------------------------------------
-
-class TestMigrateSchema:
-
-    def test_migrate_schema_adds_missing_columns(self):
-        """
-        _migrate_schema() must survive being run against a schema that already
-        has all the columns (the normal case in tests). It should not raise.
-        """
-
-        eng = create_engine(
-            "sqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-        )
-        Base.metadata.create_all(eng)
-
-        # Patch main.engine to our in-memory engine so _migrate_schema uses it
-        import main as main_module
-        original_engine = main_module.engine
-        main_module.engine = eng
-        try:
-            # Should not raise even though columns already exist
-            main_module._migrate_schema()
-        finally:
-            main_module.engine = original_engine
-
-    def test_migrate_schema_adds_column_to_bare_table(self):
-        """
-        _migrate_schema() adds the column when it is genuinely missing.
-        """
-
-        eng = create_engine(
-            "sqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-        )
-        # Create tables WITHOUT the new columns by first creating all,
-        # then manually dropping the column-bearing column via raw SQL
-        # (SQLite doesn't support DROP COLUMN until 3.35, so we instead
-        # create a minimal bare table and confirm ALTER TABLE works).
-        with eng.connect() as conn:
-            # Create a minimal conversations table without ai_initiated
-            conn.execute(text(
-                "CREATE TABLE IF NOT EXISTS conversations_bare "
-                "(id TEXT PRIMARY KEY, subject TEXT)"
-            ))
-            # Attempt to add a column as _migrate_schema would
-            conn.execute(text(
-                "ALTER TABLE conversations_bare ADD COLUMN ai_initiated BOOLEAN NOT NULL DEFAULT 0"
-            ))
-            conn.commit()
-
-            # Idempotent — running it again should not raise
-            try:
-                conn.execute(text(
-                    "ALTER TABLE conversations_bare ADD COLUMN ai_initiated BOOLEAN NOT NULL DEFAULT 0"
-                ))
-                conn.commit()
-            except Exception:
-                pass  # Expected — column already exists, same as _migrate_schema behaviour
-
-            # Verify the column is there
-            result = conn.execute(text("PRAGMA table_info(conversations_bare)"))
-            cols = [row[1] for row in result.fetchall()]
-            assert "ai_initiated" in cols
-
-    def test_migrate_schema_new_columns_present_after_migration(self):
-        """
-        After _migrate_schema() runs, all expected columns exist in the DB.
-        """
-        from sqlalchemy import inspect as sa_inspect
-
-        eng = create_engine(
-            "sqlite:///:memory:",
-            connect_args={"check_same_thread": False},
-        )
-        Base.metadata.create_all(eng)
-
-        import main as main_module
-        original_engine = main_module.engine
-        main_module.engine = eng
-        try:
-            main_module._migrate_schema()
-        finally:
-            main_module.engine = original_engine
-
-        inspector = sa_inspect(eng)
-
-        conv_cols = {c["name"] for c in inspector.get_columns("conversations")}
-        assert "ai_initiated" in conv_cols, "Missing column in conversations: ai_initiated"
-
-        task_cols = {c["name"] for c in inspector.get_columns("tasks")}
-        for expected in ["task_number", "ai_conversation_id", "parent_conversation_id", "external_conversation_id"]:
-            assert expected in task_cols, f"Missing column in tasks: {expected}"
-
-        msg_cols = {c["name"] for c in inspector.get_columns("messages")}
-        for expected in ["message_type", "sender_name", "is_ai", "draft_reply",
-                         "approval_status", "related_task_ids"]:
-            assert expected in msg_cols, f"Missing column in messages: {expected}"
-
-        lease_cols = {c["name"] for c in inspector.get_columns("leases")}
-        assert "payment_status" in lease_cols
-
-        doc_cols = {c["name"] for c in inspector.get_columns("documents")}
-        for expected in ["sha256_checksum", "suggestion_states", "confirmed_at"]:
-            assert expected in doc_cols, f"Missing column in documents: {expected}"
 
 
 # ---------------------------------------------------------------------------

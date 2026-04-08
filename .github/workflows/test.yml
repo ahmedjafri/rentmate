@@ -36,6 +36,9 @@ jobs:
       - name: Install dependencies
         run: poetry install --no-interaction
 
+      - name: Check migrations up to date
+        run: DATABASE_URL="sqlite://" poetry run alembic check
+
       - name: Run tests
         run: poetry run pytest --tb=short -q
 
@@ -46,3 +49,12 @@ jobs:
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
         run: poetry run pytest -m eval --tb=short -q
+
+  install-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install smoke test (Docker)
+        run: bash tests/test-install.sh

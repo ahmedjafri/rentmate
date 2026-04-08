@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "rentmate"
 version = "0.1.0"
-description = "Open source property management assistant"
+description = "Fair source property management assistant"
 authors = ["RentMate Contributors"]
 readme = "README.md"
 packages = [{ include = "llm" }]
