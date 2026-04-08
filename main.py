@@ -78,7 +78,10 @@ def _ensure_schema():
     if not needs_update:
         return
 
-    if is_dev:
+    import sys
+    is_tty = sys.stdin.isatty()
+
+    if is_dev and is_tty:
         print("\n⚠  Schema drift detected — database doesn't match models.")
         print("   Options:")
         print("     [w] Wipe database and recreate (data will be lost)")

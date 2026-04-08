@@ -1,0 +1,39 @@
+name: rentmate
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: infra/backend.Dockerfile
+    ports:
+      - "8002:8002"
+    volumes:
+      - ../:/app
+      - ../data:/app/data
+    environment:
+      - RENTMATE_ENV=development
+      - RENTMATE_DB_PATH=/tmp/rentmate.db
+    env_file:
+      - ../.env
+    networks:
+      - rentmate-network
+
+  www:
+    build:
+      context: ..
+      dockerfile: infra/frontend.Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../www/rentmate-ui:/app/www/rentmate-ui
+      - /app/www/rentmate-ui/node_modules
+    environment:
+      - VITE_BACKEND_URL=http://api:8002
+    depends_on:
+      - api
+    networks:
+      - rentmate-network
+
+networks:
+  rentmate-network:
+    driver: bridge
