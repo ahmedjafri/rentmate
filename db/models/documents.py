@@ -12,10 +12,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
-from .base import Base, HasAccountId
+from .base import Base, HasAccountId, HasContext
 
 
-class Document(Base, HasAccountId):
+class Document(Base, HasAccountId, HasContext):
     """
     An uploaded document (e.g. lease PDF).
     """

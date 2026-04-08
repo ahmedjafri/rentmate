@@ -34,15 +34,43 @@ class LiteLLMVectorBackend:
         self._engine = create_engine(f"sqlite:///{_DB_PATH}")
         _VectorBase.metadata.create_all(self._engine, checkfirst=True)
         self._Session = sessionmaker(bind=self._engine)
-        self._model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+
+    def _get_embedding_config(self) -> tuple[str, str | None, str | None]:
+        """Return (model, api_key, api_base) for the embedding call."""
+        model = os.getenv("EMBEDDING_MODEL")
+        api_key = os.getenv("LLM_API_KEY", "")
+        api_base = os.getenv("LLM_BASE_URL") or None
+
+        if model:
+            return model, api_key or None, api_base
+
+        # Infer from the LLM provider — use their embedding model
+        llm_model = os.getenv("LLM_MODEL", "")
+        provider = llm_model.split("/")[0] if "/" in llm_model else ""
+
+        _PROVIDER_EMBEDDING = {
+            "openai": "text-embedding-3-small",
+            "anthropic": "text-embedding-3-small",  # Anthropic has no embedding API; fall back to OpenAI
+            "deepseek": "deepseek/text-embedding-v1",  # hypothetical; DeepSeek may not have embeddings
+        }
+
+        if provider in _PROVIDER_EMBEDDING:
+            return _PROVIDER_EMBEDDING[provider], api_key or None, api_base
+        return "text-embedding-3-small", api_key or None, api_base
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
-        """Get embeddings via litellm."""
+        """Get embeddings via litellm. Returns empty lists if embedding fails."""
+        model, api_key, api_base = self._get_embedding_config()
         try:
-            resp = litellm.embedding(model=self._model, input=texts)
+            kwargs: dict = {"model": model, "input": texts}
+            if api_key:
+                kwargs["api_key"] = api_key
+            if api_base:
+                kwargs["api_base"] = api_base
+            resp = litellm.embedding(**kwargs)
             return [d["embedding"] for d in resp.data]
         except Exception as e:
-            print(f"[vector] Embedding failed: {e}")
+            print(f"[vector] Embedding failed ({model}): {e}")
             return [[] for _ in texts]
 
     def add_document(self, doc_id: str, *, chunks: list[str], metadatas: list[dict]) -> None:

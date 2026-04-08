@@ -110,6 +110,7 @@ async def get_document(
         "progress": doc.progress,
         "extracted_data": doc.extracted_data,
         "extraction_meta": doc.extraction_meta,
+        "context": doc.context,
         "raw_text": doc.raw_text,
         "error_message": doc.error_message,
         "created_at": doc.created_at.isoformat() if doc.created_at else None,
@@ -131,7 +132,7 @@ async def get_document_suggestions(
         return {"groups": [], "extracted": {}}
     suggestions = compute_suggestions(db, doc.extracted_data)
     states = doc.suggestion_states or {}
-    groups = group_suggestions(str(doc.id), doc.filename, suggestions, states, db=db)
+    groups = group_suggestions(str(doc.id), filename=doc.filename, suggestions=suggestions, suggestion_states=states, db=db)
     return {"groups": groups, "extracted": doc.extracted_data}
 
 
@@ -358,7 +359,7 @@ async def get_dashboard_suggestions(
         if not suggestions:
             continue
         states = doc.suggestion_states or {}
-        groups = group_suggestions(str(doc.id), doc.filename, suggestions, states, db=db)
+        groups = group_suggestions(str(doc.id), filename=doc.filename, suggestions=suggestions, suggestion_states=states, db=db)
         all_groups.extend(groups)
     return {"groups": all_groups}
 

@@ -99,7 +99,7 @@ async def process_document(document_id: str) -> None:
     """
     import json
 
-    from backends.wire import storage_backend, vector_backend
+    from backends.wire import storage_backend
 
     SessionLocal = _get_session_factory()
     db: Session = SessionLocal()
@@ -151,16 +151,7 @@ async def process_document(document_id: str) -> None:
             "form_fields_filled": _form_fields_filled,
         }
 
-        # 3. Chunk the text
-        chunks = _split_text(raw_text, chunk_size=800, overlap=100) if raw_text else []
-
-        # 4. Store chunks in vector backend
-        if chunks:
-            _set_progress(db, doc, f"Embedding {len(chunks)} chunks from {n_pages} page(s)…")
-            metadatas = [{"doc_id": document_id, "chunk_index": i} for i in range(len(chunks))]
-            vector_backend.add_document(document_id, chunks=chunks, metadatas=metadatas)
-
-        # 5. LLM extraction pass
+        # 3. LLM extraction pass
         extracted_data = None
         if raw_text or file_bytes:
             _set_progress(db, doc, "Extracting lease details with AI…")

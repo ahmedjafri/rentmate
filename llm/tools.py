@@ -803,7 +803,10 @@ class SaveMemoryTool(Tool):
             "Save a note. Use scope='task' (default) for task-specific observations "
             "like quotes, scheduling details, assessment findings. Use scope='entity' "
             "for permanent knowledge about an entity that applies across all tasks "
-            "(vendor specialties, tenant preferences, property recurring issues)."
+            "(vendor specialties, tenant preferences, property recurring issues, "
+            "document summaries). IMPORTANT: When processing an uploaded document, "
+            "always save a summary of key terms to the document entity "
+            "(entity_type='document') so it's visible on the document page."
         )
 
     @property
@@ -827,7 +830,7 @@ class SaveMemoryTool(Tool):
                 },
                 "entity_type": {
                     "type": "string",
-                    "enum": ["property", "unit", "tenant", "vendor", "general"],
+                    "enum": ["property", "unit", "tenant", "vendor", "document", "general"],
                     "description": "Entity type (required when scope='entity').",
                 },
                 "entity_id": {
@@ -886,6 +889,7 @@ class SaveMemoryTool(Tool):
             "unit": "Unit",
             "tenant": "Tenant",
             "vendor": "ExternalContact",
+            "document": "Document",
         }
         model_name = _MODEL_MAP.get(entity_type)
         if not model_name:
@@ -935,7 +939,7 @@ class RecallMemoryTool(Tool):
             "properties": {
                 "entity_type": {
                     "type": "string",
-                    "enum": ["property", "unit", "tenant", "vendor", "general"],
+                    "enum": ["property", "unit", "tenant", "vendor", "document", "general"],
                     "description": "Filter by entity type. Omit to get all notes.",
                 },
                 "entity_id": {
@@ -965,6 +969,7 @@ class RecallMemoryTool(Tool):
             "unit": "Unit",
             "tenant": "Tenant",
             "vendor": "ExternalContact",
+            "document": "Document",
         }
         model_name = _MODEL_MAP.get(entity_type or "")
         if not model_name:
@@ -1022,7 +1027,7 @@ class EditMemoryTool(Tool):
             "properties": {
                 "entity_type": {
                     "type": "string",
-                    "enum": ["property", "unit", "tenant", "vendor"],
+                    "enum": ["property", "unit", "tenant", "vendor", "document"],
                     "description": "Type of entity whose context to replace.",
                 },
                 "entity_id": {
@@ -1046,6 +1051,7 @@ class EditMemoryTool(Tool):
             "unit": "Unit",
             "tenant": "Tenant",
             "vendor": "ExternalContact",
+            "document": "Document",
         }
         model_name = _MODEL_MAP.get(entity_type)
         if not model_name:
@@ -1353,8 +1359,8 @@ class ReadDocumentTool(Tool):
     def description(self) -> str:
         return (
             "Access uploaded documents. Use document_id to read a specific document's "
-            "extracted data and raw text. Use query to search across all document text "
-            "via semantic similarity. Use list_recent to see what documents exist."
+            "extracted data and raw text. Use query to search across all document text. "
+            "Use list_recent to see what documents exist."
         )
 
     @property
@@ -1368,7 +1374,7 @@ class ReadDocumentTool(Tool):
                 },
                 "query": {
                     "type": "string",
-                    "description": "Search document text for relevant content (semantic search)",
+                    "description": "Search document text for relevant content (keyword search)",
                 },
                 "list_recent": {
                     "type": "boolean",
@@ -1398,19 +1404,28 @@ class ReadDocumentTool(Tool):
                         "status": doc.status,
                         "extracted_data": doc.extracted_data,
                         "extraction_meta": doc.extraction_meta,
+                        "context": doc.context,
                         "raw_text_preview": raw_preview,
                         "raw_text_chars": len(doc.raw_text or ""),
                     },
                 })
 
-            # --- Search document chunks ---
+            # --- Search document text ---
             if kwargs.get("query"):
-                from backends.wire import vector_backend
-                results = vector_backend.query(kwargs["query"], n_results=5)
-                return json.dumps({
-                    "status": "ok",
-                    "matches": results,
-                })
+                query_lower = kwargs["query"].lower()
+                docs = db.query(Document).filter(Document.raw_text.isnot(None)).all()
+                matches = []
+                for d in docs:
+                    if query_lower in (d.raw_text or "").lower():
+                        matches.append({
+                            "id": d.id,
+                            "filename": d.filename,
+                            "status": d.status,
+                            "preview": (d.raw_text or "")[:500],
+                        })
+                    if len(matches) >= 5:
+                        break
+                return json.dumps({"status": "ok", "matches": matches})
 
             # --- List recent documents ---
             if kwargs.get("list_recent"):

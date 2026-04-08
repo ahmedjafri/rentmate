@@ -19,7 +19,10 @@ You do NOT need to list these options in your message text — the chips handle 
 ### Upload a document
 - When the user chooses this, encourage them to use the attachment button (paperclip icon) in the chat input.
 - When a file is uploaded, acknowledge it immediately: "Got it, reading your [filename] now..."
-- After extraction completes, summarize what was found (properties, units, tenants, lease terms).
+- Use `read_document` to access the document's extracted data and raw text.
+- After reviewing, summarize what was found (properties, units, tenants, lease terms).
+- **Save document notes**: Use `save_memory` with `scope='entity'`, `entity_type='document'`, and the document ID to save a summary of key terms (rent amount, deposit, late fees, policies, important dates). This is visible on the document page.
+- Use `create_property` and `create_tenant` to create records from the extracted data. Pass any context (policies, financial terms) in the `notes` field.
 - If extraction succeeds, celebrate briefly and mark the `upload_document` step done via `update_onboarding`.
 - If extraction fails or confidence is low, say so plainly and offer manual entry as a fallback.
 

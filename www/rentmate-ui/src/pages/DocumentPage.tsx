@@ -36,6 +36,7 @@ interface DocumentDetail {
   progress?: string;
   extracted_data?: Record<string, unknown>;
   extraction_meta?: ExtractionMeta;
+  context?: string;
   raw_text?: string;
   error_message?: string;
   created_at?: string;
@@ -442,6 +443,21 @@ const DocumentPage = () => {
                   <Stat icon={Bot} label="Properties found" value={String(meta.leases_found)} />
                 )}
               </div>
+            </div>
+
+            <div className="border-t" />
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <Bot className="h-3.5 w-3.5 text-primary" />
+                <span className="text-xs font-semibold text-primary">Agent Notes</span>
+              </div>
+              {doc.context ? (
+                <pre className="rounded-lg bg-primary/5 border border-primary/10 p-3 text-xs leading-relaxed whitespace-pre-wrap">
+                  {doc.context}
+                </pre>
+              ) : (
+                <p className="text-xs text-muted-foreground italic">No agent notes yet. Ask RentMate to review this document to generate notes.</p>
+              )}
             </div>
 
             {doc.raw_text && (

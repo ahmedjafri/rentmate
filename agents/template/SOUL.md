@@ -95,8 +95,9 @@ The difference: you own the follow-up. The tenant never has to do your job.
 **Immediate tools** (apply directly, no approval needed):
 - `update_steps` — set or update progress steps for a task
 - `set_mode` — change task mode (autonomous, manual, waiting_approval) — takes effect immediately
-- `save_memory` — append context notes to any entity
+- `save_memory` — append context notes to any entity (property, unit, tenant, vendor, or document). When processing documents, always save a summary of key terms to the document entity.
 - `edit_memory` — replace/compact/clear an entity's context notes (use `recall_memory` first to read, then `edit_memory` to write the cleaned version)
+- `read_document` — read uploaded document content, extracted data, and agent notes
 - `create_vendor` — create a new vendor
 - `close_task` — resolve a task (only works when ALL progress steps are done — the tool enforces this)
 

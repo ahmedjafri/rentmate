@@ -5,7 +5,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ChatMessageBubble } from './ChatMessage';
-import { ChatInput, ChatInputHandle } from './ChatInput';
+import { ChatInput, ChatInputHandle, PendingAttachment } from './ChatInput';
 import { useApp } from '@/context/AppContext';
 import { ActionDeskTask, ChatMessage, LinkedConversation, ManagedDocument, categoryLabels, TaskMode } from '@/data/mockData';
 import { getToken, authFetch } from '@/lib/auth';
@@ -106,6 +106,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<ChatInputHandle>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<import('./ChatInput').PendingAttachment[]>([]);
   // Track in-flight stream IDs so we can reconnect on panel reopen
   const activeStreamIdRef = useRef<string | null>(null);
   const [isTyping, setIsTyping] = useState(false);
@@ -537,91 +538,57 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
     }
   };
 
-  const handleOnboardingFileUpload = async (file: File) => {
-    const tempId = `uploading-${Date.now()}`;
-    const tempDoc: ManagedDocument = {
-      id: tempId,
-      fileName: file.name,
-      fileType: file.type,
-      fileSize: file.size,
-      documentType: 'lease',
-      status: 'uploading',
-      uploadedAt: new Date(),
-      tags: [],
-    };
-    addDocument(tempDoc);
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('document_type', 'lease');
-      const res = await authFetch('/api/upload-document', { method: 'POST', body: formData });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const { document_id } = await res.json();
-      replaceDocument(tempId, { ...tempDoc, id: document_id, status: 'analyzing' });
-      // Notify the agent asynchronously — don't block the upload spinner
-      setTimeout(() => handleSend(`I've uploaded a document: ${file.name}`), 0);
-    } catch {
-      removeDocument(tempId);
-      toast.error('Failed to upload file. Please try again.');
-    }
-  };
-
-  const handleFileUpload = async (file: File) => {
+  const uploadFile = async (file: File): Promise<{ id: string; filename: string } | null> => {
     const taskId = chatPanel.taskId;
-    if (!taskId) return;
-
-    const tempId = `uploading-${Date.now()}`;
-    const tempDoc: ManagedDocument = {
-      id: tempId,
-      fileName: file.name,
-      fileType: file.type,
-      fileSize: file.size,
-      documentType: 'other',
-      status: 'uploading',
-      uploadedAt: new Date(),
-      tags: [],
-      actionDeskTaskId: taskId,
-    };
-    addDocument(tempDoc);
+    const docType = onboarding.isActive ? 'lease' : 'other';
 
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('document_type', 'other');
-      formData.append('task_id', taskId);
+      formData.append('document_type', docType);
+      if (taskId) formData.append('task_id', taskId);
       const res = await authFetch('/api/upload-document', { method: 'POST', body: formData });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const { document_id } = await res.json();
-
-      replaceDocument(tempId, { ...tempDoc, id: document_id, status: 'analyzing' });
-
-      const msgContent = `Attached: ${file.name}`;
-      const contextMsg: ChatMessage = {
-        id: `msg-${Date.now()}`,
-        role: 'user',
-        content: msgContent,
-        timestamp: new Date(),
-        senderName: 'You',
-        senderType: 'manager',
-        messageType: 'context',
-      };
-      addChatMessage({ taskId }, contextMsg);
-      if (activeTask?.aiConversationId) {
-        await graphqlQuery(SEND_MESSAGE_MUTATION, {
-          input: { conversationId: activeTask.aiConversationId, body: msgContent, messageType: 'context', senderName: 'You', isAi: false },
+      const data = await res.json();
+      const document_id = data.document_id;
+      // Only add to document list for new uploads (not duplicates)
+      if (!data.duplicate) {
+        addDocument({
+          id: document_id,
+          fileName: file.name,
+          fileType: file.type,
+          fileSize: file.size,
+          documentType: docType,
+          status: 'analyzing',
+          uploadedAt: new Date(),
+          tags: [],
+          ...(taskId ? { actionDeskTaskId: taskId } : {}),
         });
       }
+      return { id: document_id, filename: file.name };
     } catch {
-      removeDocument(tempId);
       toast.error('Failed to upload file. Please try again.');
+      return null;
     }
   };
 
-  const handleSend = (content: string, insertedFromMessageId?: string) => {
+  const handleSend = (content: string, attachments?: PendingAttachment[], insertedFromMessageId?: string) => {
+    // Build the message text — include attachment references if present
+    let messageText = content;
+    const readyAttachments = (attachments ?? []).filter(a => a.documentId);
+    if (readyAttachments.length > 0) {
+      const names = readyAttachments.map(a => a.filename).join(', ');
+      if (!messageText) {
+        messageText = `I've uploaded: ${names}`;
+      }
+      const refs = readyAttachments.map(a => `${a.documentId} (${a.filename})`).join(', ');
+      messageText += `\n\n[Attached documents: ${refs}]`;
+    }
+
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
       role: 'user',
-      content,
+      content: messageText,
       timestamp: new Date(),
       senderName: 'You',
       senderType: 'manager',
@@ -649,7 +616,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
       return; // don't call AI for approval confirmations
     }
 
-    callAI(content);
+    callAI(messageText);
   };
 
   const handleInsertCleared = (messageId: string) => {
@@ -1010,7 +977,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
               </div>
             ) : (
               <div className="border-t shrink-0">
-                <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} onFileUpload={handleFileUpload} />
+                <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
               </div>
             )}
           </TabsContent>
@@ -1250,7 +1217,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
               }}
             />
           ) : (
-            <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} onFileUpload={onboarding.isActive ? handleOnboardingFileUpload : undefined} />
+            <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
           )}
         </>
       )}

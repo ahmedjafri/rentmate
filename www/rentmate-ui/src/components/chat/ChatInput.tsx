@@ -1,14 +1,25 @@
-import { useState, useRef, useEffect, forwardRef, useImperativeHandle, useCallback } from 'react';
-import { Send, Paperclip, Loader2 } from 'lucide-react';
+import { useState, useRef, useEffect, forwardRef, useImperativeHandle, useCallback, Dispatch, SetStateAction } from 'react';
+import { Send, Paperclip, Loader2, X, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 
+export interface PendingAttachment {
+  localId: string;
+  documentId: string | null;  // null while uploading
+  filename: string;
+  status: 'uploading' | 'ready' | 'error';
+}
+
 interface Props {
-  onSend: (message: string, insertedFromMessageId?: string) => void;
+  onSend: (message: string, attachments?: PendingAttachment[], insertedFromMessageId?: string) => void;
   disabled?: boolean;
   placeholder?: string;
   onInsertCleared?: (messageId: string) => void;
-  onFileUpload?: (file: File) => Promise<void>;
+  /** Controlled attachment list — managed by parent to survive re-renders. */
+  attachments?: PendingAttachment[];
+  setAttachments?: Dispatch<SetStateAction<PendingAttachment[]>>;
+  /** Upload a file and return { id, filename } or null on failure. */
+  uploadFile?: (file: File) => Promise<{ id: string; filename: string } | null>;
 }
 
 export interface ChatInputHandle {
@@ -16,18 +27,18 @@ export interface ChatInputHandle {
   triggerFileUpload: () => void;
 }
 
-export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, placeholder = 'Type a message...', onInsertCleared, onFileUpload }, ref) => {
+export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, placeholder = 'Type a message...', onInsertCleared, attachments = [], setAttachments, uploadFile }, ref) => {
   const [input, setInput] = useState('');
   const [insertedMessageId, setInsertedMessageId] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const anyUploading = attachments.some(a => a.status === 'uploading');
 
   useImperativeHandle(ref, () => ({
     insertText: (text: string, fromMessageId?: string) => {
       setInput(text);
       setInsertedMessageId(fromMessageId ?? null);
-      // Focus the textarea after inserting
       setTimeout(() => textareaRef.current?.focus(), 50);
     },
     triggerFileUpload: () => {
@@ -46,16 +57,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled,
 
   const handleSend = () => {
     const trimmed = input.trim();
-    if (!trimmed) return;
-    onSend(trimmed, insertedMessageId ?? undefined);
+    const readyAttachments = attachments.filter(a => a.status === 'ready');
+    if (!trimmed && readyAttachments.length === 0) return;
+    if (anyUploading) return;
+    onSend(trimmed, readyAttachments.length > 0 ? readyAttachments : undefined, insertedMessageId ?? undefined);
     setInput('');
     setInsertedMessageId(null);
+    setAttachments?.([]);
   };
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value;
     setInput(newValue);
-    // If user clears the inserted text completely, notify parent
     if (insertedMessageId && newValue.trim() === '') {
       onInsertCleared?.(insertedMessageId);
       setInsertedMessageId(null);
@@ -63,15 +76,36 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled,
   }, [insertedMessageId, onInsertCleared]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !onFileUpload) return;
+    const files = e.target.files;
+    if (!files || !uploadFile || !setAttachments) return;
     e.target.value = '';
-    setUploading(true);
-    try {
-      await onFileUpload(file);
-    } finally {
-      setUploading(false);
+
+    for (const file of Array.from(files)) {
+      const localId = `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const newAtt: PendingAttachment = {
+        localId,
+        documentId: null,
+        filename: file.name,
+        status: 'uploading',
+      };
+      // Add chip immediately
+      setAttachments(prev => [...prev, newAtt]);
+
+      // Upload in background — uses functional setState to avoid stale closures
+      uploadFile(file).then(result => {
+        setAttachments(prev => prev.map(a =>
+          a.localId === localId
+            ? { ...a, documentId: result?.id ?? null, status: result ? 'ready' as const : 'error' as const }
+            : a
+        ));
+      });
     }
+
+    setTimeout(() => textareaRef.current?.focus(), 100);
+  };
+
+  const removeAttachment = (localId: string) => {
+    setAttachments?.(prev => prev.filter(a => a.localId !== localId));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -81,41 +115,81 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled,
     }
   };
 
+  const canSend = !disabled && !anyUploading && (input.trim() || attachments.some(a => a.status === 'ready'));
+
   return (
-    <div className="flex items-end gap-2 p-3 border-t bg-card/50">
-      {onFileUpload && (
-        <>
-          <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={disabled || uploading}
-            className="rounded-xl shrink-0 h-10 w-10 text-muted-foreground hover:text-foreground"
-          >
-            {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
-          </Button>
-        </>
+    <div className="border-t bg-card/50">
+      {/* Attachment chips */}
+      {attachments.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-3 pt-2">
+          {attachments.map(att => (
+            <div
+              key={att.localId}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs ${
+                att.status === 'error'
+                  ? 'bg-destructive/10 text-destructive'
+                  : att.status === 'uploading'
+                    ? 'bg-muted/80 text-muted-foreground'
+                    : 'bg-primary/10 text-foreground border border-primary/20'
+              }`}
+            >
+              {att.status === 'uploading' ? (
+                <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+              ) : att.status === 'ready' ? (
+                <FileText className="h-3 w-3 shrink-0 text-primary" />
+              ) : (
+                <X className="h-3 w-3 shrink-0" />
+              )}
+              <span className="truncate max-w-[180px]">{att.filename}</span>
+              {att.status === 'uploading' && (
+                <span className="text-[10px] text-muted-foreground">uploading…</span>
+              )}
+              <button
+                onClick={() => removeAttachment(att.localId)}
+                className="ml-0.5 p-0.5 rounded hover:bg-foreground/10 transition-colors"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+        </div>
       )}
-      <Textarea
-        ref={textareaRef}
-        value={input}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder}
-        disabled={disabled}
-        className="min-h-[40px] max-h-[200px] resize-none rounded-xl border-border/60 text-sm overflow-y-auto"
-        rows={1}
-      />
-      <Button
-        size="icon"
-        onClick={handleSend}
-        disabled={disabled || !input.trim()}
-        className="rounded-xl shrink-0 h-10 w-10"
-      >
-        <Send className="h-4 w-4" />
-      </Button>
+      {/* Input row */}
+      <div className="flex items-end gap-2 p-3">
+        {uploadFile && (
+          <>
+            <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} accept=".pdf,.doc,.docx,.txt,.csv,.xls,.xlsx,.jpg,.jpeg,.png" />
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={disabled}
+              className="rounded-xl shrink-0 h-10 w-10 text-muted-foreground hover:text-foreground"
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
+          </>
+        )}
+        <Textarea
+          ref={textareaRef}
+          value={input}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          placeholder={attachments.length > 0 ? 'Add a message (optional)...' : placeholder}
+          disabled={disabled}
+          className="min-h-[40px] max-h-[200px] resize-none rounded-xl border-border/60 text-sm overflow-y-auto"
+          rows={1}
+        />
+        <Button
+          size="icon"
+          onClick={handleSend}
+          disabled={!canSend}
+          className="rounded-xl shrink-0 h-10 w-10"
+        >
+          <Send className="h-4 w-4" />
+        </Button>
+      </div>
     </div>
   );
 });

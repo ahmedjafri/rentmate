@@ -119,21 +119,10 @@ class TestProcessDocument:
             })))
         ]
 
-        # Track vector backend calls to verify keyword args
-        vector_calls = []
-
-        def _capture_add_document(doc_id_arg, *, chunks, metadatas):
-            vector_calls.append({
-                "doc_id": doc_id_arg,
-                "num_chunks": len(chunks),
-                "num_metadatas": len(metadatas),
-            })
-
         with (
             patch("llm.document_processor._get_session_factory", return_value=lambda: self.db),
             patch("llm.document_processor._set_progress"),
             patch("backends.wire.storage_backend.download", new_callable=AsyncMock, return_value=pdf_bytes),
-            patch("backends.wire.vector_backend.add_document", side_effect=_capture_add_document),
             patch("litellm.completion", return_value=fake_llm_response),
         ):
             asyncio.get_event_loop().run_until_complete(process_document(doc_id))
@@ -153,11 +142,6 @@ class TestProcessDocument:
         assert doc.extraction_meta["page_count"] > 0
         assert doc.extraction_meta["raw_text_chars"] > 0
 
-        # Vector backend was called with keyword args and got chunks
-        assert len(vector_calls) == 1
-        assert vector_calls[0]["num_chunks"] > 0
-        assert vector_calls[0]["num_metadatas"] == vector_calls[0]["num_chunks"]
-
         # LLM extraction produced results
         assert doc.extracted_data is not None
         assert "leases" in doc.extracted_data
@@ -176,28 +160,22 @@ class TestProcessDocument:
             with pytest.raises(FileNotFoundError, match="gone"):
                 asyncio.get_event_loop().run_until_complete(process_document(doc_id))
 
-    def test_vector_backend_called_with_keyword_args(self):
-        """Regression: add_document must be called with keyword-only
-        chunks/metadatas args, not positional."""
+    def test_extraction_produces_extracted_data(self):
+        """Verify the LLM extraction step populates extracted_data."""
         doc_id = self._create_doc()
         pdf_bytes = _SAMPLE_PDF.read_bytes()
 
-        mock_vector = MagicMock()
         fake_llm = MagicMock()
-        fake_llm.choices = [MagicMock(message=MagicMock(content='{"leases": []}'))]
+        fake_llm.choices = [MagicMock(message=MagicMock(content='{"leases": [{"tenant_first_name": "Test"}]}'))]
 
         with (
             patch("llm.document_processor._get_session_factory", return_value=lambda: self.db),
             patch("llm.document_processor._set_progress"),
             patch("backends.wire.storage_backend.download", new_callable=AsyncMock, return_value=pdf_bytes),
-            patch("backends.wire.vector_backend.add_document", mock_vector),
             patch("litellm.completion", return_value=fake_llm),
         ):
             asyncio.get_event_loop().run_until_complete(process_document(doc_id))
 
-        # Verify add_document was called and used keyword args
-        mock_vector.assert_called_once()
-        call_kwargs = mock_vector.call_args
-        assert "chunks" in call_kwargs.kwargs, "add_document must be called with chunks as keyword arg"
-        assert "metadatas" in call_kwargs.kwargs, "add_document must be called with metadatas as keyword arg"
-        assert len(call_kwargs.args) == 1, "Only doc_id should be positional"
+        doc = self.db.query(Document).filter_by(id=doc_id).one()
+        assert doc.extracted_data is not None
+        assert doc.extracted_data["leases"][0]["tenant_first_name"] == "Test"
