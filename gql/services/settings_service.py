@@ -104,8 +104,19 @@ _LLM_KEY = "llm"
 
 
 def get_llm_settings() -> dict:
-    """Return LLM settings: {api_key, model, base_url}."""
-    return get_setting(_LLM_KEY) or {}
+    """Return LLM settings: {api_key, model, base_url}.
+
+    Prioritizes database settings over environment variables
+    (LLM_API_KEY, LLM_MODEL, LLM_BASE_URL).
+    """
+    import os
+    db_settings = get_setting(_LLM_KEY) or {}
+
+    return {
+        "api_key":  db_settings.get("api_key")  or os.environ.get("LLM_API_KEY", ""),
+        "model":    db_settings.get("model")    or os.environ.get("LLM_MODEL", "openai/gpt-4o-mini"),
+        "base_url": db_settings.get("base_url") or os.environ.get("LLM_BASE_URL", ""),
+    }
 
 
 def save_llm_settings(*, api_key: str | None = None, model: str | None = None, base_url: str | None = None) -> None:

@@ -1,39 +1,50 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
 
-const backendProxy = {
-  '/graphql':      { target: 'http://127.0.0.1:8002', changeOrigin: true },
-  '/auth':         { target: 'http://127.0.0.1:8002', changeOrigin: true },
-  '/api':          { target: 'http://127.0.0.1:8002', changeOrigin: true },
-  '/settings':     { target: 'http://127.0.0.1:8002', changeOrigin: true },
-  '/chat/':        { target: 'http://127.0.0.1:8002', changeOrigin: true },
-  '/automations':  { target: 'http://127.0.0.1:8002', changeOrigin: true },
-  '/action-items': { target: 'http://127.0.0.1:8002', changeOrigin: true },
-  '/dev/':         { target: 'http://127.0.0.1:8002', changeOrigin: true },
-  '/quo-webhook':  { target: 'http://127.0.0.1:8002', changeOrigin: true },
-  '/onboarding':   { target: 'http://127.0.0.1:8002', changeOrigin: true },
-};
-
 // https://vitejs.dev/config/
-export default defineConfig(({ mode }) => ({
-  server: {
-    host: "::",
-    port: 8080,
-    proxy: backendProxy,
-    hmr: {
-      overlay: false,
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  const backendTarget = env.VITE_BACKEND_URL || 'http://127.0.0.1:8002';
+
+  const backendProxy = {
+    '/graphql':      { target: backendTarget, changeOrigin: true },
+    '/auth':         { target: backendTarget, changeOrigin: true },
+    '/api':          { target: backendTarget, changeOrigin: true },
+    '/settings':     { target: backendTarget, changeOrigin: true },
+    '/chat/':        { target: backendTarget, changeOrigin: true },
+    '/automations':  { target: backendTarget, changeOrigin: true },
+    '/action-items': { target: backendTarget, changeOrigin: true },
+    '/dev/':         { target: backendTarget, changeOrigin: true },
+    '/quo-webhook':  { target: backendTarget, changeOrigin: true },
+    '/onboarding':   { target: backendTarget, changeOrigin: true },
+  };
+
+  return {
+    server: {
+      host: "::",
+      port: 8080,
+      allowedHosts: [
+        "localhost",
+        "127.0.0.1",
+        "www.rentmate.orb.local",
+        "www.rentmate"
+      ],
+      proxy: backendProxy,
+      hmr: {
+        overlay: false,
+      },
     },
-  },
-  build: {
-    outDir: 'dist',
-  },
-  plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
+    build: {
+      outDir: 'dist',
     },
-    dedupe: ["react", "react-dom", "react/jsx-runtime"],
-  },
-}));
+    plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
+    resolve: {
+      alias: {
+        "@": path.resolve(__dirname, "./src"),
+      },
+      dedupe: ["react", "react-dom", "react/jsx-runtime"],
+    },
+  };
+});
