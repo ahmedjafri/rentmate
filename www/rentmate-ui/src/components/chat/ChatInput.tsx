@@ -77,10 +77,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled,
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files || !uploadFile || !setAttachments) return;
+    if (!files || files.length === 0 || !uploadFile || !setAttachments) return;
+    // Copy the FileList BEFORE clearing the input — clearing resets the live FileList
+    const fileList = Array.from(files);
     e.target.value = '';
 
-    for (const file of Array.from(files)) {
+    for (const file of fileList) {
       const localId = `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const newAtt: PendingAttachment = {
         localId,
@@ -118,7 +120,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled,
   const canSend = !disabled && !anyUploading && (input.trim() || attachments.some(a => a.status === 'ready'));
 
   return (
-    <div className="border-t bg-card/50">
+    <div className="border-t bg-card/50 shrink-0">
       {/* Attachment chips */}
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5 px-3 pt-2">

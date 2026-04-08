@@ -573,26 +573,36 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
   };
 
   const handleSend = (content: string, attachments?: PendingAttachment[], insertedFromMessageId?: string) => {
-    // Build the message text — include attachment references if present
-    let messageText = content;
     const readyAttachments = (attachments ?? []).filter(a => a.documentId);
-    if (readyAttachments.length > 0) {
+
+    // The visible message text — no document IDs
+    let displayText = content;
+    if (!displayText && readyAttachments.length > 0) {
       const names = readyAttachments.map(a => a.filename).join(', ');
-      if (!messageText) {
-        messageText = `I've uploaded: ${names}`;
-      }
-      const refs = readyAttachments.map(a => `${a.documentId} (${a.filename})`).join(', ');
-      messageText += `\n\n[Attached documents: ${refs}]`;
+      displayText = `Uploaded ${names}`;
     }
+
+    // The text sent to the agent — includes document IDs so it can use read_document
+    let agentText = displayText;
+    if (readyAttachments.length > 0) {
+      const refs = readyAttachments.map(a => `${a.documentId} (${a.filename})`).join(', ');
+      agentText += `\n\n[Attached documents: ${refs}]`;
+    }
+
+    const msgAttachments = readyAttachments.map(a => ({
+      documentId: a.documentId!,
+      filename: a.filename,
+    }));
 
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
       role: 'user',
-      content: messageText,
+      content: displayText,
       timestamp: new Date(),
       senderName: 'You',
       senderType: 'manager',
       messageType: 'message',
+      ...(msgAttachments.length > 0 ? { attachments: msgAttachments } : {}),
     };
     if (!chatPanel.taskId && !chatPanel.suggestionId) {
       setConvMessages(prev => [...prev, userMsg]);
@@ -616,7 +626,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
       return; // don't call AI for approval confirmations
     }
 
-    callAI(messageText);
+    callAI(agentText);
   };
 
   const handleInsertCleared = (messageId: string) => {

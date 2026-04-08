@@ -67,6 +67,11 @@ export interface ChatMessageRelatedTask {
   label: string;
 }
 
+export interface ChatMessageAttachment {
+  documentId: string;
+  filename: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -79,6 +84,7 @@ export interface ChatMessage {
   draftReply?: string;
   approvalStatus?: 'pending' | 'approved' | 'rejected' | 'edited';
   relatedTasks?: ChatMessageRelatedTask[];
+  attachments?: ChatMessageAttachment[];
 }
 
 export interface SuggestionOption {

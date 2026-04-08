@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
-import { Bot, User, Eye, Lightbulb, Check, X, Send, Pencil, ChevronDown, ChevronUp, CheckCircle2, XCircle, Zap, Building2, Wrench, BookOpen, ArrowUpRight, Loader2, Expand } from 'lucide-react';
+import { Bot, User, Eye, Lightbulb, Check, X, Send, Pencil, ChevronDown, ChevronUp, CheckCircle2, XCircle, Zap, Building2, Wrench, BookOpen, ArrowUpRight, Loader2, Expand, FileText } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { getToken } from '@/lib/auth';
@@ -304,6 +304,27 @@ export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onAppr
             </div>
           ) : (
             <p className="break-words overflow-hidden">{message.content}</p>
+          )}
+          {message.attachments && message.attachments.length > 0 && (
+            <div className="flex flex-col gap-1.5 mt-2">
+              {message.attachments.map(att => (
+                <a
+                  key={att.documentId}
+                  href={`/documents/${att.documentId}`}
+                  onClick={(e) => { e.stopPropagation(); }}
+                  className={cn(
+                    'flex items-center gap-2 rounded-lg px-3 py-2 text-xs transition-colors',
+                    isManager
+                      ? 'bg-primary-foreground/15 hover:bg-primary-foreground/25 text-primary-foreground'
+                      : 'bg-muted/60 hover:bg-muted text-foreground',
+                  )}
+                >
+                  <FileText className="h-4 w-4 shrink-0" />
+                  <span className="truncate">{att.filename}</span>
+                  <ArrowUpRight className="h-3 w-3 shrink-0 ml-auto opacity-60" />
+                </a>
+              ))}
+            </div>
           )}
         </div>
       </div>
