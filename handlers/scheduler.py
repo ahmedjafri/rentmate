@@ -124,7 +124,12 @@ def seed_default_tasks():
         if db.query(ScheduledTask).count() > 0:
             return  # Already seeded
 
-        from backends.local_auth import DEFAULT_CREATOR_ID
+        from db.models import Account
+        account = db.query(Account).first()
+        if not account:
+            logger.warning("No account found — cannot seed scheduled tasks")
+            return
+        creator_id = account.id
 
         defaults = [
             {
@@ -199,7 +204,7 @@ def seed_default_tasks():
             nxt = next_run(d["schedule"])
             db.add(ScheduledTask(
                 id=str(uuid.uuid4()),
-                creator_id=DEFAULT_CREATOR_ID,
+                creator_id=creator_id,
                 name=d["name"],
                 prompt=d["prompt"],
                 schedule=d["schedule"],
@@ -283,13 +288,13 @@ async def _tick():
 
 async def _execute_task(task) -> str:
     """Run the agent with the scheduled task's prompt."""
-    from backends.local_auth import DEFAULT_USER_ID, set_request_context
+    from backends.local_auth import set_request_context
     from llm.client import call_agent
     from llm.context import load_account_context
     from llm.registry import agent_registry
 
     # Set request context for the task's creator
-    creator_id = task.creator_id or DEFAULT_USER_ID
+    creator_id = task.creator_id
     tokens = set_request_context(user_id=creator_id, account_id=creator_id)
 
     try:

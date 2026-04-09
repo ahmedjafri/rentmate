@@ -5,8 +5,12 @@ from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
 
-def _default_creator_id():
-    """Resolve creator_id from request context. Raises if not set."""
+def _resolve_creator_id():
+    """Column default: resolve creator_id from request context.
+
+    Raises RuntimeError if no context is set — catches code that creates
+    entities without going through authentication.
+    """
     from backends.local_auth import resolve_creator_id
     return resolve_creator_id()
 
@@ -14,10 +18,11 @@ def _default_creator_id():
 class HasCreatorId:
     """Mixin that adds creator_id to any model, tracking which account created it.
 
-    The default is resolved from the request-scoped context var. If no context
-    is set (e.g. missing authentication), entity creation will raise.
+    The default resolves from the request-scoped context var. If no context
+    is set (missing auth), entity creation raises RuntimeError.
+    Startup code must call set_request_context() first or pass creator_id explicitly.
     """
-    creator_id = Column(String(36), nullable=False, default=_default_creator_id, index=True)
+    creator_id = Column(String(36), nullable=False, default=_resolve_creator_id, index=True)
 
 
 HasAccountId = HasCreatorId  # backward compat alias
