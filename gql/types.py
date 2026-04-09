@@ -597,6 +597,39 @@ class SuggestionType:
 
 
 @strawberry.type
+class DocumentType:
+    uid: str
+    filename: str
+    document_type: str
+    status: str
+    progress: typing.Optional[str] = None
+    extracted_data: typing.Optional[strawberry.scalars.JSON] = None
+    extraction_meta: typing.Optional[strawberry.scalars.JSON] = None
+    context: typing.Optional[str] = None
+    raw_text: typing.Optional[str] = None
+    error_message: typing.Optional[str] = None
+    created_at: typing.Optional[str] = None
+    processed_at: typing.Optional[str] = None
+
+    @classmethod
+    def from_sql(cls, d: typing.Any) -> "DocumentType":
+        return cls(
+            uid=str(d.id),
+            filename=d.filename,
+            document_type=d.document_type or "lease",
+            status=d.status or "pending",
+            progress=d.progress,
+            extracted_data=d.extracted_data,
+            extraction_meta=d.extraction_meta,
+            context=d.context,
+            raw_text=d.raw_text,
+            error_message=d.error_message,
+            created_at=_utc_iso(d.created_at),
+            processed_at=_utc_iso(d.processed_at) if d.processed_at else None,
+        )
+
+
+@strawberry.type
 class DocumentTagType:
     uid: str
     document_id: str

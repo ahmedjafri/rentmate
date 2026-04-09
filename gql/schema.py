@@ -35,6 +35,7 @@ from .types import (
     CreateTenantWithLeaseInput,
     CreateVendorInput,
     DocumentTagType,
+    DocumentType,
     HouseType,
     LeaseType,
     SendMessageInput,
@@ -82,6 +83,13 @@ class Query:
             username=user.get("username") or user.get("email") or "user",
             role="admin",
         )
+
+    @strawberry.field(description="Returns a single document by ID")
+    def document(self, info, uid: str) -> typing.Optional[DocumentType]:
+        _current_user(info)
+        from db.models import Document
+        doc = _session(info).query(Document).filter_by(id=uid).first()
+        return DocumentType.from_sql(doc) if doc else None
 
     @strawberry.field(description="Get private (per-account) notes for an entity")
     def entity_note(self, info, *, entity_type: str, entity_id: str) -> typing.Optional[str]:

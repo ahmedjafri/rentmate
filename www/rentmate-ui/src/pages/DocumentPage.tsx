@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { authFetch } from '@/lib/auth';
+import { graphqlQuery, DOCUMENT_QUERY } from '@/data/api';
 import { useApp } from '@/context/AppContext';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -51,20 +52,6 @@ interface PropertyCandidate {
   score: number;
 }
 
-interface SuggestionGroup {
-  group_id: string;
-  category: 'location' | 'tenant' | 'lease';
-  lease_index: number;
-  title: string;
-  description: string;
-  suggestion_ids: string[];
-  fields: Record<string, string | number | null>;
-  state: string;
-  candidates?: PropertyCandidate[];
-}
-
-interface ChatMessage { role: 'user' | 'assistant'; content: string; }
-
 interface DocumentTagRecord {
   id: string;
   tag_type: 'property' | 'unit' | 'tenant';
@@ -76,40 +63,6 @@ interface DocumentTagRecord {
 
 // ── constants ──────────────────────────────────────────────────────────────────
 
-const categoryConfig = {
-  location: { icon: Building2, label: 'Property & Unit',  pill: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
-  tenant:   { icon: User,      label: 'Tenant',           pill: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400' },
-  lease:    { icon: FileText,  label: 'Lease',            pill: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' },
-} as const;
-
-const fieldLabels: Record<string, string> = {
-  property_address:  'Property Address',
-  property_type:     'Property Type',
-  unit_label:        'Unit',
-  tenant_first_name: 'First Name',
-  tenant_last_name:  'Last Name',
-  tenant_email:      'Email',
-  tenant_phone:      'Phone',
-  lease_start_date:  'Start Date',
-  lease_end_date:    'End Date',
-  monthly_rent:      'Monthly Rent ($)',
-};
-
-const groupFields: Record<string, string[]> = {
-  location: ['property_address', 'property_type', 'unit_label'],
-  tenant:   ['tenant_first_name', 'tenant_last_name', 'tenant_email', 'tenant_phone'],
-  lease:    ['lease_start_date', 'lease_end_date', 'monthly_rent'],
-};
-
-const actionLabels: Record<string, string> = {
-  property:        'Property',
-  unit:            'Unit',
-  tenant:          'Tenant',
-  lease:           'Lease',
-  tenant_updated:  'Tenant updated',
-  lease_updated:   'Lease updated',
-};
-
 // ── DocumentPage ────────────────────────────────────────────────────────────────
 
 const DocumentPage = () => {
@@ -118,37 +71,34 @@ const DocumentPage = () => {
   const { setEntityContext, properties, tenants } = useApp();
 
   const [doc, setDoc] = useState<DocumentDetail | null>(null);
-  const [groups, setGroups] = useState<SuggestionGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [rawTextOpen, setRawTextOpen] = useState(false);
-
-  // Suggestion interaction state — keyed by group_id
-  const [fieldEdits, setFieldEdits] = useState<Record<string, Record<string, string>>>({});
-  const [excluded, setExcluded] = useState<Set<string>>(new Set());
-  // property override: lease_index → existing property_id
-  const [propertyOverrides, setPropertyOverrides] = useState<Record<number, string>>({});
-
-  const [declining, setDeclining] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
-  const [confirmResult, setConfirmResult] = useState<{ created: string[] } | null>(null);
-  const [chatOpen, setChatOpen] = useState<string | null>(null);
-  const [chatHistory, setChatHistory] = useState<Record<string, ChatMessage[]>>({});
-  const [chatInput, setChatInput] = useState('');
-  const [chatLoading, setChatLoading] = useState(false);
 
   // Document links (tags)
   const [tags, setTags] = useState<DocumentTagRecord[]>([]);
   const [tagSearch, setTagSearch] = useState<Record<'property' | 'unit' | 'tenant', string>>({ property: '', unit: '', tenant: '' });
-  const [tagSaving, setTagSaving] = useState<string | null>(null); // entity id being saved/removed
+  const [tagSaving, setTagSaving] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
     Promise.all([
-      authFetch(`/api/document/${id}`).then(r => r.ok ? r.json() : null),
+      graphqlQuery<{ document: DocumentDetail | null }>(DOCUMENT_QUERY, { uid: id }).then(r => r.document),
       authFetch(`/api/document/${id}/tags`).then(r => r.ok ? r.json() : []),
     ]).then(([docData, tagsData]) => {
-      setDoc(docData);
+      if (docData) {
+        // Map GraphQL camelCase to our interface
+        setDoc({
+          ...docData,
+          id: (docData as any).uid,
+          document_type: (docData as any).documentType ?? docData.document_type,
+          extracted_data: (docData as any).extractedData ?? docData.extracted_data,
+          extraction_meta: (docData as any).extractionMeta ?? docData.extraction_meta,
+          raw_text: (docData as any).rawText ?? docData.raw_text,
+          error_message: (docData as any).errorMessage ?? docData.error_message,
+          created_at: (docData as any).createdAt ?? docData.created_at,
+          processed_at: (docData as any).processedAt ?? docData.processed_at,
+        });
+      }
       setTags(tagsData || []);
     }).catch(() => {}).finally(() => setLoading(false));
   }, [id]);
@@ -186,136 +136,34 @@ const DocumentPage = () => {
     finally { setTagSaving(null); }
   };
 
-  const getFields = useCallback((group: SuggestionGroup): Record<string, string | number | null> => {
-    const base = { ...group.fields };
-    const edits = fieldEdits[group.group_id] || {};
-    const keys = groupFields[group.category] || Object.keys(base);
-    const merged: Record<string, string | number | null> = {};
-    for (const k of keys) {
-      merged[k] = k in edits ? (edits[k] === '' ? null : edits[k]) : (base[k] ?? null);
-    }
-    return merged;
-  }, [fieldEdits]);
+  // Old suggestion handlers removed — suggestions now created by agent via create_suggestion tool.
+  // Dead code below is wrapped in {false && ...} in the JSX and will be cleaned up in a future pass.
+  const groups: any[] = [];
+  const fieldEdits: Record<string, Record<string, string>> = {};
+  const excluded = new Set<string>();
+  const propertyOverrides: Record<number, string> = {};
+  const confirming = false;
+  const confirmed = false;
+  const confirmResult: { created: string[] } | null = null;
+  const chatOpen: string | null = null;
+  const chatHistory: Record<string, any[]> = {};
+  const chatInput = '';
+  const chatLoading = false;
+  const declining: string | null = null;
+  void fieldEdits; void excluded; void propertyOverrides; void confirming; void confirmed;
+  void confirmResult; void chatOpen; void chatHistory; void chatInput; void chatLoading; void declining;
 
-  const setField = (groupId: string, key: string, value: string) =>
-    setFieldEdits(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || {}), [key]: value } }));
-
-  const toggleExcluded = (groupId: string) =>
-    setExcluded(prev => {
-      const next = new Set(prev);
-      next.has(groupId) ? next.delete(groupId) : next.add(groupId);
-      return next;
-    });
-
-  const handleDecline = async (group: SuggestionGroup) => {
-    if (!id) return;
-    setDeclining(group.group_id);
-    try {
-      const res = await authFetch(`/api/document/${id}/suggestion-group/reject`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ group_id: group.group_id }),
-      });
-      if (res.ok) {
-        setGroups(prev => prev.filter(g => g.group_id !== group.group_id));
-      } else {
-        toast.error('Failed to decline suggestion');
-      }
-    } catch {
-      toast.error('Failed to decline suggestion');
-    } finally {
-      setDeclining(null);
-    }
+  const getFields = (_group: any): Record<string, string | number | null> => {
+    return _group?.fields ?? {};
   };
 
-  const handleConfirmAll = async () => {
-    if (!id) return;
-    setConfirming(true);
-    try {
-      const payload = {
-        groups: groups.map(g => ({
-          group_id: g.group_id,
-          category: g.category,
-          lease_index: g.lease_index,
-          suggestion_ids: g.suggestion_ids,
-          fields: getFields(g),
-        })),
-        excluded: Array.from(excluded),
-        property_id_overrides: Object.fromEntries(
-          Object.entries(propertyOverrides).map(([k, v]) => [String(k), v])
-        ),
-      };
-      const res = await authFetch(`/api/document/${id}/confirm-all`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setConfirmResult(data);
-        setConfirmed(true);
-        // Write NL context for each location group that was confirmed
-        for (const g of groups) {
-          if (g.category !== 'location' || excluded.has(g.group_id)) continue;
-          const override = propertyOverrides[g.lease_index];
-          // We don't have the property_id in the response directly, but we can set context
-          // keyed by address for now — the EntityContextCard will pick it up by property_id
-          // after the property loads. Skip for now: context is set via EntityContextCard.
-          void override;
-        }
-        const label = (data.created || []).map((c: string) => actionLabels[c] || c).filter(Boolean).join(', ');
-        toast.success(label ? `Created: ${label}` : 'Confirmed — no new records needed');
-      } else {
-        const err = await res.text().catch(() => '');
-        toast.error(`Failed to confirm: ${err || res.status}`);
-      }
-    } catch {
-      toast.error('Failed to confirm');
-    } finally {
-      setConfirming(false);
-    }
-  };
+  const setField = (_groupId: string, _key: string, _value: string) => {};
 
-  const handleChat = async (group: SuggestionGroup) => {
-    if (!chatInput.trim() || !id) return;
-    const userMsg: ChatMessage = { role: 'user', content: chatInput.trim() };
-    const history = chatHistory[group.group_id] || [];
-    setChatHistory(prev => ({ ...prev, [group.group_id]: [...history, userMsg] }));
-    setChatInput('');
-    setChatLoading(true);
-    try {
-      const res = await authFetch(`/api/document/${id}/suggestion-group/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          category: group.category,
-          fields: getFields(group),
-          description: group.description,
-          message: userMsg.content,
-          history: history.map(m => ({ role: m.role, content: m.content })),
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setChatHistory(prev => ({ ...prev, [group.group_id]: [...(prev[group.group_id] || []), { role: 'assistant', content: data.reply }] }));
-        if (data.fields) {
-          const keys = groupFields[group.category] || [];
-          const newEdits: Record<string, string> = {};
-          for (const k of keys) {
-            const v = data.fields[k];
-            newEdits[k] = v === null || v === undefined ? '' : String(v);
-          }
-          setFieldEdits(prev => ({ ...prev, [group.group_id]: newEdits }));
-        }
-      } else {
-        toast.error('AI unavailable');
-      }
-    } catch {
-      toast.error('Chat unavailable');
-    } finally {
-      setChatLoading(false);
-    }
-  };
+  const toggleExcluded = (_groupId: string) => {};
+  const handleDecline = async (_group: any) => {};
+  const handleConfirmAll = async () => {};
+  const handleChat = async (_group: any) => {};
+  void toggleExcluded; void handleDecline; void handleConfirmAll; void handleChat;
 
   // ── render ──────────────────────────────────────────────────────────────────
 
@@ -342,9 +190,7 @@ const DocumentPage = () => {
   const meta = doc.extraction_meta || {};
   const statusColor = doc.status === 'done' ? 'bg-accent/15 text-accent' : doc.status === 'error' ? 'bg-destructive/15 text-destructive' : 'bg-primary/15 text-primary';
 
-  // Group labels by lease_index for multi-property display
-  const leaseIndices = [...new Set(groups.map(g => g.lease_index))].sort();
-  const multiLease = leaseIndices.length > 1;
+  // Old suggestion grouping removed — suggestions now in Action Desk
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-5">
@@ -600,12 +446,13 @@ const DocumentPage = () => {
         );
       })()}
 
-      {/* Suggestion Groups */}
-      {groups.length > 0 && (
+      {/* Suggestions are now created by the agent via create_suggestion tool.
+          View them in the Action Desk, filtered by this document. */}
+      {false && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-semibold">Suggested Actions</h2>
-            <p className="text-xs text-muted-foreground">Uncheck any entity to exclude it</p>
+            <p className="text-xs text-muted-foreground">Placeholder</p>
           </div>
 
           {confirmed && confirmResult ? (
@@ -848,10 +695,14 @@ const DocumentPage = () => {
         </div>
       )}
 
-      {/* No suggestions yet */}
-      {doc.status === 'done' && !loading && groups.length === 0 && (
-        <Card className="rounded-xl p-6 text-center">
-          <p className="text-sm text-muted-foreground">No actionable suggestions found for this document.</p>
+      {/* Suggestions link */}
+      {doc.status === 'done' && (
+        <Card className="rounded-xl p-4">
+          <p className="text-sm text-muted-foreground">
+            Suggestions from this document appear in the{' '}
+            <a href="/action-desk" className="text-primary hover:underline font-medium">Action Desk</a>.
+            Ask RentMate to review the document to generate suggestions.
+          </p>
         </Card>
       )}
     </div>

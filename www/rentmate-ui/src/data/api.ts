@@ -403,6 +403,25 @@ export const DELETE_TENANT_MUTATION = `
   }
 `;
 
+export const DOCUMENT_QUERY = `
+  query GetDocument($uid: String!) {
+    document(uid: $uid) {
+      uid
+      filename
+      documentType
+      status
+      progress
+      extractedData
+      extractionMeta
+      context
+      rawText
+      errorMessage
+      createdAt
+      processedAt
+    }
+  }
+`;
+
 export const CONVERSATIONS_QUERY = `
   query GetConversations($conversationType: String!, $limit: Int) {
     conversations(conversationType: $conversationType, limit: $limit) {
