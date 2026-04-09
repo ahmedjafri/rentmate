@@ -4,16 +4,17 @@ import { PageLoader } from '@/components/ui/page-loader';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Link } from 'react-router-dom';
-import { Building2, Users, Wrench, ShieldCheck, Bot, Clock, MessageCircle, Hand, Lock, Zap, Plus, Lightbulb } from 'lucide-react';
+import { Building2, Users, Wrench, ShieldCheck, Bot, Clock, MessageCircle, Hand, Lock, Zap, Plus } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { TaskMode, TaskParticipantType, categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { ConvRow } from '@/components/chat/ConvRow';
 import { useConversations } from '@/hooks/useConversations';
-import { graphqlQuery, DELETE_CONVERSATION_MUTATION } from '@/data/api';
+import { graphqlQuery, DELETE_CONVERSATION_MUTATION, ACT_ON_SUGGESTION_MUTATION } from '@/data/api';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { SuggestionCard } from './ActionDesk';
 
 const modeConfig: Record<TaskMode, { label: string; icon: React.ElementType; className: string }> = {
   autonomous: { label: 'Autonomous', icon: Zap, className: 'bg-accent/15 text-accent' },
@@ -29,7 +30,7 @@ const participantIcon: Record<TaskParticipantType, React.ElementType> = {
 };
 
 const Index = () => {
-  const { properties, tenants, actionDeskTasks, suggestions, openChat, closeChat, chatPanel, isLoading } = useApp();
+  const { properties, tenants, vendors, actionDeskTasks, suggestions, updateSuggestionStatus, openChat, closeChat, chatPanel, isLoading } = useApp();
   const { conversations, loading: convsLoading, refresh, removeConversation } = useConversations('user_ai', 20);
   const [showNewChat, setShowNewChat] = useState(false);
 
@@ -68,9 +69,28 @@ const Index = () => {
   if (isLoading) return <PageLoader />;
 
   const stats = [
-    { label: 'Properties', value: properties.length, icon: Building2, sub: `${totalUnits} total units`, link: '/properties' },
+    { label: 'Properties', value: properties.length, icon: Building2, sub: `${totalUnits} units`, link: '/properties' },
     { label: 'Tenants', value: tenants.length, icon: Users, sub: `${activeTenants.length} active` },
+    { label: 'Vendors', value: vendors.length, icon: Wrench, sub: `contractors`, link: '/vendors' },
   ];
+
+  const handleSuggestionAction = async (suggestionId: string, action: string, editedBody?: string) => {
+    try {
+      const result = await graphqlQuery<{ actOnSuggestion: { uid: string; status: string; taskId?: string } }>(
+        ACT_ON_SUGGESTION_MUTATION,
+        { uid: suggestionId, action, editedBody: editedBody ?? null },
+      );
+      const { status, taskId } = result.actOnSuggestion;
+      updateSuggestionStatus(suggestionId, status as 'accepted' | 'dismissed');
+      if (status === 'accepted') {
+        toast.success(taskId ? 'Task created' : 'Suggestion accepted');
+      } else {
+        toast.info('Suggestion dismissed');
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Action failed');
+    }
+  };
 
   return (
     <div className="flex flex-col md:flex-row h-full">
@@ -131,7 +151,7 @@ const Index = () => {
       </div>
 
       {/* Right column: Stats + Action Desk */}
-      <div className="w-80 min-w-[300px] shrink-0 overflow-auto hidden lg:block border-l">
+      <div className="w-96 min-w-[360px] shrink-0 overflow-auto hidden lg:block border-l">
         <div className="p-4 space-y-4">
           {/* Welcome */}
           <div className="flex items-center gap-3">
@@ -147,16 +167,16 @@ const Index = () => {
           </div>
 
           {/* Stats */}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {stats.map((stat) => {
               const content = (
-                <Card key={stat.label} className={cn('p-3 rounded-xl', stat.link && 'hover:shadow-md transition-shadow cursor-pointer')}>
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <stat.icon className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-[10px] text-muted-foreground">{stat.label}</span>
+                <Card key={stat.label} className={cn('p-2.5 rounded-xl', stat.link && 'hover:shadow-md transition-shadow cursor-pointer')}>
+                  <div className="flex items-center gap-1 mb-0.5">
+                    <stat.icon className="h-3 w-3 text-muted-foreground" />
+                    <span className="text-[9px] text-muted-foreground">{stat.label}</span>
                   </div>
-                  <p className="text-lg font-bold">{stat.value}</p>
-                  <p className="text-[10px] text-muted-foreground">{stat.sub}</p>
+                  <p className="text-base font-bold">{stat.value}</p>
+                  <p className="text-[9px] text-muted-foreground">{stat.sub}</p>
                 </Card>
               );
               return stat.link ? <Link key={stat.label} to={stat.link}>{content}</Link> : <div key={stat.label}>{content}</div>;
@@ -178,32 +198,14 @@ const Index = () => {
               </div>
             ) : (
               <div className="space-y-2">
-                {/* Pending suggestions */}
+                {/* Pending suggestions — full interactive cards */}
                 {pendingSuggestions.map(sug => (
-                  <Link key={sug.id} to={`/action-desk?suggestion=${sug.id}`}>
-                    <Card className="p-3 rounded-xl hover:shadow-md transition-shadow cursor-pointer">
-                      <div className="flex items-start justify-between gap-2 mb-1.5">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <Badge variant="secondary" className="text-[10px] rounded-lg gap-1 bg-primary/15 text-primary">
-                            <Lightbulb className="h-3 w-3" />
-                            Suggestion
-                          </Badge>
-                          {sug.category && (
-                            <Badge variant="secondary" className={cn('text-[10px] rounded-lg', categoryColors[sug.category])}>
-                              {categoryLabels[sug.category]}
-                            </Badge>
-                          )}
-                        </div>
-                        <span className="text-[10px] text-muted-foreground shrink-0">
-                          {sug.createdAt ? formatDistanceToNow(new Date(sug.createdAt), { addSuffix: true }) : ''}
-                        </span>
-                      </div>
-                      <h3 className="font-semibold text-xs mb-1">{sug.title}</h3>
-                      {sug.body && (
-                        <p className="text-[11px] text-muted-foreground line-clamp-2">{sug.body}</p>
-                      )}
-                    </Card>
-                  </Link>
+                  <SuggestionCard
+                    key={sug.id}
+                    suggestion={sug}
+                    onAction={handleSuggestionAction}
+                    compact
+                  />
                 ))}
 
                 {/* Tasks needing attention */}

@@ -24,10 +24,12 @@ const urgencyColors: Record<string, string> = {
 
 // ─── SuggestionCard ──────────────────────────────────────────────────────────
 
-function SuggestionCard({ suggestion, onAction, isActive }: {
+export function SuggestionCard({ suggestion, onAction, isActive, compact }: {
   suggestion: Suggestion;
   onAction: (id: string, action: string, editedBody?: string) => Promise<void>;
   isActive?: boolean;
+  /** Stack action buttons vertically for narrow containers */
+  compact?: boolean;
 }) {
   const [loading, setLoading] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -139,13 +141,13 @@ function SuggestionCard({ suggestion, onAction, isActive }: {
 
       {/* Action buttons (hidden while editing) */}
       {!editing && (
-        <div className="flex items-center gap-2 pt-1">
+        <div className={cn("flex gap-2 pt-1", compact ? "flex-col" : "flex-row items-center")}>
           {opts.map(opt => (
             <Button
               key={opt.key}
               size="sm"
               variant={opt.variant as 'default' | 'outline' | 'ghost'}
-              className="h-7 text-xs rounded-lg"
+              className={cn("h-7 text-xs rounded-lg", compact && "w-full")}
               disabled={loading !== null}
               onClick={() => {
                 if (opt.action === 'edit_draft') {
