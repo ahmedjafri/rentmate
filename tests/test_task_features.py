@@ -102,7 +102,7 @@ def _mk_task(
     prop=None,
 ):
     task = Task(
-        account_id=DEFAULT_ACCOUNT_ID,
+        creator_id=DEFAULT_ACCOUNT_ID,
         title=subject,
         task_status=task_status,
         category=category,

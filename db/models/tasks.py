@@ -4,22 +4,22 @@ from datetime import datetime
 from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import relationship
 
-from .base import Base, HasAccountId
+from .base import Base, HasCreatorId
 
 
 class TaskNumberSequence(Base):
     """
-    Monotonically increasing task-number counter, one row per account.
+    Monotonically increasing task-number counter, one row per creator.
     Only ever incremented — never decremented or reset — so that task
     numbers are never reused even after tasks are deleted.
     """
     __tablename__ = "task_number_sequences"
 
-    account_id  = Column(String(36), primary_key=True)
+    creator_id  = Column(String(36), primary_key=True)
     last_number = Column(Integer, nullable=False, default=0)
 
 
-class Task(Base, HasAccountId):
+class Task(Base, HasCreatorId):
     """
     A first-class work-item (task / action-desk item).
     Owns task metadata; links directly to its AI conversation thread.
@@ -73,5 +73,5 @@ class Task(Base, HasAccountId):
     document_tasks = relationship("DocumentTask", back_populates="task", cascade="all, delete-orphan")
 
     __table_args__ = (
-        UniqueConstraint("account_id", "task_number", name="uq_task_number_per_account"),
+        UniqueConstraint("creator_id", "task_number", name="uq_task_number_per_creator"),
     )

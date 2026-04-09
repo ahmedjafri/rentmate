@@ -27,7 +27,7 @@ class TestAgentRegistry(unittest.TestCase):
     # ensure_agent
     # ------------------------------------------------------------------
 
-    def test_ensure_agent_returns_account_id(self):
+    def test_ensure_agent_returns_creator_id(self):
         registry = self._make_registry()
         with patch.object(registry, "start_gateway"), \
              patch.object(registry, "_write_workspace"):

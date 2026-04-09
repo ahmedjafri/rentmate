@@ -115,7 +115,7 @@ def task_id(db):
     """Insert a minimal Task with a linked Conversation and return the Task's ID."""
     task = Task(
         id=str(uuid.uuid4()),
-        account_id="00000000-0000-0000-0000-000000000001",
+        creator_id="00000000-0000-0000-0000-000000000001",
         title="HVAC Repair",
         task_status="active",
         task_mode="manual",

@@ -21,8 +21,7 @@ import Vendors from "./pages/Vendors";
 import DocumentPage from './pages/DocumentPage';
 import Settings from "./pages/Settings";
 import DevTools from "./pages/DevTools";
-import Automation from "./pages/Automation";
-import AutomationDetail from "./pages/AutomationDetail";
+import ScheduledTasks from "./pages/ScheduledTasks";
 import NotFound from "./pages/NotFound";
 import PortalInvite from "./pages/VendorInvite";
 import VendorPortal from "./pages/VendorPortal";
@@ -69,8 +68,7 @@ const App = () => (
                     <Route path="/action-desk" element={<ActionDesk />} />
                     <Route path="/tasks" element={<Tasks />} />
                     <Route path="/chats" element={<Chats />} />
-                    <Route path="/automation" element={<Automation />} />
-                    <Route path="/automation/:key" element={<AutomationDetail />} />
+                    <Route path="/scheduled-tasks" element={<ScheduledTasks />} />
                     <Route path="/settings" element={<Settings />} />
                     <Route path="/dev" element={<DevTools />} />
                     <Route path="*" element={<NotFound />} />

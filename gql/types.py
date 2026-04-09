@@ -597,6 +597,43 @@ class SuggestionType:
 
 
 @strawberry.type
+class ScheduledTaskType:
+    uid: str
+    name: str
+    prompt: str
+    schedule: str
+    schedule_display: typing.Optional[str] = None
+    enabled: bool = True
+    state: str = "scheduled"
+    repeat: typing.Optional[int] = None
+    completed_count: int = 0
+    next_run_at: typing.Optional[str] = None
+    last_run_at: typing.Optional[str] = None
+    last_status: typing.Optional[str] = None
+    last_output: typing.Optional[str] = None
+    created_at: str = ""
+
+    @classmethod
+    def from_sql(cls, st: typing.Any) -> "ScheduledTaskType":
+        return cls(
+            uid=str(st.id),
+            name=st.name,
+            prompt=st.prompt,
+            schedule=st.schedule,
+            schedule_display=st.schedule_display,
+            enabled=st.enabled,
+            state=st.state or "scheduled",
+            repeat=st.repeat,
+            completed_count=st.completed_count or 0,
+            next_run_at=_utc_iso(st.next_run_at) if st.next_run_at else None,
+            last_run_at=_utc_iso(st.last_run_at) if st.last_run_at else None,
+            last_status=st.last_status,
+            last_output=st.last_output,
+            created_at=_utc_iso(st.created_at),
+        )
+
+
+@strawberry.type
 class DocumentType:
     uid: str
     filename: str

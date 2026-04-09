@@ -38,7 +38,5 @@ class SMSRouter(ABC):
     @abstractmethod
     def resolve(self, db, *, from_number: str, to_number: str) -> tuple | None:
         """
-        Returns (account_id, tenant, direction) or None.
-        OSS: account_id is always DEFAULT_ACCOUNT_ID
-        Pro: account_id is dynamically resolved from phone-matched AccountUser
+        Returns (creator_id, entity, direction, entity_type) or None.
         """

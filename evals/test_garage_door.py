@@ -169,7 +169,7 @@ def scenario(db):
     # Task
     task = Task(
         id=str(uuid.uuid4()),
-        account_id=DEFAULT_ACCOUNT_ID,
+        creator_id=DEFAULT_ACCOUNT_ID,
         title="Garage door is broken",
         task_status="active",
         task_mode="autonomous",

@@ -81,7 +81,7 @@ async def simulate_inbound(
         now = datetime.now(UTC)
         task = Task(
             id=str(uuid.uuid4()),
-            account_id=tenant.account_id,
+            creator_id=tenant.creator_id,
             title=f"Message from {tenant.first_name} {tenant.last_name}",
             task_status="active",
             task_mode="autonomous",
@@ -95,7 +95,7 @@ async def simulate_inbound(
 
         conv = Conversation(
             id=str(uuid.uuid4()),
-            account_id=tenant.account_id,
+            creator_id=tenant.creator_id,
             task_id=task.id,
             subject=f"Message from {tenant.first_name} {tenant.last_name}",
             is_group=False,

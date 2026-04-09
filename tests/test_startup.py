@@ -67,9 +67,9 @@ def test_sqlite_columns_present():
     assert "sha256_checksum" in _column_names(eng, "documents")
     assert "payment_status" in _column_names(eng, "leases")
     assert "property_type" in _column_names(eng, "properties")
-    assert "account_id" in _column_names(eng, "properties")
-    assert "account_id" in _column_names(eng, "tenants")
-    assert "account_id" in _column_names(eng, "conversations")
+    assert "creator_id" in _column_names(eng, "properties")
+    assert "creator_id" in _column_names(eng, "tenants")
+    assert "creator_id" in _column_names(eng, "conversations")
 
 
 def test_sqlite_dev_recreates_on_drift():
@@ -91,7 +91,7 @@ def test_sqlite_dev_recreates_on_drift():
         _main._ensure_schema()
 
     # After recreate, all model columns should be present
-    assert "account_id" in _column_names(eng, "properties")
+    assert "creator_id" in _column_names(eng, "properties")
     assert "address_line1" in _column_names(eng, "properties")
 
 
@@ -145,4 +145,4 @@ def test_postgres_columns_present(pg_engine):
     assert "sha256_checksum" in _column_names(pg_engine, "documents")
     assert "payment_status" in _column_names(pg_engine, "leases")
     assert "property_type" in _column_names(pg_engine, "properties")
-    assert "account_id" in _column_names(pg_engine, "properties")
+    assert "creator_id" in _column_names(pg_engine, "properties")

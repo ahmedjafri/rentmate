@@ -19,10 +19,10 @@ class PropertyService:
         postal_code: str | None = None,
         unit_labels: list[str] | None = None,
     ) -> tuple[SqlProperty, list[SqlUnit]]:
-        from backends.local_auth import resolve_account_id
+        from backends.local_auth import resolve_creator_id
         prop = SqlProperty(
             id=str(uuid.uuid4()),
-            account_id=resolve_account_id(),
+            creator_id=resolve_creator_id(),
             name=name,
             address_line1=address,
             city=city,
@@ -37,7 +37,7 @@ class PropertyService:
 
         units: list[SqlUnit] = []
         if property_type == "single_family":
-            unit = SqlUnit(id=str(uuid.uuid4()), account_id=resolve_account_id(), property_id=prop.id, label="Main", created_at=datetime.now(UTC))
+            unit = SqlUnit(id=str(uuid.uuid4()), creator_id=resolve_creator_id(), property_id=prop.id, label="Main", created_at=datetime.now(UTC))
             sess.add(unit)
             sess.flush()
             units.append(unit)
@@ -46,7 +46,7 @@ class PropertyService:
                 label = label.strip()
                 if not label:
                     continue
-                unit = SqlUnit(id=str(uuid.uuid4()), account_id=resolve_account_id(), property_id=prop.id, label=label, created_at=datetime.now(UTC))
+                unit = SqlUnit(id=str(uuid.uuid4()), creator_id=resolve_creator_id(), property_id=prop.id, label=label, created_at=datetime.now(UTC))
                 sess.add(unit)
                 sess.flush()
                 units.append(unit)

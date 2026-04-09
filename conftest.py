@@ -21,6 +21,15 @@ if _ENV_FILE.exists():
 
 
 @pytest.fixture(autouse=True)
+def _set_creator_context():
+    """Set a default creator context for tests so entity creation works."""
+    from backends.local_auth import DEFAULT_USER_ID, set_request_context, reset_request_context
+    tokens = set_request_context(user_id=DEFAULT_USER_ID, creator_id=DEFAULT_USER_ID)
+    yield
+    reset_request_context(tokens)
+
+
+@pytest.fixture(autouse=True)
 def _no_llm_suggestion(request):
     """Suppress generate_task_suggestion for all non-eval tests to prevent
     real LLM calls during unit/integration tests and keep task message counts predictable."""

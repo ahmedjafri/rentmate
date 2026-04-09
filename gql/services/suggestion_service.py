@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from backends.local_auth import resolve_account_id
+from backends.local_auth import resolve_creator_id
 from db.enums import (
     AutomationSource,
     SuggestionOption,
@@ -22,14 +22,14 @@ from db.models import (
 )
 
 
-def _get_account_id(sess: Session, property_id: str | None, unit_id: str | None) -> str:
+def _get_creator_id(sess: Session, property_id: str | None, unit_id: str | None) -> str:
     try:
         if property_id:
-            res = sess.execute(text("SELECT account_id FROM properties WHERE id = :id"), {"id": property_id}).fetchone()
+            res = sess.execute(text("SELECT creator_id FROM properties WHERE id = :id"), {"id": property_id}).fetchone()
             if res and res[0]:
                 return res[0]
         if unit_id:
-            res = sess.execute(text("SELECT account_id FROM units WHERE id = :id"), {"id": unit_id}).fetchone()
+            res = sess.execute(text("SELECT creator_id FROM units WHERE id = :id"), {"id": unit_id}).fetchone()
             if res and res[0]:
                 return res[0]
     except Exception:
@@ -71,7 +71,7 @@ def create_suggestion(
         unit_id: Scoping FK — the unit this suggestion relates to.
     """
     now = datetime.now(UTC)
-    account_id = _get_account_id(sess, property_id, unit_id)
+    creator_id = _get_creator_id(sess, property_id, unit_id)
 
     # Decompose source union into DB columns
     if isinstance(source, AutomationSource):
@@ -91,7 +91,7 @@ def create_suggestion(
     ai_convo = Conversation(
         subject=title,
         property_id=property_id,
-        account_id=resolve_account_id(),
+        creator_id=resolve_creator_id(),
         unit_id=unit_id,
         conversation_type=ConversationType.SUGGESTION_AI,
         is_group=False,
@@ -103,7 +103,7 @@ def create_suggestion(
     sess.flush()
 
     suggestion = Suggestion(
-        account_id=account_id,
+        creator_id=creator_id,
         title=title,
         body=ai_context,
         category=category,

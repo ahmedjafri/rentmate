@@ -38,6 +38,7 @@ from .types import (
     DocumentType,
     HouseType,
     LeaseType,
+    ScheduledTaskType,
     SendMessageInput,
     SpawnTaskInput,
     SuggestionType,
@@ -91,14 +92,31 @@ class Query:
         doc = _session(info).query(Document).filter_by(id=uid).first()
         return DocumentType.from_sql(doc) if doc else None
 
+    @strawberry.field(description="Returns all scheduled tasks")
+    def scheduled_tasks(self, info, *, enabled: typing.Optional[bool] = None) -> typing.List[ScheduledTaskType]:
+        _current_user(info)
+        from db.models import ScheduledTask
+        db = _session(info)
+        q = db.query(ScheduledTask).order_by(ScheduledTask.created_at.desc())
+        if enabled is not None:
+            q = q.filter(ScheduledTask.enabled == enabled)
+        return [ScheduledTaskType.from_sql(st) for st in q.all()]
+
+    @strawberry.field(description="Returns a single scheduled task by ID")
+    def scheduled_task(self, info, uid: str) -> typing.Optional[ScheduledTaskType]:
+        _current_user(info)
+        from db.models import ScheduledTask
+        st = _session(info).query(ScheduledTask).filter_by(id=uid).first()
+        return ScheduledTaskType.from_sql(st) if st else None
+
     @strawberry.field(description="Get private (per-account) notes for an entity")
     def entity_note(self, info, *, entity_type: str, entity_id: str) -> typing.Optional[str]:
         _current_user(info)
-        from backends.local_auth import resolve_account_id
+        from backends.local_auth import resolve_creator_id
         from db.models import EntityNote
         db = _session(info)
         note = db.query(EntityNote).filter_by(
-            account_id=resolve_account_id(), entity_type=entity_type, entity_id=entity_id,
+            creator_id=resolve_creator_id(), entity_type=entity_type, entity_id=entity_id,
         ).first()
         return note.content if note else None
 
@@ -413,11 +431,11 @@ class Mutation(AuthMutation):
         db = _session(info)
         from datetime import UTC, datetime
 
-        from backends.local_auth import resolve_account_id
+        from backends.local_auth import resolve_creator_id
         from db.models import EntityNote
-        account_id = resolve_account_id()
+        creator_id = resolve_creator_id()
         note = db.query(EntityNote).filter_by(
-            account_id=account_id, entity_type=entity_type, entity_id=entity_id,
+            creator_id=creator_id, entity_type=entity_type, entity_id=entity_id,
         ).first()
         if content.strip():
             if note:
@@ -425,7 +443,7 @@ class Mutation(AuthMutation):
                 note.updated_at = datetime.now(UTC)
             else:
                 db.add(EntityNote(
-                    account_id=account_id,
+                    creator_id=creator_id,
                     entity_type=entity_type,
                     entity_id=entity_id,
                     content=content.strip(),
@@ -434,6 +452,81 @@ class Mutation(AuthMutation):
                 ))
         elif note:
             db.delete(note)
+        db.commit()
+        return True
+
+    @strawberry.mutation(description="Create a scheduled task")
+    def create_scheduled_task(
+        self, info, *, name: str, prompt: str, schedule: str, repeat: typing.Optional[int] = None,
+    ) -> ScheduledTaskType:
+        _current_user(info)
+        import uuid
+        from datetime import UTC, datetime
+
+        from backends.local_auth import resolve_creator_id
+        from db.models import ScheduledTask
+        from handlers.scheduler import human_schedule, next_run, parse_schedule
+
+        db = _session(info)
+        cron_expr = parse_schedule(schedule)
+        st = ScheduledTask(
+            id=str(uuid.uuid4()),
+            creator_id=resolve_creator_id(),
+            name=name, prompt=prompt,
+            schedule=cron_expr,
+            schedule_display=human_schedule(cron_expr),
+            enabled=True, state="scheduled",
+            repeat=repeat,
+            next_run_at=next_run(cron_expr),
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        db.add(st)
+        db.commit()
+        return ScheduledTaskType.from_sql(st)
+
+    @strawberry.mutation(description="Update a scheduled task")
+    def update_scheduled_task(
+        self, info, uid: str, *,
+        name: typing.Optional[str] = None,
+        prompt: typing.Optional[str] = None,
+        schedule: typing.Optional[str] = None,
+        enabled: typing.Optional[bool] = None,
+    ) -> ScheduledTaskType:
+        _current_user(info)
+        from datetime import UTC, datetime
+
+        from db.models import ScheduledTask
+        from handlers.scheduler import human_schedule, next_run, parse_schedule
+
+        db = _session(info)
+        st = db.query(ScheduledTask).filter_by(id=uid).first()
+        if not st:
+            raise ValueError("Scheduled task not found")
+        if name is not None:
+            st.name = name
+        if prompt is not None:
+            st.prompt = prompt
+        if schedule is not None:
+            st.schedule = parse_schedule(schedule)
+            st.schedule_display = human_schedule(st.schedule)
+            st.next_run_at = next_run(st.schedule)
+        if enabled is not None:
+            st.enabled = enabled
+            st.state = "scheduled" if enabled else "paused"
+        st.updated_at = datetime.now(UTC)
+        db.commit()
+        return ScheduledTaskType.from_sql(st)
+
+    @strawberry.mutation(description="Delete a scheduled task")
+    def delete_scheduled_task(self, info, uid: str) -> bool:
+        _current_user(info)
+        from db.models import ScheduledTask
+        db = _session(info)
+        st = db.query(ScheduledTask).filter_by(id=uid).first()
+        if not st:
+            raise ValueError("Scheduled task not found")
+        db.delete(st)
         db.commit()
         return True
 

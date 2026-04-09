@@ -6,7 +6,7 @@ Usage:
     poetry run python scripts/seed_data.py
 
 Creates 3 Seattle-area properties, units, 8 tenants, and leases
-under the first AccountUser found in the database.
+under the first Account found in the database.
 """
 import sys
 from datetime import date
@@ -16,21 +16,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy import select
 
-from db.models import AccountUser, Lease, Property, Tenant, Unit
+from db.models import Account, Lease, Property, Tenant, Unit
 from db.session import SessionLocal
 
 db = SessionLocal.session_factory()
 
 # ------------------------------------------------------------------
-# Resolve account
+# Resolve account (creator_id)
 # ------------------------------------------------------------------
-au = db.execute(select(AccountUser).order_by(AccountUser.created_at)).scalars().first()
-if not au:
-    print("ERROR: No AccountUser found. Create one via the app login first.")
+account = db.execute(select(Account).order_by(Account.created_at)).scalars().first()
+if not account:
+    print("ERROR: No Account found. Start the server first to create the default account.")
     sys.exit(1)
 
-account_id = au.account_id
-print(f"Seeding under account_id={account_id} (user={au.id})")
+creator_id = account.id
+print(f"Seeding under creator_id={creator_id}")
 
 # ------------------------------------------------------------------
 # Properties
@@ -60,12 +60,12 @@ props_data = [
 created_props = []
 for pd in props_data:
     units_labels = pd.pop("units")
-    p = Property(account_id=account_id, country="USA", **pd)
+    p = Property(creator_id=creator_id, country="USA", **pd)
     db.add(p)
     db.flush()
     units = []
     for label in units_labels:
-        u = Unit(account_id=account_id, property_id=p.id, label=label)
+        u = Unit(creator_id=creator_id, property_id=p.id, label=label)
         db.add(u)
         units.append(u)
     db.flush()
@@ -88,7 +88,7 @@ tenants_data = [
 
 tenants = []
 for td in tenants_data:
-    t = Tenant(account_id=account_id, **td)
+    t = Tenant(creator_id=creator_id, **td)
     db.add(t)
     tenants.append(t)
 db.flush()
@@ -116,7 +116,7 @@ for pi, ui, ti, start, end, rent in lease_assignments:
     unit = units[ui]
     tenant = tenants[ti]
     lease = Lease(
-        account_id=account_id,
+        creator_id=creator_id,
         tenant_id=tenant.id,
         unit_id=unit.id,
         property_id=prop.id,

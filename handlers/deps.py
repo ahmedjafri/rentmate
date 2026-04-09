@@ -21,11 +21,11 @@ async def require_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         user = await auth_backend.validate_token(token)
-        # Set request-scoped context so tools/services can read account_id
-        account_id = user.get("account_id", "")
+        # Set request-scoped context so tools/services can read creator_id
+        creator_id = user.get("creator_id") or user.get("uid") or user.get("id", "")
         user_id = user.get("uid") or user.get("id", "")
-        if account_id and user_id:
-            set_request_context(user_id=user_id, account_id=account_id)
+        if creator_id and user_id:
+            set_request_context(user_id=user_id, creator_id=creator_id)
         return user
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")

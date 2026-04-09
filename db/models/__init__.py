@@ -11,7 +11,8 @@ from db.enums import (
 from .account import Account
 from .agent_memory import AgentMemory
 from .agent_trace import AgentTrace
-from .automation import AutomationRevision
+
+# AutomationRevision removed — replaced by ScheduledTask
 from .base import Base, EntityNote, HasAccountId, HasCreatorId
 from .documents import Document, DocumentTag, DocumentTask
 from .messaging import (
@@ -57,7 +58,6 @@ __all__ = [
     "AgentMemory",
     "AgentTrace",
     "AppSetting",
-    "AutomationRevision",
     "ScheduledTask",
     "TaskCategory",
     "Urgency",

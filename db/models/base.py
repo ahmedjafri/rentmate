@@ -5,12 +5,22 @@ from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
 
-DEFAULT_ACCOUNT_ID = "00000000-0000-0000-0000-000000000001"
+def _default_creator_id():
+    """Resolve creator_id from request context. Raises if not set."""
+    from backends.local_auth import resolve_creator_id
+    return resolve_creator_id()
 
 
-class HasAccountId:
-    """Mixin that adds account_id to any model for multi-tenancy scoping."""
-    account_id = Column(String(36), nullable=False, default=DEFAULT_ACCOUNT_ID, index=True)
+class HasCreatorId:
+    """Mixin that adds creator_id to any model, tracking which account created it.
+
+    The default is resolved from the request-scoped context var. If no context
+    is set (e.g. missing authentication), entity creation will raise.
+    """
+    creator_id = Column(String(36), nullable=False, default=_default_creator_id, index=True)
+
+
+HasAccountId = HasCreatorId  # backward compat alias
 
 
 class HasContext:
@@ -33,7 +43,7 @@ class EntityNote(Base):
     __tablename__ = "entity_notes"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    account_id = Column(String(36), nullable=False, index=True)
+    creator_id = Column(String(36), nullable=False, index=True)
     entity_type = Column(String(20), nullable=False)  # property, unit, tenant, vendor, document
     entity_id = Column(String(36), nullable=False, index=True)
     content = Column(Text, nullable=False, default="")
@@ -41,5 +51,5 @@ class EntityNote(Base):
     updated_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("account_id", "entity_type", "entity_id", name="uq_entity_note_account"),
+        UniqueConstraint("creator_id", "entity_type", "entity_id", name="uq_entity_note_creator"),
     )

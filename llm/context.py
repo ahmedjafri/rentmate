@@ -154,9 +154,9 @@ def build_task_context(db: Session, task_id: str) -> str:
                 lines.append(f"Vendor ID: {vendor_id}")
 
     # Entity context notes — both shared (entity.context) and private (EntityNote)
-    from backends.local_auth import resolve_account_id
+    from backends.local_auth import resolve_creator_id
     from db.models import EntityNote
-    account_id = resolve_account_id()
+    creator_id = resolve_creator_id()
 
     def _entity_notes(entity, entity_type: str, label: str):
         notes = []
@@ -164,7 +164,7 @@ def build_task_context(db: Session, task_id: str) -> str:
             notes.append(f"[shared] {label} notes: {entity.context}")
         if entity:
             private = db.query(EntityNote).filter_by(
-                account_id=account_id, entity_type=entity_type, entity_id=str(entity.id),
+                creator_id=creator_id, entity_type=entity_type, entity_id=str(entity.id),
             ).first()
             if private and private.content:
                 notes.append(f"[private] {label} notes: {private.content}")

@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backends.local_auth import resolve_account_id
+from backends.local_auth import resolve_creator_id
 from db.models import ExternalContact
 from gql.services import portal_auth
 from gql.types import VENDOR_TYPES, CreateVendorInput, UpdateVendorInput
@@ -27,7 +27,7 @@ class VendorService:
         extra: dict = {"portal_token": portal_auth.generate_portal_token()}
         vendor = ExternalContact(
             id=str(uuid.uuid4()),
-            account_id=resolve_account_id(),
+            creator_id=resolve_creator_id(),
             name=input.name,
             company=input.company,
             role_label=input.vendor_type,

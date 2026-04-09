@@ -4,7 +4,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from backends.local_auth import resolve_account_id
+from backends.local_auth import resolve_creator_id
 from db.models import (
     Conversation,
     ConversationType,
@@ -16,14 +16,14 @@ from db.models import (
 from gql.types import CreateTaskInput, UpdateTaskInput
 
 
-def _get_account_id(sess: Session, property_id: str | None, unit_id: str | None) -> str:
+def _get_creator_id(sess: Session, property_id: str | None, unit_id: str | None) -> str:
     try:
         if property_id:
-            res = sess.execute(text("SELECT account_id FROM properties WHERE id = :id"), {"id": property_id}).fetchone()
+            res = sess.execute(text("SELECT creator_id FROM properties WHERE id = :id"), {"id": property_id}).fetchone()
             if res and res[0]:
                 return res[0]
         if unit_id:
-            res = sess.execute(text("SELECT account_id FROM units WHERE id = :id"), {"id": unit_id}).fetchone()
+            res = sess.execute(text("SELECT creator_id FROM units WHERE id = :id"), {"id": unit_id}).fetchone()
             if res and res[0]:
                 return res[0]
     except Exception:
@@ -34,9 +34,9 @@ def _get_account_id(sess: Session, property_id: str | None, unit_id: str | None)
 class TaskService:
     @staticmethod
     def create_task(sess: Session, input: CreateTaskInput) -> Task:
-        account_id = _get_account_id(sess, input.property_id, input.unit_id)
+        creator_id = _get_creator_id(sess, input.property_id, input.unit_id)
         task = Task(
-            account_id=account_id,
+            creator_id=creator_id,
             title=input.title,
             task_status=input.task_status,
             task_mode=input.task_mode,
@@ -57,10 +57,10 @@ class TaskService:
         # increasing, never reused even after task deletion).
         seq = sess.execute(
             select(TaskNumberSequence)
-            .where(TaskNumberSequence.account_id == task.account_id)
+            .where(TaskNumberSequence.creator_id == task.creator_id)
         ).scalar_one_or_none()
         if seq is None:
-            seq = TaskNumberSequence(account_id=task.account_id, last_number=0)
+            seq = TaskNumberSequence(creator_id=task.creator_id, last_number=0)
             sess.add(seq)
             sess.flush()
         seq.last_number += 1
@@ -70,7 +70,7 @@ class TaskService:
         ai_convo = Conversation(
             subject=input.title,
             property_id=input.property_id,
-            account_id=resolve_account_id(),
+            creator_id=resolve_creator_id(),
             unit_id=input.unit_id,
             conversation_type=ConversationType.TASK_AI,
             is_group=False,

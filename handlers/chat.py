@@ -17,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from backends.local_auth import DEFAULT_USER_ID, resolve_account_id
+from backends.local_auth import DEFAULT_USER_ID, resolve_creator_id
 from backends.wire import sms_router
 from db.enums import TaskSource
 from db.lib import (
@@ -137,7 +137,7 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
         print(f"[sms] Sender not resolved for from={from_number} to={to_number}")
         return False
 
-    _account_id, entity, direction, entity_type = resolved
+    _creator_id, entity, direction, entity_type = resolved
 
     if direction != "inbound":
         return False
@@ -199,7 +199,7 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
     context = build_task_context(db, conv.id)
     messages = chat_service.build_agent_message_history(db, conv_id=conv.id, user_message=body, context=context, exclude_last=True)
 
-    agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
+    agent_id = agent_registry.ensure_agent(resolve_creator_id(), db)
     session_key = f"sms:{conv.id}"
 
     agent_resp = await call_agent(agent_id, session_key=session_key, messages=messages)
@@ -284,7 +284,7 @@ async def chat_endpoint(
             conv = chat_service.get_or_create_conversation(db, body.conversation_id)
         else:
             session_key = "Onboarding" if _is_onboarding_start else None
-            conv = get_or_create_user_ai_conversation(db, account_id="default", user_id="default", session_key=session_key)
+            conv = get_or_create_user_ai_conversation(db, creator_id="default", user_id="default", session_key=session_key)
         if _is_onboarding_start:
             # If the onboarding conversation already has messages, the AI has
             # already greeted the user — just return the conversation so the
@@ -345,7 +345,7 @@ async def chat_endpoint(
     else:
         messages_payload = chat_service.build_agent_message_history(db, conv_id=conv_id, user_message=body.message, context=context)
 
-    agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
+    agent_id = agent_registry.ensure_agent(resolve_creator_id(), db)
     session_key = f"task:{body.task_id}" if body.task_id else f"chat:{conv_id}"
     stream_id = str(uuid.uuid4())
     user_message = body.message
@@ -842,7 +842,7 @@ async def assess_task_endpoint(
         "content": ASSESS_PROMPT + steps_text + ext_msgs_text,
     })
 
-    agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
+    agent_id = agent_registry.ensure_agent(resolve_creator_id(), db)
     session_key = f"task:{body.task_id}"
     stream_id = str(uuid.uuid4())
 
@@ -1000,7 +1000,7 @@ async def create_new_chat(
     db: Session = Depends(get_db),
 ):
     await require_user(request)
-    conv = get_or_create_user_ai_conversation(db, account_id="default", user_id="default", session_key=None)
+    conv = get_or_create_user_ai_conversation(db, creator_id="default", user_id="default", session_key=None)
     db.commit()
     return {"id": conv.id, "title": conv.subject}
 

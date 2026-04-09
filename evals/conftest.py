@@ -179,7 +179,7 @@ class ScenarioBuilder:
             ))
 
         task = Task(
-            id=str(uuid.uuid4()), account_id=DEFAULT_ACCOUNT_ID,
+            id=str(uuid.uuid4()), creator_id=DEFAULT_ACCOUNT_ID,
             title=title, task_status=task_status, task_mode=task_mode,
             category=category, urgency=urgency, source="manual",
             property_id=prop.id if prop else None,
