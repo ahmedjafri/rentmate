@@ -146,11 +146,9 @@ const DocumentPage = () => {
     if (!id) return;
     Promise.all([
       authFetch(`/api/document/${id}`).then(r => r.ok ? r.json() : null),
-      authFetch(`/api/document/${id}/suggestions`).then(r => r.ok ? r.json() : { groups: [] }),
       authFetch(`/api/document/${id}/tags`).then(r => r.ok ? r.json() : []),
-    ]).then(([docData, sugData, tagsData]) => {
+    ]).then(([docData, tagsData]) => {
       setDoc(docData);
-      setGroups(sugData.groups || []);
       setTags(tagsData || []);
     }).catch(() => {}).finally(() => setLoading(false));
   }, [id]);

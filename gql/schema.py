@@ -143,11 +143,12 @@ class Query:
         _current_user(info)
         return VENDOR_TYPES
 
-    @strawberry.field(description="Returns suggestions, optionally filtered by status")
+    @strawberry.field(description="Returns suggestions, optionally filtered by status and/or document")
     def suggestions(
         self,
         info,
         *, status: typing.Optional[str] = None,
+        document_id: typing.Optional[str] = None,
         limit: int = 50,
     ) -> typing.List[SuggestionType]:
         _current_user(info)
@@ -162,6 +163,8 @@ class Query:
         ).order_by(Suggestion.created_at.desc()).limit(limit)
         if status:
             q = q.where(Suggestion.status == status)
+        if document_id:
+            q = q.where(Suggestion.document_id == document_id)
         rows = db.execute(q).unique().scalars().all()
         return [SuggestionType.from_sql(s) for s in rows]
 

@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from .base import Base, HasAccountId
@@ -39,9 +39,15 @@ class Suggestion(Base, HasAccountId):
     # e.g. {vendor_id, vendor_name, draft_message, notify_tenant}
     action_payload  = Column(JSON, nullable=True)
 
+    # Suggestion type — maps to autonomy category for approval routing
+    suggestion_type = Column(String(20), nullable=False, default="maintenance")
+    # Agent's risk assessment (0=safe to auto-approve, 10=must have human review)
+    risk_score      = Column(Integer, nullable=True)
+
     # Context FKs
     property_id     = Column(String(36), ForeignKey("properties.id", ondelete="SET NULL"), nullable=True)
     unit_id         = Column(String(36), ForeignKey("units.id", ondelete="SET NULL"), nullable=True)
+    document_id     = Column(String(36), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True)
 
     # AI conversation for this suggestion's chat thread
     ai_conversation_id = Column(
@@ -61,6 +67,7 @@ class Suggestion(Base, HasAccountId):
     property        = relationship("Property")
     unit            = relationship("Unit")
     task            = relationship("Task")
+    document        = relationship("Document")
 
     __table_args__ = (
         Index("ix_suggestions_status", "status"),

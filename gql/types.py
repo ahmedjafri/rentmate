@@ -549,6 +549,8 @@ class SuggestionType:
     automation_key: typing.Optional[str] = None
     options: typing.Optional[strawberry.scalars.JSON] = None
     action_taken: typing.Optional[str] = None
+    suggestion_type: typing.Optional[str] = None
+    risk_score: typing.Optional[int] = None
     property_id: typing.Optional[str] = None
     unit_id: typing.Optional[str] = None
     task_id: typing.Optional[str] = None
@@ -581,6 +583,8 @@ class SuggestionType:
             automation_key=s.automation_key,
             options=s.options,
             action_taken=s.action_taken,
+            suggestion_type=getattr(s, "suggestion_type", None),
+            risk_score=getattr(s, "risk_score", None),
             property_id=str(s.property_id) if s.property_id else None,
             unit_id=str(s.unit_id) if s.unit_id else None,
             task_id=str(s.task_id) if s.task_id else None,

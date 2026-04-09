@@ -35,6 +35,7 @@ def _register_rentmate_tools():
         AttachEntityToTaskTool,
         CloseTaskTool,
         CreatePropertyTool,
+        CreateSuggestionTool,
         CreateTenantTool,
         CreateVendorTool,
         EditMemoryTool,
@@ -54,7 +55,8 @@ def _register_rentmate_tools():
         AttachEntityToTaskTool, MessageExternalPersonTool,
         LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
         SaveMemoryTool, RecallMemoryTool, EditMemoryTool,
-        CreatePropertyTool, CreateTenantTool, ReadDocumentTool, AnalyzeDocumentTool,
+        CreatePropertyTool, CreateTenantTool, CreateSuggestionTool,
+        ReadDocumentTool, AnalyzeDocumentTool,
         UpdateOnboardingTool,
     ):
         tool = tool_cls()

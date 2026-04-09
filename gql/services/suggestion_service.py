@@ -48,6 +48,8 @@ def create_suggestion(
     action_payload: dict | None = None,
     property_id: str | None = None,
     unit_id: str | None = None,
+    risk_score: int | None = None,
+    suggestion_type: str | None = None,
 ) -> Suggestion:
     """Create a Suggestion with its own AI conversation thread.
 
@@ -112,6 +114,8 @@ def create_suggestion(
         property_id=property_id,
         unit_id=unit_id,
         ai_conversation_id=ai_convo.id,
+        suggestion_type=suggestion_type or category or "maintenance",
+        risk_score=risk_score if risk_score is not None else 5,
         created_at=now,
         updated_at=now,
     )

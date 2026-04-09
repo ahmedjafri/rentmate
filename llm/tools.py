@@ -60,6 +60,8 @@ def _create_suggestion(
     options: list[SuggestionOption],
     task_id: str | None = None,
     property_id: str | None = None,
+    risk_score: int | None = None,
+    suggestion_type: str | None = None,
 ) -> str:
     """Write a Suggestion row and return its ID.
 
@@ -98,6 +100,10 @@ def _create_suggestion(
         )
         if task_id:
             suggestion.task_id = task_id
+        if risk_score is not None:
+            suggestion.risk_score = risk_score
+        if suggestion_type:
+            suggestion.suggestion_type = suggestion_type
 
         # Queue a suggestion message to be flushed after the AI reply so it
         # appears below the agent response in the conversation timeline.
@@ -195,6 +201,10 @@ class ProposeTaskTool(Tool):
                 "draft_message": {"type": "string", "description": "Draft message to send to the vendor on approval"},
                 "property_id": {"type": "string", "description": "Property ID (if applicable)"},
                 "task_id": {"type": "string", "description": "Originating task ID (if applicable)"},
+                "risk_score": {
+                    "type": "integer",
+                    "description": "0-10: risk of auto-approving. 0=safe, 10=must review. Default 5.",
+                },
                 "steps": {
                     "type": "array",
                     "description": "Ordered progress plan for the task (3-6 steps). Each step has key, label, and status.",
@@ -251,6 +261,11 @@ class ProposeTaskTool(Tool):
                 SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
             ]
 
+        # External contact messages are at least risk 4
+        risk = kwargs.get("risk_score", 3)
+        if draft_message and risk < 4:
+            risk = 4
+
         sid = _create_suggestion(
             title=kwargs["title"],
             ai_context=kwargs.get("description") or kwargs["title"],
@@ -260,6 +275,8 @@ class ProposeTaskTool(Tool):
             options=options,
             task_id=kwargs.get("task_id"),
             property_id=kwargs.get("property_id"),
+            risk_score=risk,
+            suggestion_type=kwargs["category"],
         )
         return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Task proposal '{kwargs['title']}' with {vendor_name} created for manager review."})
 
@@ -1595,6 +1612,93 @@ class AnalyzeDocumentTool(Tool):
                 "filename": doc.filename,
             })
         except Exception as e:
+            return json.dumps({"status": "error", "message": str(e)})
+        finally:
+            db.close()
+
+
+class CreateSuggestionTool(Tool):
+    """Create a suggestion for the property manager to review."""
+
+    @property
+    def name(self) -> str:
+        return "create_suggestion"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Create a suggestion for the property manager to review and approve. "
+            "Use this for actions that benefit from human review — creating entities "
+            "from documents, proposing lease changes, compliance actions, etc. "
+            "Set risk_score: 0 = safe to auto-approve, 10 = must have human review. "
+            "Low-risk routine actions (creating a property from a clear document) can "
+            "be 1-3. High-risk actions (legal notices, deposit deductions) should be 7-10."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["title", "body", "suggestion_type", "risk_score"],
+            "properties": {
+                "title": {"type": "string", "description": "Short title for the suggestion"},
+                "body": {"type": "string", "description": "Detailed context and reasoning"},
+                "suggestion_type": {
+                    "type": "string",
+                    "enum": ["rent", "maintenance", "leasing", "compliance"],
+                    "description": "Category — maps to autonomy level for approval routing",
+                },
+                "risk_score": {
+                    "type": "integer",
+                    "description": "0-10: risk of auto-approving. 0=safe, 10=must review",
+                },
+                "urgency": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"],
+                    "description": "How urgent is this suggestion (default: medium)",
+                },
+                "property_id": {"type": "string", "description": "Link to a property"},
+                "unit_id": {"type": "string", "description": "Link to a unit"},
+                "document_id": {"type": "string", "description": "Link to a source document"},
+                "action_payload": {
+                    "type": "object",
+                    "description": "Data needed to execute this suggestion when accepted",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        from db.session import SessionLocal
+        from gql.services import suggestion_service
+
+        db = SessionLocal.session_factory()
+        try:
+            suggestion = suggestion_service.create_suggestion(
+                db,
+                title=kwargs["title"],
+                ai_context=kwargs["body"],
+                category=kwargs["suggestion_type"],
+                urgency=kwargs.get("urgency", "medium"),
+                source="agent",
+                property_id=kwargs.get("property_id"),
+                unit_id=kwargs.get("unit_id"),
+            )
+            # Set the new fields
+            suggestion.suggestion_type = kwargs["suggestion_type"]
+            suggestion.risk_score = kwargs.get("risk_score", 5)
+            if kwargs.get("document_id"):
+                suggestion.document_id = kwargs["document_id"]
+            if kwargs.get("action_payload"):
+                suggestion.action_payload = kwargs["action_payload"]
+            db.commit()
+
+            return json.dumps({
+                "status": "ok",
+                "suggestion_id": str(suggestion.id),
+                "message": f"Suggestion created: {kwargs['title']}",
+            })
+        except Exception as e:
+            db.rollback()
             return json.dumps({"status": "error", "message": str(e)})
         finally:
             db.close()

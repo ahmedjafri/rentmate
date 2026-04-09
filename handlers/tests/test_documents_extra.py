@@ -165,37 +165,9 @@ class TestDeleteDocument(unittest.TestCase):
 # GET /document/{document_id}/suggestions
 # ---------------------------------------------------------------------------
 
-@pytest.mark.usefixtures("db")
-class TestGetDocumentSuggestions(unittest.TestCase):
-    def setUp(self):
-        self.client = TestClient(app)
-        app.dependency_overrides[get_db] = lambda: self.db
 
-    def tearDown(self):
-        app.dependency_overrides = {}
-
-    def test_not_found(self):
-        response = self.client.get("/api/document/nope/suggestions", headers=AUTH)
-        assert response.status_code == 404
-
-    def test_returns_empty_when_not_done(self):
-        _make_doc(self.db, doc_id="doc-sug-1", status="pending")
-        response = self.client.get("/api/document/doc-sug-1/suggestions", headers=AUTH)
-        assert response.status_code == 200
-        assert response.json() == {"groups": [], "extracted": {}}
-
-    def test_returns_suggestions_when_done(self):
-        extracted = {"tenant_first_name": "Alice"}
-        _make_doc(self.db, doc_id="doc-sug-2", status="done", extracted_data=extracted)
-        with (
-            patch("handlers.documents.compute_suggestions", return_value=[]),
-            patch("handlers.documents.group_suggestions", return_value=[{"group": "test"}]),
-        ):
-            response = self.client.get("/api/document/doc-sug-2/suggestions", headers=AUTH)
-        assert response.status_code == 200
-        data = response.json()
-        assert "groups" in data
-        assert "extracted" in data
+# TestGetDocumentSuggestions removed — document suggestion endpoints replaced
+# by agent-driven create_suggestion tool.
 
 
 # ---------------------------------------------------------------------------

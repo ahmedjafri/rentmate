@@ -44,7 +44,9 @@ _TOOL_LABELS = {
     "edit_memory": "Editing memory",
     "create_property": "Creating property",
     "create_tenant": "Creating tenant",
+    "create_suggestion": "Creating suggestion",
     "read_document": "Reading document",
+    "analyze_document": "Analyzing document",
     "update_onboarding": "Updating setup progress",
 }
 
@@ -138,6 +140,28 @@ async def chat_with_agent(
                     if steps and isinstance(steps, list):
                         labels = [s.get("label", "") for s in steps[:3] if isinstance(s, dict)]
                         hint = f": {', '.join(l for l in labels if l)}" if labels else ""
+                elif tool_name == "create_property":
+                    addr = args.get("address", "")
+                    hint = f": {addr[:60]}" if addr else ""
+                elif tool_name == "create_tenant":
+                    name = f"{args.get('first_name', '')} {args.get('last_name', '')}".strip()
+                    hint = f": {name}" if name else ""
+                elif tool_name == "create_suggestion":
+                    title = args.get("title", "")
+                    hint = f": {title[:60]}" if title else ""
+                elif tool_name in ("read_document", "analyze_document"):
+                    doc_id = args.get("document_id", "")
+                    hint = f" ({doc_id[:12]}…)" if doc_id else ""
+                    if args.get("list_recent"):
+                        hint = " (listing recent)"
+                elif tool_name == "edit_memory":
+                    et = args.get("entity_type", "")
+                    hint = f" → {et}" if et else ""
+                elif tool_name == "close_task":
+                    hint = ""
+                elif tool_name == "set_mode":
+                    mode = args.get("mode", "")
+                    hint = f" → {mode}" if mode else ""
             msg = f"{label}{hint}"
             progress_events.append(msg)
             progress_queue.put(msg)
