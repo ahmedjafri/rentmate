@@ -92,6 +92,36 @@ async def upload_document(
     return {"document_id": doc_id}
 
 
+@router.post("/document/{document_id}/reprocess")
+async def reprocess_document(
+    document_id: str,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Clear extracted data and re-run document processing with the current extraction prompt."""
+    await require_user(request)
+    doc = db.query(Document).filter(Document.id == document_id).one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not doc.storage_path:
+        raise HTTPException(status_code=400, detail="Document has no stored file to reprocess")
+
+    doc.status = "pending"
+    doc.progress = None
+    doc.extracted_data = None
+    doc.extraction_meta = None
+    doc.context = None
+    doc.error_message = None
+    doc.processed_at = None
+    db.commit()
+
+    from llm.document_processor import process_document
+    background_tasks.add_task(process_document, document_id)
+
+    return {"ok": True, "document_id": document_id}
+
+
 @router.get("/document/{document_id}")
 async def get_document(
     document_id: str,
@@ -144,7 +174,7 @@ async def get_property_candidates(
     db: Session = Depends(get_db),
 ):
     await require_user(request)
-    candidates = find_candidate_properties(db, address)
+    candidates = find_candidate_properties(db, address=address)
     return {"candidates": candidates}
 
 

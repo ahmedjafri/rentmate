@@ -14,6 +14,7 @@ import pytest
 from llm.document_processor import EXTRACTION_PROMPT
 
 _SAMPLE_PDF = Path(__file__).resolve().parent / "sample_rental_agreement.pdf"
+_MISSING_TENANT_PDF = Path(__file__).resolve().parent / "sample_lease_missing_tenant.pdf"
 
 pytestmark = pytest.mark.eval
 
@@ -220,3 +221,89 @@ class TestLandlordTenantDistinction:
             assert "4734" not in phone, (
                 f"tenant_phone '{phone}' appears to be the landlord's phone number"
             )
+
+
+# ---------------------------------------------------------------------------
+# Missing tenant document — dedicated PDF with no tenant name
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def missing_tenant_extraction():
+    """Extract from the lease PDF that has NO tenant name filled in."""
+    if not _MISSING_TENANT_PDF.exists():
+        pytest.skip(f"Missing tenant PDF not found: {_MISSING_TENANT_PDF}")
+    if not os.getenv("LLM_API_KEY"):
+        pytest.skip("LLM_API_KEY not set")
+    return _extract_from_pdf(_MISSING_TENANT_PDF)
+
+
+@pytest.fixture(scope="module")
+def missing_tenant_lease(missing_tenant_extraction):
+    leases = missing_tenant_extraction.get("leases", [])
+    assert len(leases) >= 1
+    return leases[0]
+
+
+class TestMissingTenantDocument:
+    """The 'sample lease agreement missing tenant.pdf' has:
+    - Property: 1234 Acme Lane, ABC, WA 12345
+    - Landlord: Lisa, 557 Dwight Way, Blaine WA 12345, 123-123-1234
+    - Landlord email: bob@hotmail.com (in payment delivery section)
+    - Tenant signature: BLANK
+    - Tenant occupant fields: BLANK
+
+    The extraction must NOT fabricate a tenant name from the landlord info."""
+
+    def test_tenant_name_is_null(self, missing_tenant_lease):
+        """When no tenant name is written in tenant fields, both should be null."""
+        first = missing_tenant_lease.get("tenant_first_name")
+        last = missing_tenant_lease.get("tenant_last_name")
+        # Acceptable: both null, or both empty string
+        if first or last:
+            # If a name was extracted, it MUST NOT be the landlord's name
+            full = f"{first or ''} {last or ''}".lower().strip()
+            assert "lisa" not in full, (
+                f"Tenant name '{first} {last}' was hallucinated from landlord name 'Lisa'"
+            )
+            assert "bob" not in full, (
+                f"Tenant name '{first} {last}' was hallucinated from landlord email 'bob@...'"
+            )
+
+    def test_tenant_email_not_landlord_payment_email(self, missing_tenant_lease):
+        """bob@hotmail.com is the landlord's payment email, not the tenant's."""
+        email = (missing_tenant_lease.get("tenant_email") or "").lower()
+        if email:
+            assert "bob" not in email, (
+                f"tenant_email '{email}' is the landlord's payment email"
+            )
+            assert "hotmail" not in email, (
+                f"tenant_email '{email}' appears to be the landlord's email"
+            )
+
+    def test_tenant_phone_not_landlord_phone(self, missing_tenant_lease):
+        """123-123-1234 is the landlord's phone, not the tenant's."""
+        phone = (missing_tenant_lease.get("tenant_phone") or "").replace("-", "").replace(" ", "")
+        if phone:
+            assert "1231231234" not in phone, (
+                f"tenant_phone '{phone}' is the landlord's phone number"
+            )
+
+    def test_property_address_extracted(self, missing_tenant_lease):
+        """The property address should be correctly extracted."""
+        addr = (missing_tenant_lease.get("property_address") or "").lower()
+        assert "1234" in addr and "acme" in addr, (
+            f"Expected '1234 Acme Lane' in property_address, got: {addr}"
+        )
+
+    def test_context_fields_dont_attribute_landlord_as_tenant(self, missing_tenant_lease):
+        """Context fields should not say the tenant IS Lisa or Bob."""
+        for field in ("property_context", "unit_context", "tenant_context", "lease_context"):
+            ctx = (missing_tenant_lease.get(field) or "").lower()
+            # Look for phrases that misidentify landlord as tenant
+            bad_phrases = ["tenant: lisa", "tenant lisa", "tenant name: lisa",
+                           "tenant: bob", "tenant bob", "tenant name: bob"]
+            for phrase in bad_phrases:
+                assert phrase not in ctx, (
+                    f"{field} misidentifies landlord as tenant ('{phrase}' found): {ctx[:200]}"
+                )

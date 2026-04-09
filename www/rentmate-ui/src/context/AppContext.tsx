@@ -57,6 +57,7 @@ interface AppContextType {
   removeProperty: (id: string) => void;
   addTenant: (tenant: Tenant) => void;
   updateTenant: (id: string, updates: Partial<Tenant>) => void;
+  removeTenant: (id: string) => void;
   addVendor: (vendor: Vendor) => void;
   updateVendor: (id: string, updates: Partial<Vendor>) => void;
   removeVendor: (id: string) => void;
@@ -214,6 +215,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTenants(prev => [tenant, ...prev]);
   }, []);
 
+  const removeTenant = useCallback((id: string) => {
+    setTenants(prev => prev.filter(t => t.id !== id));
+  }, []);
+
   const updateTenant = useCallback((id: string, updates: Partial<Tenant>) => {
     setTenants(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
   }, []);
@@ -341,7 +346,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       chatPanel, entityContext, getEntityContext, setEntityContext,
       updateSuggestionStatus, updateSuggestion, addChatMessage, updateTaskMessage, setTaskMessages, updateTask,
       addTask, removeTask,
-      addProperty, updateProperty, removeProperty, addTenant, updateTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, setChatConversationId, closeChat, setAutonomySettings, refreshData,
+      addProperty, updateProperty, removeProperty, addTenant, updateTenant, removeTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, setChatConversationId, closeChat, setAutonomySettings, refreshData,
     }}>
       {children}
     </AppContext.Provider>

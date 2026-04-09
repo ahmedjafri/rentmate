@@ -4,8 +4,10 @@ import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { Users, Search, ChevronRight, CalendarDays, DollarSign } from 'lucide-react';
+import { Users, Search, ChevronRight, CalendarDays, DollarSign, Trash2 } from 'lucide-react';
 import { PageLoader } from '@/components/ui/page-loader';
+import { graphqlQuery, DELETE_TENANT_MUTATION } from '@/data/api';
+import { toast } from 'sonner';
 
 const paymentConfig = {
   current:  { label: 'Current',  className: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
@@ -14,7 +16,7 @@ const paymentConfig = {
 };
 
 const Tenants = () => {
-  const { tenants, properties, isLoading } = useApp();
+  const { tenants, properties, isLoading, removeTenant } = useApp();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
@@ -99,59 +101,79 @@ const Tenants = () => {
               : null;
 
             return (
-              <Link key={tenant.id} to={`/tenants/${tenant.id}`} state={{ from: 'tenants' }}>
-                <Card className="p-4 rounded-xl hover:shadow-md transition-shadow cursor-pointer">
-                  <div className="flex items-center gap-4">
-                    {/* Avatar */}
-                    <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                      <span className="text-sm font-semibold text-primary">
-                        {tenant.name.charAt(0).toUpperCase()}
-                      </span>
-                    </div>
-
-                    {/* Main info */}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium truncate">{tenant.name}</span>
-                        {!tenant.isActive && (
-                          <Badge variant="secondary" className="text-[10px] rounded-md">Inactive</Badge>
-                        )}
-                        <Badge className={`text-[10px] rounded-md ${payCfg.className}`}>
-                          {payCfg.label}
-                        </Badge>
-                      </div>
-                      <p className="text-sm text-muted-foreground truncate">{tenant.email}</p>
-                    </div>
-
-                    {/* Meta */}
-                    <div className="hidden sm:flex flex-col items-end gap-1 shrink-0 text-right">
-                      {tenant.unit && (
-                        <span className="text-sm font-medium">
-                          {property ? `${property.name || property.address} · ` : ''}{tenant.unit}
+              <div key={tenant.id} className="relative group">
+                <Link to={`/tenants/${tenant.id}`} state={{ from: 'tenants' }}>
+                  <Card className="p-4 rounded-xl hover:shadow-md transition-shadow cursor-pointer">
+                    <div className="flex items-center gap-4">
+                      {/* Avatar */}
+                      <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                        <span className="text-sm font-semibold text-primary">
+                          {tenant.name.charAt(0).toUpperCase()}
                         </span>
-                      )}
-                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                        {tenant.rentAmount > 0 && (
-                          <span className="flex items-center gap-1">
-                            <DollarSign className="h-3 w-3" />
-                            {tenant.rentAmount.toLocaleString()}/mo
-                          </span>
-                        )}
-                        {leaseEnd && (
-                          <span className={`flex items-center gap-1 ${daysLeft !== null && daysLeft < 60 ? 'text-yellow-600 dark:text-yellow-400' : ''}`}>
-                            <CalendarDays className="h-3 w-3" />
-                            {daysLeft !== null && daysLeft < 0
-                              ? `Expired ${Math.abs(daysLeft)}d ago`
-                              : `Ends ${leaseEnd.toLocaleDateString()}`}
-                          </span>
-                        )}
                       </div>
-                    </div>
 
-                    <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                  </div>
-                </Card>
-              </Link>
+                      {/* Main info */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium truncate">{tenant.name}</span>
+                          {!tenant.isActive && (
+                            <Badge variant="secondary" className="text-[10px] rounded-md">Inactive</Badge>
+                          )}
+                          <Badge className={`text-[10px] rounded-md ${payCfg.className}`}>
+                            {payCfg.label}
+                          </Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground truncate">{tenant.email}</p>
+                      </div>
+
+                      {/* Meta */}
+                      <div className="hidden sm:flex flex-col items-end gap-1 shrink-0 text-right">
+                        {tenant.unit && (
+                          <span className="text-sm font-medium">
+                            {property ? `${property.name || property.address} · ` : ''}{tenant.unit}
+                          </span>
+                        )}
+                        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                          {tenant.rentAmount > 0 && (
+                            <span className="flex items-center gap-1">
+                              <DollarSign className="h-3 w-3" />
+                              {tenant.rentAmount.toLocaleString()}/mo
+                            </span>
+                          )}
+                          {leaseEnd && (
+                            <span className={`flex items-center gap-1 ${daysLeft !== null && daysLeft < 60 ? 'text-yellow-600 dark:text-yellow-400' : ''}`}>
+                              <CalendarDays className="h-3 w-3" />
+                              {daysLeft !== null && daysLeft < 0
+                                ? `Expired ${Math.abs(daysLeft)}d ago`
+                                : `Ends ${leaseEnd.toLocaleDateString()}`}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                    </div>
+                  </Card>
+                </Link>
+                <button
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (!confirm(`Delete tenant ${tenant.name}? This will also remove their leases.`)) return;
+                    try {
+                      await graphqlQuery(DELETE_TENANT_MUTATION, { uid: tenant.id });
+                      removeTenant(tenant.id);
+                      toast.success(`${tenant.name} deleted`);
+                    } catch {
+                      toast.error('Failed to delete tenant');
+                    }
+                  }}
+                  className="absolute top-3 right-3 h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors hidden group-hover:flex"
+                  title="Delete tenant"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
             );
           })}
         </div>

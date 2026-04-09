@@ -800,13 +800,13 @@ class SaveMemoryTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Save a note. Use scope='task' (default) for task-specific observations "
-            "like quotes, scheduling details, assessment findings. Use scope='entity' "
-            "for permanent knowledge about an entity that applies across all tasks "
-            "(vendor specialties, tenant preferences, property recurring issues, "
-            "document summaries). IMPORTANT: When processing an uploaded document, "
-            "always save a summary of key terms to the document entity "
-            "(entity_type='document') so it's visible on the document page."
+            "Save a note. Use scope='task' for task-specific observations, "
+            "scope='entity' for permanent entity knowledge. "
+            "For entity notes, set visibility: 'private' (default) for account-specific "
+            "observations/assessments only your account can see; 'shared' for objective "
+            "facts visible to all accounts (lease terms, property features, extraction data). "
+            "When unsure, use private. When processing documents, save factual summaries "
+            "as shared and your assessments as private."
         )
 
     @property
@@ -823,6 +823,11 @@ class SaveMemoryTool(Tool):
                     "type": "string",
                     "enum": ["task", "entity"],
                     "description": "Where to save: 'task' for this task only (default), 'entity' for permanent entity knowledge.",
+                },
+                "visibility": {
+                    "type": "string",
+                    "enum": ["private", "shared"],
+                    "description": "For entity scope: 'private' (default) = only this account sees it; 'shared' = all accounts see it.",
                 },
                 "task_id": {
                     "type": "string",
@@ -883,37 +888,63 @@ class SaveMemoryTool(Tool):
             store.add_note(content=content, entity_type="general", entity_id="", entity_label="")
             return json.dumps({"status": "ok", "message": "General note saved."})
 
-        # Entity-scoped notes go directly to the entity's context column
-        _MODEL_MAP = {
-            "property": "Property",
-            "unit": "Unit",
-            "tenant": "Tenant",
-            "vendor": "ExternalContact",
-            "document": "Document",
-        }
-        model_name = _MODEL_MAP.get(entity_type)
-        if not model_name:
+        visibility = kwargs.get("visibility", "private")
+
+        _VALID_ENTITY_TYPES = {"property", "unit", "tenant", "vendor", "document"}
+        if entity_type not in _VALID_ENTITY_TYPES:
             return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
 
         db = SessionLocal.session_factory()
         try:
-            import db.models as models
-            model_cls = getattr(models, model_name)
-            entity = db.query(model_cls).filter_by(id=entity_id).first()
-            if not entity:
-                return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
-
-            # Append to existing context with timestamp
-            now = datetime.now(UTC).strftime("%Y-%m-%d")
-            entry = f"[{now}] {content}"
-            existing = entity.context or ""
-            entity.context = f"{existing}\n{entry}".strip()
-            from sqlalchemy.orm.attributes import flag_modified
-            flag_modified(entity, "context")
-            db.commit()
-
+            now = datetime.now(UTC)
+            now_str = now.strftime("%Y-%m-%d")
+            entry = f"[{now_str}] {content}"
             label = entity_label or entity_type
-            return json.dumps({"status": "ok", "message": f"Context saved for {label}."})
+
+            if visibility == "shared":
+                # Write to entity.context (visible to all accounts)
+                _MODEL_MAP = {
+                    "property": "Property",
+                    "unit": "Unit",
+                    "tenant": "Tenant",
+                    "vendor": "ExternalContact",
+                    "document": "Document",
+                }
+                import db.models as models
+                model_cls = getattr(models, _MODEL_MAP[entity_type])
+                entity = db.query(model_cls).filter_by(id=entity_id).first()
+                if not entity:
+                    return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
+                existing = entity.context or ""
+                entity.context = f"{existing}\n{entry}".strip()
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(entity, "context")
+                db.commit()
+                return json.dumps({"status": "ok", "message": f"Shared context saved for {label}."})
+            else:
+                # Write to EntityNote (private to this account)
+                from backends.local_auth import resolve_account_id
+                from db.models import EntityNote
+                account_id = resolve_account_id()
+                note = db.query(EntityNote).filter_by(
+                    account_id=account_id, entity_type=entity_type, entity_id=entity_id,
+                ).first()
+                if note:
+                    existing = note.content or ""
+                    note.content = f"{existing}\n{entry}".strip()
+                    note.updated_at = now
+                else:
+                    note = EntityNote(
+                        account_id=account_id,
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        content=entry,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    db.add(note)
+                db.commit()
+                return json.dumps({"status": "ok", "message": f"Private note saved for {label}."})
         finally:
             db.close()
 
@@ -954,7 +985,6 @@ class RecallMemoryTool(Tool):
         entity_id = kwargs.get("entity_id")
 
         if entity_type == "general" or (not entity_type and not entity_id):
-            # Read general notes from agent_memory
             from backends.local_auth import DEFAULT_USER_ID
             from llm.memory_store import DbMemoryStore
             store = DbMemoryStore(DEFAULT_USER_ID)
@@ -963,7 +993,6 @@ class RecallMemoryTool(Tool):
                 return json.dumps({"notes": [], "message": "No general notes found."})
             return json.dumps({"notes": notes, "count": len(notes)})
 
-        # Read from entity context column
         _MODEL_MAP = {
             "property": "Property",
             "unit": "Unit",
@@ -976,29 +1005,42 @@ class RecallMemoryTool(Tool):
             return json.dumps({"notes": [], "message": f"Unknown entity type: {entity_type}"})
 
         import db.models as models
+        from backends.local_auth import resolve_account_id
+        from db.models import EntityNote
         from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
             model_cls = getattr(models, model_name)
+            account_id = resolve_account_id()
+
             if entity_id:
                 entity = db.query(model_cls).filter_by(id=entity_id).first()
                 entities = [entity] if entity else []
             else:
-                entities = db.query(model_cls).filter(model_cls.context.isnot(None)).all()
+                entities = db.query(model_cls).all()
 
-            notes = []
+            results = []
             for e in entities:
-                if e and e.context:
-                    label = getattr(e, "name", None) or getattr(e, "label", None) or str(e.id)[:8]
-                    notes.append({
+                if not e:
+                    continue
+                label = getattr(e, "name", None) or getattr(e, "label", None) or str(e.id)[:8]
+                shared = e.context or ""
+                # Get private notes for this account
+                private_note = db.query(EntityNote).filter_by(
+                    account_id=account_id, entity_type=entity_type, entity_id=str(e.id),
+                ).first()
+                private = private_note.content if private_note else ""
+                if shared or private:
+                    results.append({
                         "entity_type": entity_type,
                         "entity_id": str(e.id),
                         "label": label,
-                        "context": e.context,
+                        "shared_context": shared,
+                        "private_notes": private,
                     })
-            if not notes:
+            if not results:
                 return json.dumps({"notes": [], "message": f"No {entity_type} context found."})
-            return json.dumps({"notes": notes, "count": len(notes)})
+            return json.dumps({"notes": results, "count": len(results)})
         finally:
             db.close()
 
@@ -1038,6 +1080,11 @@ class EditMemoryTool(Tool):
                     "type": "string",
                     "description": "The full replacement context text. Pass empty string to clear.",
                 },
+                "visibility": {
+                    "type": "string",
+                    "enum": ["private", "shared"],
+                    "description": "'private' (default) edits your account's notes; 'shared' edits the shared context visible to all.",
+                },
             },
         }
 
@@ -1045,35 +1092,62 @@ class EditMemoryTool(Tool):
         entity_type = kwargs["entity_type"]
         entity_id = kwargs["entity_id"]
         new_context = kwargs["new_context"]
+        visibility = kwargs.get("visibility", "private")
 
-        _MODEL_MAP = {
-            "property": "Property",
-            "unit": "Unit",
-            "tenant": "Tenant",
-            "vendor": "ExternalContact",
-            "document": "Document",
-        }
-        model_name = _MODEL_MAP.get(entity_type)
-        if not model_name:
+        _VALID = {"property", "unit", "tenant", "vendor", "document"}
+        if entity_type not in _VALID:
             return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
 
         from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
-            import db.models as models
-            model_cls = getattr(models, model_name)
-            entity = db.query(model_cls).filter_by(id=entity_id).first()
-            if not entity:
-                return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
+            if visibility == "shared":
+                _MODEL_MAP = {
+                    "property": "Property",
+                    "unit": "Unit",
+                    "tenant": "Tenant",
+                    "vendor": "ExternalContact",
+                    "document": "Document",
+                }
+                import db.models as models
+                model_cls = getattr(models, _MODEL_MAP[entity_type])
+                entity = db.query(model_cls).filter_by(id=entity_id).first()
+                if not entity:
+                    return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
+                entity.context = new_context.strip() or None
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(entity, "context")
+                db.commit()
+                label = getattr(entity, "name", None) or getattr(entity, "label", None) or entity_type
+                action = "cleared" if not new_context.strip() else "updated"
+                return json.dumps({"status": "ok", "message": f"Shared context {action} for {label}."})
+            else:
+                from datetime import UTC, datetime
 
-            entity.context = new_context.strip() or None
-            from sqlalchemy.orm.attributes import flag_modified
-            flag_modified(entity, "context")
-            db.commit()
-
-            label = getattr(entity, "name", None) or getattr(entity, "label", None) or entity_type
-            action = "cleared" if not new_context.strip() else "updated"
-            return json.dumps({"status": "ok", "message": f"Context {action} for {label}."})
+                from backends.local_auth import resolve_account_id
+                from db.models import EntityNote
+                account_id = resolve_account_id()
+                note = db.query(EntityNote).filter_by(
+                    account_id=account_id, entity_type=entity_type, entity_id=entity_id,
+                ).first()
+                if new_context.strip():
+                    if note:
+                        note.content = new_context.strip()
+                        note.updated_at = datetime.now(UTC)
+                    else:
+                        db.add(EntityNote(
+                            account_id=account_id,
+                            entity_type=entity_type,
+                            entity_id=entity_id,
+                            content=new_context.strip(),
+                            created_at=datetime.now(UTC),
+                            updated_at=datetime.now(UTC),
+                        ))
+                elif note:
+                    db.delete(note)
+                db.commit()
+                action = "cleared" if not new_context.strip() else "updated"
+                return json.dumps({"status": "ok", "message": f"Private notes {action}."})
         finally:
             db.close()
 

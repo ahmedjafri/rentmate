@@ -153,16 +153,28 @@ def build_task_context(db: Session, task_id: str) -> str:
                 lines.append(f"Assigned Vendor: {vendor_name}")
                 lines.append(f"Vendor ID: {vendor_id}")
 
-    # Entity context notes (agent memory saved via save_memory tool)
+    # Entity context notes — both shared (entity.context) and private (EntityNote)
+    from backends.local_auth import resolve_account_id
+    from db.models import EntityNote
+    account_id = resolve_account_id()
+
+    def _entity_notes(entity, entity_type: str, label: str):
+        notes = []
+        if entity and entity.context:
+            notes.append(f"[shared] {label} notes: {entity.context}")
+        if entity:
+            private = db.query(EntityNote).filter_by(
+                account_id=account_id, entity_type=entity_type, entity_id=str(entity.id),
+            ).first()
+            if private and private.content:
+                notes.append(f"[private] {label} notes: {private.content}")
+        return notes
+
     context_notes: list[str] = []
-    if prop and prop.context:
-        context_notes.append(f"Property notes: {prop.context}")
-    if unit_obj and unit_obj.context:
-        context_notes.append(f"Unit notes: {unit_obj.context}")
-    if tenant_obj and tenant_obj.context:
-        context_notes.append(f"Tenant notes: {tenant_obj.context}")
-    if vendor_obj and getattr(vendor_obj, 'context', None):
-        context_notes.append(f"Vendor notes: {vendor_obj.context}")
+    context_notes.extend(_entity_notes(prop, "property", "Property"))
+    context_notes.extend(_entity_notes(unit_obj, "unit", "Unit"))
+    context_notes.extend(_entity_notes(tenant_obj, "tenant", "Tenant"))
+    context_notes.extend(_entity_notes(vendor_obj, "vendor", "Vendor"))
     if context_notes:
         lines.append("")
         lines.extend(context_notes)

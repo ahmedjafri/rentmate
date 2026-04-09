@@ -385,6 +385,24 @@ export const UPDATE_ENTITY_CONTEXT_MUTATION = `
   }
 `;
 
+export const ENTITY_NOTE_QUERY = `
+  query EntityNote($entityType: String!, $entityId: String!) {
+    entityNote(entityType: $entityType, entityId: $entityId)
+  }
+`;
+
+export const SAVE_ENTITY_NOTE_MUTATION = `
+  mutation SaveEntityNote($entityType: String!, $entityId: String!, $content: String!) {
+    saveEntityNote(entityType: $entityType, entityId: $entityId, content: $content)
+  }
+`;
+
+export const DELETE_TENANT_MUTATION = `
+  mutation DeleteTenant($uid: String!) {
+    deleteTenant(uid: $uid)
+  }
+`;
+
 export const CONVERSATIONS_QUERY = `
   query GetConversations($conversationType: String!, $limit: Int) {
     conversations(conversationType: $conversationType, limit: $limit) {

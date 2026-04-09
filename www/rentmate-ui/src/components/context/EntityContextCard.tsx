@@ -7,9 +7,10 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { FileText, AlertTriangle, CheckCircle2, Bot, ChevronRight, Loader2 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
-import { graphqlQuery, UPDATE_ENTITY_CONTEXT_MUTATION } from '@/data/api';
+import { graphqlQuery, UPDATE_ENTITY_CONTEXT_MUTATION, ENTITY_NOTE_QUERY, SAVE_ENTITY_NOTE_MUTATION } from '@/data/api';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { Globe, Lock } from 'lucide-react';
 
 export interface ContextTopic {
   key: string;
@@ -86,57 +87,68 @@ export function EntityContextCard({ entityId, entityName, entityType, agentConte
   const [open, setOpen] = useState(false);
   const context = getEntityContext(entityId);
   const [draft, setDraft] = useState('');
-  const [agentDraft, setAgentDraft] = useState('');
-  const [savingAgent, setSavingAgent] = useState(false);
+  const [sharedDraft, setSharedDraft] = useState('');
+  const [privateDraft, setPrivateDraft] = useState('');
+  const [privateNotes, setPrivateNotes] = useState('');
+  const [saving, setSaving] = useState(false);
   const autoContextText = useMemo(() => autoContext.map(a => `${a.label} ${a.value}`).join(' '), [autoContext]);
 
-  const allText = [context, agentContext || '', autoContextText].join(' ');
+  const allText = [context, agentContext || '', privateNotes, autoContextText].join(' ');
   const wordCount = countWords(allText);
 
   const { missing } = useMemo(() => checkTopicCoverage(allText, expectedTopics), [allText, expectedTopics]);
   const health = getContextHealth(wordCount, missing.length, expectedTopics.length);
   const hc = healthConfig[health];
 
-  const handleOpen = () => {
+  const handleOpen = async () => {
     setDraft(context);
-    setAgentDraft(agentContext || '');
+    setSharedDraft(agentContext || '');
+    // Fetch private notes from DB
+    if (entityType) {
+      try {
+        const result = await graphqlQuery<{ entityNote: string | null }>(ENTITY_NOTE_QUERY, { entityType, entityId });
+        const notes = result.entityNote || '';
+        setPrivateDraft(notes);
+        setPrivateNotes(notes);
+      } catch {
+        setPrivateDraft('');
+      }
+    }
     setOpen(true);
   };
 
-  const saveAgentContext = async () => {
-    if (!entityType) return;
-    setSavingAgent(true);
-    try {
-      const trimmed = agentDraft.trim();
-      await graphqlQuery(UPDATE_ENTITY_CONTEXT_MUTATION, {
-        entityType,
-        entityId,
-        context: trimmed,
-      });
-      onAgentContextSaved?.(trimmed);
-      return true;
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to save agent memory');
-      return false;
-    } finally {
-      setSavingAgent(false);
-    }
-  };
-
   const handleSave = async () => {
-    // Save human notes to localStorage
-    setEntityContext(entityId, draft);
-    // Save agent memory to DB if changed
-    const agentChanged = agentDraft !== (agentContext || '');
-    if (agentChanged && entityType) {
-      const ok = await saveAgentContext();
-      if (!ok) return; // Don't close on error
+    setSaving(true);
+    try {
+      // Save human notes to localStorage
+      setEntityContext(entityId, draft);
+
+      // Save shared context if changed
+      if (entityType && sharedDraft !== (agentContext || '')) {
+        await graphqlQuery(UPDATE_ENTITY_CONTEXT_MUTATION, {
+          entityType, entityId, context: sharedDraft.trim(),
+        });
+        onAgentContextSaved?.(sharedDraft.trim());
+      }
+
+      // Save private notes if changed
+      if (entityType && privateDraft !== privateNotes) {
+        await graphqlQuery(SAVE_ENTITY_NOTE_MUTATION, {
+          entityType, entityId, content: privateDraft.trim(),
+        });
+        setPrivateNotes(privateDraft.trim());
+      }
+
+      toast.success('Context saved');
+      setOpen(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to save');
+    } finally {
+      setSaving(false);
     }
-    toast.success('Context saved');
-    setOpen(false);
   };
 
-  const draftAllText = [draft, agentDraft, autoContextText].join(' ');
+  const draftAllText = [draft, sharedDraft, privateDraft, autoContextText].join(' ');
   const draftWordCount = countWords(draftAllText);
   const draftCoverage = useMemo(() => checkTopicCoverage(draftAllText, expectedTopics), [draftAllText, expectedTopics]);
   const draftHealth = getContextHealth(draftWordCount, draftCoverage.missing.length, expectedTopics.length);
@@ -199,21 +211,42 @@ export function EntityContextCard({ entityId, entityName, entityType, agentConte
                 </Collapsible>
               )}
 
-              {/* Agent memory */}
+              {/* Shared context (visible to all accounts) */}
               {entityType && (
                 <div>
                   <div className="flex items-center gap-1.5 mb-2">
-                    <Bot className="h-3.5 w-3.5 text-primary" />
-                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Agent Memory</span>
-                    {agentDraft && (
-                      <span className="text-[10px] text-muted-foreground ml-1">({countWords(agentDraft)} words)</span>
+                    <Globe className="h-3.5 w-3.5 text-blue-500" />
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Shared Context</span>
+                    <span className="text-[10px] text-muted-foreground ml-1">(visible to all accounts)</span>
+                    {sharedDraft && (
+                      <span className="text-[10px] text-muted-foreground">· {countWords(sharedDraft)} words</span>
                     )}
                   </div>
                   <Textarea
-                    value={agentDraft}
-                    onChange={(e) => setAgentDraft(e.target.value)}
-                    placeholder="No agent notes yet. RentMate will add context here as it learns about this entity."
-                    className="min-h-[100px] resize-none text-sm font-mono"
+                    value={sharedDraft}
+                    onChange={(e) => setSharedDraft(e.target.value)}
+                    placeholder="Objective facts: lease terms, property features, extraction data. Set by document processing or agent."
+                    className="min-h-[80px] resize-none text-sm font-mono"
+                  />
+                </div>
+              )}
+
+              {/* Private notes (per-account) */}
+              {entityType && (
+                <div>
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <Lock className="h-3.5 w-3.5 text-orange-500" />
+                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Private Notes</span>
+                    <span className="text-[10px] text-muted-foreground ml-1">(only your account)</span>
+                    {privateDraft && (
+                      <span className="text-[10px] text-muted-foreground">· {countWords(privateDraft)} words</span>
+                    )}
+                  </div>
+                  <Textarea
+                    value={privateDraft}
+                    onChange={(e) => setPrivateDraft(e.target.value)}
+                    placeholder="Account-specific observations, assessments, strategies, preferences."
+                    className="min-h-[80px] resize-none text-sm font-mono"
                   />
                 </div>
               )}
@@ -275,8 +308,8 @@ export function EntityContextCard({ entityId, entityName, entityType, agentConte
             </span>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={() => setOpen(false)}>Cancel</Button>
-              <Button size="sm" onClick={handleSave} disabled={savingAgent}>
-                {savingAgent ? <Loader2 className="h-3 w-3 animate-spin mr-1.5" /> : null}
+              <Button size="sm" onClick={handleSave} disabled={saving}>
+                {saving ? <Loader2 className="h-3 w-3 animate-spin mr-1.5" /> : null}
                 Save
               </Button>
             </div>

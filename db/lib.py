@@ -716,7 +716,7 @@ def group_suggestions(doc_id: str, *, filename: str, suggestions: list, suggesti
             address       = next((s['payload'].get('property_address', '') for s in location_sug if s['payload'].get('property_address')), '')
             unit          = next((s['payload'].get('unit_label', '') for s in location_sug if s['payload'].get('unit_label')), '')
             property_type = next((s['payload'].get('property_type') for s in location_sug if s['payload'].get('property_type')), 'multi_family')
-            candidates    = find_candidate_properties(db, address) if db else []
+            candidates    = find_candidate_properties(db, address=address) if db else []
             groups.append({
                 'group_id':          f'{doc_id}_{loc_key}',
                 'document_id':       doc_id,

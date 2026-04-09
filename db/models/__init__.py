@@ -11,7 +11,7 @@ from db.enums import (
 from .agent_memory import AgentMemory
 from .agent_trace import AgentTrace
 from .automation import AutomationRevision
-from .base import DEFAULT_ACCOUNT_ID, Base, HasAccountId
+from .base import DEFAULT_ACCOUNT_ID, Base, EntityNote, HasAccountId
 from .documents import Document, DocumentTag, DocumentTask
 from .messaging import (
     Conversation,
@@ -32,6 +32,7 @@ __all__ = [
     "Base",
     "HasAccountId",
     "DEFAULT_ACCOUNT_ID",
+    "EntityNote",
     "Property",
     "Unit",
     "Tenant",

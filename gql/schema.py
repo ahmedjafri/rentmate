@@ -83,6 +83,17 @@ class Query:
             role="admin",
         )
 
+    @strawberry.field(description="Get private (per-account) notes for an entity")
+    def entity_note(self, info, *, entity_type: str, entity_id: str) -> typing.Optional[str]:
+        _current_user(info)
+        from backends.local_auth import resolve_account_id
+        from db.models import EntityNote
+        db = _session(info)
+        note = db.query(EntityNote).filter_by(
+            account_id=resolve_account_id(), entity_type=entity_type, entity_id=entity_id,
+        ).first()
+        return note.content if note else None
+
     @strawberry.field(description="Returns all properties with their tenants and leases")
     def houses(self, info) -> typing.List[HouseType]:
         _current_user(info)
@@ -380,6 +391,36 @@ class Mutation(AuthMutation):
         if not entity:
             raise ValueError(f"{entity_type} {entity_id} not found")
         entity.context = context or None
+        db.commit()
+        return True
+
+    @strawberry.mutation(description="Save private (per-account) notes for an entity")
+    def save_entity_note(self, info, *, entity_type: str, entity_id: str, content: str) -> bool:
+        _current_user(info)
+        db = _session(info)
+        from datetime import UTC, datetime
+
+        from backends.local_auth import resolve_account_id
+        from db.models import EntityNote
+        account_id = resolve_account_id()
+        note = db.query(EntityNote).filter_by(
+            account_id=account_id, entity_type=entity_type, entity_id=entity_id,
+        ).first()
+        if content.strip():
+            if note:
+                note.content = content.strip()
+                note.updated_at = datetime.now(UTC)
+            else:
+                db.add(EntityNote(
+                    account_id=account_id,
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    content=content.strip(),
+                    created_at=datetime.now(UTC),
+                    updated_at=datetime.now(UTC),
+                ))
+        elif note:
+            db.delete(note)
         db.commit()
         return True
 

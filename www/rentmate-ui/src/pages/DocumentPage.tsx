@@ -446,17 +446,19 @@ const DocumentPage = () => {
             </div>
 
             <div className="border-t" />
+            {/* Shared context */}
             <div className="space-y-1.5">
               <div className="flex items-center gap-1.5">
                 <Bot className="h-3.5 w-3.5 text-primary" />
-                <span className="text-xs font-semibold text-primary">Agent Notes</span>
+                <span className="text-xs font-semibold text-primary">Shared Context</span>
+                <span className="text-[10px] text-muted-foreground">(all accounts)</span>
               </div>
               {doc.context ? (
                 <pre className="rounded-lg bg-primary/5 border border-primary/10 p-3 text-xs leading-relaxed whitespace-pre-wrap">
                   {doc.context}
                 </pre>
               ) : (
-                <p className="text-xs text-muted-foreground italic">No agent notes yet. Ask RentMate to review this document to generate notes.</p>
+                <p className="text-xs text-muted-foreground italic">No shared context yet. Upload and process the document to generate.</p>
               )}
             </div>
 
