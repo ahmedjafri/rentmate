@@ -34,7 +34,7 @@ def _get_creator_id(sess: Session, property_id: str | None, unit_id: str | None)
                 return res[0]
     except Exception:
         pass
-    return "00000000-0000-0000-0000-000000000001"
+    return 1
 
 
 def create_suggestion(

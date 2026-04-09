@@ -7,15 +7,16 @@ import jwt
 JWT_SECRET = os.getenv("JWT_SECRET", "rentmate-local-secret")
 RENTMATE_PASSWORD = os.getenv("RENTMATE_PASSWORD", "rentmate")
 
-DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000001"
+DEFAULT_ACCOUNT_ID = 1  # Default account ID (integer, auto-increment PK)
+DEFAULT_USER_ID = str(DEFAULT_ACCOUNT_ID)  # String version for paths/JWT sub claims
 DEFAULT_USER_EMAIL = os.getenv("RENTMATE_ADMIN_EMAIL", "admin@localhost")
 
 # Request-scoped creator context — set by middleware/deps, read by tools
-_current_creator_id: ContextVar[str | None] = ContextVar("current_creator_id", default=None)
-_current_user_id: ContextVar[str | None] = ContextVar("current_user_id", default=None)
+_current_creator_id: ContextVar[int | None] = ContextVar("current_creator_id", default=None)
+_current_user_id: ContextVar[int | None] = ContextVar("current_user_id", default=None)
 
 
-def resolve_creator_id() -> str:
+def resolve_creator_id() -> int:
     """Return the creator_id for the current request.
 
     Reads from the request-scoped context var set by set_request_context().
@@ -31,7 +32,7 @@ def resolve_creator_id() -> str:
 resolve_account_id = resolve_creator_id
 
 
-def set_request_context(*, user_id: str, creator_id: str) -> tuple:
+def set_request_context(*, user_id: int, creator_id: int) -> tuple:
     """Set request-scoped context vars. Returns tokens for reset."""
     t1 = _current_user_id.set(user_id)
     t2 = _current_creator_id.set(creator_id)
@@ -48,14 +49,15 @@ class LocalAuthBackend:
     async def validate_token(self, token: str) -> dict:
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-            uid = payload.get("sub", DEFAULT_USER_ID)
+            uid = payload.get("sub", str(DEFAULT_ACCOUNT_ID))
             email = payload.get("email", DEFAULT_USER_EMAIL)
+            # For local auth, the account ID is always the default account
             return {
                 "uid": uid,
                 "id": uid,
                 "email": email,
                 "username": email,
-                "creator_id": uid,
+                "creator_id": DEFAULT_ACCOUNT_ID,
             }
         except Exception as e:
             raise ValueError(f"Invalid token: {e}")
@@ -65,7 +67,7 @@ class LocalAuthBackend:
         if password != RENTMATE_PASSWORD:
             raise ValueError("Invalid password")
         payload = {
-            "sub": DEFAULT_USER_ID,
+            "sub": str(DEFAULT_ACCOUNT_ID),
             "email": DEFAULT_USER_EMAIL,
             "exp": datetime.now(UTC) + timedelta(days=30),
         }

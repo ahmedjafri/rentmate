@@ -38,7 +38,7 @@ from db.models import (
 )
 from gql.schema import schema
 
-DEFAULT_ACCOUNT_ID = "00000000-0000-0000-0000-000000000001"
+DEFAULT_ACCOUNT_ID = 1
 
 # ---------------------------------------------------------------------------
 # Helpers

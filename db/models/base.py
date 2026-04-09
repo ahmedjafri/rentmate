@@ -1,9 +1,10 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
+
 
 def _resolve_creator_id():
     """Column default: resolve creator_id from request context.
@@ -16,13 +17,13 @@ def _resolve_creator_id():
 
 
 class HasCreatorId:
-    """Mixin that adds creator_id to any model, tracking which account created it.
+    """Mixin that adds creator_id (integer) to any model.
 
-    The default resolves from the request-scoped context var. If no context
-    is set (missing auth), entity creation raises RuntimeError.
-    Startup code must call set_request_context() first or pass creator_id explicitly.
+    References Account.id. The default resolves from the request-scoped
+    context var. If no context is set (missing auth), entity creation
+    raises RuntimeError.
     """
-    creator_id = Column(String(36), nullable=False, default=_resolve_creator_id, index=True)
+    creator_id = Column(Integer, nullable=False, default=_resolve_creator_id, index=True)
 
 
 HasAccountId = HasCreatorId  # backward compat alias
@@ -48,8 +49,8 @@ class EntityNote(Base):
     __tablename__ = "entity_notes"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    creator_id = Column(String(36), nullable=False, index=True)
-    entity_type = Column(String(20), nullable=False)  # property, unit, tenant, vendor, document
+    creator_id = Column(Integer, nullable=False, index=True)
+    entity_type = Column(String(20), nullable=False)
     entity_id = Column(String(36), nullable=False, index=True)
     content = Column(Text, nullable=False, default="")
     created_at = Column(DateTime, nullable=True)

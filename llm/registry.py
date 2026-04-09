@@ -104,20 +104,21 @@ class AgentRegistry:
                 _register_rentmate_tools()
                 self._tools_registered = True
                 print("[agent] RentMate tools registered")
-            aid = account_id or DEFAULT_USER_ID
+            aid = str(account_id) if account_id else DEFAULT_USER_ID
             self._ready[aid] = True
             print(f"[agent] Agent ready for account {aid[:8]}…")
 
-    def stop_gateway(self, account_id: str | None = None):
-        aid = account_id or DEFAULT_USER_ID
+    def stop_gateway(self, account_id=None):
+        aid = str(account_id) if account_id else DEFAULT_USER_ID
         self._ready.pop(aid, None)
         print(f"[agent] Agent stopped for account {aid[:8]}…")
 
-    def is_healthy(self, account_id: str | None = None) -> bool:
-        aid = account_id or DEFAULT_USER_ID
+    def is_healthy(self, account_id=None) -> bool:
+        aid = str(account_id) if account_id else DEFAULT_USER_ID
         return self._ready.get(aid, False)
 
-    def ensure_agent(self, account_id: str, db: Session) -> str:
+    def ensure_agent(self, account_id, db: Session) -> str:
+        account_id = str(account_id)
         if account_id not in self._ready:
             agent_dir = DATA_DIR / account_id
             self._write_workspace(agent_dir, db, account_id)

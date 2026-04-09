@@ -609,7 +609,7 @@ def spawn_task_from_conversation(
                 creator_id = res[0] if res and res[0] else None
         except Exception:
             pass
-        creator_id = creator_id or "00000000-0000-0000-0000-000000000001"
+        creator_id = creator_id or 1
 
     now = datetime.now(UTC)
 

@@ -30,7 +30,7 @@ from db.models import (
     Unit,
 )
 
-DEFAULT_ACCOUNT_ID = "00000000-0000-0000-0000-000000000000"
+DEFAULT_ACCOUNT_ID = 1
 
 
 # ── DB fixtures ──────────────────────────────────────────────────────────────
