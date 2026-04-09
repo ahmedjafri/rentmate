@@ -37,7 +37,10 @@ jobs:
         run: poetry install --no-interaction
 
       - name: Check migrations up to date
-        run: DATABASE_URL="sqlite://" poetry run alembic check
+        run: |
+          DATABASE_URL="sqlite:////tmp/ci_migration_check.db" poetry run alembic upgrade head
+          DATABASE_URL="sqlite:////tmp/ci_migration_check.db" poetry run alembic check
+          rm -f /tmp/ci_migration_check.db
 
       - name: Run tests
         run: poetry run pytest --tb=short -q
