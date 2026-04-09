@@ -5,6 +5,7 @@ import re
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
+from backends.local_auth import set_request_context
 from backends.wire import auth_backend
 from db.session import SessionLocal, engine  # noqa: F401 — re-exported
 
@@ -19,7 +20,13 @@ async def require_user(request: Request) -> dict:
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
-        return await auth_backend.validate_token(token)
+        user = await auth_backend.validate_token(token)
+        # Set request-scoped context so tools/services can read account_id
+        account_id = user.get("account_id", "")
+        user_id = user.get("uid") or user.get("id", "")
+        if account_id and user_id:
+            set_request_context(user_id=user_id, account_id=account_id)
+        return user
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")
 

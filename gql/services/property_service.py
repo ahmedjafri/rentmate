@@ -19,8 +19,10 @@ class PropertyService:
         postal_code: str | None = None,
         unit_labels: list[str] | None = None,
     ) -> tuple[SqlProperty, list[SqlUnit]]:
+        from backends.local_auth import resolve_account_id
         prop = SqlProperty(
             id=str(uuid.uuid4()),
+            account_id=resolve_account_id(),
             name=name,
             address_line1=address,
             city=city,

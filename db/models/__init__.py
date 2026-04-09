@@ -8,6 +8,7 @@ from db.enums import (
     Urgency,
 )
 
+from .account import Account, AccountUser
 from .agent_memory import AgentMemory
 from .agent_trace import AgentTrace
 from .automation import AutomationRevision
@@ -29,6 +30,8 @@ from .suggestions import Suggestion
 from .tasks import Task, TaskNumberSequence
 
 __all__ = [
+    "Account",
+    "AccountUser",
     "Base",
     "HasAccountId",
     "DEFAULT_ACCOUNT_ID",

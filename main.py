@@ -155,6 +155,17 @@ async def lifespan(app: FastAPI):
 
     db = SessionLocal()
     try:
+        # Ensure default account + user exist
+        from backends.local_auth import DEFAULT_USER_ID
+        from db.models import Account, AccountUser
+        if not db.query(Account).filter_by(id=DEFAULT_USER_ID).first():
+            db.add(Account(id=DEFAULT_USER_ID, name="Default Account"))
+            db.flush()
+        if not db.query(AccountUser).filter_by(user_id=DEFAULT_USER_ID, account_id=DEFAULT_USER_ID).first():
+            db.add(AccountUser(user_id=DEFAULT_USER_ID, account_id=DEFAULT_USER_ID, role="admin", email=os.getenv("RENTMATE_ADMIN_EMAIL", "admin@localhost")))
+            db.flush()
+        db.commit()
+
         agent_registry.populate_all_agents(db)
         # Migrate vendors: ensure all have a short portal_token
         from db.models import ExternalContact as _EC

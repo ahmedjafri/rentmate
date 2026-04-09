@@ -32,13 +32,25 @@ def tenant_display_name(t: Tenant) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Query functions
+# Account scoping
+# ---------------------------------------------------------------------------
+
+def _account_id() -> str:
+    """Get the current request's account_id from context."""
+    from backends.local_auth import DEFAULT_ACCOUNT_ID, _current_account_id
+    return _current_account_id.get(DEFAULT_ACCOUNT_ID)
+
+
+# ---------------------------------------------------------------------------
+# Query functions (all scoped to current account)
 # ---------------------------------------------------------------------------
 
 def fetch_properties(db: Session) -> list[Property]:
     return (
         db.execute(
-            select(Property).options(
+            select(Property)
+            .where(Property.account_id == _account_id())
+            .options(
                 selectinload(Property.units),
                 selectinload(Property.leases).selectinload(Lease.tenant),
                 selectinload(Property.leases).selectinload(Lease.unit),
@@ -52,7 +64,9 @@ def fetch_properties(db: Session) -> list[Property]:
 def fetch_tenants(db: Session) -> list[Tenant]:
     return (
         db.execute(
-            select(Tenant).options(
+            select(Tenant)
+            .where(Tenant.account_id == _account_id())
+            .options(
                 selectinload(Tenant.leases).selectinload(Lease.property),
                 selectinload(Tenant.leases).selectinload(Lease.unit),
             )
@@ -65,7 +79,9 @@ def fetch_tenants(db: Session) -> list[Tenant]:
 def fetch_leases(db: Session) -> list[Lease]:
     return (
         db.execute(
-            select(Lease).options(
+            select(Lease)
+            .where(Lease.account_id == _account_id())
+            .options(
                 selectinload(Lease.tenant),
                 selectinload(Lease.property),
                 selectinload(Lease.unit),
@@ -82,7 +98,7 @@ def fetch_tasks(
     status: Optional[str] = None,
     source: Optional[str] = None,
 ) -> list[Task]:
-    q = select(Task)
+    q = select(Task).where(Task.account_id == _account_id())
     if category:
         q = q.where(Task.category == category)
     if status:
@@ -127,6 +143,7 @@ def fetch_conversations(
         select(Conversation)
         .where(Conversation.conversation_type == conversation_type)
         .where(Conversation.is_archived.is_(False))
+        .where(Conversation.account_id == _account_id())
         .options(
             selectinload(Conversation.participants)
             .selectinload(ConversationParticipant.tenant),
@@ -143,7 +160,7 @@ def fetch_conversations(
 
 
 def fetch_vendors(db: Session) -> list[ExternalContact]:
-    return db.execute(select(ExternalContact)).scalars().all()
+    return db.execute(select(ExternalContact).where(ExternalContact.account_id == _account_id())).scalars().all()
 
 
 def fetch_messages(db: Session, conversation_id: str) -> list[Message]:
