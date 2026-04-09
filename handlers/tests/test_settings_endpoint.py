@@ -48,7 +48,10 @@ class TestSettingsEndpoint(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_get_settings_returns_llm_status(self):
-        with patch.dict(os.environ, {"LLM_API_KEY": "sk-test", "LLM_MODEL": "openai/gpt-4o-mini"}):
+        with (
+            patch.dict(os.environ, {"LLM_API_KEY": "sk-test", "LLM_MODEL": "openai/gpt-4o-mini"}),
+            patch("handlers.settings.get_llm_settings", return_value={"api_key": "sk-test", "model": "openai/gpt-4o-mini", "base_url": ""}),
+        ):
             response = self.client.get(
                 "/settings", headers={"Authorization": f"Bearer {make_token()}"}
             )
@@ -61,7 +64,10 @@ class TestSettingsEndpoint(unittest.TestCase):
 
     def test_get_settings_api_key_not_set(self):
         env = {k: v for k, v in os.environ.items() if k != "LLM_API_KEY"}
-        with patch.dict(os.environ, env, clear=True):
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch("handlers.settings.get_llm_settings", return_value={"api_key": "", "model": "openai/gpt-4o-mini", "base_url": ""}),
+        ):
             response = self.client.get(
                 "/settings", headers={"Authorization": f"Bearer {make_token()}"}
             )

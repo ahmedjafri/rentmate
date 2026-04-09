@@ -10,6 +10,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { ChatMessageBubble } from './ChatMessage';
 import { ChatMessage } from '@/data/mockData';
 
@@ -38,7 +39,7 @@ const makeMessage = (overrides: Partial<ChatMessage> = {}): ChatMessage => ({
 
 describe('ChatMessageBubble overflow containment', () => {
   it('outer row has min-w-0 to allow flex shrinking', () => {
-    render(<ChatMessageBubble message={makeMessage()} />);
+    render(<MemoryRouter><ChatMessageBubble message={makeMessage()} /></MemoryRouter>);
     // prose div → bubble div → row div
     const row = screen.getByText('A'.repeat(200)).closest('[class]')!.parentElement!.parentElement!;
     expect(row.className).toContain('min-w-0');
@@ -50,23 +51,23 @@ describe('ChatMessageBubble overflow containment', () => {
     screen.getByText(text).closest('[class]')!.parentElement!;
 
   it('message bubble has overflow-hidden', () => {
-    render(<ChatMessageBubble message={makeMessage()} />);
+    render(<MemoryRouter><ChatMessageBubble message={makeMessage()} /></MemoryRouter>);
     expect(getAiBubble('A'.repeat(200)).className).toContain('overflow-hidden');
   });
 
   it('message bubble has min-w-0', () => {
-    render(<ChatMessageBubble message={makeMessage()} />);
+    render(<MemoryRouter><ChatMessageBubble message={makeMessage()} /></MemoryRouter>);
     expect(getAiBubble('A'.repeat(200)).className).toContain('min-w-0');
   });
 
   it('message bubble has break-words', () => {
-    render(<ChatMessageBubble message={makeMessage()} />);
+    render(<MemoryRouter><ChatMessageBubble message={makeMessage()} /></MemoryRouter>);
     // break-words is on the bubble itself
     expect(getAiBubble('A'.repeat(200)).className).toContain('break-words');
   });
 
   it('manager message bubble has overflow-hidden', () => {
-    render(<ChatMessageBubble message={makeMessage({ role: 'user', senderType: 'manager' })} />);
+    render(<MemoryRouter><ChatMessageBubble message={makeMessage({ role: 'user', senderType: 'manager' })} /></MemoryRouter>);
     const bubble = screen.getByText('A'.repeat(200)).closest('[class]')!;
     expect(bubble.className).toContain('overflow-hidden');
   });
