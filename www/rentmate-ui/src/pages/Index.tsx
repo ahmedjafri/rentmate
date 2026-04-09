@@ -30,7 +30,7 @@ const participantIcon: Record<TaskParticipantType, React.ElementType> = {
 };
 
 const Index = () => {
-  const { properties, tenants, vendors, actionDeskTasks, suggestions, updateSuggestionStatus, openChat, closeChat, chatPanel, isLoading } = useApp();
+  const { properties, tenants, vendors, actionDeskTasks, suggestions, updateSuggestionStatus, refreshData, openChat, closeChat, chatPanel, isLoading } = useApp();
   const { conversations, loading: convsLoading, refresh, removeConversation } = useConversations('user_ai', 20);
   const [showNewChat, setShowNewChat] = useState(false);
 
@@ -82,6 +82,8 @@ const Index = () => {
       );
       const { status, taskId } = result.actOnSuggestion;
       updateSuggestionStatus(suggestionId, status as 'accepted' | 'dismissed');
+      // Re-fetch so new tasks appear immediately
+      refreshData();
       if (status === 'accepted') {
         toast.success(taskId ? 'Task created' : 'Suggestion accepted');
       } else {
