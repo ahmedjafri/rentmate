@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Bell, ShieldCheck, Hand, Bot } from 'lucide-react';
+import { Bell, ShieldCheck, Hand, Bot, MessageSquareHeart } from 'lucide-react';
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from './Sidebar';
 import { ChatPanel } from '@/components/chat/ChatPanel';
@@ -130,6 +130,16 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
             )}
 
             <div className="flex-1" />
+
+            <a
+              href="https://github.com/ahmedjafri/rentmate/issues"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 h-7 px-2.5 rounded-xl text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
+            >
+              <MessageSquareHeart className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Feedback</span>
+            </a>
 
             {attentionCount > 0 && (
               <Popover open={open} onOpenChange={setOpen}>
