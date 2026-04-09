@@ -172,3 +172,51 @@ class TestLeaseContext:
         amounts = re.findall(r'\$[\d,]+', ctx)
         assert len(amounts) >= 2, \
             f"Expected at least 2 dollar amounts in lease_context, found {len(amounts)}: {ctx[:200]}"
+
+
+# ---------------------------------------------------------------------------
+# Landlord vs tenant distinction
+# ---------------------------------------------------------------------------
+
+
+class TestLandlordTenantDistinction:
+    """The sample PDF has landlord contact info (email, phone, address) in the
+    payment delivery and signature sections. These must NOT be attributed to
+    the tenant. The tenant signature lines are blank — tenant fields should
+    be null, not hallucinated from landlord info."""
+
+    def test_tenant_name_not_hallucinated_from_landlord(self, lease):
+        """If the document has no tenant name filled in, fields should be null —
+        not inferred from landlord email or other non-tenant sources."""
+        first = lease.get("tenant_first_name")
+        last = lease.get("tenant_last_name")
+        # The sample PDF's tenant lines are blank. If the LLM fills in a name,
+        # it must not come from the landlord's email address or contact info.
+        # Known bad extraction: "Zainab Zahra" from "zainabzahra98@..." landlord email
+        if first and last:
+            full_name = f"{first} {last}".lower()
+            # These are landlord-associated names/fragments that should never appear as tenant
+            landlord_fragments = ["zainab", "zahra"]
+            for frag in landlord_fragments:
+                assert frag not in full_name, (
+                    f"Tenant name '{first} {last}' was likely hallucinated from "
+                    f"landlord contact info (contains '{frag}')"
+                )
+
+    def test_tenant_email_not_landlord_email(self, lease):
+        """Payment/delivery emails belong to the landlord, not the tenant."""
+        email = (lease.get("tenant_email") or "").lower()
+        if email:
+            # The delivery-of-rent section contains the landlord's email
+            assert "hotmail" not in email and "zainab" not in email, (
+                f"tenant_email '{email}' appears to be the landlord's payment email, not the tenant's"
+            )
+
+    def test_tenant_phone_not_landlord_phone(self, lease):
+        """Landlord/manager phone from the signature section is not the tenant's."""
+        phone = lease.get("tenant_phone") or ""
+        if phone:
+            # The landlord's phone appears in the signature section
+            assert "4734" not in phone, (
+                f"tenant_phone '{phone}' appears to be the landlord's phone number"
+            )

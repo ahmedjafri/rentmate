@@ -25,6 +25,8 @@ htmlcov/
 .coverage
 .coverage.*
 eval/*.pdf
+test-results/
+**/test-results/
 
 # Node / Frontend
 node_modules/

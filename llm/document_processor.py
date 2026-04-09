@@ -89,6 +89,13 @@ Rules:
 - Context fields should be concise bullet points, not full legal text. Capture the key facts a manager needs.
 - Include specific dollar amounts, dates, percentages, and quantities — not vague descriptions.
 
+CRITICAL — distinguishing tenant vs landlord/agent:
+- Tenant name/email/phone ONLY come from: signature lines labeled "Tenant" or "Occupant", occupancy fields (item 3 in standard WLA forms), or sections explicitly about the tenant.
+- Emails, phones, and addresses in "Delivery of Rent/Notices", "Landlord/Manager" sections, or payment instructions belong to the LANDLORD/AGENT — do NOT assign these to tenant fields.
+- Do NOT infer a tenant name from an email address (e.g. "bob@email.com" does NOT mean tenant is "Bob").
+- If no tenant name is clearly written in tenant-specific fields, set tenant_first_name and tenant_last_name to null.
+- When in doubt, leave tenant fields null rather than guessing. The user can fill them in later.
+
 Document text:
 """
 
