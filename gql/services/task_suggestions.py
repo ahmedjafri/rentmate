@@ -145,7 +145,7 @@ class SuggestionExecutor:
         """Send a draft message to the task's external conversation."""
         if task.external_conversation_id:
             chat_service.send_autonomous_message(
-                self.db, task.external_conversation_id, draft, task_id=task.id,
+                self.db, conversation_id=task.external_conversation_id, body=draft, task_id=task.id,
             )
 
     def _resolve_suggestion(
@@ -631,7 +631,7 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
                 conv_id = self._resolve_conversation_for_entity(task, entity_type)
                 if conv_id:
                     chat_service.send_autonomous_message(
-                        self.db, conv_id, draft, task_id=task.id,
+                        self.db, conversation_id=conv_id, body=draft, task_id=task.id,
                     )
                     if entity_phone:
                         # For tenants, include a portal link in the SMS
