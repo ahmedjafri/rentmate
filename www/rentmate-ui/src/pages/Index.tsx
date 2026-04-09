@@ -4,7 +4,7 @@ import { PageLoader } from '@/components/ui/page-loader';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Link } from 'react-router-dom';
-import { Building2, Users, Wrench, ShieldCheck, Bot, Clock, MessageCircle, Hand, Lock, Zap, Plus } from 'lucide-react';
+import { Building2, Users, Wrench, ShieldCheck, Bot, Clock, MessageCircle, Hand, Lock, Zap, Plus, Lightbulb } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { TaskMode, TaskParticipantType, categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
@@ -29,7 +29,7 @@ const participantIcon: Record<TaskParticipantType, React.ElementType> = {
 };
 
 const Index = () => {
-  const { properties, tenants, actionDeskTasks, openChat, closeChat, chatPanel, isLoading } = useApp();
+  const { properties, tenants, actionDeskTasks, suggestions, openChat, closeChat, chatPanel, isLoading } = useApp();
   const { conversations, loading: convsLoading, refresh, removeConversation } = useConversations('user_ai', 20);
   const [showNewChat, setShowNewChat] = useState(false);
 
@@ -39,6 +39,7 @@ const Index = () => {
   const needsAttention = actionDeskTasks.filter(
     t => t.status === 'active' && (t.mode === 'waiting_approval' || t.mode === 'manual')
   );
+  const pendingSuggestions = suggestions.filter(s => s.status === 'pending');
 
   // Track latest chatPanel in a ref so the cleanup can read it without stale closure
   const chatPanelRef = useRef(chatPanel);
@@ -68,7 +69,7 @@ const Index = () => {
 
   const stats = [
     { label: 'Properties', value: properties.length, icon: Building2, sub: `${totalUnits} total units`, link: '/properties' },
-    { label: 'Tenants', value: activeTenants.length, icon: Users, sub: `${totalUnits} total units` },
+    { label: 'Tenants', value: tenants.length, icon: Users, sub: `${activeTenants.length} active` },
   ];
 
   return (
@@ -140,7 +141,7 @@ const Index = () => {
             <div>
               <h1 className="text-lg font-bold">Good morning!</h1>
               <p className="text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">{needsAttention.length} tasks</span> need attention
+                <span className="font-medium text-foreground">{needsAttention.length + pendingSuggestions.length} items</span> need attention
               </p>
             </div>
           </div>
@@ -169,14 +170,43 @@ const Index = () => {
               <Link to="/action-desk" className="text-sm font-bold hover:underline">Action Desk</Link>
             </div>
 
-            {needsAttention.length === 0 ? (
+            {needsAttention.length === 0 && pendingSuggestions.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
                 <ShieldCheck className="h-10 w-10 mb-2 opacity-40" />
-                <p className="text-sm font-medium">No tasks need attention</p>
+                <p className="text-sm font-medium">Nothing needs attention</p>
                 <p className="text-xs mt-1">All caught up!</p>
               </div>
             ) : (
               <div className="space-y-2">
+                {/* Pending suggestions */}
+                {pendingSuggestions.map(sug => (
+                  <Link key={sug.id} to={`/action-desk?suggestion=${sug.id}`}>
+                    <Card className="p-3 rounded-xl hover:shadow-md transition-shadow cursor-pointer">
+                      <div className="flex items-start justify-between gap-2 mb-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <Badge variant="secondary" className="text-[10px] rounded-lg gap-1 bg-primary/15 text-primary">
+                            <Lightbulb className="h-3 w-3" />
+                            Suggestion
+                          </Badge>
+                          {sug.category && (
+                            <Badge variant="secondary" className={cn('text-[10px] rounded-lg', categoryColors[sug.category])}>
+                              {categoryLabels[sug.category]}
+                            </Badge>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-muted-foreground shrink-0">
+                          {sug.createdAt ? formatDistanceToNow(new Date(sug.createdAt), { addSuffix: true }) : ''}
+                        </span>
+                      </div>
+                      <h3 className="font-semibold text-xs mb-1">{sug.title}</h3>
+                      {sug.body && (
+                        <p className="text-[11px] text-muted-foreground line-clamp-2">{sug.body}</p>
+                      )}
+                    </Card>
+                  </Link>
+                ))}
+
+                {/* Tasks needing attention */}
                 {needsAttention.map(task => {
                   const mode = modeConfig[task.mode];
                   const ModeIcon = mode.icon;

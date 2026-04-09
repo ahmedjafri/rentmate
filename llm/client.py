@@ -151,7 +151,16 @@ async def chat_with_agent(
                     hint = f": {title[:60]}" if title else ""
                 elif tool_name in ("read_document", "analyze_document"):
                     doc_id = args.get("document_id", "")
-                    hint = f" ({doc_id[:12]}…)" if doc_id else ""
+                    if doc_id:
+                        try:
+                            from db.models import Document as _Doc
+                            from db.session import SessionLocal as _SL
+                            _db = _SL()
+                            _d = _db.query(_Doc.filename).filter_by(id=doc_id).first()
+                            _db.close()
+                            hint = f": {_d[0]}" if _d else f" ({doc_id[:12]}…)"
+                        except Exception:
+                            hint = f" ({doc_id[:12]}…)"
                     if args.get("list_recent"):
                         hint = " (listing recent)"
                 elif tool_name == "edit_memory":
