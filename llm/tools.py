@@ -251,13 +251,13 @@ class ProposeTaskTool(Tool):
 
         if draft_message:
             options = [
-                SuggestionOption(key="send", label=f"Create & Send to {vendor_name}", action="approve_draft", variant="default"),
-                SuggestionOption(key="accept", label="Create Without Sending", action="accept_task", variant="outline"),
+                SuggestionOption(key="send", label=f"Send to {vendor_name}", action="approve_draft", variant="default"),
+                SuggestionOption(key="edit", label="Edit Message", action="edit_draft", variant="outline"),
                 SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
             ]
         else:
             options = [
-                SuggestionOption(key="accept", label=f"Create & Assign {vendor_name}", action="accept_task", variant="default"),
+                SuggestionOption(key="accept", label=f"Assign {vendor_name}", action="accept_task", variant="default"),
                 SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
             ]
 
