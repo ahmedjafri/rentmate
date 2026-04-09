@@ -940,11 +940,11 @@ class SaveMemoryTool(Tool):
                 return json.dumps({"status": "ok", "message": f"Shared context saved for {label}."})
             else:
                 # Write to EntityNote (private to this account)
-                from backends.local_auth import resolve_account_id
+                from backends.local_auth import resolve_creator_id
                 from db.models import EntityNote
-                account_id = resolve_account_id()
+                creator_id = resolve_creator_id()
                 note = db.query(EntityNote).filter_by(
-                    account_id=account_id, entity_type=entity_type, entity_id=entity_id,
+                    creator_id=creator_id, entity_type=entity_type, entity_id=entity_id,
                 ).first()
                 if note:
                     existing = note.content or ""
@@ -952,7 +952,7 @@ class SaveMemoryTool(Tool):
                     note.updated_at = now
                 else:
                     note = EntityNote(
-                        account_id=account_id,
+                        creator_id=creator_id,
                         entity_type=entity_type,
                         entity_id=entity_id,
                         content=entry,
@@ -1022,13 +1022,13 @@ class RecallMemoryTool(Tool):
             return json.dumps({"notes": [], "message": f"Unknown entity type: {entity_type}"})
 
         import db.models as models
-        from backends.local_auth import resolve_account_id
+        from backends.local_auth import resolve_creator_id
         from db.models import EntityNote
         from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
             model_cls = getattr(models, model_name)
-            account_id = resolve_account_id()
+            creator_id = resolve_creator_id()
 
             if entity_id:
                 entity = db.query(model_cls).filter_by(id=entity_id).first()
@@ -1042,9 +1042,9 @@ class RecallMemoryTool(Tool):
                     continue
                 label = getattr(e, "name", None) or getattr(e, "label", None) or str(e.id)[:8]
                 shared = e.context or ""
-                # Get private notes for this account
+                # Get private notes for this creator
                 private_note = db.query(EntityNote).filter_by(
-                    account_id=account_id, entity_type=entity_type, entity_id=str(e.id),
+                    creator_id=creator_id, entity_type=entity_type, entity_id=str(e.id),
                 ).first()
                 private = private_note.content if private_note else ""
                 if shared or private:
@@ -1141,11 +1141,11 @@ class EditMemoryTool(Tool):
             else:
                 from datetime import UTC, datetime
 
-                from backends.local_auth import resolve_account_id
+                from backends.local_auth import resolve_creator_id
                 from db.models import EntityNote
-                account_id = resolve_account_id()
+                creator_id = resolve_creator_id()
                 note = db.query(EntityNote).filter_by(
-                    account_id=account_id, entity_type=entity_type, entity_id=entity_id,
+                    creator_id=creator_id, entity_type=entity_type, entity_id=entity_id,
                 ).first()
                 if new_context.strip():
                     if note:
@@ -1153,7 +1153,7 @@ class EditMemoryTool(Tool):
                         note.updated_at = datetime.now(UTC)
                     else:
                         db.add(EntityNote(
-                            account_id=account_id,
+                            creator_id=creator_id,
                             entity_type=entity_type,
                             entity_id=entity_id,
                             content=new_context.strip(),
@@ -1320,6 +1320,7 @@ class CreateTenantTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        from backends.local_auth import resolve_creator_id
         from db.models import Tenant as SqlTenant
         from db.session import SessionLocal
 
@@ -1351,7 +1352,7 @@ class CreateTenantTool(Tool):
             # Always create the tenant first
             tenant = SqlTenant(
                 id=str(uuid.uuid4()),
-                account_id=resolve_account_id(),
+                creator_id=resolve_creator_id(),
                 first_name=first_name,
                 last_name=last_name,
                 email=kwargs.get("email"),
@@ -1391,7 +1392,7 @@ class CreateTenantTool(Tool):
                 from db.models import Lease as SqlLease
                 lease = SqlLease(
                     id=str(uuid.uuid4()),
-                    account_id=resolve_account_id(),
+                    creator_id=resolve_creator_id(),
                     tenant_id=tenant.id,
                     unit_id=unit.id,
                     property_id=kwargs["property_id"],
@@ -1698,6 +1699,92 @@ class CreateSuggestionTool(Tool):
                 "status": "ok",
                 "suggestion_id": str(suggestion.id),
                 "message": f"Suggestion created: {kwargs['title']}",
+            })
+        except Exception as e:
+            db.rollback()
+            return json.dumps({"status": "error", "message": str(e)})
+        finally:
+            db.close()
+
+
+class CreateScheduledTaskTool(Tool):
+    """Create a recurring or one-shot scheduled task."""
+
+    @property
+    def name(self) -> str:
+        return "create_scheduled_task"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Create a scheduled task that runs the AI agent on a recurring schedule. "
+            "Use for recurring checks (lease expiry, rent reminders, maintenance schedules). "
+            "Schedule can be: cron expression ('0 9 * * 1'), interval ('every 4h'), "
+            "or named ('daily', 'weekly', 'monthly'). The prompt describes what the "
+            "agent should do each time it runs."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["name", "prompt", "schedule"],
+            "properties": {
+                "name": {"type": "string", "description": "Human-friendly name for this scheduled task"},
+                "prompt": {"type": "string", "description": "What the agent should do each run (natural language)"},
+                "schedule": {
+                    "type": "string",
+                    "description": "Cron expression, interval, or named schedule (e.g. '0 9 * * 1', 'every 4h', 'weekly')",
+                },
+                "repeat": {
+                    "type": "integer",
+                    "description": "Number of times to run (omit for forever)",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        from backends.local_auth import resolve_creator_id
+        from db.models import ScheduledTask
+        from db.session import SessionLocal
+        from handlers.scheduler import human_schedule, next_run, parse_schedule
+
+        name = kwargs["name"]
+        prompt = kwargs["prompt"]
+        raw_schedule = kwargs["schedule"]
+
+        cron_expr = parse_schedule(raw_schedule)
+        display = human_schedule(cron_expr)
+        nxt = next_run(cron_expr)
+
+        db = SessionLocal.session_factory()
+        try:
+            import uuid
+            from datetime import UTC, datetime
+
+            task = ScheduledTask(
+                id=str(uuid.uuid4()),
+                creator_id=resolve_creator_id(),
+                name=name,
+                prompt=prompt,
+                schedule=cron_expr,
+                schedule_display=display,
+                enabled=True,
+                state="scheduled",
+                repeat=kwargs.get("repeat"),
+                next_run_at=nxt,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+            db.add(task)
+            db.commit()
+
+            return json.dumps({
+                "status": "ok",
+                "scheduled_task_id": task.id,
+                "schedule": display,
+                "next_run": nxt.isoformat(),
+                "message": f"Scheduled task '{name}' created — {display}, next run {nxt.strftime('%b %d at %H:%M')}.",
             })
         except Exception as e:
             db.rollback()

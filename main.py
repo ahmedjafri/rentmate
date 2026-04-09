@@ -18,7 +18,6 @@ from db.models import Base
 from gql.schema import schema
 from handlers import (
     auth,
-    automations,
     chat,
     dev,
     documents,
@@ -155,14 +154,11 @@ async def lifespan(app: FastAPI):
 
     db = SessionLocal()
     try:
-        # Ensure default account + user exist
+        # Ensure default account exists
         from backends.local_auth import DEFAULT_USER_ID
-        from db.models import Account, AccountUser
+        from db.models import Account
         if not db.query(Account).filter_by(id=DEFAULT_USER_ID).first():
             db.add(Account(id=DEFAULT_USER_ID, name="Default Account"))
-            db.flush()
-        if not db.query(AccountUser).filter_by(user_id=DEFAULT_USER_ID, account_id=DEFAULT_USER_ID).first():
-            db.add(AccountUser(user_id=DEFAULT_USER_ID, account_id=DEFAULT_USER_ID, role="admin", email=os.getenv("RENTMATE_ADMIN_EMAIL", "admin@localhost")))
             db.flush()
         db.commit()
 
@@ -194,11 +190,14 @@ async def lifespan(app: FastAPI):
 
     await agent_registry.restart_channels_async(load_integrations())
 
-    if os.getenv("RENTMATE_ENV") == "development":
-        automations.seed_automations()
+    # Seed default scheduled tasks if none exist
+    from handlers.scheduler import scheduler_loop, seed_default_tasks
+    seed_default_tasks()
 
-    asyncio.create_task(automations.audit_loop())
-    asyncio.create_task(automations.heartbeat_loop())
+    # Background loops
+    asyncio.create_task(scheduler_loop())
+    from handlers.heartbeat import heartbeat_loop
+    asyncio.create_task(heartbeat_loop())
 
     if os.getenv("GMAIL_CLIENT_ID"):
         asyncio.create_task(_gmail_poll_loop())
@@ -224,7 +223,7 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(graphql_app, prefix="/graphql")
 app.include_router(auth.router)
 app.include_router(settings.router)
-app.include_router(automations.router)
+# automations router removed — replaced by scheduled tasks
 app.include_router(documents.router, prefix="/api")
 app.include_router(chat.router)
 app.include_router(dev.router, prefix="/dev")

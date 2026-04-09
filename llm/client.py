@@ -45,6 +45,7 @@ _TOOL_LABELS = {
     "create_property": "Creating property",
     "create_tenant": "Creating tenant",
     "create_suggestion": "Creating suggestion",
+    "create_scheduled_task": "Scheduling task",
     "read_document": "Reading document",
     "analyze_document": "Analyzing document",
     "update_onboarding": "Updating setup progress",
