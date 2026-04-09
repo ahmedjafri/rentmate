@@ -148,6 +148,49 @@ def seed_default_tasks():
                 "schedule": "0 8 1 * *",
                 "schedule_display": "Monthly on the 1st at 8am",
             },
+            {
+                "name": "Rent collection follow-up",
+                "prompt": (
+                    "Check all tenants with payment status 'late' or 'overdue'. "
+                    "For each, create a suggestion to send a friendly rent reminder. "
+                    "Include the amount due, how many days late, and the tenant's name."
+                ),
+                "schedule": "0 10 5 * *",
+                "schedule_display": "Monthly on the 5th at 10am",
+            },
+            {
+                "name": "Seasonal maintenance review",
+                "prompt": (
+                    "Review all properties and identify seasonal maintenance needs "
+                    "based on the current month: gutter cleaning (fall), HVAC servicing "
+                    "(spring/fall), landscaping (spring), winterization (late fall). "
+                    "Create suggestions for each property that needs attention, "
+                    "with appropriate vendor types."
+                ),
+                "schedule": "0 9 1 3,6,9,12 *",
+                "schedule_display": "Quarterly on the 1st at 9am",
+            },
+            {
+                "name": "Vacancy check",
+                "prompt": (
+                    "Check all units that are currently vacant (no active lease). "
+                    "For units vacant more than 14 days, create a suggestion to "
+                    "list the unit or follow up on pending applications. Include "
+                    "the property address, unit label, and days vacant."
+                ),
+                "schedule": "0 9 * * 3",
+                "schedule_display": "Every Wednesday at 9am",
+            },
+            {
+                "name": "Tenant satisfaction check-in",
+                "prompt": (
+                    "Review tenants who have been in place for 6+ months and haven't "
+                    "had any recent communication. Create suggestions to send a brief "
+                    "check-in message asking if everything is going well with their unit."
+                ),
+                "schedule": "0 10 15 * *",
+                "schedule_display": "Monthly on the 15th at 10am",
+            },
         ]
 
         import uuid
@@ -161,8 +204,8 @@ def seed_default_tasks():
                 prompt=d["prompt"],
                 schedule=d["schedule"],
                 schedule_display=d["schedule_display"],
-                enabled=True,
-                state="scheduled",
+                enabled=False,
+                state="paused",
                 next_run_at=nxt,
                 created_at=now,
                 updated_at=now,
