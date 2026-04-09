@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { authFetch } from '@/lib/auth';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -73,7 +74,9 @@ const ScheduledTaskDetail = () => {
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [simulating, setSimulating] = useState(false);
+  const [simTrace, setSimTrace] = useState<string[]>([]);
   const [simOutput, setSimOutput] = useState<string | null>(null);
+  const simScrollRef = useRef<HTMLPreElement>(null);
 
   // Edit form
   const [editName, setEditName] = useState('');
@@ -146,10 +149,38 @@ const ScheduledTaskDetail = () => {
   const handleSimulate = async () => {
     if (!task) return;
     setSimulating(true);
+    setSimTrace([]);
     setSimOutput(null);
     try {
-      const data = await graphqlQuery<{ simulateScheduledTask: string }>(SIMULATE, { uid: task.uid });
-      setSimOutput(data.simulateScheduledTask);
+      const res = await authFetch(`/api/scheduled-task/${task.uid}/simulate`, { method: 'POST' });
+      if (!res.ok) {
+        setSimOutput(`Error: HTTP ${res.status}`);
+        return;
+      }
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === 'progress') {
+              setSimTrace(prev => [...prev, event.text]);
+              simScrollRef.current?.scrollTo(0, simScrollRef.current.scrollHeight);
+            } else if (event.type === 'done') {
+              setSimOutput(event.reply);
+            } else if (event.type === 'error') {
+              setSimOutput(`Error: ${event.message}`);
+            }
+          } catch { /* skip malformed */ }
+        }
+      }
       fetchTask(); // Refresh to get simulatedAt
     } catch (e) { setSimOutput(`Error: ${e instanceof Error ? e.message : 'Failed'}`); }
     finally { setSimulating(false); }
@@ -265,16 +296,46 @@ const ScheduledTaskDetail = () => {
           )}
         </div>
 
-        {/* Simulation output */}
-        {simOutput !== null && (
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-1.5">
-              <FlaskConical className="h-3.5 w-3.5 text-violet-500" />
-              <span className="text-xs font-semibold text-violet-600 dark:text-violet-400">Simulation Result</span>
-            </div>
-            <pre className="rounded-lg bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 p-3 text-xs whitespace-pre-wrap font-mono max-h-80 overflow-y-auto">
-              {simOutput}
-            </pre>
+        {/* Simulation trace + output */}
+        {(simTrace.length > 0 || simOutput !== null) && (
+          <div className="space-y-2">
+            {/* Live trace */}
+            {simTrace.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <FlaskConical className="h-3.5 w-3.5 text-violet-500" />
+                  <span className="text-xs font-semibold text-violet-600 dark:text-violet-400">
+                    {simulating ? 'Agent Reasoning…' : 'Reasoning Trace'}
+                  </span>
+                </div>
+                <pre
+                  ref={simScrollRef}
+                  className="rounded-lg bg-muted/50 border p-3 text-[11px] whitespace-pre-wrap font-mono max-h-48 overflow-y-auto space-y-0.5"
+                >
+                  {simTrace.map((line, i) => (
+                    <div key={i} className={cn(
+                      "py-0.5",
+                      i === simTrace.length - 1 && simulating ? "text-foreground/80" : "text-muted-foreground/60"
+                    )}>
+                      {line}
+                    </div>
+                  ))}
+                </pre>
+              </div>
+            )}
+
+            {/* Final result */}
+            {simOutput !== null && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <FlaskConical className="h-3.5 w-3.5 text-violet-500" />
+                  <span className="text-xs font-semibold text-violet-600 dark:text-violet-400">Simulation Result</span>
+                </div>
+                <pre className="rounded-lg bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 p-3 text-xs whitespace-pre-wrap font-mono max-h-80 overflow-y-auto">
+                  {simOutput}
+                </pre>
+              </div>
+            )}
           </div>
         )}
 

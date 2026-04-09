@@ -28,6 +28,7 @@ from handlers import (
     vendor_portal,
 )
 from handlers.deps import SessionLocal, engine
+from handlers.scheduler import router as scheduler_router
 from handlers.settings import load_integrations
 from llm.registry import agent_registry
 from memory_watchdog import set_memory_backstop, start_memory_monitor
@@ -247,6 +248,7 @@ app.include_router(settings.router)
 # automations router removed — replaced by scheduled tasks
 app.include_router(documents.router, prefix="/api")
 app.include_router(chat.router)
+app.include_router(scheduler_router, prefix="/api")
 app.include_router(dev.router, prefix="/dev")
 app.include_router(vendor_invite.router)
 app.include_router(vendor_portal.router)

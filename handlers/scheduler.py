@@ -4,11 +4,18 @@ Replaces the old Property-Flow DSL automation system with natural language
 prompts executed on configurable schedules.
 """
 import asyncio
+import json
 import logging
 import re
 from datetime import UTC, datetime, timedelta
 
 from croniter import croniter
+from fastapi import APIRouter, Request
+from fastapi.responses import StreamingResponse
+
+from handlers.deps import require_user
+
+router = APIRouter()
 
 logger = logging.getLogger("rentmate.scheduler")
 
@@ -318,3 +325,114 @@ async def _execute_task(task) -> str:
     finally:
         from backends.local_auth import reset_request_context
         reset_request_context(tokens)
+
+
+# ── SSE simulate endpoint ────────────────────────────────────────────────────
+
+
+@router.post("/scheduled-task/{task_id}/simulate")
+async def simulate_scheduled_task_sse(task_id: str, request: Request):
+    """Stream a scheduled task simulation with progress events (SSE)."""
+    await require_user(request)
+
+    from db.models import ScheduledTask
+    from db.session import SessionLocal
+
+    db = SessionLocal()
+    st = db.query(ScheduledTask).filter_by(id=task_id).first()
+    if not st:
+        db.close()
+        return StreamingResponse(
+            iter([f"data: {json.dumps({'type': 'error', 'message': 'Task not found'})}\n\n"]),
+            media_type="text/event-stream",
+        )
+
+    sim_prompt = (
+        "[SIMULATION — do NOT take direct action. Instead of creating entities "
+        "or sending messages, describe what you WOULD do and create suggestions "
+        "for each action.]\n\n" + st.prompt
+    )
+
+    async def generate():
+        from backends.local_auth import reset_request_context, set_request_context
+        from llm.client import call_agent
+        from llm.context import load_account_context
+        from llm.registry import agent_registry
+
+        creator_id = st.creator_id
+        tokens = set_request_context(user_id=creator_id, creator_id=creator_id)
+
+        try:
+            inner_db = SessionLocal()
+            try:
+                agent_id = agent_registry.ensure_agent(creator_id, inner_db)
+                context = load_account_context(inner_db)
+            finally:
+                inner_db.close()
+
+            messages = [
+                {"role": "system", "content": context},
+                {"role": "user", "content": sim_prompt},
+            ]
+
+            progress_lines = []
+
+            async def on_progress(text: str, **_kwargs):
+                progress_lines.append(text)
+                yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
+
+            # We can't yield from inside on_progress directly since it's a callback.
+            # Instead, collect progress and stream the final result.
+            queue: asyncio.Queue = asyncio.Queue()
+
+            async def _progress_cb(text: str, **_kwargs):
+                await queue.put(text)
+
+            session_key = f"simulate:{st.id}"
+
+            # Run agent in background task, stream progress from queue
+            async def _run():
+                try:
+                    resp = await call_agent(
+                        agent_id, session_key=session_key,
+                        messages=messages, on_progress=_progress_cb,
+                    )
+                    await queue.put(None)  # sentinel
+                    return resp.reply
+                except Exception as exc:
+                    await queue.put(None)
+                    raise exc
+
+            agent_task = asyncio.create_task(_run())
+
+            while True:
+                text = await queue.get()
+                if text is None:
+                    break
+                yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
+
+            try:
+                reply = agent_task.result()
+                yield f"data: {json.dumps({'type': 'done', 'reply': reply})}\n\n"
+
+                # Update simulated_at
+                update_db = SessionLocal()
+                try:
+                    row = update_db.query(ScheduledTask).filter_by(id=task_id).first()
+                    if row:
+                        row.simulated_at = datetime.now(UTC)
+                        update_db.commit()
+                finally:
+                    update_db.close()
+
+            except Exception as exc:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(exc)[:500]})}\n\n"
+
+        finally:
+            reset_request_context(tokens)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
