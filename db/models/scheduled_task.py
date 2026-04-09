@@ -24,6 +24,7 @@ class ScheduledTask(Base, HasCreatorId):
     # Human-readable display: "Every Monday at 9am"
     schedule_display = Column(String(255), nullable=True)
 
+    is_default = Column(Boolean, nullable=False, default=False)  # True for system-seeded tasks
     enabled = Column(Boolean, nullable=False, default=True)
     state = Column(String(20), nullable=False, default="scheduled")  # scheduled | paused | completed
 

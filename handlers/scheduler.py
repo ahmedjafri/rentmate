@@ -209,6 +209,7 @@ def seed_default_tasks():
                 prompt=d["prompt"],
                 schedule=d["schedule"],
                 schedule_display=d["schedule_display"],
+                is_default=True,
                 enabled=False,
                 state="paused",
                 next_run_at=nxt,

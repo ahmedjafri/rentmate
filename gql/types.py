@@ -603,6 +603,7 @@ class ScheduledTaskType:
     prompt: str
     schedule: str
     schedule_display: typing.Optional[str] = None
+    is_default: bool = False
     enabled: bool = True
     state: str = "scheduled"
     repeat: typing.Optional[int] = None
@@ -621,6 +622,7 @@ class ScheduledTaskType:
             prompt=st.prompt,
             schedule=st.schedule,
             schedule_display=st.schedule_display,
+            is_default=getattr(st, "is_default", False),
             enabled=st.enabled,
             state=st.state or "scheduled",
             repeat=st.repeat,

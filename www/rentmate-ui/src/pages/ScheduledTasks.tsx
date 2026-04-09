@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -49,6 +50,7 @@ const UPDATE = `
 const DELETE = `mutation($uid: String!) { deleteScheduledTask(uid: $uid) }`;
 
 const ScheduledTasksPage = () => {
+  const navigate = useNavigate();
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -117,7 +119,7 @@ const ScheduledTasksPage = () => {
       ) : (
         <div className="space-y-3">
           {tasks.map(task => (
-            <Card key={task.uid} className="rounded-xl overflow-hidden">
+            <Card key={task.uid} className="rounded-xl overflow-hidden cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate(`/scheduled-tasks/${task.uid}`)}>
               <div className="p-4 space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2 min-w-0">
@@ -126,10 +128,10 @@ const ScheduledTasksPage = () => {
                     {!task.enabled && <Badge variant="secondary" className="text-[10px] shrink-0">Paused</Badge>}
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => toggle(task)} title={task.enabled ? 'Pause' : 'Resume'}>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); toggle(task); }} title={task.enabled ? 'Pause' : 'Resume'}>
                       {task.enabled ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive/60 hover:text-destructive" onClick={() => remove(task)} title="Delete">
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive/60 hover:text-destructive" onClick={(e) => { e.stopPropagation(); remove(task); }} title="Delete">
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </div>

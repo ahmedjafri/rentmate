@@ -22,6 +22,7 @@ import DocumentPage from './pages/DocumentPage';
 import Settings from "./pages/Settings";
 import DevTools from "./pages/DevTools";
 import ScheduledTasks from "./pages/ScheduledTasks";
+import ScheduledTaskDetail from "./pages/ScheduledTaskDetail";
 import NotFound from "./pages/NotFound";
 import PortalInvite from "./pages/VendorInvite";
 import VendorPortal from "./pages/VendorPortal";
@@ -69,6 +70,7 @@ const App = () => (
                     <Route path="/tasks" element={<Tasks />} />
                     <Route path="/chats" element={<Chats />} />
                     <Route path="/scheduled-tasks" element={<ScheduledTasks />} />
+                    <Route path="/scheduled-tasks/:id" element={<ScheduledTaskDetail />} />
                     <Route path="/settings" element={<Settings />} />
                     <Route path="/dev" element={<DevTools />} />
                     <Route path="*" element={<NotFound />} />

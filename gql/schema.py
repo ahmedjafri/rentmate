@@ -530,6 +530,61 @@ class Mutation(AuthMutation):
         db.commit()
         return True
 
+    @strawberry.mutation(description="Run a scheduled task immediately and return its output")
+    def run_scheduled_task(self, info, uid: str) -> ScheduledTaskType:
+        _current_user(info)
+        import asyncio
+
+        from db.models import ScheduledTask
+        from handlers.scheduler import _execute_task
+        db = _session(info)
+        st = db.query(ScheduledTask).filter_by(id=uid).first()
+        if not st:
+            raise ValueError("Scheduled task not found")
+        from datetime import UTC, datetime
+        try:
+            loop = asyncio.get_event_loop()
+            output = loop.run_until_complete(_execute_task(st))
+            st.last_status = "ok"
+            st.last_output = output[:5000] if output else ""
+        except Exception as exc:
+            st.last_status = "error"
+            st.last_output = str(exc)[:2000]
+        st.last_run_at = datetime.now(UTC)
+        st.updated_at = datetime.now(UTC)
+        db.commit()
+        return ScheduledTaskType.from_sql(st)
+
+    @strawberry.mutation(description="Simulate a scheduled task — dry run that returns what the agent would do")
+    def simulate_scheduled_task(self, info, uid: str) -> str:
+        """Run the task's prompt through the agent but prefix with [SIMULATION] so the
+        agent creates suggestions instead of taking direct action."""
+        _current_user(info)
+        import asyncio
+
+        from db.models import ScheduledTask
+        from handlers.scheduler import _execute_task
+        db = _session(info)
+        st = db.query(ScheduledTask).filter_by(id=uid).first()
+        if not st:
+            raise ValueError("Scheduled task not found")
+        # Create a temporary copy with simulation prefix
+        class _SimTask:
+            def __init__(self, orig):
+                self.creator_id = orig.creator_id
+                self.id = orig.id
+                self.prompt = (
+                    "[SIMULATION — do NOT take direct action. Instead of creating entities "
+                    "or sending messages, describe what you WOULD do and create suggestions "
+                    "for each action.]\n\n" + orig.prompt
+                )
+        try:
+            loop = asyncio.get_event_loop()
+            output = loop.run_until_complete(_execute_task(_SimTask(st)))
+            return output or "(no output)"
+        except Exception as exc:
+            return f"Simulation error: {exc}"
+
     @strawberry.mutation(description="Delete a property and all its units/leases (cascade)")
     def delete_property(self, info, uid: str) -> bool:
         _current_user(info)
