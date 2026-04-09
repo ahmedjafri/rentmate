@@ -108,6 +108,11 @@ def _ensure_schema():
         else:
             print("   Aborting.")
             raise SystemExit(0)
+    elif is_dev:
+        # Non-interactive dev mode (e.g. npm run dev) — auto-recreate
+        print("   Schema drift detected — auto-recreating database (dev mode)...")
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
     else:
         print("ERROR: Database schema is out of date.")
         print("Run: poetry run alembic upgrade head")
@@ -147,10 +152,12 @@ async def lifespan(app: FastAPI):
             _init_db(),
             asyncio.to_thread(agent_registry.start_gateway),
         )
-    except asyncio.CancelledError:
-        print("Startup cancelled — shutting down")
-        yield
-        return
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except (asyncio.CancelledError, Exception) as exc:
+        print(f"Startup failed: {exc}" if not isinstance(exc, asyncio.CancelledError) else "Startup cancelled")
+        import sys
+        sys.exit(1)
 
     # Populate os.environ from DB-stored settings (must run after DB init)
     from gql.services.settings_service import load_agent_integrations_into_env, load_llm_into_env
