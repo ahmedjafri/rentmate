@@ -26,7 +26,7 @@ export interface AutoContext {
 interface EntityContextCardProps {
   entityId: string;
   entityName: string;
-  entityType?: 'property' | 'unit' | 'tenant' | 'vendor';
+  entityType?: 'property' | 'unit' | 'tenant' | 'vendor' | 'document';
   /** Agent-managed context from the DB */
   agentContext?: string;
   /** Callback when agent context is saved to DB */
@@ -103,8 +103,8 @@ export function EntityContextCard({ entityId, entityName, entityType, agentConte
   const handleOpen = async () => {
     setDraft(context);
     setSharedDraft(agentContext || '');
-    // Fetch private notes from DB
-    if (entityType) {
+    // Fetch private notes from DB (not supported for documents)
+    if (entityType && entityType !== 'document') {
       try {
         const result = await graphqlQuery<{ entityNote: string | null }>(ENTITY_NOTE_QUERY, { entityType, entityId });
         const notes = result.entityNote || '';
@@ -131,8 +131,8 @@ export function EntityContextCard({ entityId, entityName, entityType, agentConte
         onAgentContextSaved?.(sharedDraft.trim());
       }
 
-      // Save private notes if changed
-      if (entityType && privateDraft !== privateNotes) {
+      // Save private notes if changed (not supported for documents)
+      if (entityType && entityType !== 'document' && privateDraft !== privateNotes) {
         await graphqlQuery(SAVE_ENTITY_NOTE_MUTATION, {
           entityType, entityId, content: privateDraft.trim(),
         });
@@ -231,8 +231,8 @@ export function EntityContextCard({ entityId, entityName, entityType, agentConte
                 </div>
               )}
 
-              {/* Private notes (per-account) */}
-              {entityType && (
+              {/* Private notes (per-account) — not shown for documents */}
+              {entityType && entityType !== 'document' && (
                 <div>
                   <div className="flex items-center gap-1.5 mb-2">
                     <Lock className="h-3.5 w-3.5 text-orange-500" />

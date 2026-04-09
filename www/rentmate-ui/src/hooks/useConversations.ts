@@ -34,6 +34,15 @@ export function useConversations(conversationType: TabKey, limit = 50) {
     prevOpen.current = chatPanel.isOpen;
   }, [chatPanel.isOpen, refresh]);
 
+  // Re-fetch when a lazy chat gets its backend conversation ID (first message sent)
+  const prevConvId = useRef(chatPanel.conversationId);
+  useEffect(() => {
+    if (!prevConvId.current && chatPanel.conversationId) {
+      refresh();
+    }
+    prevConvId.current = chatPanel.conversationId;
+  }, [chatPanel.conversationId, refresh]);
+
   const removeConversation = useCallback((uid: string) => {
     setConversations(prev => prev.filter(c => c.uid !== uid));
   }, []);

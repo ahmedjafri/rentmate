@@ -100,6 +100,51 @@ Document text:
 """
 
 
+def _build_document_context(leases: list[dict]) -> str | None:
+    """Synthesize a document-level shared context string from extracted lease data."""
+    if not leases:
+        return None
+
+    sections: list[str] = []
+    for i, lease in enumerate(leases):
+        parts: list[str] = []
+        addr = lease.get("property_address")
+        unit = lease.get("unit_label")
+        header = addr or "Unknown property"
+        if unit:
+            header += f" — Unit {unit}"
+        parts.append(header)
+
+        tenant_parts = [lease.get("tenant_first_name"), lease.get("tenant_last_name")]
+        tenant_name = " ".join(p for p in tenant_parts if p)
+        if tenant_name:
+            parts.append(f"Tenant: {tenant_name}")
+
+        start = lease.get("lease_start_date")
+        end = lease.get("lease_end_date")
+        if start or end:
+            parts.append(f"Lease: {start or '?'} to {end or '?'}")
+
+        rent = lease.get("monthly_rent")
+        if rent is not None:
+            parts.append(f"Rent: ${rent:,.0f}/mo" if isinstance(rent, (int, float)) else f"Rent: {rent}")
+
+        for key, label in [
+            ("property_context", "Property"),
+            ("unit_context", "Unit"),
+            ("tenant_context", "Tenant"),
+            ("lease_context", "Lease"),
+        ]:
+            val = lease.get(key)
+            if val:
+                parts.append(f"{label}: {val}")
+
+        sections.append("\n".join(parts))
+
+    result = "\n\n".join(sections).strip()
+    return result or None
+
+
 async def process_document(document_id: str) -> None:
     """
     Background task: extract text, embed chunks, and run LLM extraction on a Document.
@@ -185,6 +230,10 @@ async def process_document(document_id: str) -> None:
         if doc.extraction_meta:
             doc.extraction_meta = {**doc.extraction_meta, "leases_found": leases_found}
         doc.extracted_data = extracted_data
+
+        # Build document-level shared context from extracted lease context fields
+        doc.context = _build_document_context(leases if isinstance(leases, list) else [])
+
         doc.status = "done"
         doc.progress = None
         doc.processed_at = datetime.now(UTC)

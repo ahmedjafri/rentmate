@@ -266,6 +266,7 @@ async def chat_endpoint(
 
     # ── Resolve conversation + context ────────────────────────────────────
     task_obj: Task | None = None
+    _is_onboarding_start = False
     if body.task_id:
         task_obj = db.query(Task).filter_by(id=body.task_id).first()
         if not task_obj:

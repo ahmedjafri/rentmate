@@ -397,6 +397,8 @@ class Mutation(AuthMutation):
     @strawberry.mutation(description="Save private (per-account) notes for an entity")
     def save_entity_note(self, info, *, entity_type: str, entity_id: str, content: str) -> bool:
         _current_user(info)
+        if entity_type == "document":
+            raise ValueError("Private notes are not supported for documents — use shared context instead")
         db = _session(info)
         from datetime import UTC, datetime
 

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { PageLoader } from '@/components/ui/page-loader';
 import { Card } from '@/components/ui/card';
@@ -29,8 +29,9 @@ const participantIcon: Record<TaskParticipantType, React.ElementType> = {
 };
 
 const Index = () => {
-  const { properties, tenants, actionDeskTasks, openChat, chatPanel, isLoading } = useApp();
+  const { properties, tenants, actionDeskTasks, openChat, closeChat, chatPanel, isLoading } = useApp();
   const { conversations, loading: convsLoading, refresh, removeConversation } = useConversations('user_ai', 20);
+  const [showNewChat, setShowNewChat] = useState(false);
 
   const totalUnits = properties.reduce((a, p) => a + p.units, 0);
   const activeTenants = tenants.filter(t => t.isActive);
@@ -39,11 +40,27 @@ const Index = () => {
     t => t.status === 'active' && (t.mode === 'waiting_approval' || t.mode === 'manual')
   );
 
+  // Track latest chatPanel in a ref so the cleanup can read it without stale closure
+  const chatPanelRef = useRef(chatPanel);
+  chatPanelRef.current = chatPanel;
+
+  // Clear "New Chat" indicator once a backend conversation is created
+  useEffect(() => {
+    if (chatPanel.conversationId) setShowNewChat(false);
+  }, [chatPanel.conversationId]);
+
   // Open the chat panel on dashboard mount (no conversation created yet)
+  // On unmount, close unsaved lazy chats (no backend conversation)
   useEffect(() => {
     if (!chatPanel.isOpen) {
       openChat({ lazy: true });
     }
+    return () => {
+      const cp = chatPanelRef.current;
+      if (cp.isOpen && !cp.conversationId && !cp.taskId && !cp.suggestionId) {
+        closeChat();
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -65,14 +82,26 @@ const Index = () => {
             size="icon"
             className="h-7 w-7"
             title="New chat"
-            onClick={() => openChat({ lazy: true })}
+            onClick={() => { openChat({ lazy: true }); setShowNewChat(true); }}
           >
             <Plus className="h-4 w-4" />
           </Button>
         </div>
         <div className="flex-1 overflow-auto p-2 space-y-1.5">
+          {/* Show "New Chat" row when user explicitly clicked "+" */}
+          {showNewChat && !chatPanel.conversationId && !chatPanel.taskId && !chatPanel.suggestionId && (
+            <Card className="px-3 py-2.5 rounded-xl ring-2 ring-primary/40 bg-primary/5">
+              <div className="flex items-center gap-1.5">
+                <Badge variant="secondary" className="text-[10px] rounded-lg gap-1 shrink-0 bg-primary/10 text-primary">
+                  <Bot className="h-3 w-3" />
+                  RentMate
+                </Badge>
+              </div>
+              <h3 className="font-medium text-sm mt-1.5">New Chat</h3>
+            </Card>
+          )}
           {convsLoading && <p className="text-xs text-muted-foreground text-center py-4">Loading…</p>}
-          {!convsLoading && conversations.length === 0 && (
+          {!convsLoading && conversations.length === 0 && chatPanel.conversationId && (
             <p className="text-xs text-muted-foreground text-center py-4">No conversations yet</p>
           )}
           {conversations.map(conv => (
@@ -80,7 +109,7 @@ const Index = () => {
               key={conv.uid}
               conv={conv}
               isActive={chatPanel.conversationId === conv.uid}
-              onClick={() => openChat({ conversationId: conv.uid })}
+              onClick={() => { setShowNewChat(false); openChat({ conversationId: conv.uid }); }}
               onDelete={async () => {
                 try {
                   await graphqlQuery(DELETE_CONVERSATION_MUTATION, { uid: conv.uid });

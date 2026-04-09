@@ -547,6 +547,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
       formData.append('file', file);
       formData.append('document_type', docType);
       if (taskId) formData.append('task_id', taskId);
+      formData.append('skip_extraction', 'true');
       const res = await authFetch('/api/upload-document', { method: 'POST', body: formData });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -559,7 +560,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
           fileType: file.type,
           fileSize: file.size,
           documentType: docType,
-          status: 'analyzing',
+          status: 'pending',
           uploadedAt: new Date(),
           tags: [],
           ...(taskId ? { actionDeskTaskId: taskId } : {}),
@@ -646,7 +647,15 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
     ? activeTask.title
     : activeSuggestion
       ? 'Discuss Suggestion'
-      : ('Ask RentMate');
+      : (() => {
+          // Derive title from the first user message in the conversation
+          const firstUserMsg = messages.find(m => m.role === 'user');
+          if (firstUserMsg) {
+            const text = firstUserMsg.content.trim();
+            return text.length > 50 ? text.slice(0, 50) + '…' : text;
+          }
+          return 'New Chat';
+        })();
 
   const placeholder = activeTask
     ? 'Reply in this thread...'

@@ -93,7 +93,7 @@ class TestChatEndpoint(unittest.TestCase):
     def test_agent_error_returns_error_event(self):
         with (
             patch("handlers.chat.load_account_context", return_value="ctx"),
-            patch("llm.client.chat_with_agent", new_callable=AsyncMock, side_effect=RuntimeError("boom")),
+            patch("llm.client.call_agent", new_callable=AsyncMock, side_effect=RuntimeError("boom")),
         ):
             response = self.client.post(
                 "/chat/send",
@@ -104,7 +104,7 @@ class TestChatEndpoint(unittest.TestCase):
         events = _parse_sse(response.text)
         error_events = [e for e in events if e.get("type") == "error"]
         assert len(error_events) == 1
-        assert error_events[0]["message"] == "AI unavailable"
+        assert error_events[0]["message"] == "AI model error: boom"
 
     def test_builds_history_from_prior_messages(self):
         captured = {}

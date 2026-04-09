@@ -81,7 +81,13 @@ def test_sqlite_dev_recreates_on_drift():
         conn.commit()
 
     import main as _main
-    with patch.object(_main, "engine", eng), patch.dict(os.environ, {"RENTMATE_ENV": "development"}):
+    with (
+        patch.object(_main, "engine", eng),
+        patch.dict(os.environ, {"RENTMATE_ENV": "development"}),
+        patch("sys.stdin") as mock_stdin,
+        patch("builtins.input", return_value="w"),
+    ):
+        mock_stdin.isatty.return_value = True
         _main._ensure_schema()
 
     # After recreate, all model columns should be present

@@ -31,6 +31,7 @@ def _register_rentmate_tools():
     from tools.registry import registry
 
     from llm.tools import (
+        AnalyzeDocumentTool,
         AttachEntityToTaskTool,
         CloseTaskTool,
         CreatePropertyTool,
@@ -53,7 +54,7 @@ def _register_rentmate_tools():
         AttachEntityToTaskTool, MessageExternalPersonTool,
         LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
         SaveMemoryTool, RecallMemoryTool, EditMemoryTool,
-        CreatePropertyTool, CreateTenantTool, ReadDocumentTool,
+        CreatePropertyTool, CreateTenantTool, ReadDocumentTool, AnalyzeDocumentTool,
         UpdateOnboardingTool,
     ):
         tool = tool_cls()

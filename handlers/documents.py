@@ -52,6 +52,7 @@ async def upload_document(
     file: UploadFile = File(...),
     document_type: str = Form("lease"),
     task_id: Optional[str] = Form(None),
+    skip_extraction: bool = Form(False),
     db: Session = Depends(get_db),
 ):
     await require_user(request)
@@ -86,8 +87,9 @@ async def upload_document(
         db.add(DocumentTask(document_id=doc_id, task_id=task_id))
     db.commit()
 
-    from llm.document_processor import process_document
-    background_tasks.add_task(process_document, doc_id)
+    if not skip_extraction:
+        from llm.document_processor import process_document
+        background_tasks.add_task(process_document, doc_id)
 
     return {"document_id": doc_id}
 

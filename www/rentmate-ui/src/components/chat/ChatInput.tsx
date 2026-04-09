@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle, useCallback, Dispatch, SetStateAction } from 'react';
-import { Send, Paperclip, Loader2, X, FileText } from 'lucide-react';
+import { Send, Paperclip, Loader2, X, FileText, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { toast } from 'sonner';
 
 export interface PendingAttachment {
   localId: string;
@@ -27,11 +28,20 @@ export interface ChatInputHandle {
   triggerFileUpload: () => void;
 }
 
+const ACCEPTED_EXTENSIONS = ['.pdf', '.doc', '.docx', '.txt', '.csv', '.xls', '.xlsx', '.jpg', '.jpeg', '.png'];
+
+function isAcceptedFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return ACCEPTED_EXTENSIONS.some(ext => name.endsWith(ext));
+}
+
 export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, placeholder = 'Type a message...', onInsertCleared, attachments = [], setAttachments, uploadFile }, ref) => {
   const [input, setInput] = useState('');
   const [insertedMessageId, setInsertedMessageId] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragCounterRef = useRef(0);
 
   const anyUploading = attachments.some(a => a.status === 'uploading');
 
@@ -55,6 +65,35 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled,
     }
   }, [input]);
 
+  const processFiles = useCallback((files: File[]) => {
+    if (!uploadFile || !setAttachments) return;
+
+    const accepted = files.filter(isAcceptedFile);
+    const rejected = files.length - accepted.length;
+    if (rejected > 0) {
+      toast.error(`${rejected} file${rejected > 1 ? 's' : ''} not supported. Accepted: PDF, DOC, TXT, CSV, XLS, JPG, PNG`);
+    }
+
+    for (const file of accepted) {
+      const localId = `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const newAtt: PendingAttachment = {
+        localId,
+        documentId: null,
+        filename: file.name,
+        status: 'uploading',
+      };
+      setAttachments(prev => [...prev, newAtt]);
+
+      uploadFile(file).then(result => {
+        setAttachments(prev => prev.map(a =>
+          a.localId === localId
+            ? { ...a, documentId: result?.id ?? null, status: result ? 'ready' as const : 'error' as const }
+            : a
+        ));
+      });
+    }
+  }, [uploadFile, setAttachments]);
+
   const handleSend = () => {
     const trimmed = input.trim();
     const readyAttachments = attachments.filter(a => a.status === 'ready');
@@ -75,34 +114,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled,
     }
   }, [insertedMessageId, onInsertCleared]);
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files || files.length === 0 || !uploadFile || !setAttachments) return;
-    // Copy the FileList BEFORE clearing the input — clearing resets the live FileList
+    if (!files || files.length === 0) return;
     const fileList = Array.from(files);
     e.target.value = '';
-
-    for (const file of fileList) {
-      const localId = `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      const newAtt: PendingAttachment = {
-        localId,
-        documentId: null,
-        filename: file.name,
-        status: 'uploading',
-      };
-      // Add chip immediately
-      setAttachments(prev => [...prev, newAtt]);
-
-      // Upload in background — uses functional setState to avoid stale closures
-      uploadFile(file).then(result => {
-        setAttachments(prev => prev.map(a =>
-          a.localId === localId
-            ? { ...a, documentId: result?.id ?? null, status: result ? 'ready' as const : 'error' as const }
-            : a
-        ));
-      });
-    }
-
+    processFiles(fileList);
     setTimeout(() => textareaRef.current?.focus(), 100);
   };
 
@@ -117,10 +134,61 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled,
     }
   };
 
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current === 0) {
+      setIsDragging(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+
+    if (!uploadFile || !setAttachments) return;
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      processFiles(files);
+    }
+  };
+
   const canSend = !disabled && !anyUploading && (input.trim() || attachments.some(a => a.status === 'ready'));
 
   return (
-    <div className="border-t bg-card/50 shrink-0">
+    <div
+      className="border-t bg-card/50 shrink-0 relative"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Drag overlay */}
+      {isDragging && uploadFile && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/5 border-2 border-dashed border-primary rounded-lg pointer-events-none">
+          <div className="flex items-center gap-2 text-primary font-medium text-sm">
+            <Upload className="h-4 w-4" />
+            Drop files here
+          </div>
+        </div>
+      )}
       {/* Attachment chips */}
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5 px-3 pt-2">

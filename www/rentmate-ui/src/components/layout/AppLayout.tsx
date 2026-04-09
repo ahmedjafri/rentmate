@@ -114,18 +114,20 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
           <header className="h-10 flex items-center border-b px-4 bg-card/50 backdrop-blur-sm shrink-0 gap-2">
             <SidebarTrigger className="mr-1 shrink-0" />
 
-            {/* RentMate chat button */}
-            <Button
-              variant={chatPanel.isOpen && !chatPanel.taskId ? 'default' : 'outline'}
-              size="sm"
-              onClick={handleRentMateClick}
-              className="h-7 rounded-xl gap-1.5 text-xs shrink-0"
-            >
-              <Bot className="h-3.5 w-3.5 shrink-0" />
-              <span className="hidden sm:inline">
-                {pageCtx ? `Ask about ${pageCtx.label}` : 'Ask RentMate'}
-              </span>
-            </Button>
+            {/* RentMate chat button — hidden on dashboard which has embedded chat */}
+            {!isDashboard && (
+              <Button
+                variant={chatPanel.isOpen && !chatPanel.taskId ? 'default' : 'outline'}
+                size="sm"
+                onClick={handleRentMateClick}
+                className="h-7 rounded-xl gap-1.5 text-xs shrink-0"
+              >
+                <Bot className="h-3.5 w-3.5 shrink-0" />
+                <span className="hidden sm:inline">
+                  {pageCtx ? `Ask about ${pageCtx.label}` : 'Ask RentMate'}
+                </span>
+              </Button>
+            )}
 
             <div className="flex-1" />
 

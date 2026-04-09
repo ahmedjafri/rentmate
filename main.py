@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect as sa_inspect
@@ -233,8 +234,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # ─── middleware ───────────────────────────────────────────────────────────────
+
+
+@app.middleware("http")
+async def cache_control_middleware(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/assets/"):
+        # Vite content-hashes these filenames — safe to cache forever
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
 
 @app.middleware("http")
 async def db_session_middleware(request: Request, call_next):
@@ -437,7 +450,7 @@ async def serve_react_app(full_path: str):
     index = _DIST / "index.html"
     if not index.exists():
         return {"status": "frontend not built"}
-    return FileResponse(str(index))
+    return FileResponse(str(index), headers={"Cache-Control": "no-cache"})
 
 
 if __name__ == "__main__":

@@ -688,7 +688,8 @@ class ConversationSummaryType:
 
     @classmethod
     def from_sql(cls, c: typing.Any) -> "ConversationSummaryType":
-        last_msg = max(c.messages, key=lambda m: m.sent_at, default=None) if c.messages else None
+        visible_msgs = [m for m in (c.messages or []) if m.message_type in ("message", "thread")]
+        last_msg = max(visible_msgs, key=lambda m: m.sent_at, default=None) if visible_msgs else None
         active_participants = [p for p in c.participants if p.is_active] if c.participants else []
         prop_name = None
         if c.property:

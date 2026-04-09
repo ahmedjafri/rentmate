@@ -19,8 +19,7 @@ const Chats = () => {
         <h1 className="text-2xl font-bold">Chats</h1>
         {activeTab === 'user_ai' && (
           <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={() => {
-            openChat();
-            setTimeout(() => refresh(), 500);
+            openChat({ lazy: true });
           }}>
             <Plus className="h-3.5 w-3.5" />
             New Chat

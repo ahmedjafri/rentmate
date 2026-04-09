@@ -42,7 +42,7 @@ export function ConvRow({ conv, onClick, onDelete, isActive }: { conv: ConvSumma
   const relTime = at ? formatDistanceToNow(new Date(at), { addSuffix: true }) : null;
 
   return (
-    <Card className={`px-3 py-2.5 rounded-xl hover:shadow-md transition-shadow cursor-pointer relative group ${isActive ? 'ring-2 ring-primary/40' : ''}`} onClick={onClick}>
+    <Card className={`px-3 py-2.5 rounded-xl hover:shadow-md transition-shadow cursor-pointer relative group ${isActive ? 'ring-2 ring-primary/40 bg-primary/5' : ''}`} onClick={onClick}>
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
         className="absolute top-2 right-2 h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors hidden group-hover:flex"
@@ -68,17 +68,19 @@ export function ConvRow({ conv, onClick, onDelete, isActive }: { conv: ConvSumma
         )}
       </div>
 
-      <div className="flex items-center justify-between gap-2 mt-1.5">
-        <h3 className="font-medium text-sm truncate">{conv.title ?? 'Conversation'}</h3>
-        {conv.propertyName && (
-          <span className="text-[10px] text-muted-foreground shrink-0">{conv.propertyName}</span>
-        )}
-      </div>
-
-      {conv.lastMessageBody && (
-        <p className="text-xs text-muted-foreground mt-1 truncate">
-          {conv.lastMessageSenderName && <span className="font-medium">{conv.lastMessageSenderName}: </span>}
-          {conv.lastMessageBody}
+      {conv.title && conv.title !== 'Chat with RentMate' ? (
+        <>
+          <h3 className="font-medium text-sm truncate mt-1.5">{conv.title}</h3>
+          {conv.lastMessageBody && (
+            <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">
+              {conv.lastMessageSenderName && <span className="font-medium">{conv.lastMessageSenderName}: </span>}
+              {conv.lastMessageBody}
+            </p>
+          )}
+        </>
+      ) : (
+        <p className="text-[11px] text-muted-foreground mt-1.5 line-clamp-2">
+          {conv.lastMessageBody ?? 'Conversation'}
         </p>
       )}
     </Card>

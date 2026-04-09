@@ -1468,6 +1468,18 @@ class ReadDocumentTool(Tool):
                 doc = db.query(Document).filter_by(id=kwargs["document_id"]).first()
                 if not doc:
                     return json.dumps({"status": "error", "message": "Document not found"})
+                # Hint when document hasn't been analyzed yet
+                if doc.status == "pending" and not doc.raw_text:
+                    return json.dumps({
+                        "status": "ok",
+                        "document": {
+                            "id": doc.id,
+                            "filename": doc.filename,
+                            "document_type": doc.document_type,
+                            "status": doc.status,
+                            "hint": "This document has not been analyzed yet. Use analyze_document to extract its contents.",
+                        },
+                    })
                 raw_preview = (doc.raw_text or "")[:3000]
                 return json.dumps({
                     "status": "ok",
@@ -1524,6 +1536,64 @@ class ReadDocumentTool(Tool):
                 return json.dumps({"status": "ok", "documents": items})
 
             return json.dumps({"status": "error", "message": "Provide document_id, query, or list_recent"})
+        except Exception as e:
+            return json.dumps({"status": "error", "message": str(e)})
+        finally:
+            db.close()
+
+
+class AnalyzeDocumentTool(Tool):
+    """Trigger text extraction and AI analysis on an unprocessed document."""
+
+    @property
+    def name(self) -> str:
+        return "analyze_document"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Trigger text extraction and AI analysis on a document that hasn't been "
+            "processed yet (status='pending'). Use this when a user attaches a document "
+            "in chat and asks about its contents. Returns the analysis result once complete."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["document_id"],
+            "properties": {
+                "document_id": {
+                    "type": "string",
+                    "description": "The ID of the document to analyze",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        from db.models import Document
+        from db.session import SessionLocal
+
+        db = SessionLocal.session_factory()
+        try:
+            doc = db.query(Document).filter_by(id=kwargs["document_id"]).first()
+            if not doc:
+                return json.dumps({"status": "error", "message": "Document not found"})
+            if doc.status == "done":
+                return json.dumps({"status": "already_done", "message": "Document already analyzed"})
+            if doc.status == "processing":
+                return json.dumps({"status": "in_progress", "message": "Document is currently being analyzed"})
+
+            from llm.document_processor import process_document
+            await process_document(doc.id)
+
+            db.refresh(doc)
+            return json.dumps({
+                "status": "ok",
+                "message": "Document analysis complete",
+                "document_status": doc.status,
+                "filename": doc.filename,
+            })
         except Exception as e:
             return json.dumps({"status": "error", "message": str(e)})
         finally:
