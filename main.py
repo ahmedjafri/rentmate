@@ -159,6 +159,10 @@ async def lifespan(app: FastAPI):
         import sys
         sys.exit(1)
 
+    # Set default creator context for startup operations (no HTTP request yet)
+    from backends.local_auth import DEFAULT_USER_ID, set_request_context
+    set_request_context(user_id=DEFAULT_USER_ID, account_id=DEFAULT_USER_ID)
+
     # Populate os.environ from DB-stored settings (must run after DB init)
     from gql.services.settings_service import load_agent_integrations_into_env, load_llm_into_env
     load_llm_into_env()
