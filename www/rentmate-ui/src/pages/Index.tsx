@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { PageLoader } from '@/components/ui/page-loader';
 import { Card } from '@/components/ui/card';
@@ -31,7 +31,21 @@ const participantIcon: Record<TaskParticipantType, React.ElementType> = {
 
 const Index = () => {
   const { properties, tenants, vendors, actionDeskTasks, suggestions, updateSuggestionStatus, refreshData, openChat, closeChat, chatPanel, isLoading } = useApp();
-  const { conversations, loading: convsLoading, refresh, removeConversation } = useConversations('user_ai', 20);
+  const { conversations: aiConvs, loading: aiLoading, refresh: refreshAi, removeConversation: removeAiConv } = useConversations('user_ai', 20);
+  const { conversations: tenantConvs, loading: tenantLoading, refresh: refreshTenants, removeConversation: removeTenantConv } = useConversations('tenant', 20);
+  const { conversations: vendorConvs, loading: vendorLoading, refresh: refreshVendors, removeConversation: removeVendorConv } = useConversations('vendor', 20);
+
+  const convsLoading = aiLoading || tenantLoading || vendorLoading;
+  const allConversations = useMemo(() =>
+    [...aiConvs, ...tenantConvs, ...vendorConvs].sort((a, b) => {
+      const aTime = a.lastMessageAt ?? a.updatedAt;
+      const bTime = b.lastMessageAt ?? b.updatedAt;
+      return new Date(bTime).getTime() - new Date(aTime).getTime();
+    }).slice(0, 30),
+    [aiConvs, tenantConvs, vendorConvs]
+  );
+  const refreshAllConvs = () => { refreshAi(); refreshTenants(); refreshVendors(); };
+  const removeConversation = (uid: string) => { removeAiConv(uid); removeTenantConv(uid); removeVendorConv(uid); };
   const [showNewChat, setShowNewChat] = useState(false);
 
   const totalUnits = properties.reduce((a, p) => a + p.units, 0);
@@ -124,10 +138,10 @@ const Index = () => {
             </Card>
           )}
           {convsLoading && <p className="text-xs text-muted-foreground text-center py-4">Loading…</p>}
-          {!convsLoading && conversations.length === 0 && chatPanel.conversationId && (
+          {!convsLoading && allConversations.length === 0 && chatPanel.conversationId && (
             <p className="text-xs text-muted-foreground text-center py-4">No conversations yet</p>
           )}
-          {conversations.map(conv => (
+          {allConversations.map(conv => (
             <ConvRow
               key={conv.uid}
               conv={conv}
