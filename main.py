@@ -142,10 +142,15 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(_ensure_schema)
         print("Database schema ready")
 
-    await asyncio.gather(
-        _init_db(),
-        asyncio.to_thread(agent_registry.start_gateway),
-    )
+    try:
+        await asyncio.gather(
+            _init_db(),
+            asyncio.to_thread(agent_registry.start_gateway),
+        )
+    except asyncio.CancelledError:
+        print("Startup cancelled — shutting down")
+        yield
+        return
 
     # Populate os.environ from DB-stored settings (must run after DB init)
     from gql.services.settings_service import load_agent_integrations_into_env, load_llm_into_env
