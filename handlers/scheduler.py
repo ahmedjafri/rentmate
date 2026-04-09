@@ -296,7 +296,7 @@ async def _execute_task(task) -> str:
 
     # Set request context for the task's creator
     creator_id = task.creator_id
-    tokens = set_request_context(user_id=creator_id, account_id=creator_id)
+    tokens = set_request_context(user_id=creator_id, creator_id=creator_id)
 
     try:
         from db.session import SessionLocal
