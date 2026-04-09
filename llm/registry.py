@@ -192,7 +192,7 @@ class AgentRegistry:
         return row.content if row else None
 
     @staticmethod
-    def _db_write_file(db: Session, agent_id: str, filename: str, content: str):
+    def _db_write_file(db: Session, agent_id: str, filename: str, content: str, *, creator_id: int | None = None):
         import uuid as _uuid
 
         from db.models import AgentMemory
@@ -204,17 +204,22 @@ class AgentRegistry:
             row.content = content
             row.updated_at = now
         else:
+            if creator_id is None:
+                from backends.local_auth import resolve_creator_id
+                creator_id = resolve_creator_id()
             db.add(AgentMemory(
                 id=str(_uuid.uuid4()),
+                creator_id=creator_id,
                 agent_id=agent_id,
                 memory_type=f"file:{filename}",
                 content=content,
                 updated_at=now,
             ))
 
-    def _write_workspace(self, agent_dir: Path, db: Session, account_id: str = DEFAULT_USER_ID):
+    def _write_workspace(self, agent_dir: Path, db: Session, account_id: str = DEFAULT_USER_ID, *, creator_id: int | None = None):
         agent_dir.mkdir(parents=True, exist_ok=True)
         agent_id = account_id
+        _cid = creator_id or (int(account_id) if account_id.isdigit() else None)
 
         for filename in _STATIC_TEMPLATE_FILES:
             dest = agent_dir / filename
@@ -227,7 +232,7 @@ class AgentRegistry:
                         old_v = _soul_version(db_content)
                         if new_v > old_v:
                             db_content = src.read_text()
-                            self._db_write_file(db, agent_id, filename, db_content)
+                            self._db_write_file(db, agent_id, filename, db_content, creator_id=_cid)
                             print(f"[agent] SOUL.md upgraded: v{old_v} → v{new_v}")
                 dest.write_text(db_content)
                 continue
@@ -235,7 +240,7 @@ class AgentRegistry:
             if src.exists():
                 content = src.read_text()
                 shutil.copy2(src, dest)
-                self._db_write_file(db, agent_id, filename, content)
+                self._db_write_file(db, agent_id, filename, content, creator_id=_cid)
 
         admin_email = os.environ.get("RENTMATE_ADMIN_EMAIL", "admin@localhost")
         account_name = os.environ.get("RENTMATE_ACCOUNT_NAME", "RentMate")
@@ -254,7 +259,7 @@ class AgentRegistry:
                 f"_(Update this as you learn more about how they prefer to work.)_\n"
             )
             user_md.write_text(content)
-            self._db_write_file(db, agent_id, "USER.md", content)
+            self._db_write_file(db, agent_id, "USER.md", content, creator_id=_cid)
 
         data_script = Path(__file__).parent / "agent_data.py"
         workspace_abs = str((DATA_DIR / DEFAULT_USER_ID).resolve())
@@ -298,7 +303,7 @@ class AgentRegistry:
             "_(Add vendor contacts here as you learn them.)_\n"
         )
         tools_content = (agent_dir / "TOOLS.md").read_text()
-        self._db_write_file(db, agent_id, "TOOLS.md", tools_content)
+        self._db_write_file(db, agent_id, "TOOLS.md", tools_content, creator_id=_cid)
 
         db.commit()
 

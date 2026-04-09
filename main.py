@@ -121,6 +121,7 @@ def _ensure_schema():
 # ─── GraphQL ─────────────────────────────────────────────────────────────────
 
 async def get_context(request: Request):
+    from backends.local_auth import set_request_context
     from backends.wire import auth_backend
     auth_header = request.headers.get("Authorization", "")
     token = auth_header.replace("Bearer ", "").strip()
@@ -128,6 +129,10 @@ async def get_context(request: Request):
         return {"user": None, "db_session": request.state.db_session}
     try:
         user = await auth_backend.validate_token(token)
+        # Set request-scoped context so query filters resolve creator_id
+        creator_id = user.get("creator_id")
+        if creator_id is not None:
+            set_request_context(user_id=creator_id, creator_id=creator_id)
         return {"user": user, "db_session": request.state.db_session}
     except Exception as e:
         print(f"Invalid token, error: {e}")
