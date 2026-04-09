@@ -39,7 +39,7 @@ from db.models import (
 
 # ── constants ────────────────────────────────────────────────────────────────
 
-DEFAULT_ACCOUNT_ID = "00000000-0000-0000-0000-000000000000"
+TEST_CREATOR_ID = 1
 TENANT_NAME = "Alice Renter"
 TENANT_PHONE = "206-555-0100"
 VENDOR_NAME = "Handyman Rob"
@@ -169,7 +169,7 @@ def scenario(db):
     # Task
     task = Task(
         id=str(uuid.uuid4()),
-        creator_id=DEFAULT_ACCOUNT_ID,
+        creator_id=TEST_CREATOR_ID,
         title="Garage door is broken",
         task_status="active",
         task_mode="autonomous",

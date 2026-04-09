@@ -23,8 +23,8 @@ if _ENV_FILE.exists():
 @pytest.fixture(autouse=True)
 def _set_creator_context():
     """Set a default creator context for tests so entity creation works."""
-    from backends.local_auth import DEFAULT_ACCOUNT_ID, reset_request_context, set_request_context
-    tokens = set_request_context(user_id=DEFAULT_ACCOUNT_ID, creator_id=DEFAULT_ACCOUNT_ID)
+    from backends.local_auth import reset_request_context, set_request_context
+    tokens = set_request_context(user_id=1, creator_id=1)
     yield
     reset_request_context(tokens)
 

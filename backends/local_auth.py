@@ -7,8 +7,7 @@ import jwt
 JWT_SECRET = os.getenv("JWT_SECRET", "rentmate-local-secret")
 RENTMATE_PASSWORD = os.getenv("RENTMATE_PASSWORD", "rentmate")
 
-DEFAULT_ACCOUNT_ID = 1  # Default account ID (integer, auto-increment PK)
-DEFAULT_USER_ID = str(DEFAULT_ACCOUNT_ID)  # String version for paths/JWT sub claims
+DEFAULT_USER_ID = "1"  # Filesystem path for agent workspace (data/agent/1/)
 DEFAULT_USER_EMAIL = os.getenv("RENTMATE_ADMIN_EMAIL", "admin@localhost")
 
 # Request-scoped creator context — set by middleware/deps, read by tools
@@ -32,6 +31,20 @@ def resolve_creator_id() -> int:
 resolve_account_id = resolve_creator_id
 
 
+def _lookup_account_id() -> int:
+    """Look up the first account's ID from the database."""
+    from db.models import Account
+    from db.session import SessionLocal
+    db = SessionLocal()
+    try:
+        acct = db.query(Account).first()
+        if not acct:
+            raise RuntimeError("No account exists in the database")
+        return acct.id
+    finally:
+        db.close()
+
+
 def set_request_context(*, user_id: int, creator_id: int) -> tuple:
     """Set request-scoped context vars. Returns tokens for reset."""
     t1 = _current_user_id.set(user_id)
@@ -49,17 +62,18 @@ class LocalAuthBackend:
     async def validate_token(self, token: str) -> dict:
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-            uid = payload.get("sub", str(DEFAULT_ACCOUNT_ID))
+            uid = payload.get("sub", DEFAULT_USER_ID)
             email = payload.get("email", DEFAULT_USER_EMAIL)
-            # For local auth, the account ID is always the default account
+            # Look up the actual account from the DB
+            account_id = _lookup_account_id()
             return {
                 "uid": uid,
                 "id": uid,
                 "email": email,
                 "username": email,
-                "creator_id": DEFAULT_ACCOUNT_ID,
+                "creator_id": account_id,
             }
-        except Exception as e:
+        except jwt.exceptions.PyJWTError as e:
             raise ValueError(f"Invalid token: {e}")
 
     async def login(self, **credentials) -> str:
@@ -67,7 +81,7 @@ class LocalAuthBackend:
         if password != RENTMATE_PASSWORD:
             raise ValueError("Invalid password")
         payload = {
-            "sub": str(DEFAULT_ACCOUNT_ID),
+            "sub": DEFAULT_USER_ID,
             "email": DEFAULT_USER_EMAIL,
             "exp": datetime.now(UTC) + timedelta(days=30),
         }
