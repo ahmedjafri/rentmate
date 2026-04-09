@@ -612,6 +612,7 @@ class ScheduledTaskType:
     last_run_at: typing.Optional[str] = None
     last_status: typing.Optional[str] = None
     last_output: typing.Optional[str] = None
+    simulated_at: typing.Optional[str] = None
     created_at: str = ""
 
     @classmethod
@@ -631,6 +632,7 @@ class ScheduledTaskType:
             last_run_at=_utc_iso(st.last_run_at) if st.last_run_at else None,
             last_status=st.last_status,
             last_output=st.last_output,
+            simulated_at=_utc_iso(st.simulated_at) if getattr(st, "simulated_at", None) else None,
             created_at=_utc_iso(st.created_at),
         )
 

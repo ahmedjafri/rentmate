@@ -512,6 +512,8 @@ class Mutation(AuthMutation):
             st.schedule_display = human_schedule(st.schedule)
             st.next_run_at = next_run(st.schedule)
         if enabled is not None:
+            if enabled and not st.simulated_at:
+                raise ValueError("Cannot enable a scheduled task that hasn't been simulated yet. Run a simulation first.")
             st.enabled = enabled
             st.state = "scheduled" if enabled else "paused"
         st.updated_at = datetime.now(UTC)
@@ -531,10 +533,8 @@ class Mutation(AuthMutation):
         return True
 
     @strawberry.mutation(description="Run a scheduled task immediately and return its output")
-    def run_scheduled_task(self, info, uid: str) -> ScheduledTaskType:
+    async def run_scheduled_task(self, info, uid: str) -> ScheduledTaskType:
         _current_user(info)
-        import asyncio
-
         from db.models import ScheduledTask
         from handlers.scheduler import _execute_task
         db = _session(info)
@@ -543,8 +543,7 @@ class Mutation(AuthMutation):
             raise ValueError("Scheduled task not found")
         from datetime import UTC, datetime
         try:
-            loop = asyncio.get_event_loop()
-            output = loop.run_until_complete(_execute_task(st))
+            output = await _execute_task(st)
             st.last_status = "ok"
             st.last_output = output[:5000] if output else ""
         except Exception as exc:
@@ -556,19 +555,17 @@ class Mutation(AuthMutation):
         return ScheduledTaskType.from_sql(st)
 
     @strawberry.mutation(description="Simulate a scheduled task — dry run that returns what the agent would do")
-    def simulate_scheduled_task(self, info, uid: str) -> str:
+    async def simulate_scheduled_task(self, info, uid: str) -> str:
         """Run the task's prompt through the agent but prefix with [SIMULATION] so the
         agent creates suggestions instead of taking direct action."""
         _current_user(info)
-        import asyncio
-
         from db.models import ScheduledTask
         from handlers.scheduler import _execute_task
         db = _session(info)
         st = db.query(ScheduledTask).filter_by(id=uid).first()
         if not st:
             raise ValueError("Scheduled task not found")
-        # Create a temporary copy with simulation prefix
+
         class _SimTask:
             def __init__(self, orig):
                 self.creator_id = orig.creator_id
@@ -579,8 +576,10 @@ class Mutation(AuthMutation):
                     "for each action.]\n\n" + orig.prompt
                 )
         try:
-            loop = asyncio.get_event_loop()
-            output = loop.run_until_complete(_execute_task(_SimTask(st)))
+            output = await _execute_task(_SimTask(st))
+            from datetime import UTC, datetime
+            st.simulated_at = datetime.now(UTC)
+            db.commit()
             return output or "(no output)"
         except Exception as exc:
             return f"Simulation error: {exc}"

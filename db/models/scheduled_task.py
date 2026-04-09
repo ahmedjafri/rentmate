@@ -36,6 +36,7 @@ class ScheduledTask(Base, HasCreatorId):
     last_run_at = Column(DateTime, nullable=True)
     last_status = Column(String(20), nullable=True)  # ok | error
     last_output = Column(Text, nullable=True)  # Agent's response from last run
+    simulated_at = Column(DateTime, nullable=True)  # Must simulate before enabling
 
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))

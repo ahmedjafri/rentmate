@@ -31,6 +31,7 @@ interface ScheduledTask {
   lastRunAt: string | null;
   lastStatus: string | null;
   lastOutput: string | null;
+  simulatedAt: string | null;
   createdAt: string;
 }
 
@@ -38,7 +39,7 @@ const QUERY = `
   query($uid: String!) {
     scheduledTask(uid: $uid) {
       uid name prompt schedule scheduleDisplay isDefault enabled state
-      repeat completedCount nextRunAt lastRunAt lastStatus lastOutput createdAt
+      repeat completedCount nextRunAt lastRunAt lastStatus lastOutput simulatedAt createdAt
     }
   }
 `;
@@ -149,6 +150,7 @@ const ScheduledTaskDetail = () => {
     try {
       const data = await graphqlQuery<{ simulateScheduledTask: string }>(SIMULATE, { uid: task.uid });
       setSimOutput(data.simulateScheduledTask);
+      fetchTask(); // Refresh to get simulatedAt
     } catch (e) { setSimOutput(`Error: ${e instanceof Error ? e.message : 'Failed'}`); }
     finally { setSimulating(false); }
   };
@@ -190,7 +192,14 @@ const ScheduledTaskDetail = () => {
           </div>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <Button variant="outline" size="sm" onClick={handleToggle} className="gap-1.5">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleToggle}
+            disabled={!task.enabled && !task.simulatedAt}
+            title={!task.enabled && !task.simulatedAt ? 'Run a simulation first before enabling' : undefined}
+            className="gap-1.5"
+          >
             {task.enabled ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
             {task.enabled ? 'Pause' : 'Resume'}
           </Button>
@@ -247,8 +256,13 @@ const ScheduledTaskDetail = () => {
           </Button>
           <Button onClick={handleSimulate} disabled={running || simulating} variant="outline" className="gap-1.5">
             {simulating ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
-            Simulate
+            {task.simulatedAt ? 'Re-simulate' : 'Simulate'}
           </Button>
+          {!task.simulatedAt && !task.enabled && (
+            <span className="text-xs text-amber-600 dark:text-amber-400">
+              Simulation required before enabling
+            </span>
+          )}
         </div>
 
         {/* Simulation output */}
