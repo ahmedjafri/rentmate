@@ -30,8 +30,10 @@ class TenantService:
         if not unit:
             raise ValueError(f"Unit {input.unit_id} not found on property {input.property_id}")
 
+        from backends.local_auth import resolve_account_id
         tenant = SqlTenant(
             id=str(uuid.uuid4()),
+            account_id=resolve_account_id(),
             first_name=input.first_name,
             last_name=input.last_name,
             email=input.email,
@@ -43,6 +45,7 @@ class TenantService:
 
         lease = SqlLease(
             id=str(uuid.uuid4()),
+            account_id=resolve_account_id(),
             tenant_id=tenant.id,
             unit_id=unit.id,
             property_id=input.property_id,
@@ -70,8 +73,10 @@ class TenantService:
         if not unit:
             raise ValueError(f"Unit {input.unit_id} not found on property {input.property_id}")
 
+        from backends.local_auth import resolve_account_id
         lease = SqlLease(
             id=str(uuid.uuid4()),
+            account_id=resolve_account_id(),
             tenant_id=tenant.id,
             unit_id=unit.id,
             property_id=input.property_id,

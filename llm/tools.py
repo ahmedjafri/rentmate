@@ -1351,6 +1351,7 @@ class CreateTenantTool(Tool):
             # Always create the tenant first
             tenant = SqlTenant(
                 id=str(uuid.uuid4()),
+                account_id=resolve_account_id(),
                 first_name=first_name,
                 last_name=last_name,
                 email=kwargs.get("email"),
@@ -1390,6 +1391,7 @@ class CreateTenantTool(Tool):
                 from db.models import Lease as SqlLease
                 lease = SqlLease(
                     id=str(uuid.uuid4()),
+                    account_id=resolve_account_id(),
                     tenant_id=tenant.id,
                     unit_id=unit.id,
                     property_id=kwargs["property_id"],

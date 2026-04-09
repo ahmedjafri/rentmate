@@ -4,6 +4,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from backends.local_auth import resolve_account_id
 from db.models import (
     Conversation,
     ConversationType,
@@ -69,6 +70,7 @@ class TaskService:
         ai_convo = Conversation(
             subject=input.title,
             property_id=input.property_id,
+            account_id=resolve_account_id(),
             unit_id=input.unit_id,
             conversation_type=ConversationType.TASK_AI,
             is_group=False,

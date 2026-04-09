@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from backends.local_auth import resolve_account_id
 from db.lib import get_conversation_with_messages
 from db.models import (
     Conversation,
@@ -27,6 +28,7 @@ def get_or_create_conversation(db: Session, conversation_id: str) -> Conversatio
     if conv is None:
         conv = Conversation(
             id=conversation_id,
+            account_id=resolve_account_id(),
             subject="Chat with RentMate",
             is_group=False,
             is_archived=False,
@@ -145,6 +147,7 @@ def get_or_create_external_conversation(
     now = datetime.now(UTC)
     conv = Conversation(
         id=str(uuid.uuid4()),
+        account_id=resolve_account_id(),
         subject=subject,
         property_id=property_id,
         unit_id=unit_id,
