@@ -37,6 +37,7 @@ class UserType:
 class LoginInput:
     password: str
     username: typing.Optional[str] = None
+    email: typing.Optional[str] = None
 
 @strawberry.type
 class AuthPayload:

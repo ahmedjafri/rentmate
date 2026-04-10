@@ -21,15 +21,19 @@ The difference matters in practice. When AI is a layer on top, every new capabil
 
 ## Features
 
-- **AI Chat** — Ask questions about your tenants, leases, and properties
-- **Document Processing** — Upload lease PDFs and automatically extract tenant/property/lease data
-- **SMS Integration** — Auto-reply to tenant texts via Quo webhook
-- **GraphQL API** — Full data access via a Strawberry GraphQL endpoint
-- **React UI** — Built-in web interface for property management
+- **AI Chat** — Conversational interface backed by any OpenAI-compatible model (OpenAI, Anthropic, DeepSeek, Ollama, etc.)
+- **Document Processing** — Upload lease PDFs and automatically extract tenant, property, unit, and lease data
+- **Onboarding** — Guided first-run setup walks you through AI configuration and property setup
+- **Suggestions** — Agent-generated action items with risk scoring and approval workflows
+- **Scheduled Tasks** — Cron-based background tasks with natural language prompts (replaces YAML automation DSL)
+- **SMS Integration** — Auto-reply to tenant texts via Quo/OpenPhone webhook
+- **Multi-tenancy** — Per-account data isolation with request-scoped context
+- **GraphQL API** — Full data access via Strawberry GraphQL
+- **React UI** — Three-column dashboard with chat, tasks, and action desk
 
 ## Quickstart
 
-Requires **Node ≥18** and **Python ≥3.12** with [Poetry](https://python-poetry.org/docs/#installation).
+Requires **Node >= 18** and **Python >= 3.12** with [Poetry](https://python-poetry.org/docs/#installation).
 
 **One-line install** (macOS / Linux):
 ```bash
@@ -41,8 +45,7 @@ Or manually:
 git clone https://github.com/ahmedjafri/rentmate.git && cd rentmate
 npm install              # installs Python deps (poetry) + frontend
 
-cp .env.example .env
-# Edit .env — set LLM_API_KEY to any OpenAI-compatible key
+cp .env.example .env     # optional — LLM can be configured in the UI
 
 npm run db:migrate       # apply database migrations
 npm start                # starts API (port 8000)
@@ -54,49 +57,61 @@ npm run dev              # starts API (port 8002) + Vite dev server
                          # auto-recreates DB when schema changes
 ```
 
-Open [http://localhost:8002](http://localhost:8002) (dev) or [http://localhost:8000](http://localhost:8000) (prod) and log in with the password from `RENTMATE_PASSWORD` (default: `rentmate`).
+Open [http://localhost:8002](http://localhost:8002) (dev) or [http://localhost:8000](http://localhost:8000) (prod).
+
+On first visit, click **Sign up** to create your account with an email and password. After signing in, the onboarding flow will guide you through connecting an AI model.
 
 ## Environment Variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `LLM_API_KEY` | Yes | — | API key for your LLM provider |
-| `LLM_MODEL` | No | `openai/gpt-4o-mini` | LiteLLM model string |
-| `LLM_BASE_URL` | No | — | Custom base URL (e.g. Ollama) |
-| `RENTMATE_PASSWORD` | No | `rentmate` | Login password |
+| `LLM_API_KEY` | No | — | API key for your LLM provider (can also be set in Settings UI) |
+| `LLM_MODEL` | No | `anthropic/claude-haiku-4-5-20251001` | LiteLLM model string |
+| `LLM_BASE_URL` | No | — | Custom base URL (e.g. `http://localhost:11434` for Ollama) |
 | `JWT_SECRET` | No | `rentmate-local-secret` | JWT signing secret — change in production |
-| `RENTMATE_DB_PATH` | No | `./data/rentmate.db` | SQLite database path |
-| `RENTMATE_DOCS_DIR` | No | `./data/documents` | Document storage directory |
-| `RENTMATE_CHROMA_DIR` | No | `./data/chroma` | ChromaDB vector store path |
-| `QUO_API_KEY` | No | — | Quo API key for SMS |
+| `RENTMATE_DATA_DIR` | No | `./data` | Data directory (DB, documents, agent workspace) |
+| `QUO_API_KEY` | No | — | Quo/OpenPhone API key for SMS |
 | `PHONE_WHITELIST` | No | — | Comma-separated phone numbers for auto-reply |
 
 ## Architecture
 
 ```
 FastAPI backend (main.py)
-  ├── /graphql          — Strawberry GraphQL API
-  ├── /auth/login       — JWT authentication
-  ├── /upload-document  — Document upload + processing
-  ├── /chat             — AI chat endpoint
-  ├── /quo-webhook  — Inbound SMS from Quo
-  └── /*                — React SPA (www/rentmate/dist/)
+  ├── /graphql            — Strawberry GraphQL API
+  ├── /chat/send          — AI chat (SSE streaming)
+  ├── /upload-document    — Document upload + extraction
+  ├── /settings           — LLM and integration config
+  ├── /onboarding/state   — First-run onboarding
+  ├── /quo-webhook        — Inbound SMS from Quo
+  └── /*                  — React SPA (www/rentmate-ui/dist/)
 
 backends/
-  ├── base.py           — Abstract interfaces
-  ├── local_auth.py     — JWT auth (single user)
-  ├── local_storage.py  — Filesystem document storage
-  ├── chroma_vector.py  — ChromaDB vector store
-  ├── single_tenant_sms.py — SMS routing
-  └── wire.py           — Backend wiring
+  ├── local_auth.py       — JWT auth with per-account bcrypt passwords
+  ├── local_storage.py    — Filesystem document storage
+  └── wire.py             — Backend wiring
 
 db/
-  ├── models.py         — SQLAlchemy ORM (SQLite)
-  └── lib.py            — Business logic
+  ├── models/             — SQLAlchemy ORM (SQLite with WAL)
+  ├── lib.py              — Legacy DB helpers
+  └── queries.py          — Shared query functions
+
+gql/
+  ├── schema.py           — GraphQL queries and mutations
+  └── services/           — Business logic (chat, tasks, settings, etc.)
 
 llm/
-  ├── client.py         — AI agent + tool progress
-  └── document_processor.py — PDF extraction + embedding
+  ├── client.py           — Agent execution + tool progress bridging
+  ├── registry.py         — Agent registry, tool registration, system prompt
+  ├── tools.py            — Agent tools (tasks, memory, documents, etc.)
+  └── document_processor.py — PDF extraction + LLM parsing
+
+handlers/
+  ├── chat.py             — Chat endpoint, SSE streaming, heartbeat
+  ├── settings.py         — LLM and integration settings
+  ├── scheduler.py        — Scheduled task execution (cron)
+  └── documents.py        — Document upload and processing
+
+www/rentmate-ui/          — React 18 SPA (Vite + TypeScript + shadcn/ui)
 ```
 
 ## Contributing

@@ -172,19 +172,13 @@ async def lifespan(app: FastAPI):
 
     db = SessionLocal()
     try:
-        # Ensure default account exists (id=1, auto-increment)
+        # Set startup context if an account exists (first login creates the account)
         from backends.local_auth import set_request_context
         from db.models import Account
         acct = db.query(Account).first()
-        if not acct:
-            acct = Account(name="Default Account")
-            db.add(acct)
-            db.flush()
-        db.commit()
-        # Set startup context so entity creation resolves creator_id
-        set_request_context(account_id=acct.id)
-
-        agent_registry.populate_all_agents(db)
+        if acct:
+            set_request_context(account_id=acct.id)
+            agent_registry.populate_all_agents(db)
         # Migrate vendors: ensure all have a short portal_token
         from db.models import ExternalContact as _EC
         from gql.services.vendor_service import VendorService as _VS

@@ -242,8 +242,9 @@ class AgentRegistry:
                 shutil.copy2(src, dest)
                 self._db_write_file(db, agent_id, filename, content, creator_id=_cid)
 
-        admin_email = os.environ.get("RENTMATE_ADMIN_EMAIL", "admin@localhost")
-        account_name = os.environ.get("RENTMATE_ACCOUNT_NAME", "RentMate")
+        from db.models import Account
+        _acct = db.query(Account).filter_by(id=int(account_id) if account_id.isdigit() else 0).first()
+        admin_email = (_acct.email if _acct and _acct.email else "") or "admin"
 
         user_md = agent_dir / "USER.md"
         db_user = self._db_read_file(db, agent_id, "USER.md")
@@ -254,7 +255,6 @@ class AgentRegistry:
                 f"# USER.md - About Your Manager\n\n"
                 f"- **Name:** {admin_email}\n"
                 f"- **Pronouns:** Unknown — use neutral language (they/them) until told otherwise\n"
-                f"- **Account:** {account_name}\n"
                 f"- **Role:** admin\n\n"
                 f"_(Update this as you learn more about how they prefer to work.)_\n"
             )

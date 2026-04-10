@@ -10,18 +10,21 @@ const LOGIN_MUTATION = `
   }
 `;
 
-export async function login(password: string): Promise<void> {
+export async function login(password: string, email?: string): Promise<void> {
   const res = await fetch(GRAPHQL_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: LOGIN_MUTATION, variables: { input: { password } } }),
+    body: JSON.stringify({
+      query: LOGIN_MUTATION,
+      variables: { input: { password, ...(email ? { email } : {}) } },
+    }),
   });
   const text = await res.text();
   if (!text) throw new Error(`Server error (HTTP ${res.status})`);
   const { data, errors } = JSON.parse(text);
   if (errors?.length) throw new Error(errors[0].message);
   const token = data?.login?.token;
-  if (!token) throw new Error('Login failed. Please check your password.');
+  if (!token) throw new Error('Login failed. Please check your credentials.');
   localStorage.setItem(TOKEN_KEY, token);
 }
 
@@ -31,6 +34,19 @@ export function logout(): void {
 
 export function getToken(): string {
   return localStorage.getItem(TOKEN_KEY) || '';
+}
+
+/** Decode the JWT payload without verifying the signature. */
+export function getTokenPayload(): { sub: string; email: string } | null {
+  const token = getToken();
+  if (!token) return null;
+  try {
+    const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64 + '=='.slice((b64.length % 4 === 0) ? 4 : b64.length % 4);
+    return JSON.parse(atob(padded));
+  } catch {
+    return null;
+  }
 }
 
 export function isAuthenticated(): boolean {

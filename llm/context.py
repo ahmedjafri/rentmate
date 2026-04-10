@@ -1,4 +1,3 @@
-import os
 from datetime import date
 from typing import Optional
 
@@ -8,12 +7,11 @@ from db.models import Lease, MessageType, Property, Task, Tenant, Unit
 
 
 def load_account_context(db: Session) -> str:
-    account_name = os.environ.get("RENTMATE_ACCOUNT_NAME", "RentMate")
     properties = db.query(Property).all()
     today = date.today()
     active_leases = db.query(Lease).filter(Lease.end_date >= today).all()
 
-    lines = [f"Account: {account_name}"]
+    lines: list[str] = []
 
     if properties:
         lines.append("Properties:")
@@ -202,9 +200,6 @@ def build_task_context(db: Session, task_id: str) -> str:
     if not task.property_id:
         lines.append("")
         lines.append(load_account_context(db))
-    else:
-        account_name = os.environ.get("RENTMATE_ACCOUNT_NAME", "RentMate")
-        lines.append(f"\nAccount: {account_name}")
 
     return "\n".join(lines)
 

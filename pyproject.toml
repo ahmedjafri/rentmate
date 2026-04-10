@@ -19,6 +19,7 @@ sqlalchemy = "^2.0"
 hermes-agent = {git = "https://github.com/nousresearch/hermes-agent.git"}
 memray = "^1.19.2"
 croniter = "^6.2.2"
+bcrypt = "^5.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.0"

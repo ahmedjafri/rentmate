@@ -2,7 +2,6 @@
 
 import strawberry
 
-from backends.local_auth import DEFAULT_USER_EMAIL, _lookup_account_id
 from backends.wire import auth_backend
 
 from .types import AuthPayload, LoginInput, UserType
@@ -13,18 +12,21 @@ class Mutation:
     @strawberry.mutation
     async def login(self, input: LoginInput) -> AuthPayload:
         """
-        Authenticate using the configured auth backend.
-        For the OSS version, validates against RENTMATE_PASSWORD env var.
+        Authenticate with email + password.
+        Creates the account on first sign-up if no account with that email exists.
         """
         try:
-            token = await auth_backend.login(password=input.password)
+            token, account = await auth_backend.login(
+                password=input.password,
+                email=input.email or None,
+            )
         except ValueError as e:
             raise ValueError("Invalid password") from e
 
         return AuthPayload(
             token=token,
             user=UserType(
-                uid=str(_lookup_account_id()),
-                username=DEFAULT_USER_EMAIL,
+                uid=str(account.id),
+                username=account.email or input.email or "",
             ),
         )
