@@ -122,13 +122,13 @@ def test_fresh_startup_seeds_account_and_scheduled_tasks():
     Session = sessionmaker(bind=eng)
     db = Session()
 
-    # Account should be seeded
-    from db.models import Account
-    accounts = db.query(Account).all()
-    # Account may or may not be seeded by _ensure_schema (it's done in lifespan),
+    # User should be seeded
+    from db.models import User
+    accounts = db.query(User).all()
+    # User may or may not be seeded by _ensure_schema (it's done in lifespan),
     # but the tables must exist
     inspector = inspect(eng)
-    assert "accounts" in inspector.get_table_names()
+    assert "users" in inspector.get_table_names()
     assert "scheduled_tasks" in inspector.get_table_names()
     db.close()
 

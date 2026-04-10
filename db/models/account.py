@@ -5,12 +5,9 @@ from sqlalchemy import Boolean, Column, DateTime, Integer, String
 from .base import Base
 
 
-class Account(Base):
-    """A user identity — authentication record.
-
-    Accounts are standalone user identities.
-    """
-    __tablename__ = "accounts"
+class User(Base):
+    """A user identity — login credentials and profile."""
+    __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     email = Column(String(255), nullable=True, unique=True)

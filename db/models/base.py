@@ -19,7 +19,7 @@ def _resolve_creator_id():
 class HasCreatorId:
     """Mixin that adds creator_id (integer) to any model.
 
-    References Account.id. The default resolves from the request-scoped
+    References User.id. The default resolves from the request-scoped
     context var. If no context is set (missing auth), entity creation
     raises RuntimeError.
     """

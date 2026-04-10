@@ -175,7 +175,7 @@ const Index = () => {
               <Bot className="h-4 w-4 text-primary" />
             </div>
             <div>
-              <h1 className="text-lg font-bold">Good morning!</h1>
+              <h1 className="text-lg font-bold">{new Date().getHours() < 12 ? 'Good morning!' : new Date().getHours() < 17 ? 'Good afternoon!' : 'Good evening!'}</h1>
               <p className="text-xs text-muted-foreground">
                 <span className="font-medium text-foreground">{needsAttention.length + pendingSuggestions.length} items</span> need attention
               </p>

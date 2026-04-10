@@ -19,6 +19,7 @@ from gql.schema import schema
 from handlers import (
     auth,
     chat,
+    data_portability,
     dev,
     documents,
     settings,
@@ -174,8 +175,8 @@ async def lifespan(app: FastAPI):
     try:
         # Set startup context if an account exists (first login creates the account)
         from backends.local_auth import set_request_context
-        from db.models import Account
-        acct = db.query(Account).first()
+        from db.models import User
+        acct = db.query(User).first()
         if acct:
             set_request_context(account_id=acct.id)
             agent_registry.populate_all_agents(db)
@@ -243,6 +244,7 @@ app.include_router(settings.router)
 app.include_router(documents.router, prefix="/api")
 app.include_router(chat.router)
 app.include_router(scheduler_router, prefix="/api")
+app.include_router(data_portability.router, prefix="/api")
 app.include_router(dev.router, prefix="/dev")
 app.include_router(vendor_invite.router)
 app.include_router(vendor_portal.router)

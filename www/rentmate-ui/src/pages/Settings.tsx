@@ -3,7 +3,7 @@ import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { AutonomySlider } from '@/components/suggestions/AutonomySlider';
 import { SuggestionCategory, AutonomyLevel } from '@/data/mockData';
-import { Shield, Bot, Terminal, MessageSquare, Lock, Puzzle, Globe, Phone, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { Shield, Bot, Terminal, MessageSquare, Lock, Puzzle, Globe, Phone, Loader2, CheckCircle2, XCircle, HardDrive, Download, Upload } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,7 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { getToken } from '@/lib/auth';
+import { authFetch, getToken } from '@/lib/auth';
 
 const categories: SuggestionCategory[] = ['rent', 'maintenance', 'leasing', 'compliance'];
 
@@ -728,6 +728,81 @@ const SettingsPage = () => {
           </Tabs>
         </Card>
       )}
+
+      {/* Data Portability */}
+      <Card className="p-6 rounded-xl">
+        <div className="flex items-center gap-2 mb-1">
+          <HardDrive className="h-5 w-5 text-primary" />
+          <h2 className="text-lg font-bold">Data Portability</h2>
+        </div>
+        <p className="text-sm text-muted-foreground mb-6">
+          Export all data for backup or migrate to another RentMate instance.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <Button
+            variant="outline"
+            onClick={async () => {
+              try {
+                const res = await authFetch('/api/export');
+                if (!res.ok) {
+                  const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+                  toast.error(err.detail || 'Export failed');
+                  return;
+                }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `rentmate-export-${new Date().toISOString().slice(0, 10)}.zip`;
+                a.click();
+                URL.revokeObjectURL(url);
+                toast.success('Export downloaded');
+              } catch {
+                toast.error('Export failed');
+              }
+            }}
+          >
+            <Download className="h-4 w-4 mr-2" />
+            Export Data
+          </Button>
+          <div className="flex items-center gap-2">
+            <input
+              type="file"
+              accept=".zip,.json"
+              id="import-file"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                if (!window.confirm('Import will only work on a fresh instance with no existing data. Continue?')) {
+                  e.target.value = '';
+                  return;
+                }
+                try {
+                  const form = new FormData();
+                  form.append('file', file);
+                  const res = await authFetch('/api/import', { method: 'POST', body: form });
+                  const data = await res.json();
+                  if (!res.ok) {
+                    toast.error(data.detail || 'Import failed');
+                  } else {
+                    const total = Object.values(data.summary as Record<string, number>).reduce((a: number, b: number) => a + b, 0);
+                    toast.success(`Imported ${total} records across ${Object.keys(data.summary).length} tables`);
+                  }
+                } catch {
+                  toast.error('Import failed');
+                } finally {
+                  e.target.value = '';
+                }
+              }}
+            />
+            <Button variant="outline" onClick={() => document.getElementById('import-file')?.click()}>
+              <Upload className="h-4 w-4 mr-2" />
+              Import Data
+            </Button>
+          </div>
+        </div>
+      </Card>
 
       {/* Developer Tools link */}
       <div className="pt-2">

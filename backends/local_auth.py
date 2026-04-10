@@ -33,11 +33,11 @@ def resolve_account_id() -> int:
 
 def _lookup_account_id() -> int:
     """Look up the first account's ID from the database."""
-    from db.models import Account
+    from db.models import User
     from db.session import SessionLocal
     db = SessionLocal()
     try:
-        acct = db.query(Account).first()
+        acct = db.query(User).first()
         if not acct:
             raise RuntimeError("No account exists in the database")
         return acct.id
@@ -72,18 +72,18 @@ class LocalAuthBackend:
         except jwt.exceptions.PyJWTError as e:
             raise ValueError(f"Invalid token: {e}")
 
-    async def login(self, **credentials) -> tuple[str, "Account"]:
+    async def login(self, **credentials) -> tuple[str, "User"]:
         """Validate password against DB-stored hash. Creates account on first sign-up."""
         password = credentials.get("password", "")
         email = credentials.get("email") or ""
         if not password:
             raise ValueError("Password is required")
 
-        from db.models import Account
+        from db.models import User
         from db.session import SessionLocal
         db = SessionLocal()
         try:
-            acct = db.query(Account).filter_by(email=email).first() if email else None
+            acct = db.query(User).filter_by(email=email).first() if email else None
 
             if acct:
                 # Existing account — check password
@@ -97,7 +97,7 @@ class LocalAuthBackend:
                 # No account with this email — create one (sign-up)
                 if not email:
                     raise ValueError("Email is required to create an account")
-                acct = Account(email=email, password_hash=_hash_password(password))
+                acct = User(email=email, password_hash=_hash_password(password))
                 db.add(acct)
                 db.flush()
                 db.commit()

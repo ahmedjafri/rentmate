@@ -242,8 +242,8 @@ class AgentRegistry:
                 shutil.copy2(src, dest)
                 self._db_write_file(db, agent_id, filename, content, creator_id=_cid)
 
-        from db.models import Account
-        _acct = db.query(Account).filter_by(id=int(account_id) if account_id.isdigit() else 0).first()
+        from db.models import User
+        _acct = db.query(User).filter_by(id=int(account_id) if account_id.isdigit() else 0).first()
         admin_email = (_acct.email if _acct and _acct.email else "") or "admin"
 
         user_md = agent_dir / "USER.md"

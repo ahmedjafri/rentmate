@@ -6,7 +6,7 @@ Usage:
     poetry run python scripts/seed_data.py
 
 Creates 3 Seattle-area properties, units, 8 tenants, and leases
-under the first Account found in the database.
+under the first User found in the database.
 """
 import sys
 from datetime import date
@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from sqlalchemy import select
 
-from db.models import Account, Lease, Property, Tenant, Unit
+from db.models import Lease, Property, Tenant, Unit, User
 from db.session import SessionLocal
 
 db = SessionLocal.session_factory()
@@ -24,9 +24,9 @@ db = SessionLocal.session_factory()
 # ------------------------------------------------------------------
 # Resolve account (creator_id)
 # ------------------------------------------------------------------
-account = db.execute(select(Account).order_by(Account.created_at)).scalars().first()
+account = db.execute(select(User).order_by(User.created_at)).scalars().first()
 if not account:
-    print("ERROR: No Account found. Start the server first to create the default account.")
+    print("ERROR: No User found. Start the server first to create the default account.")
     sys.exit(1)
 
 creator_id = account.id

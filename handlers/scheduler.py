@@ -131,8 +131,8 @@ def seed_default_tasks():
         if db.query(ScheduledTask).count() > 0:
             return  # Already seeded
 
-        from db.models import Account
-        account = db.query(Account).first()
+        from db.models import User
+        account = db.query(User).first()
         if not account:
             logger.warning("No account found — cannot seed scheduled tasks")
             return
