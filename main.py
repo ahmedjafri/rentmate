@@ -278,11 +278,20 @@ async def cache_control_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def db_session_middleware(request: Request, call_next):
+    from backends.local_auth import _current_account_id
+
+    # Clear account context at the start of every request to prevent
+    # stale values from a previous request leaking into this one.
+    _current_account_id.set(None)
+
     request.state.db_session = SessionLocal()
     try:
         response = await call_next(request)
     finally:
         request.state.db_session.close()
+        # Don't reset context here — streaming responses (SSE) continue
+        # after the middleware returns. The next request's set(None) at
+        # the top handles cleanup.
     return response
 
 

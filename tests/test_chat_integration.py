@@ -52,6 +52,13 @@ def _make_session_factory(engine):
 
 # ─── Test-app context manager ─────────────────────────────────────────────────
 
+async def _mock_require_user(request=None):
+    """Mock require_user that also sets the request-scoped account context."""
+    from backends.local_auth import set_request_context
+    set_request_context(account_id=1)
+    return {"id": "test-user", "email": "test@test.com", "account_id": 1}
+
+
 @asynccontextmanager
 async def _test_app(session_factory):
     """
@@ -67,7 +74,7 @@ async def _test_app(session_factory):
         patch("handlers.chat.SessionLocal", session_factory),
         patch(
             "handlers.chat.require_user",
-            AsyncMock(return_value={"id": "test-user", "email": "test@test.com"}),
+            AsyncMock(side_effect=_mock_require_user),
         ),
     ):
         async with AsyncClient(

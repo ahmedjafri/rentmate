@@ -139,6 +139,10 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
 
     _creator_id, entity, direction, entity_type = resolved
 
+    # Set account context so entity creation resolves creator_id correctly
+    from backends.local_auth import set_request_context
+    set_request_context(account_id=_creator_id)
+
     if direction != "inbound":
         return False
 
