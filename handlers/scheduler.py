@@ -303,7 +303,7 @@ async def _execute_task(task) -> str:
 
     # Set request context for the task's creator
     creator_id = task.creator_id
-    tokens = set_request_context(user_id=creator_id, creator_id=creator_id)
+    tokens = set_request_context(account_id=creator_id)
 
     try:
         from db.session import SessionLocal
@@ -360,7 +360,7 @@ async def simulate_scheduled_task_sse(task_id: str, request: Request):
         from llm.registry import agent_registry
 
         creator_id = st.creator_id
-        tokens = set_request_context(user_id=creator_id, creator_id=creator_id)
+        tokens = set_request_context(account_id=creator_id)
 
         try:
             inner_db = SessionLocal()

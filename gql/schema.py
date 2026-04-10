@@ -112,11 +112,11 @@ class Query:
     @strawberry.field(description="Get private (per-account) notes for an entity")
     def entity_note(self, info, *, entity_type: str, entity_id: str) -> typing.Optional[str]:
         _current_user(info)
-        from backends.local_auth import resolve_creator_id
+        from backends.local_auth import resolve_account_id
         from db.models import EntityNote
         db = _session(info)
         note = db.query(EntityNote).filter_by(
-            creator_id=resolve_creator_id(), entity_type=entity_type, entity_id=entity_id,
+            creator_id=resolve_account_id(), entity_type=entity_type, entity_id=entity_id,
         ).first()
         return note.content if note else None
 
@@ -431,9 +431,9 @@ class Mutation(AuthMutation):
         db = _session(info)
         from datetime import UTC, datetime
 
-        from backends.local_auth import resolve_creator_id
+        from backends.local_auth import resolve_account_id
         from db.models import EntityNote
-        creator_id = resolve_creator_id()
+        creator_id = resolve_account_id()
         note = db.query(EntityNote).filter_by(
             creator_id=creator_id, entity_type=entity_type, entity_id=entity_id,
         ).first()
@@ -463,7 +463,7 @@ class Mutation(AuthMutation):
         import uuid
         from datetime import UTC, datetime
 
-        from backends.local_auth import resolve_creator_id
+        from backends.local_auth import resolve_account_id
         from db.models import ScheduledTask
         from handlers.scheduler import human_schedule, next_run, parse_schedule
 
@@ -471,7 +471,7 @@ class Mutation(AuthMutation):
         cron_expr = parse_schedule(schedule)
         st = ScheduledTask(
             id=str(uuid.uuid4()),
-            creator_id=resolve_creator_id(),
+            creator_id=resolve_account_id(),
             name=name, prompt=prompt,
             schedule=cron_expr,
             schedule_display=human_schedule(cron_expr),

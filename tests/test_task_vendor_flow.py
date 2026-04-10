@@ -6,7 +6,6 @@ Validates the full lifecycle that a property manager and vendor go through
 when an automation suggests a task with a vendor assignment.
 """
 import os
-from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -34,7 +33,7 @@ def _gql_context(db):
 def _make_token():
     import jwt
 
-    from backends.local_auth import DEFAULT_USER_ID
+    DEFAULT_USER_ID = "1"  # test-only JWT sub claim
     return jwt.encode(
         {"sub": DEFAULT_USER_ID, "email": "admin@localhost"},
         os.getenv("JWT_SECRET", "rentmate-local-secret"),
@@ -46,6 +45,7 @@ AUTH = {"Authorization": f"Bearer {_make_token()}"}
 
 
 import pytest
+
 
 @pytest.mark.skip(reason="Needs rewrite for new task creation — old automation endpoints removed")
 class TestTaskVendorFlow:

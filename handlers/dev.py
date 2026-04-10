@@ -183,10 +183,10 @@ async def simulate_inbound(
         messages.append({"role": "assistant" if m.is_ai else "user", "content": m.body or ""})
     messages.append({"role": "user", "content": body.message})
 
-    from backends.local_auth import DEFAULT_USER_ID
+    from backends.local_auth import resolve_account_id
     from llm.client import call_agent
     from llm.side_effects import process_side_effects
-    agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
+    agent_id = agent_registry.ensure_agent(str(resolve_account_id()), db)
 
     try:
         agent_resp = await call_agent(agent_id, session_key=f"sim:{conv.id}", messages=messages)

@@ -899,9 +899,9 @@ class SaveMemoryTool(Tool):
 
         if entity_type == "general" or not entity_id:
             # General notes go to agent_memory table
-            from backends.local_auth import DEFAULT_USER_ID
+            from backends.local_auth import resolve_account_id
             from llm.memory_store import DbMemoryStore
-            store = DbMemoryStore(DEFAULT_USER_ID)
+            store = DbMemoryStore(str(resolve_account_id()))
             store.add_note(content=content, entity_type="general", entity_id="", entity_label="")
             return json.dumps({"status": "ok", "message": "General note saved."})
 
@@ -940,9 +940,8 @@ class SaveMemoryTool(Tool):
                 return json.dumps({"status": "ok", "message": f"Shared context saved for {label}."})
             else:
                 # Write to EntityNote (private to this account)
-                from backends.local_auth import resolve_creator_id
                 from db.models import EntityNote
-                creator_id = resolve_creator_id()
+                creator_id = resolve_account_id()
                 note = db.query(EntityNote).filter_by(
                     creator_id=creator_id, entity_type=entity_type, entity_id=entity_id,
                 ).first()
@@ -1002,9 +1001,9 @@ class RecallMemoryTool(Tool):
         entity_id = kwargs.get("entity_id")
 
         if entity_type == "general" or (not entity_type and not entity_id):
-            from backends.local_auth import DEFAULT_USER_ID
+            from backends.local_auth import resolve_account_id
             from llm.memory_store import DbMemoryStore
-            store = DbMemoryStore(DEFAULT_USER_ID)
+            store = DbMemoryStore(str(resolve_account_id()))
             notes = store.get_notes(entity_type="general")
             if not notes:
                 return json.dumps({"notes": [], "message": "No general notes found."})
@@ -1022,13 +1021,12 @@ class RecallMemoryTool(Tool):
             return json.dumps({"notes": [], "message": f"Unknown entity type: {entity_type}"})
 
         import db.models as models
-        from backends.local_auth import resolve_creator_id
         from db.models import EntityNote
         from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
             model_cls = getattr(models, model_name)
-            creator_id = resolve_creator_id()
+            creator_id = resolve_account_id()
 
             if entity_id:
                 entity = db.query(model_cls).filter_by(id=entity_id).first()
@@ -1141,9 +1139,8 @@ class EditMemoryTool(Tool):
             else:
                 from datetime import UTC, datetime
 
-                from backends.local_auth import resolve_creator_id
                 from db.models import EntityNote
-                creator_id = resolve_creator_id()
+                creator_id = resolve_account_id()
                 note = db.query(EntityNote).filter_by(
                     creator_id=creator_id, entity_type=entity_type, entity_id=entity_id,
                 ).first()
@@ -1320,7 +1317,6 @@ class CreateTenantTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        from backends.local_auth import resolve_creator_id
         from db.models import Tenant as SqlTenant
         from db.session import SessionLocal
 
@@ -1352,7 +1348,7 @@ class CreateTenantTool(Tool):
             # Always create the tenant first
             tenant = SqlTenant(
                 id=str(uuid.uuid4()),
-                creator_id=resolve_creator_id(),
+                creator_id=resolve_account_id(),
                 first_name=first_name,
                 last_name=last_name,
                 email=kwargs.get("email"),
@@ -1392,7 +1388,7 @@ class CreateTenantTool(Tool):
                 from db.models import Lease as SqlLease
                 lease = SqlLease(
                     id=str(uuid.uuid4()),
-                    creator_id=resolve_creator_id(),
+                    creator_id=resolve_account_id(),
                     tenant_id=tenant.id,
                     unit_id=unit.id,
                     property_id=kwargs["property_id"],
@@ -1744,7 +1740,6 @@ class CreateScheduledTaskTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        from backends.local_auth import resolve_creator_id
         from db.models import ScheduledTask
         from db.session import SessionLocal
         from handlers.scheduler import human_schedule, next_run, parse_schedule
@@ -1764,7 +1759,7 @@ class CreateScheduledTaskTool(Tool):
 
             task = ScheduledTask(
                 id=str(uuid.uuid4()),
-                creator_id=resolve_creator_id(),
+                creator_id=resolve_account_id(),
                 name=name,
                 prompt=prompt,
                 schedule=cron_expr,

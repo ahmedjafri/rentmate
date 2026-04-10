@@ -8,7 +8,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from backends.local_auth import DEFAULT_USER_ID
+from backends.local_auth import _lookup_account_id
 
 # Paths
 AGENTS_DIR = Path(__file__).parent.parent / "agents"
@@ -93,8 +93,8 @@ class AgentRegistry:
     # ─── Public lifecycle ─────────────────────────────────────────────────────
 
     def populate_all_agents(self, db: Session):
-        agent_dir = DATA_DIR / DEFAULT_USER_ID
-        self._write_workspace(agent_dir, db, DEFAULT_USER_ID)
+        agent_dir = DATA_DIR / str(_lookup_account_id())
+        self._write_workspace(agent_dir, db, str(_lookup_account_id()))
         print("[agent] Workspace populated")
 
     def start_gateway(self, account_id: str | None = None):
@@ -104,17 +104,17 @@ class AgentRegistry:
                 _register_rentmate_tools()
                 self._tools_registered = True
                 print("[agent] RentMate tools registered")
-            aid = str(account_id) if account_id else DEFAULT_USER_ID
+            aid = str(account_id)
             self._ready[aid] = True
             print(f"[agent] Agent ready for account {aid[:8]}…")
 
     def stop_gateway(self, account_id=None):
-        aid = str(account_id) if account_id else DEFAULT_USER_ID
+        aid = str(account_id)
         self._ready.pop(aid, None)
         print(f"[agent] Agent stopped for account {aid[:8]}…")
 
     def is_healthy(self, account_id=None) -> bool:
-        aid = str(account_id) if account_id else DEFAULT_USER_ID
+        aid = str(account_id)
         return self._ready.get(aid, False)
 
     def ensure_agent(self, account_id, db: Session) -> str:
@@ -172,7 +172,7 @@ class AgentRegistry:
 
     # ─── Channel management (Telegram/WhatsApp) ────────
 
-    async def restart_channels_async(self, integrations: dict, account_id: str = DEFAULT_USER_ID):
+    async def restart_channels_async(self, integrations: dict, account_id: str = ''):
         """Placeholder — channel management is handled separately from the agent."""
         tg = integrations.get("telegram", {})
         wa = integrations.get("whatsapp", {})
@@ -216,7 +216,7 @@ class AgentRegistry:
                 updated_at=now,
             ))
 
-    def _write_workspace(self, agent_dir: Path, db: Session, account_id: str = DEFAULT_USER_ID, *, creator_id: int | None = None):
+    def _write_workspace(self, agent_dir: Path, db: Session, account_id: str = '', *, creator_id: int | None = None):
         agent_dir.mkdir(parents=True, exist_ok=True)
         agent_id = account_id
         _cid = creator_id or (int(account_id) if account_id.isdigit() else None)
@@ -262,7 +262,7 @@ class AgentRegistry:
             self._db_write_file(db, agent_id, "USER.md", content, creator_id=_cid)
 
         data_script = Path(__file__).parent / "agent_data.py"
-        workspace_abs = str((DATA_DIR / DEFAULT_USER_ID).resolve())
+        workspace_abs = str((DATA_DIR / str(_lookup_account_id())).resolve())
 
         (agent_dir / "TOOLS.md").write_text(
             "# TOOLS.md - Communication Channels & Data Access\n\n"

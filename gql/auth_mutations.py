@@ -2,7 +2,7 @@
 
 import strawberry
 
-from backends.local_auth import DEFAULT_USER_EMAIL, DEFAULT_USER_ID
+from backends.local_auth import DEFAULT_USER_EMAIL, _lookup_account_id
 from backends.wire import auth_backend
 
 from .types import AuthPayload, LoginInput, UserType
@@ -24,7 +24,7 @@ class Mutation:
         return AuthPayload(
             token=token,
             user=UserType(
-                uid=DEFAULT_USER_ID,
+                uid=str(_lookup_account_id()),
                 username=DEFAULT_USER_EMAIL,
             ),
         )

@@ -12,8 +12,8 @@ def _resolve_creator_id():
     Raises RuntimeError if no context is set — catches code that creates
     entities without going through authentication.
     """
-    from backends.local_auth import resolve_creator_id
-    return resolve_creator_id()
+    from backends.local_auth import resolve_account_id
+    return resolve_account_id()
 
 
 class HasCreatorId:

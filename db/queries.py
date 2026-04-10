@@ -35,10 +35,10 @@ def tenant_display_name(t: Tenant) -> str:
 # Account scoping
 # ---------------------------------------------------------------------------
 
-def _creator_id() -> str:
-    """Get the current request's creator_id from context."""
-    from backends.local_auth import resolve_creator_id
-    return resolve_creator_id()
+def _account_id() -> int:
+    """Get the current request's account_id from context."""
+    from backends.local_auth import resolve_account_id
+    return resolve_account_id()
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ def fetch_properties(db: Session) -> list[Property]:
     return (
         db.execute(
             select(Property)
-            .where(Property.creator_id == _creator_id())
+            .where(Property.creator_id == _account_id())
             .options(
                 selectinload(Property.units),
                 selectinload(Property.leases).selectinload(Lease.tenant),
@@ -65,7 +65,7 @@ def fetch_tenants(db: Session) -> list[Tenant]:
     return (
         db.execute(
             select(Tenant)
-            .where(Tenant.creator_id == _creator_id())
+            .where(Tenant.creator_id == _account_id())
             .options(
                 selectinload(Tenant.leases).selectinload(Lease.property),
                 selectinload(Tenant.leases).selectinload(Lease.unit),
@@ -80,7 +80,7 @@ def fetch_leases(db: Session) -> list[Lease]:
     return (
         db.execute(
             select(Lease)
-            .where(Lease.creator_id == _creator_id())
+            .where(Lease.creator_id == _account_id())
             .options(
                 selectinload(Lease.tenant),
                 selectinload(Lease.property),
@@ -98,7 +98,7 @@ def fetch_tasks(
     status: Optional[str] = None,
     source: Optional[str] = None,
 ) -> list[Task]:
-    q = select(Task).where(Task.creator_id == _creator_id())
+    q = select(Task).where(Task.creator_id == _account_id())
     if category:
         q = q.where(Task.category == category)
     if status:
@@ -143,7 +143,7 @@ def fetch_conversations(
         select(Conversation)
         .where(Conversation.conversation_type == conversation_type)
         .where(Conversation.is_archived.is_(False))
-        .where(Conversation.creator_id == _creator_id())
+        .where(Conversation.creator_id == _account_id())
         .options(
             selectinload(Conversation.participants)
             .selectinload(ConversationParticipant.tenant),
@@ -160,7 +160,7 @@ def fetch_conversations(
 
 
 def fetch_vendors(db: Session) -> list[ExternalContact]:
-    return db.execute(select(ExternalContact).where(ExternalContact.creator_id == _creator_id())).scalars().all()
+    return db.execute(select(ExternalContact).where(ExternalContact.creator_id == _account_id())).scalars().all()
 
 
 def fetch_messages(db: Session, conversation_id: str) -> list[Message]:

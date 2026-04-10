@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from backends.local_auth import DEFAULT_USER_ID
+# DEFAULT_USER_ID removed — tests use local constant
+DEFAULT_USER_ID = "1"
 
 
 @pytest.mark.usefixtures("db")
@@ -54,18 +55,18 @@ class TestAgentRegistry(unittest.TestCase):
 
     def test_is_healthy_false_when_not_ready(self):
         registry = self._make_registry()
-        self.assertFalse(registry.is_healthy())
+        self.assertFalse(registry.is_healthy(DEFAULT_USER_ID))
 
     def test_is_healthy_true_when_ready(self):
         registry = self._make_registry()
         registry._ready[DEFAULT_USER_ID] = True
-        self.assertTrue(registry.is_healthy())
+        self.assertTrue(registry.is_healthy(DEFAULT_USER_ID))
 
     def test_stop_gateway_clears_ready(self):
         registry = self._make_registry()
         registry._ready[DEFAULT_USER_ID] = True
-        registry.stop_gateway()
-        self.assertFalse(registry.is_healthy())
+        registry.stop_gateway(DEFAULT_USER_ID)
+        self.assertFalse(registry.is_healthy(DEFAULT_USER_ID))
 
     # ------------------------------------------------------------------
     # populate_all_agents — workspace files

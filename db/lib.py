@@ -8,7 +8,7 @@ from typing import List, Optional
 from sqlalchemy import func, select as sa_select
 from sqlalchemy.orm import Session, joinedload
 
-from backends.local_auth import resolve_creator_id
+from backends.local_auth import resolve_account_id
 
 from .models import (
     Conversation,
@@ -105,7 +105,7 @@ def get_or_create_tenant_by_phone(
 
     tenant = Tenant(
         id=str(uuid.uuid4()),
-        creator_id=resolve_creator_id(),
+        creator_id=resolve_account_id(),
         first_name=first_name,
         last_name=last_name,
         phone=phone_norm,
@@ -145,7 +145,7 @@ def get_or_create_conversation_for_tenant(
     now = datetime.now(UTC)
     conv = Conversation(
         id=str(uuid.uuid4()),
-        creator_id=resolve_creator_id(),
+        creator_id=resolve_account_id(),
         subject=subject or f"Conversation with {tenant.first_name} {tenant.last_name}",
         is_group=False,
         is_archived=False,
@@ -396,7 +396,7 @@ def route_inbound_to_task(
 
         conv = Conversation(
             id=str(uuid.uuid4()),
-            creator_id=resolve_creator_id(),
+            creator_id=resolve_account_id(),
             subject=f"Message from {tenant.first_name} {tenant.last_name}",
             is_group=False,
             is_archived=False,
@@ -543,7 +543,7 @@ def route_inbound_to_tenant_chat(
     if existing is None:
         existing = Conversation(
             id=str(uuid.uuid4()),
-            creator_id=resolve_creator_id(),
+            creator_id=resolve_account_id(),
             subject=f"Conversation with {tenant.first_name} {tenant.last_name}",
             is_group=False,
             is_archived=False,
@@ -638,7 +638,7 @@ def spawn_task_from_conversation(
 
     convo = Conversation(
         id=str(uuid.uuid4()),
-        creator_id=resolve_creator_id(),
+        creator_id=resolve_account_id(),
         subject=objective,
         is_group=False,
         is_archived=False,
@@ -687,7 +687,7 @@ def get_or_create_user_ai_conversation(
     # Create a new user_ai conversation
     conv = Conversation(
         id=str(uuid.uuid4()),
-        creator_id=resolve_creator_id(),
+        creator_id=resolve_account_id(),
         subject=session_key or "Chat with RentMate",
         is_group=False,
         is_archived=False,
@@ -743,7 +743,7 @@ def apply_document_extraction(
         if not prop and _should("create_property"):
             prop = Property(
                 id=str(uuid.uuid4()),
-                creator_id=resolve_creator_id(),
+                creator_id=resolve_account_id(),
                 address_line1=address,
                 property_type=data.get("property_type") or "multi_family",
                 source="document",
@@ -767,7 +767,7 @@ def apply_document_extraction(
         if not unit and (is_single_family or _should("create_unit")):
             unit = Unit(
                 id=str(uuid.uuid4()),
-                creator_id=resolve_creator_id(),
+                creator_id=resolve_account_id(),
                 property_id=prop.id,
                 label=unit_label,
                 created_at=datetime.now(UTC),
@@ -801,7 +801,7 @@ def apply_document_extraction(
     if not tenant and _should("create_tenant"):
         tenant = Tenant(
             id=str(uuid.uuid4()),
-            creator_id=resolve_creator_id(),
+            creator_id=resolve_account_id(),
             first_name=first_name or "Unknown",
             last_name=last_name or "Tenant",
             email=email,
@@ -857,7 +857,7 @@ def apply_document_extraction(
 
             lease = Lease(
                 id=str(uuid.uuid4()),
-                creator_id=resolve_creator_id(),
+                creator_id=resolve_account_id(),
                 tenant_id=tenant.id,
                 unit_id=unit.id,
                 property_id=prop.id,

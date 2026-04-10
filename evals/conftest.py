@@ -256,7 +256,7 @@ def build_messages(db, task, user_message):
 
 async def run_agent_turn(db, task, user_message):
     """Run one agent turn and return structured results."""
-    from backends.local_auth import DEFAULT_USER_ID
+    DEFAULT_USER_ID = "1"
     from llm.client import call_agent
     from llm.registry import agent_registry
     from llm.tools import active_conversation_id, pending_suggestion_messages

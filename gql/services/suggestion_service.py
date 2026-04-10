@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from backends.local_auth import resolve_creator_id
+from backends.local_auth import resolve_account_id
 from db.enums import (
     AutomationSource,
     SuggestionOption,
@@ -91,7 +91,7 @@ def create_suggestion(
     ai_convo = Conversation(
         subject=title,
         property_id=property_id,
-        creator_id=resolve_creator_id(),
+        creator_id=resolve_account_id(),
         unit_id=unit_id,
         conversation_type=ConversationType.SUGGESTION_AI,
         is_group=False,

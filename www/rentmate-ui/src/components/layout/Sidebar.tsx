@@ -1,9 +1,13 @@
-import { Home, Building2, Users, ClipboardList, Lightbulb, Settings, Bot, FileText, Zap, MessageCircle, Wrench } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Home, Building2, Users, ClipboardList, Lightbulb, Settings, Bot, FileText, Zap, MessageCircle, Wrench, LogOut } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
 import { useLocation } from 'react-router-dom';
+import { logout } from '@/lib/auth';
+import { graphqlQuery } from '@/data/api';
 import {
   Sidebar as SidebarUI,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -27,10 +31,27 @@ const navItems = [
   { title: 'Settings', url: '/settings', icon: Settings },
 ];
 
+const ME_QUERY = `{ me { uid username } }`;
+
 export function AppSidebar() {
   const { state, setOpen, isMobile, setOpenMobile } = useSidebar();
   const dismissSidebar = () => isMobile ? setOpenMobile(false) : setOpen(false);
   const location = useLocation();
+
+  const [email, setEmail] = useState('');
+
+  useEffect(() => {
+    graphqlQuery<{ me: { username: string } }>(ME_QUERY)
+      .then(({ me }) => setEmail(me.username))
+      .catch(() => {});
+  }, []);
+
+  const initial = (email || 'U')[0].toUpperCase();
+
+  const handleLogout = () => {
+    logout();
+    window.dispatchEvent(new Event('auth:logout'));
+  };
 
   return (
     <SidebarUI
@@ -69,6 +90,24 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+
+      <SidebarFooter className="border-t">
+        <div className="flex items-center gap-2 overflow-hidden">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium">
+            {initial}
+          </div>
+          <div className="overflow-hidden transition-all duration-200 ease-linear group-data-[collapsible=icon]:w-0 group-data-[collapsible=icon]:opacity-0 w-auto opacity-100 flex-1 min-w-0">
+            <p className="text-sm font-medium truncate">{email}</p>
+          </div>
+          <button
+            onClick={handleLogout}
+            className="shrink-0 p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors group-data-[collapsible=icon]:hidden"
+            title="Sign out"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        </div>
+      </SidebarFooter>
     </SidebarUI>
   );
 }

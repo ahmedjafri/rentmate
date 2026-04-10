@@ -367,8 +367,9 @@ _AGENT_FILENAMES = {f["filename"] for f in _AGENT_FILES}
 
 
 def _agent_workspace() -> Path:
-    from llm.registry import DATA_DIR, DEFAULT_USER_ID
-    return DATA_DIR / DEFAULT_USER_ID
+    from backends.local_auth import _lookup_account_id
+    from llm.registry import DATA_DIR
+    return DATA_DIR / str(_lookup_account_id())
 
 
 @router.get("/settings/agent/files")

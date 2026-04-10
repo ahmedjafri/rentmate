@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
-from backends.local_auth import resolve_creator_id
+from backends.local_auth import resolve_account_id
 from backends.wire import storage_backend
 from db.models import Document, DocumentTask
 from handlers.deps import get_db, require_user
@@ -43,7 +43,7 @@ async def upload_document(
 
     doc = Document(
         id=doc_id,
-        creator_id=resolve_creator_id(),
+        creator_id=resolve_account_id(),
         filename=file.filename,
         content_type=file.content_type,
         storage_path=storage_path,

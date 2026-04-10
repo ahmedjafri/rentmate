@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from backends.local_auth import DEFAULT_USER_ID
+DEFAULT_USER_ID = "1"  # test-only JWT sub claim
 from handlers.deps import get_db
 from handlers.settings import _mask_integrations
 from main import app

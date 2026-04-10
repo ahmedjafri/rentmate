@@ -6,29 +6,22 @@ import jwt
 
 JWT_SECRET = os.getenv("JWT_SECRET", "rentmate-local-secret")
 RENTMATE_PASSWORD = os.getenv("RENTMATE_PASSWORD", "rentmate")
-
-DEFAULT_USER_ID = "1"  # Filesystem path for agent workspace (data/agent/1/)
 DEFAULT_USER_EMAIL = os.getenv("RENTMATE_ADMIN_EMAIL", "admin@localhost")
 
-# Request-scoped creator context — set by middleware/deps, read by tools
-_current_creator_id: ContextVar[int | None] = ContextVar("current_creator_id", default=None)
-_current_user_id: ContextVar[int | None] = ContextVar("current_user_id", default=None)
+# Request-scoped account context — set by middleware/deps, read by tools/queries
+_current_account_id: ContextVar[int | None] = ContextVar("current_account_id", default=None)
 
 
-def resolve_creator_id() -> int:
-    """Return the creator_id for the current request.
+def resolve_account_id() -> int:
+    """Return the account_id for the current request.
 
     Reads from the request-scoped context var set by set_request_context().
     Raises if no context has been set — every request must authenticate.
     """
-    ctx = _current_creator_id.get(None)
+    ctx = _current_account_id.get(None)
     if ctx is None:
-        raise RuntimeError("No creator context set — did the request go through authentication?")
+        raise RuntimeError("No account context set — did the request go through authentication?")
     return ctx
-
-
-# Backward compat alias
-resolve_account_id = resolve_creator_id
 
 
 def _lookup_account_id() -> int:
@@ -45,33 +38,29 @@ def _lookup_account_id() -> int:
         db.close()
 
 
-def set_request_context(*, user_id: int, creator_id: int) -> tuple:
-    """Set request-scoped context vars. Returns tokens for reset."""
-    t1 = _current_user_id.set(user_id)
-    t2 = _current_creator_id.set(creator_id)
-    return t1, t2
+def set_request_context(*, account_id: int) -> object:
+    """Set request-scoped account context. Returns token for reset."""
+    return _current_account_id.set(account_id)
 
 
-def reset_request_context(tokens: tuple) -> None:
-    """Reset context vars after request completes."""
-    _current_user_id.reset(tokens[0])
-    _current_creator_id.reset(tokens[1])
+def reset_request_context(token: object) -> None:
+    """Reset account context after request completes."""
+    _current_account_id.reset(token)
 
 
 class LocalAuthBackend:
     async def validate_token(self, token: str) -> dict:
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-            uid = payload.get("sub", DEFAULT_USER_ID)
+            uid = payload.get("sub", "")
             email = payload.get("email", DEFAULT_USER_EMAIL)
-            # Look up the actual account from the DB
             account_id = _lookup_account_id()
             return {
                 "uid": uid,
                 "id": uid,
                 "email": email,
                 "username": email,
-                "creator_id": account_id,
+                "account_id": account_id,
             }
         except jwt.exceptions.PyJWTError as e:
             raise ValueError(f"Invalid token: {e}")
@@ -80,8 +69,9 @@ class LocalAuthBackend:
         password = credentials.get("password", "")
         if password != RENTMATE_PASSWORD:
             raise ValueError("Invalid password")
+        account_id = _lookup_account_id()
         payload = {
-            "sub": DEFAULT_USER_ID,
+            "sub": str(account_id),
             "email": DEFAULT_USER_EMAIL,
             "exp": datetime.now(UTC) + timedelta(days=30),
         }

@@ -154,9 +154,9 @@ def build_task_context(db: Session, task_id: str) -> str:
                 lines.append(f"Vendor ID: {vendor_id}")
 
     # Entity context notes — both shared (entity.context) and private (EntityNote)
-    from backends.local_auth import resolve_creator_id
+    from backends.local_auth import resolve_account_id
     from db.models import EntityNote
-    creator_id = resolve_creator_id()
+    creator_id = resolve_account_id()
 
     def _entity_notes(entity, entity_type: str, label: str):
         notes = []

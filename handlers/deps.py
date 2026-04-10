@@ -21,11 +21,10 @@ async def require_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         user = await auth_backend.validate_token(token)
-        # Set request-scoped context so tools/services can read creator_id
-        creator_id = user.get("creator_id")
-        if creator_id is not None:
-            user_id = creator_id  # For local auth, user_id == creator_id
-            set_request_context(user_id=user_id, creator_id=creator_id)
+        # Set request-scoped account context for query filters and entity creation
+        account_id = user.get("account_id")
+        if account_id is not None:
+            set_request_context(account_id=account_id)
         return user
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid token")

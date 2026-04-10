@@ -294,7 +294,7 @@ def _add_message(db, conv_id: str, sender_name: str, body: str,
 
 async def _run_agent_turn(db, task: Task, user_message: str) -> dict:
     """Run one agent turn and return structured results."""
-    from backends.local_auth import DEFAULT_USER_ID
+    DEFAULT_USER_ID = "1"
     from llm.client import call_agent
     from llm.registry import agent_registry
     from llm.tools import active_conversation_id, pending_suggestion_messages

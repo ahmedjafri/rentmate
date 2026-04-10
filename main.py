@@ -131,9 +131,9 @@ async def get_context(request: Request):
     try:
         user = await auth_backend.validate_token(token)
         # Set request-scoped context so query filters resolve creator_id
-        creator_id = user.get("creator_id")
-        if creator_id is not None:
-            set_request_context(user_id=creator_id, creator_id=creator_id)
+        account_id = user.get("account_id")
+        if account_id is not None:
+            set_request_context(account_id=account_id)
         return {"user": user, "db_session": request.state.db_session}
     except Exception as e:
         print(f"Invalid token, error: {e}")
@@ -182,7 +182,7 @@ async def lifespan(app: FastAPI):
             db.flush()
         db.commit()
         # Set startup context so entity creation resolves creator_id
-        set_request_context(user_id=acct.id, creator_id=acct.id)
+        set_request_context(account_id=acct.id)
 
         agent_registry.populate_all_agents(db)
         # Migrate vendors: ensure all have a short portal_token
@@ -425,7 +425,6 @@ def _run_agent_for_task(db, conv, latest_body: str) -> str:
     """Run the agent synchronously for a task and return its reply text."""
     import asyncio as _asyncio
 
-    from backends.local_auth import DEFAULT_USER_ID
     from llm.client import call_agent
     from llm.context import build_task_context
     from llm.registry import agent_registry
@@ -441,7 +440,7 @@ def _run_agent_for_task(db, conv, latest_body: str) -> str:
         messages.append({"role": role, "content": m.body or ""})
     messages.append({"role": "user", "content": latest_body})
 
-    agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
+    agent_id = agent_registry.ensure_agent(str(acct.id), db)
     session_key = f"email:{conv.id}"
 
     loop = _asyncio.new_event_loop()

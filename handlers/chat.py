@@ -17,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from backends.local_auth import DEFAULT_USER_ID, resolve_creator_id
+from backends.local_auth import resolve_account_id
 from backends.wire import sms_router
 from db.enums import TaskSource
 from db.lib import (
@@ -199,7 +199,7 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
     context = build_task_context(db, conv.id)
     messages = chat_service.build_agent_message_history(db, conv_id=conv.id, user_message=body, context=context, exclude_last=True)
 
-    agent_id = agent_registry.ensure_agent(resolve_creator_id(), db)
+    agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
     session_key = f"sms:{conv.id}"
 
     agent_resp = await call_agent(agent_id, session_key=session_key, messages=messages)
@@ -345,7 +345,24 @@ async def chat_endpoint(
     else:
         messages_payload = chat_service.build_agent_message_history(db, conv_id=conv_id, user_message=body.message, context=context)
 
-    agent_id = agent_registry.ensure_agent(resolve_creator_id(), db)
+    # ── Guard: LLM must be configured ───────────────────────────────────
+    from gql.services.settings_service import is_llm_configured
+    if not is_llm_configured():
+        no_llm_reply = (
+            "I'm not connected to an AI model yet, so I can't respond. "
+            "Head to **Settings → AI Model** to add your API key and choose a model."
+        )
+
+        async def _no_llm():
+            yield f"data: {json.dumps({'type': 'done', 'reply': no_llm_reply, 'conversation_id': conv_id})}\n\n"
+
+        return StreamingResponse(
+            _no_llm(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
     session_key = f"task:{body.task_id}" if body.task_id else f"chat:{conv_id}"
     stream_id = str(uuid.uuid4())
     user_message = body.message
@@ -480,7 +497,7 @@ async def chat_endpoint(
                 _ob_db = _SL()
                 try:
                     _ob_state = _get_ob(_ob_db)
-                    if _ob_state and _ob_state.get("status") == "active":
+                    if _ob_state:
                         done_payload['onboarding'] = _ob_state
                 finally:
                     _ob_db.close()
@@ -646,7 +663,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
         db.commit()  # flush typing indicator + detach ORM objects
 
         # Run agent
-        agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
+        agent_id = agent_registry.ensure_agent(str(resolve_account_id()), db)
         session_key = f"task:{task_id}"
 
         # Run agent in a dedicated thread with its own event loop so we
@@ -842,7 +859,7 @@ async def assess_task_endpoint(
         "content": ASSESS_PROMPT + steps_text + ext_msgs_text,
     })
 
-    agent_id = agent_registry.ensure_agent(resolve_creator_id(), db)
+    agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
     session_key = f"task:{body.task_id}"
     stream_id = str(uuid.uuid4())
 
