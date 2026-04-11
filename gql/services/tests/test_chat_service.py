@@ -1,6 +1,8 @@
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
+from backends.local_auth import reset_request_context, set_request_context
 from db.models import (
     Conversation,
     ConversationParticipant,
@@ -14,6 +16,15 @@ from db.models import (
     User,
 )
 from gql.services import chat_service
+
+
+@contextmanager
+def _request_scope(*, account_id: int, org_id: int):
+    token = set_request_context(account_id=account_id, org_id=org_id)
+    try:
+        yield
+    finally:
+        reset_request_context(token)
 
 
 def _conversation(db, *, convo_type=ConversationType.USER_AI, extra=None):
@@ -205,3 +216,44 @@ def test_message_and_conversation_json_payloads_are_typed():
         "related_task_ids": {"suggestion_id": 7},
     }
     assert extra == {"assigned_vendor_id": 12, "assigned_vendor_name": "Pat Vendor"}
+
+
+def test_build_agent_message_history_does_not_read_other_org_conversation(db):
+    foreign_user = User(id=2, org_id=2, email="org2-user@example.com", active=True)
+    db.add(foreign_user)
+    db.flush()
+
+    with _request_scope(account_id=2, org_id=2):
+        foreign_convo = Conversation(
+            org_id=2,
+            creator_id=2,
+            subject="Other org chat",
+            conversation_type=ConversationType.USER_AI,
+            is_group=False,
+            is_archived=False,
+        )
+        db.add(foreign_convo)
+        db.flush()
+        db.add(
+            Message(
+                org_id=2,
+                conversation_id=foreign_convo.id,
+                sender_type=ParticipantType.ACCOUNT_USER,
+                body="secret",
+                is_ai=False,
+                sent_at=datetime.now(UTC),
+            )
+        )
+        db.commit()
+
+    history = chat_service.build_agent_message_history(
+        db,
+        conv_id=foreign_convo.id,
+        user_message="local follow-up",
+        context="local context",
+    )
+
+    assert history == [
+        {"role": "system", "content": "local context"},
+        {"role": "user", "content": "local follow-up"},
+    ]

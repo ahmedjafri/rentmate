@@ -22,7 +22,7 @@ import asyncio
 import json
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -31,7 +31,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from db.models import Base, Conversation, Message, Task
+from db.enums import TaskCategory, TaskMode, TaskStatus, Urgency
+from db.models import Base, Conversation, Message, MessageType, Task
 
 # ─── DB helpers ──────────────────────────────────────────────────────────────
 
@@ -121,20 +122,19 @@ def db(session_factory):
 def task_id(db):
     """Insert a minimal Task with a linked Conversation and return the Task's ID."""
     task = Task(
-        id=str(uuid.uuid4()),
         creator_id=1,
         title="HVAC Repair",
-        task_status="active",
-        task_mode="manual",
-        category="maintenance",
-        urgency="medium",
+        task_status=TaskStatus.ACTIVE,
+        task_mode=TaskMode.MANUAL,
+        category=TaskCategory.MAINTENANCE,
+        urgency=Urgency.MEDIUM,
         confidential=False,
-        last_message_at=datetime.utcnow(),
+        last_message_at=datetime.now(UTC),
     )
     db.add(task)
     db.flush()
     conv = Conversation(
-        id=str(uuid.uuid4()),
+        creator_id=1,
         subject="HVAC Repair",
     )
     db.add(conv)
@@ -211,7 +211,7 @@ class TestTaskChatSSE:
                     async with client.stream(
                         "POST",
                         "/chat/send",
-                        json={"task_id": task_id, "message": "Status?"},
+                        json={"task_id": str(task_id), "message": "Status?"},
                     ) as resp:
                         events = await _collect_sse(resp)
 
@@ -237,7 +237,7 @@ class TestTaskChatSSE:
                     async with client.stream(
                         "POST",
                         "/chat/send",
-                        json={"task_id": task_id, "message": "What is the HVAC status?"},
+                        json={"task_id": str(task_id), "message": "What is the HVAC status?"},
                     ) as resp:
                         events = await _collect_sse(resp)
 
@@ -269,7 +269,7 @@ class TestTaskChatSSE:
                     async with client.stream(
                         "POST",
                         "/chat/send",
-                        json={"task_id": task_id, "message": "Any updates?"},
+                        json={"task_id": str(task_id), "message": "Any updates?"},
                     ) as resp:
                         events = await _collect_sse(resp)
 
@@ -297,7 +297,7 @@ class TestTaskChatSSE:
                     async with client.stream(
                         "POST",
                         "/chat/send",
-                        json={"task_id": task_id, "message": "Hello?"},
+                        json={"task_id": str(task_id), "message": "Hello?"},
                     ) as resp:
                         events = await _collect_sse(resp)
 
@@ -319,7 +319,7 @@ class TestTaskChatSSE:
                     async with client.stream(
                         "POST",
                         "/chat/send",
-                        json={"task_id": task_id, "message": "When is rent due?"},
+                        json={"task_id": str(task_id), "message": "When is rent due?"},
                     ) as resp:
                         await _collect_sse(resp)
 
@@ -336,7 +336,7 @@ class TestTaskChatSSE:
             .filter_by(
                 conversation_id=conv_id,
                 is_ai=True,
-                message_type="message",
+                message_type=MessageType.MESSAGE,
             )
             .all()
         )

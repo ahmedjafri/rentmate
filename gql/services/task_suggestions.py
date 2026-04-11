@@ -6,6 +6,7 @@ message sending) for the suggestion approval workflow.
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backends.local_auth import resolve_account_id, resolve_org_id
 from db.enums import AgentSource, SuggestionSource, TaskMode, TaskPriority, TaskSource, TaskStatus
 from db.models import (
     Conversation,
@@ -16,8 +17,7 @@ from db.models import (
     Task,
 )
 from gql.services import chat_service, settings_service, suggestion_service
-from gql.services.task_service import dump_task_steps
-from gql.services.task_service import TaskService
+from gql.services.task_service import TaskService, dump_task_steps
 from gql.services.vendor_service import get_vendor_by_external_id, get_vendor_by_id
 from gql.types import CreateTaskInput
 
@@ -40,7 +40,11 @@ class SuggestionExecutor:
         without knowing which type it is.
         """
         suggestion = db.execute(
-            select(Suggestion).where(Suggestion.id == suggestion_id)
+            select(Suggestion).where(
+                Suggestion.id == suggestion_id,
+                Suggestion.org_id == resolve_org_id(),
+                Suggestion.creator_id == resolve_account_id(),
+            )
         ).scalar_one_or_none()
         if not suggestion:
             raise ValueError(f"Suggestion {suggestion_id} not found")
@@ -78,7 +82,11 @@ class SuggestionExecutor:
 
     def _fetch_suggestion(self, suggestion_id: str) -> Suggestion:
         suggestion = self.db.execute(
-            select(Suggestion).where(Suggestion.id == suggestion_id)
+            select(Suggestion).where(
+                Suggestion.id == suggestion_id,
+                Suggestion.org_id == resolve_org_id(),
+                Suggestion.creator_id == resolve_account_id(),
+            )
         ).scalar_one_or_none()
         if not suggestion:
             raise ValueError(f"Suggestion {suggestion_id} not found")

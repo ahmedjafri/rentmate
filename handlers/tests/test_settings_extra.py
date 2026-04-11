@@ -4,9 +4,10 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-DEFAULT_USER_ID = "test-user-1"  # test-only JWT sub claim
+from backends.local_auth import get_org_external_id, set_request_context
 from handlers.deps import get_db
 from handlers.settings import _mask_integrations
 from main import app
@@ -15,13 +16,21 @@ from main import app
 def make_token():
     import jwt
     return jwt.encode(
-        {"sub": DEFAULT_USER_ID, "email": "admin@localhost"},
+        {"sub": "1", "uid": "1", "org_uid": get_org_external_id(), "email": "admin@localhost"},
         os.getenv("JWT_SECRET", "rentmate-local-secret"),
         algorithm="HS256",
     )
 
 
 AUTH = {"Authorization": f"Bearer {make_token()}"}
+
+
+async def _fake_require_user(request):
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.replace("Bearer ", "").strip():
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    set_request_context(account_id=1, org_id=1)
+    return {"account_id": 1, "org_id": 1, "uid": "1", "email": "admin@localhost"}
 
 
 # ---------------------------------------------------------------------------
@@ -55,8 +64,11 @@ class TestIntegrationsEndpoint(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
         app.dependency_overrides[get_db] = lambda: self.db
+        self.require_user_patcher = patch("handlers.settings.require_user", side_effect=_fake_require_user)
+        self.require_user_patcher.start()
 
     def tearDown(self):
+        self.require_user_patcher.stop()
         app.dependency_overrides = {}
 
     def test_get_integrations_requires_auth(self):
@@ -125,7 +137,10 @@ class TestIntegrationsEndpoint(unittest.TestCase):
         assert saved_arg["autonomy"]["rent"] == "autonomous"
 
     def test_post_settings_base_url(self):
-        with patch("llm.llm.reconfigure"):
+        with (
+            patch("llm.llm.reconfigure"),
+            patch("handlers.settings.save_llm_settings"),
+        ):
             response = self.client.post(
                 "/settings",
                 json={"base_url": "http://localhost:11434", "model": "ollama/llama3"},

@@ -295,6 +295,10 @@ async def list_documents(
     await require_user(request)
     docs = (
         db.query(Document)
+        .filter(
+            Document.org_id == resolve_org_id(),
+            Document.creator_id == resolve_account_id(),
+        )
         .order_by(Document.created_at.desc())
         .limit(50)
         .all()

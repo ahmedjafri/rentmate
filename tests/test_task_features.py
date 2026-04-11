@@ -19,16 +19,16 @@ Covers:
 
 from datetime import date, timedelta
 
-import pytest
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 
+from db.enums import TaskCategory, TaskMode, TaskPriority, TaskSource, TaskStatus, Urgency
 from db.models import (
     Conversation,
     Document,
     DocumentTag,
     Lease,
     Message,
+    MessageType,
     ParticipantType,
     Property,
     Suggestion,
@@ -52,25 +52,41 @@ def _gql_context(db):
     return {"db_session": db, "user": FAKE_USER}
 
 
+def _coerce_enum(value, enum_cls):
+    if value is None or isinstance(value, enum_cls):
+        return value
+    if isinstance(value, str):
+        try:
+            return enum_cls(value)
+        except ValueError:
+            return enum_cls[value.upper()]
+    return enum_cls(value)
+
+
+def _public_conversation_id(conv_or_task):
+    conv = conv_or_task.ai_conversation if isinstance(conv_or_task, Task) else conv_or_task
+    return str(conv.external_id)
+
+
 def _mk_property(db, name="Prop", address="1 Main St"):
-    prop = Property(name=name, address_line1=address, city="Seattle", state="WA")
+    prop = Property(name=name, address_line1=address, city="Seattle", state="WA", creator_id=DEFAULT_ACCOUNT_ID)
     db.add(prop)
     db.flush()
     return prop
 
 
 def _mk_unit(db, prop, label="101"):
-    unit = Unit(property_id=prop.id, label=label)
+    unit = Unit(property_id=prop.id, label=label, creator_id=DEFAULT_ACCOUNT_ID)
     db.add(unit)
     db.flush()
     return unit
 
 
 def _mk_tenant(db, first="Alice", last="Renter", email=None):
-    user = User(first_name=first, last_name=last, email=email, active=True)
+    user = User(first_name=first, last_name=last, email=email, active=True, creator_id=DEFAULT_ACCOUNT_ID)
     db.add(user)
     db.flush()
-    t = Tenant(user_id=user.id)
+    t = Tenant(user_id=user.id, creator_id=DEFAULT_ACCOUNT_ID)
     db.add(t)
     db.flush()
     return t
@@ -81,6 +97,7 @@ def _mk_lease(db, prop, unit, tenant, payment_status="current"):
         tenant_id=tenant.id,
         unit_id=unit.id,
         property_id=prop.id,
+        creator_id=DEFAULT_ACCOUNT_ID,
         start_date=date.today(),
         end_date=date.today() + timedelta(days=365),
         rent_amount=1500.0,
@@ -108,12 +125,12 @@ def _mk_task(
     task = Task(
         creator_id=DEFAULT_ACCOUNT_ID,
         title=subject,
-        task_status=task_status,
-        category=category,
-        source=source,
-        urgency=urgency,
-        priority=priority,
-        task_mode=task_mode,
+        task_status=_coerce_enum(task_status, TaskStatus),
+        category=_coerce_enum(category, TaskCategory),
+        source=_coerce_enum(source, TaskSource),
+        urgency=_coerce_enum(urgency, Urgency),
+        priority=_coerce_enum(priority, TaskPriority),
+        task_mode=_coerce_enum(task_mode, TaskMode),
         confidential=confidential,
         lease_id=lease.id if lease else None,
         unit_id=unit.id if unit else None,
@@ -123,6 +140,7 @@ def _mk_task(
     db.flush()
     conv = Conversation(
         subject=subject,
+        creator_id=DEFAULT_ACCOUNT_ID,
         lease_id=lease.id if lease else None,
         unit_id=unit.id if unit else None,
         property_id=prop.id if prop else None,
@@ -132,6 +150,7 @@ def _mk_task(
     task.ai_conversation_id = conv.id
     ext_conv = Conversation(
         subject=subject,
+        creator_id=DEFAULT_ACCOUNT_ID,
         lease_id=lease.id if lease else None,
         unit_id=unit.id if unit else None,
         property_id=prop.id if prop else None,
@@ -143,7 +162,7 @@ def _mk_task(
 
 
 def _mk_document(db, filename="lease.pdf"):
-    doc = Document(filename=filename, document_type="lease", status="pending")
+    doc = Document(filename=filename, document_type="lease", status="pending", creator_id=DEFAULT_ACCOUNT_ID)
     db.add(doc)
     db.flush()
     return doc
@@ -167,7 +186,7 @@ def _add_message(
         conversation_id=conv_id,
         sender_type=sender_type,
         body=body,
-        message_type=message_type,
+        message_type=_coerce_enum(message_type, MessageType),
         sender_name=sender_name,
         is_ai=is_ai,
         is_system=False,
@@ -193,7 +212,7 @@ class TestTasksQuery:
 
     def test_tasks_returns_only_tasks_not_plain_conversations(self, db):
         # Plain conversation (no linked task) — should not appear in tasks query
-        plain_conv = Conversation(subject="Chat")
+        plain_conv = Conversation(subject="Chat", creator_id=DEFAULT_ACCOUNT_ID)
         db.add(plain_conv)
         db.flush()
 
@@ -206,28 +225,28 @@ class TestTasksQuery:
         assert result.errors is None
         uids = [t["uid"] for t in result.data["tasks"]]
         assert task.id in uids
-        assert plain_conv.id not in uids
+        assert len(uids) == 1
 
     def test_tasks_filter_by_category(self, db):
         _mk_task(db, subject="Rent overdue", category="rent")
         maint = _mk_task(db, subject="Broken pipe", category="maintenance")
 
         result = schema.execute_sync(
-            '{ tasks(category: "maintenance") { uid title category } }',
+            '{ tasks(category: MAINTENANCE) { uid title category } }',
             context_value=_gql_context(db),
         )
         assert result.errors is None
         tasks = result.data["tasks"]
         assert len(tasks) == 1
         assert tasks[0]["uid"] == maint.id
-        assert tasks[0]["category"] == "maintenance"
+        assert tasks[0]["category"] == "MAINTENANCE"
 
     def test_tasks_filter_by_single_status(self, db):
         active = _mk_task(db, subject="Active task", task_status="active")
         _mk_task(db, subject="Resolved task", task_status="resolved")
 
         result = schema.execute_sync(
-            '{ tasks(status: "active") { uid taskStatus } }',
+            "{ tasks(status: [ACTIVE]) { uid taskStatus } }",
             context_value=_gql_context(db),
         )
         assert result.errors is None
@@ -241,7 +260,7 @@ class TestTasksQuery:
         _mk_task(db, subject="Task C", task_status="resolved")
 
         result = schema.execute_sync(
-            '{ tasks(status: "active,suggested") { uid taskStatus } }',
+            "{ tasks(status: [ACTIVE, SUGGESTED]) { uid taskStatus } }",
             context_value=_gql_context(db),
         )
         assert result.errors is None
@@ -255,14 +274,14 @@ class TestTasksQuery:
         manual = _mk_task(db, subject="Manual task", source="manual")
 
         result = schema.execute_sync(
-            '{ tasks(source: "manual") { uid source } }',
+            "{ tasks(source: MANUAL) { uid source } }",
             context_value=_gql_context(db),
         )
         assert result.errors is None
         tasks = result.data["tasks"]
         assert len(tasks) == 1
         assert tasks[0]["uid"] == manual.id
-        assert tasks[0]["source"] == "manual"
+        assert tasks[0]["source"] == "MANUAL"
 
     def test_tasks_returns_all_task_fields(self, db):
         task = _mk_task(
@@ -289,12 +308,12 @@ class TestTasksQuery:
         t = result.data["tasks"][0]
         assert t["uid"] == task.id
         assert t["title"] == "Urgent repair"
-        assert t["taskStatus"] == "active"
-        assert t["taskMode"] == "autonomous"
-        assert t["source"] == "tenant_report"
-        assert t["category"] == "maintenance"
-        assert t["urgency"] == "high"
-        assert t["priority"] == "urgent"
+        assert t["taskStatus"] == "ACTIVE"
+        assert t["taskMode"] == "AUTONOMOUS"
+        assert t["source"] == "TENANT_REPORT"
+        assert t["category"] == "MAINTENANCE"
+        assert t["urgency"] == "HIGH"
+        assert t["priority"] == "URGENT"
         assert t["confidential"] is True
         assert t["createdAt"] != ""
 
@@ -322,14 +341,14 @@ class TestTasksQuery:
                 createTask(input: $input) { uid }
             }""",
             context_value=_gql_context(db),
-            variable_values={"input": {"title": "Gutter cleaning", "source": "ai_suggestion"}},
+            variable_values={"input": {"title": "Gutter cleaning", "source": "AI_SUGGESTION"}},
         )
         assert create_result.errors is None
         task_uid = create_result.data["createTask"]["uid"]
 
         # 2. Get the task's AI conversation ID
         task_obj = db.execute(select(Task).where(Task.id == task_uid)).scalar_one()
-        ai_convo_id = task_obj.ai_conversation_id
+        ai_convo_id = task_obj.ai_conversation.external_id
 
         # 3. Add context message via mutation
         msg_result = schema.execute_sync(
@@ -338,15 +357,15 @@ class TestTasksQuery:
             }""",
             context_value=_gql_context(db),
             variable_values={"input": {
-                "conversationId": ai_convo_id,
+                "conversationId": str(ai_convo_id),
                 "body": "Gutters need cleaning before winter.",
-                "messageType": "context",
+                "messageType": "CONTEXT",
                 "senderName": "RentMate",
                 "isAi": True,
             }},
         )
         assert msg_result.errors is None
-        assert msg_result.data["sendMessage"]["messageType"] == "context"
+        assert msg_result.data["sendMessage"]["messageType"] == "CONTEXT"
 
         # 3. Re-query via tasks query — message must be present
         query_result = schema.execute_sync(
@@ -356,7 +375,7 @@ class TestTasksQuery:
         assert query_result.errors is None
         task_data = next(t for t in query_result.data["tasks"] if t["uid"] == task_uid)
         assert len(task_data["messages"]) >= 1
-        ctx = [m for m in task_data["messages"] if m["messageType"] == "context"]
+        ctx = [m for m in task_data["messages"] if m["messageType"] == "CONTEXT"]
         assert len(ctx) == 1
         assert "Gutters need cleaning" in ctx[0]["body"]
         assert ctx[0]["isAi"] is True
@@ -476,7 +495,7 @@ class TestTenantsPaymentStatus:
             context_value=_gql_context(db),
         )
         assert result.errors is None
-        found = self._find_tenant(result.data["tenants"], tenant.id)
+        found = self._find_tenant(result.data["tenants"], str(tenant.external_id))
         assert found is not None
         assert found["paymentStatus"] == "current"
 
@@ -491,7 +510,7 @@ class TestTenantsPaymentStatus:
             context_value=_gql_context(db),
         )
         assert result.errors is None
-        found = self._find_tenant(result.data["tenants"], tenant.id)
+        found = self._find_tenant(result.data["tenants"], str(tenant.external_id))
         assert found is not None
         assert found["paymentStatus"] == "overdue"
 
@@ -506,7 +525,7 @@ class TestTenantsPaymentStatus:
             context_value=_gql_context(db),
         )
         assert result.errors is None
-        found = self._find_tenant(result.data["tenants"], tenant.id)
+        found = self._find_tenant(result.data["tenants"], str(tenant.external_id))
         assert found is not None
         assert found["paymentStatus"] == "late"
 
@@ -530,14 +549,14 @@ class TestCreateTaskMutation:
         result = schema.execute_sync(
             self.CREATE_TASK_MUTATION,
             context_value=_gql_context(db),
-            variable_values={"input": {"title": "Fix roof", "source": "manual"}},
+            variable_values={"input": {"title": "Fix roof", "source": "MANUAL"}},
         )
         assert result.errors is None
         task = result.data["createTask"]
         assert task["uid"] is not None
         assert task["title"] == "Fix roof"
-        assert task["taskStatus"] == "active"
-        assert task["source"] == "manual"
+        assert task["taskStatus"] == "ACTIVE"
+        assert task["source"] == "MANUAL"
         assert task["confidential"] is False
 
     def test_create_task_with_all_fields(self, db):
@@ -547,12 +566,12 @@ class TestCreateTaskMutation:
             variable_values={
                 "input": {
                     "title": "Inspect unit",
-                    "source": "ai_suggestion",
-                    "taskStatus": "suggested",
-                    "category": "maintenance",
-                    "urgency": "high",
-                    "priority": "urgent",
-                    "taskMode": "autonomous",
+                    "source": "AI_SUGGESTION",
+                    "taskStatus": "SUGGESTED",
+                    "category": "MAINTENANCE",
+                    "urgency": "HIGH",
+                    "priority": "URGENT",
+                    "taskMode": "AUTONOMOUS",
                     "confidential": True,
                 }
             },
@@ -560,18 +579,18 @@ class TestCreateTaskMutation:
         assert result.errors is None
         task = result.data["createTask"]
         assert task["title"] == "Inspect unit"
-        assert task["taskStatus"] == "suggested"
-        assert task["category"] == "maintenance"
-        assert task["urgency"] == "high"
-        assert task["priority"] == "urgent"
-        assert task["taskMode"] == "autonomous"
+        assert task["taskStatus"] == "SUGGESTED"
+        assert task["category"] == "MAINTENANCE"
+        assert task["urgency"] == "HIGH"
+        assert task["priority"] == "URGENT"
+        assert task["taskMode"] == "AUTONOMOUS"
         assert task["confidential"] is True
 
     def test_create_task_persists_to_db(self, db):
         result = schema.execute_sync(
             self.CREATE_TASK_MUTATION,
             context_value=_gql_context(db),
-            variable_values={"input": {"title": "Check boiler", "source": "tenant_report"}},
+            variable_values={"input": {"title": "Check boiler", "source": "TENANT_REPORT"}},
         )
         assert result.errors is None
         uid = result.data["createTask"]["uid"]
@@ -581,7 +600,7 @@ class TestCreateTaskMutation:
         task = db.execute(select(Task).where(Task.id == uid)).scalar_one_or_none()
         assert task is not None
         assert task.title == "Check boiler"
-        assert task.source == "tenant_report"
+        assert task.source == TaskSource.TENANT_REPORT
 
     def test_create_task_sets_external_conversation_id(self, db):
         result = schema.execute_sync(
@@ -593,7 +612,7 @@ class TestCreateTaskMutation:
             }
             """,
             context_value=_gql_context(db),
-            variable_values={"input": {"title": "Pipe leak", "source": "manual"}},
+            variable_values={"input": {"title": "Pipe leak", "source": "MANUAL"}},
         )
         assert result.errors is None
         task = result.data["createTask"]
@@ -611,7 +630,7 @@ class TestCreateTaskMutation:
         result = schema.execute_sync(
             self.CREATE_TASK_MUTATION,
             context_value={"db_session": db, "user": None},
-            variable_values={"input": {"title": "Unauthorized", "source": "manual"}},
+            variable_values={"input": {"title": "Unauthorized", "source": "MANUAL"}},
         )
         assert result.errors is not None
 
@@ -623,7 +642,7 @@ class TestCreateTaskMutation:
 class TestUpdateTaskStatusMutation:
 
     UPDATE_STATUS_MUTATION = """
-    mutation UpdateStatus($uid: String!, $status: String!) {
+    mutation UpdateStatus($uid: Int!, $status: TaskStatus!) {
         updateTaskStatus(uid: $uid, status: $status) {
             uid taskStatus
         }
@@ -636,11 +655,11 @@ class TestUpdateTaskStatusMutation:
         result = schema.execute_sync(
             self.UPDATE_STATUS_MUTATION,
             context_value=_gql_context(db),
-            variable_values={"uid": task.id, "status": "resolved"},
+            variable_values={"uid": task.id, "status": "RESOLVED"},
         )
         assert result.errors is None
         assert result.data["updateTaskStatus"]["uid"] == task.id
-        assert result.data["updateTaskStatus"]["taskStatus"] == "resolved"
+        assert result.data["updateTaskStatus"]["taskStatus"] == "RESOLVED"
 
     def test_update_task_status_suggested_to_active(self, db):
         task = _mk_task(db, task_status="suggested")
@@ -648,10 +667,10 @@ class TestUpdateTaskStatusMutation:
         result = schema.execute_sync(
             self.UPDATE_STATUS_MUTATION,
             context_value=_gql_context(db),
-            variable_values={"uid": task.id, "status": "active"},
+            variable_values={"uid": task.id, "status": "ACTIVE"},
         )
         assert result.errors is None
-        assert result.data["updateTaskStatus"]["taskStatus"] == "active"
+        assert result.data["updateTaskStatus"]["taskStatus"] == "ACTIVE"
 
     def test_update_task_status_persists_to_db(self, db):
         task = _mk_task(db, task_status="active")
@@ -659,32 +678,32 @@ class TestUpdateTaskStatusMutation:
         schema.execute_sync(
             self.UPDATE_STATUS_MUTATION,
             context_value=_gql_context(db),
-            variable_values={"uid": task.id, "status": "paused"},
+            variable_values={"uid": task.id, "status": "PAUSED"},
         )
 
         db.expire_all()
         from sqlalchemy import select
         fetched = db.execute(select(Task).where(Task.id == task.id)).scalar_one()
-        assert fetched.task_status == "paused"
+        assert fetched.task_status == TaskStatus.PAUSED
 
     def test_update_task_status_not_found_raises_error(self, db):
         result = schema.execute_sync(
             self.UPDATE_STATUS_MUTATION,
             context_value=_gql_context(db),
-            variable_values={"uid": "nonexistent-uid", "status": "resolved"},
+            variable_values={"uid": 999999, "status": "RESOLVED"},
         )
         assert result.errors is not None
 
     def test_update_task_status_on_non_task_conversation_fails(self, db):
         # A regular conversation (no linked task) should NOT be found by updateTaskStatus
-        conv = Conversation(subject="Not a task")
+        conv = Conversation(subject="Not a task", creator_id=DEFAULT_ACCOUNT_ID)
         db.add(conv)
         db.flush()
 
         result = schema.execute_sync(
             self.UPDATE_STATUS_MUTATION,
             context_value=_gql_context(db),
-            variable_values={"uid": conv.id, "status": "resolved"},
+            variable_values={"uid": conv.id, "status": "RESOLVED"},
         )
         assert result.errors is not None
 
@@ -709,12 +728,12 @@ class TestUpdateTaskMutation:
         result = schema.execute_sync(
             self.UPDATE_TASK_MUTATION,
             context_value=_gql_context(db),
-            variable_values={"input": {"uid": task.id, "taskMode": "autonomous"}},
+            variable_values={"input": {"uid": task.id, "taskMode": "AUTONOMOUS"}},
         )
         assert result.errors is None
         updated = result.data["updateTask"]
-        assert updated["taskMode"] == "autonomous"
-        assert updated["taskStatus"] == "active"  # unchanged
+        assert updated["taskMode"] == "AUTONOMOUS"
+        assert updated["taskStatus"] == "ACTIVE"
 
     def test_update_task_status_only(self, db):
         task = _mk_task(db, task_mode="manual", task_status="active")
@@ -722,12 +741,12 @@ class TestUpdateTaskMutation:
         result = schema.execute_sync(
             self.UPDATE_TASK_MUTATION,
             context_value=_gql_context(db),
-            variable_values={"input": {"uid": task.id, "taskStatus": "paused"}},
+            variable_values={"input": {"uid": task.id, "taskStatus": "PAUSED"}},
         )
         assert result.errors is None
         updated = result.data["updateTask"]
-        assert updated["taskStatus"] == "paused"
-        assert updated["taskMode"] == "manual"  # unchanged
+        assert updated["taskStatus"] == "PAUSED"
+        assert updated["taskMode"] == "MANUAL"
 
     def test_update_task_mode_and_status_together(self, db):
         task = _mk_task(db, task_mode="manual", task_status="active")
@@ -738,21 +757,21 @@ class TestUpdateTaskMutation:
             variable_values={
                 "input": {
                     "uid": task.id,
-                    "taskMode": "waiting_approval",
-                    "taskStatus": "paused",
+                    "taskMode": "WAITING_APPROVAL",
+                    "taskStatus": "PAUSED",
                 }
             },
         )
         assert result.errors is None
         updated = result.data["updateTask"]
-        assert updated["taskMode"] == "waiting_approval"
-        assert updated["taskStatus"] == "paused"
+        assert updated["taskMode"] == "WAITING_APPROVAL"
+        assert updated["taskStatus"] == "PAUSED"
 
     def test_update_task_not_found_raises_error(self, db):
         result = schema.execute_sync(
             self.UPDATE_TASK_MUTATION,
             context_value=_gql_context(db),
-            variable_values={"input": {"uid": "no-such-id", "taskMode": "autonomous"}},
+            variable_values={"input": {"uid": 999999, "taskMode": "AUTONOMOUS"}},
         )
         assert result.errors is not None
 
@@ -762,14 +781,14 @@ class TestUpdateTaskMutation:
         schema.execute_sync(
             self.UPDATE_TASK_MUTATION,
             context_value=_gql_context(db),
-            variable_values={"input": {"uid": task.id, "taskMode": "autonomous", "taskStatus": "resolved"}},
+            variable_values={"input": {"uid": task.id, "taskMode": "AUTONOMOUS", "taskStatus": "RESOLVED"}},
         )
 
         db.expire_all()
         from sqlalchemy import select
         fetched = db.execute(select(Task).where(Task.id == task.id)).scalar_one()
-        assert fetched.task_mode == "autonomous"
-        assert fetched.task_status == "resolved"
+        assert fetched.task_mode == TaskMode.AUTONOMOUS
+        assert fetched.task_status == TaskStatus.RESOLVED
 
 
 # ---------------------------------------------------------------------------
@@ -794,7 +813,7 @@ class TestSendMessageMutation:
             context_value=_gql_context(db),
             variable_values={
                 "input": {
-                    "conversationId": task.ai_conversation_id,
+                    "conversationId": _public_conversation_id(task),
                     "body": "Looking into this now.",
                     "senderName": "Manager",
                 }
@@ -817,18 +836,18 @@ class TestSendMessageMutation:
             context_value=_gql_context(db),
             variable_values={
                 "input": {
-                    "conversationId": task.ai_conversation_id,
+                    "conversationId": _public_conversation_id(task),
                     "body": "I've scheduled a contractor.",
                     "senderName": "RentMate AI",
                     "isAi": True,
-                    "messageType": "internal",
+                    "messageType": "INTERNAL",
                 }
             },
         )
         assert result.errors is None
         msg = result.data["sendMessage"]
         assert msg["isAi"] is True
-        assert msg["messageType"] == "internal"
+        assert msg["messageType"] == "INTERNAL"
         assert msg["senderName"] == "RentMate AI"
 
     def test_send_message_updates_last_message_at(self, db):
@@ -840,7 +859,7 @@ class TestSendMessageMutation:
             context_value=_gql_context(db),
             variable_values={
                 "input": {
-                    "conversationId": task.ai_conversation_id,
+                    "conversationId": _public_conversation_id(task),
                     "body": "Updating the task.",
                 }
             },
@@ -859,7 +878,7 @@ class TestSendMessageMutation:
             context_value=_gql_context(db),
             variable_values={
                 "input": {
-                    "conversationId": task.ai_conversation_id,
+                    "conversationId": _public_conversation_id(task),
                     "body": "Persisted message",
                     "senderName": "Test User",
                 }
@@ -879,7 +898,7 @@ class TestSendMessageMutation:
 
     def test_send_message_to_orphan_conversation(self, db):
         """Sending a message to a conversation not linked to any task should still succeed."""
-        conv = Conversation(subject="Orphan chat")
+        conv = Conversation(subject="Orphan chat", creator_id=DEFAULT_ACCOUNT_ID)
         db.add(conv)
         db.flush()
 
@@ -888,7 +907,7 @@ class TestSendMessageMutation:
             context_value=_gql_context(db),
             variable_values={
                 "input": {
-                    "conversationId": conv.id,
+                    "conversationId": str(conv.external_id),
                     "body": "This should still work (creates message row)",
                 }
             },
@@ -902,7 +921,7 @@ class TestSendMessageMutation:
             schema.execute_sync(
                 self.SEND_MSG_MUTATION,
                 context_value=_gql_context(db),
-                variable_values={"input": {"conversationId": task.ai_conversation_id, "body": body}},
+                variable_values={"input": {"conversationId": _public_conversation_id(task), "body": body}},
             )
 
         # Expire the session identity map so the subsequent query fetches fresh
@@ -992,14 +1011,14 @@ class TestAddDocumentTagMutation:
                 "input": {
                     "documentId": doc.id,
                     "tagType": "tenant",
-                    "tenantId": tenant.id,
+                    "tenantId": str(tenant.external_id),
                 }
             },
         )
         assert result.errors is None
         tag = result.data["addDocumentTag"]
         assert tag["tagType"] == "tenant"
-        assert tag["tenantId"] == tenant.id
+        assert tag["tenantId"] == str(tenant.external_id)
 
     def test_add_document_tag_persists_to_db(self, db):
         doc = _mk_document(db)
@@ -1251,31 +1270,31 @@ class TestTaskNumberNeverReused:
         from gql.services.task_service import TaskService
         from gql.types import CreateTaskInput
 
-        inp = CreateTaskInput(title="Task A", source="manual")
+        inp = CreateTaskInput(title="Task A", source=TaskSource.MANUAL)
         task_a = TaskService.create_task(db, inp)
-        assert task_a.task_number == 1
+        assert task_a.id == 1
 
-        inp2 = CreateTaskInput(title="Task B", source="manual")
+        inp2 = CreateTaskInput(title="Task B", source=TaskSource.MANUAL)
         task_b = TaskService.create_task(db, inp2)
-        assert task_b.task_number == 2
+        assert task_b.id == 2
 
         # Delete task B
         TaskService.delete_task(db, task_b.id)
 
         # New task must get 3, not reuse 2
-        inp3 = CreateTaskInput(title="Task C", source="manual")
+        inp3 = CreateTaskInput(title="Task C", source=TaskSource.MANUAL)
         task_c = TaskService.create_task(db, inp3)
-        assert task_c.task_number == 3
+        assert task_c.id == 3
 
     def test_task_number_survives_all_tasks_deleted(self, db):
         from gql.services.task_service import TaskService
         from gql.types import CreateTaskInput
 
-        t1 = TaskService.create_task(db, CreateTaskInput(title="T1", source="manual"))
-        assert t1.task_number == 1
+        t1 = TaskService.create_task(db, CreateTaskInput(title="T1", source=TaskSource.MANUAL))
+        assert t1.id == 1
 
         TaskService.delete_task(db, t1.id)
 
         # All tasks gone — next task must still be 2, not 1
-        t2 = TaskService.create_task(db, CreateTaskInput(title="T2", source="manual"))
-        assert t2.task_number == 2
+        t2 = TaskService.create_task(db, CreateTaskInput(title="T2", source=TaskSource.MANUAL))
+        assert t2.id == 2

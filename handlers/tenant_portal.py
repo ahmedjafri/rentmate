@@ -1,5 +1,4 @@
 """Tenant-facing REST endpoints. All require a tenant JWT."""
-import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
@@ -195,7 +194,6 @@ def _verify_tenant_task(db, task_id: str, tenant_id: str) -> Task:
 def tenant_task_detail(task_id: str, request: Request):
     info = _require_tenant(request)
     db = get_db(request)
-    tenant = db.get(Tenant, info["tenant_id"])
     task = _verify_tenant_task(db, task_id, info["tenant_id"])
     # Check typing indicator on the conversation
     typing = False

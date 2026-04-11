@@ -2,7 +2,19 @@ import uuid
 from datetime import UTC, datetime
 from enum import Enum
 
-from sqlalchemy import Boolean, Column, DateTime, Enum as SqlEnum, ForeignKeyConstraint, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    Enum as SqlEnum,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 
 from .base import Base, HasCreatorId, OrgId, SmallPrimaryId

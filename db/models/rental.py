@@ -36,7 +36,12 @@ class Property(Base, OrgId, PrimaryId, HasCreatorId, HasContext):
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
     units = relationship("Unit", back_populates="property", cascade="all, delete-orphan")
-    leases = relationship("Lease", back_populates="property", cascade="all, delete-orphan")
+    leases = relationship(
+        "Lease",
+        back_populates="property",
+        cascade="all, delete-orphan",
+        overlaps="unit,tenant,leases",
+    )
 
     __table_args__ = (
         UniqueConstraint("org_id", "id", name="uq_properties_server"),
@@ -60,7 +65,12 @@ class Unit(Base, OrgId, PrimaryId, HasCreatorId, HasContext):
 
     property = relationship("Property", back_populates="units")
     tenant = relationship("Tenant", foreign_keys=[tenant_id])
-    leases = relationship("Lease", back_populates="unit", cascade="all, delete-orphan")
+    leases = relationship(
+        "Lease",
+        back_populates="unit",
+        cascade="all, delete-orphan",
+        overlaps="property,tenant,leases",
+    )
 
     __table_args__ = (
         UniqueConstraint("org_id", "id", name="uq_units_server"),
@@ -93,7 +103,12 @@ class Tenant(Base, OrgId, SmallPrimaryId, HasCreatorId, HasContext):
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
     user = relationship("User", foreign_keys=[user_id])
-    leases = relationship("Lease", back_populates="tenant", cascade="all, delete-orphan")
+    leases = relationship(
+        "Lease",
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+        overlaps="property,unit,leases",
+    )
 
     @property
     def units(self):
@@ -129,9 +144,24 @@ class Lease(Base, OrgId, PrimaryId, HasCreatorId):
 
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
-    tenant = relationship("Tenant", back_populates="leases", foreign_keys=[tenant_id])
-    unit = relationship("Unit", back_populates="leases", foreign_keys=[unit_id])
-    property = relationship("Property", back_populates="leases", foreign_keys=[property_id])
+    tenant = relationship(
+        "Tenant",
+        back_populates="leases",
+        foreign_keys=[tenant_id],
+        overlaps="property,unit,leases",
+    )
+    unit = relationship(
+        "Unit",
+        back_populates="leases",
+        foreign_keys=[unit_id],
+        overlaps="property,tenant,leases",
+    )
+    property = relationship(
+        "Property",
+        back_populates="leases",
+        foreign_keys=[property_id],
+        overlaps="unit,tenant,leases",
+    )
 
     __table_args__ = (
         UniqueConstraint("org_id", "id", name="uq_leases_server"),

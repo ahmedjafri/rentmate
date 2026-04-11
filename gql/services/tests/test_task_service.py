@@ -1,5 +1,8 @@
+from contextlib import contextmanager
+
 import pytest
 
+from backends.local_auth import reset_request_context, set_request_context
 from db.enums import TaskCategory, TaskMode, TaskPriority, TaskSource, TaskStatus, Urgency
 from db.models import Conversation, ConversationType, Suggestion, User
 from gql.services.task_service import TaskService
@@ -20,6 +23,15 @@ def _create_task(db):
             confidential=False,
         ),
     )
+
+
+@contextmanager
+def _request_scope(*, account_id: int, org_id: int):
+    token = set_request_context(account_id=account_id, org_id=org_id)
+    try:
+        yield
+    finally:
+        reset_request_context(token)
 
 
 def test_create_task_creates_backing_ai_conversation(db):
@@ -76,3 +88,39 @@ def test_assign_vendor_rejects_unknown_vendor(db):
 
     with pytest.raises(ValueError, match="Vendor 999 not found"):
         TaskService.assign_vendor_to_task(db, task_id=task.id, vendor_id=999)
+
+
+def test_update_task_status_rejects_task_from_other_org(db):
+    foreign_user = User(id=2, org_id=2, email="other-org@example.com", active=True)
+    db.add(foreign_user)
+    db.flush()
+
+    with _request_scope(account_id=2, org_id=2):
+        foreign_task = TaskService.create_task(
+            db,
+            CreateTaskInput(title="Foreign task", source=TaskSource.MANUAL),
+        )
+
+    with pytest.raises(ValueError, match=f"Task {foreign_task.id} not found"):
+        TaskService.update_task_status(db, uid=foreign_task.id, status=TaskStatus.RESOLVED)
+
+
+def test_assign_vendor_rejects_vendor_from_other_org(db):
+    task = _create_task(db)
+    foreign_vendor = User(
+        id=2,
+        org_id=2,
+        creator_id=2,
+        user_type="vendor",
+        first_name="Other",
+        last_name="Vendor",
+        phone="+15550009999",
+        role_label="Plumber",
+        active=True,
+    )
+    foreign_creator = User(id=3, org_id=2, email="org2-admin@example.com", active=True)
+    db.add_all([foreign_creator, foreign_vendor])
+    db.flush()
+
+    with pytest.raises(ValueError, match=f"Vendor {foreign_vendor.id} not found"):
+        TaskService.assign_vendor_to_task(db, task_id=task.id, vendor_id=foreign_vendor.id)

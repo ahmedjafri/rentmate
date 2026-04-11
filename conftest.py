@@ -101,7 +101,8 @@ def db(Session, engine, request):
         yield session
     finally:
         session.close()
-        trans.rollback()
+        if trans.is_active and connection.in_transaction():
+            trans.rollback()
         connection.close()
 
 

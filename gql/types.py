@@ -9,13 +9,13 @@ from db.enums import (  # noqa: F401 — re-exported
     AutomationSource,
     SuggestionOption,
     SuggestionSource,
+    SuggestionSourceEnum,
+    SuggestionStatus,
     TaskCategory,
     TaskMode,
     TaskPriority,
     TaskSource,
     TaskStatus,
-    SuggestionSourceEnum,
-    SuggestionStatus,
     Urgency,
 )
 from db.models import ConversationType, MessageType
@@ -411,7 +411,6 @@ class LinkedConversationType:
 
     @classmethod
     def from_sql(cls, conv: typing.Any, label: str) -> "LinkedConversationType":
-        from gql.services.chat_service import parse_conversation_extra
 
         msgs = getattr(conv, "messages", []) or []
         last_msg = max(msgs, key=lambda m: m.sent_at, default=None) if msgs else None
@@ -701,13 +700,16 @@ class DocumentTagType:
 
     @classmethod
     def from_sql(cls, tag: typing.Any) -> "DocumentTagType":
+        tenant_id = getattr(tag, "tenant_external_id", None)
+        if tenant_id is None and getattr(tag, "tenant_id", None):
+            tenant_id = str(tag.tenant_id)
         return cls(
             uid=str(tag.id),
             document_id=str(tag.document_id),
             tag_type=tag.tag_type,
             property_id=str(tag.property_id) if tag.property_id else None,
             unit_id=str(tag.unit_id) if tag.unit_id else None,
-            tenant_id=str(tag.tenant_id) if tag.tenant_id else None,
+            tenant_id=tenant_id,
             created_at=_utc_iso(tag.created_at),
         )
 

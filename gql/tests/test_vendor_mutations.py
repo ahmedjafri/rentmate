@@ -1,5 +1,5 @@
-from gql.schema import schema
 from db.models import User
+from gql.schema import schema
 
 
 def _context(db):

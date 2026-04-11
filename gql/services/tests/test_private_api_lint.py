@@ -1,6 +1,6 @@
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 
 def test_no_private_gql_services_imports():

@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKeyConstraint, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKeyConstraint, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Session
 
 from .base import Base, OrgId, SmallPrimaryId

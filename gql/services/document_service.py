@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backends.local_auth import resolve_org_id
-from db.models import Document as SqlDocument, DocumentTag as SqlDocumentTag
+from db.models import Document as SqlDocument, DocumentTag as SqlDocumentTag, Tenant as SqlTenant
 from gql.types import AddDocumentTagInput
 
 
@@ -67,18 +67,32 @@ def dump_document_extraction_data(data: DocumentExtractionData | dict | None) ->
 class DocumentService:
     @staticmethod
     def add_document_tag(sess: Session, input: AddDocumentTagInput) -> SqlDocumentTag:
+        tenant_id = input.tenant_id
+        if tenant_id:
+            tenant = sess.execute(
+                select(SqlTenant).where(
+                    SqlTenant.org_id == resolve_org_id(),
+                    SqlTenant.external_id == tenant_id,
+                )
+            ).scalar_one_or_none()
+            if tenant is not None:
+                tenant_id = tenant.id
+            else:
+                tenant = None
         tag = SqlDocumentTag(
             org_id=resolve_org_id(),
             document_id=input.document_id,
             tag_type=input.tag_type,
             property_id=input.property_id,
             unit_id=input.unit_id,
-            tenant_id=input.tenant_id,
+            tenant_id=tenant_id,
             created_at=datetime.now(UTC),
         )
         sess.add(tag)
         sess.commit()
         sess.refresh(tag)
+        if tenant_id and tenant is not None:
+            setattr(tag, "tenant_external_id", str(tenant.external_id))
         return tag
 
     @staticmethod

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -12,6 +12,7 @@ from db.models import (
     ConversationType,
     Suggestion,
     Task,
+    TaskNumberSequence,
     User,
 )
 from gql.types import CreateTaskInput, UpdateTaskInput
@@ -40,7 +41,19 @@ class TaskService:
     def create_task(sess: Session, input: CreateTaskInput) -> Task:
         creator_id = resolve_account_id()
         org_id = resolve_org_id()
+        seq = sess.get(TaskNumberSequence, org_id)
+        current_max_id = sess.execute(
+            select(func.coalesce(func.max(Task.id), 0)).where(Task.org_id == org_id)
+        ).scalar_one()
+        if seq is None:
+            seq = TaskNumberSequence(org_id=org_id, last_number=current_max_id)
+            sess.add(seq)
+            sess.flush()
+        elif seq.last_number < current_max_id:
+            seq.last_number = current_max_id
+        seq.last_number += 1
         task = Task(
+            id=seq.last_number,
             org_id=org_id,
             creator_id=creator_id,
             title=input.title,

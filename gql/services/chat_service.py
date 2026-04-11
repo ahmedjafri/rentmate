@@ -128,6 +128,7 @@ def get_or_create_conversation(
     conv = Conversation(
         org_id=resolve_org_id(),
         creator_id=resolve_account_id(),
+        external_id=uid,
         subject="Chat with RentMate",
         is_group=False,
         is_archived=False,

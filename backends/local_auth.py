@@ -17,6 +17,8 @@ DEFAULT_ORG_EXTERNAL_ID = os.getenv(
 # Request-scoped context — set by middleware/deps, read by tools/queries
 _current_account_id: ContextVar[int | None] = ContextVar("current_account_id", default=None)
 _current_org_id: ContextVar[int | None] = ContextVar("current_org_id", default=None)
+_fallback_account_id: int | None = None
+_fallback_org_id: int | None = None
 
 
 def _hash_password(password: str) -> str:
@@ -35,6 +37,8 @@ def resolve_account_id() -> int:
     """
     ctx = _current_account_id.get(None)
     if ctx is None:
+        if _fallback_account_id is not None:
+            return _fallback_account_id
         raise RuntimeError("No account context set — did the request go through authentication?")
     return ctx
 
@@ -43,6 +47,8 @@ def resolve_org_id() -> int:
     """Return the org_id for the current request."""
     ctx = _current_org_id.get(None)
     if ctx is None:
+        if _fallback_org_id is not None:
+            return _fallback_org_id
         raise RuntimeError("No org context set — did the request go through authentication?")
     return ctx
 
@@ -87,6 +93,21 @@ def reset_request_context(token: object) -> None:
     else:
         # Legacy single-token reset
         _current_account_id.reset(token)
+
+
+def set_fallback_request_context(*, account_id: int, org_id: int | None = None) -> tuple[int | None, int | None]:
+    """Set process-wide fallback auth context for worker-thread tool execution."""
+    global _fallback_account_id, _fallback_org_id
+    prev = (_fallback_account_id, _fallback_org_id)
+    _fallback_account_id = account_id
+    _fallback_org_id = org_id if org_id is not None else DEFAULT_ORG_ID
+    return prev
+
+
+def reset_fallback_request_context(token: tuple[int | None, int | None]) -> None:
+    """Restore the previous fallback auth context."""
+    global _fallback_account_id, _fallback_org_id
+    _fallback_account_id, _fallback_org_id = token
 
 
 class LocalAuthBackend:

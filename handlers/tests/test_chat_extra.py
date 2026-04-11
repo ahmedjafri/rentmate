@@ -5,9 +5,10 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-DEFAULT_USER_ID = "test-user-1"  # test-only JWT sub claim
+from backends.local_auth import get_org_external_id, set_request_context
 from handlers.deps import get_db
 from main import app
 
@@ -15,13 +16,21 @@ from main import app
 def make_token():
     import jwt
     return jwt.encode(
-        {"sub": DEFAULT_USER_ID, "email": "admin@localhost"},
+        {"sub": "1", "uid": "1", "org_uid": get_org_external_id(), "email": "admin@localhost"},
         os.getenv("JWT_SECRET", "rentmate-local-secret"),
         algorithm="HS256",
     )
 
 
 AUTH = {"Authorization": f"Bearer {make_token()}"}
+
+
+async def _fake_require_user(request):
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.replace("Bearer ", "").strip():
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    set_request_context(account_id=1, org_id=1)
+    return {"account_id": 1, "org_id": 1, "uid": "1", "email": "admin@localhost"}
 
 
 def _parse_sse(response_text: str) -> list[dict]:
@@ -52,8 +61,11 @@ class TestChatEndpoint(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
         app.dependency_overrides[get_db] = lambda: self.db
+        self.require_user_patcher = patch("handlers.chat.require_user", side_effect=_fake_require_user)
+        self.require_user_patcher.start()
 
     def tearDown(self):
+        self.require_user_patcher.stop()
         app.dependency_overrides = {}
 
     def test_requires_auth(self):

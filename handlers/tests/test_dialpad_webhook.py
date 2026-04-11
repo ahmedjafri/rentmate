@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 import unittest.mock
 from unittest.mock import AsyncMock, Mock, patch
@@ -156,8 +157,8 @@ class TestQuoWebhook(unittest.TestCase):
 
         app.dependency_overrides = {}
 
-    @patch('handlers.chat.httpx.AsyncClient')
-    async def test_send_sms_reply_success(self, mock_client_class):
+    @patch('gql.services.sms_service.httpx.AsyncClient')
+    def test_send_sms_reply_success(self, mock_client_class):
         """
         Test the `send_sms_reply` function to ensure it makes a successful API call.
         """
@@ -166,13 +167,13 @@ class TestQuoWebhook(unittest.TestCase):
         mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
         mock_client.post = AsyncMock(return_value=httpx.Response(200, json={"status": "ok"}))
 
-        await send_sms_reply("5559876543", "5550001234", "This is a test reply.")
+        asyncio.run(send_sms_reply("5559876543", "5550001234", "This is a test reply.", api_key="test-key"))
 
         mock_client.post.assert_called_once()
         args, kwargs = mock_client.post.call_args
         self.assertIn("https://api.openphone.com/v1/messages", args[0])
-        self.assertEqual(kwargs["json"]["from"], "5559876543")
-        self.assertIn("5550001234", kwargs["json"]["to"])
+        self.assertEqual(kwargs["json"]["from"], "+15559876543")
+        self.assertIn("+15550001234", kwargs["json"]["to"])
         self.assertEqual(kwargs["json"]["content"], "This is a test reply.")
 
     def test_is_in_whitelist(self):

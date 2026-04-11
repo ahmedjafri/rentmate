@@ -1,5 +1,4 @@
 """Vendor-facing REST endpoints. All require a vendor JWT."""
-import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
@@ -13,7 +12,6 @@ from db.models import (
     MessageType,
     ParticipantType,
     Task,
-    User,
 )
 from gql.services.vendor_service import VendorService, get_vendor_by_external_id
 from handlers.deps import get_db
