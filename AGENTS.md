@@ -162,10 +162,13 @@ These docs define product behavior and the automation DSL. **Keep them in sync w
 1. Run `poetry run ruff check .` and fix all errors (use `--fix` for auto-fixable issues like import sorting)
 2. Run `poetry run python scripts/lint_kwargs.py` and fix any new violations you introduced
 3. Run `poetry run pytest tests/` and ensure all tests pass
+4. If you changed `gql/schema.py`, `gql/types.py`, GraphQL-facing handler/service behavior, or frontend GraphQL documents, run `npm run graphql:sync --prefix www/rentmate-ui`
+5. After running GraphQL sync, run `poetry run python scripts/check_graphql_codegen.py` and ensure it passes
 
 ### Before finishing any frontend change:
 1. Run `npx tsc --noEmit` and fix all type errors
 2. Verify every used identifier (especially icon imports from lucide-react) is present in the import list — Vite/tsc won't catch missing runtime bindings that exist globally elsewhere
+3. If you changed frontend GraphQL queries/mutations or backend GraphQL schema/types, run `npm run graphql:sync`
 
 ### Python lint rules (enforced by ruff + scripts/lint_kwargs.py)
 
@@ -193,6 +196,7 @@ These docs define product behavior and the automation DSL. **Keep them in sync w
 - All data is multi-tenant: every query scoped to `account_id` from the authenticated user's `AccountUser` record.
 - Tests use per-test transaction rollback (savepoints) for isolation — do not call `db.commit()` inside test fixtures.
 - The agent system prompt is assembled from `agents/template/` files + `llm/.context/index.md`.
+- Frontend GraphQL type artifacts live in `www/rentmate-ui/src/graphql/`. Backend GraphQL changes are not done until `schema.graphql` and `generated.ts` are refreshed.
 
 ### Critical constraints
 
