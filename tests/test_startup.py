@@ -10,10 +10,11 @@ Skip Postgres:    poetry run pytest tests/test_startup.py -m "not postgres"
 """
 
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 # ---------------------------------------------------------------------------
@@ -56,6 +57,55 @@ def test_sqlite_idempotent():
     with patch.object(_main, "engine", eng), patch.dict(os.environ, {"RENTMATE_ENV": "development"}):
         _main._ensure_schema()
         _main._ensure_schema()
+
+
+def test_repair_enum_rows_normalizes_lowercase_urgency():
+    eng = _sqlite_engine()
+    _init(eng)
+
+    from sqlalchemy.orm import sessionmaker
+
+    from db.enums import SuggestionStatus, TaskMode, TaskSource, TaskStatus, Urgency
+    from db.models import Suggestion, Task, User
+
+    Session = sessionmaker(bind=eng)
+    db = Session()
+    db.add(User(id=1, org_id=1, email="owner@example.com", active=True))
+    db.flush()
+    db.add(Task(
+        org_id=1,
+        creator_id=1,
+        title="Test task",
+        task_status=TaskStatus.ACTIVE,
+        task_mode=TaskMode.MANUAL,
+        source=TaskSource.MANUAL,
+        urgency=Urgency.HIGH,
+    ))
+    db.add(Suggestion(
+        org_id=1,
+        creator_id=1,
+        title="Test suggestion",
+        status=SuggestionStatus.PENDING,
+        urgency=Urgency.MEDIUM,
+        suggestion_type="maintenance",
+    ))
+    db.commit()
+    db.close()
+
+    with eng.begin() as conn:
+        conn.execute(text("UPDATE suggestions SET urgency = 'low'"))
+        conn.execute(text("UPDATE tasks SET urgency = 'medium'"))
+
+    import main as _main
+    with patch.object(_main, "engine", eng):
+        _main._repair_enum_rows()
+
+    with eng.connect() as conn:
+        suggestion_urgencies = conn.execute(text("SELECT urgency FROM suggestions")).scalars().all()
+        task_urgencies = conn.execute(text("SELECT urgency FROM tasks")).scalars().all()
+
+    assert set(suggestion_urgencies) <= {"LOW", None}
+    assert set(task_urgencies) <= {"MEDIUM", None}
 
 
 def test_sqlite_columns_present():
@@ -141,15 +191,26 @@ def test_startup_with_existing_data_no_crash():
     # Populate some data
     from sqlalchemy.orm import sessionmaker
 
-    from db.models import Property, Tenant, Unit
+    from db.models import Property, Tenant, Unit, User
     Session = sessionmaker(bind=eng)
     db = Session()
 
     import uuid
     from datetime import UTC, datetime
-    acct_id = "test-account"
+    acct_id = 1
+    shadow_user = User(
+        id=2,
+        org_id=1,
+        email="tenant@example.com",
+        first_name="Test",
+        last_name="Tenant",
+        active=True,
+        created_at=datetime.now(UTC),
+    )
+    db.add(shadow_user)
     prop = Property(
         id=str(uuid.uuid4()),
+        org_id=1,
         creator_id=acct_id,
         address_line1="123 Test St",
         property_type="single_family",
@@ -158,16 +219,16 @@ def test_startup_with_existing_data_no_crash():
     db.add(prop)
     db.add(Unit(
         id=str(uuid.uuid4()),
+        org_id=1,
         creator_id=acct_id,
         property_id=prop.id,
         label="Main",
         created_at=datetime.now(UTC),
     ))
     db.add(Tenant(
-        id=str(uuid.uuid4()),
+        org_id=1,
         creator_id=acct_id,
-        first_name="Test",
-        last_name="Tenant",
+        user_id=shadow_user.id,
         created_at=datetime.now(UTC),
     ))
     db.commit()
@@ -181,6 +242,44 @@ def test_startup_with_existing_data_no_crash():
     assert db.query(Property).count() == 1
     assert db.query(Tenant).count() == 1
     db.close()
+
+
+def test_app_lifespan_startup_no_crash():
+    """FastAPI lifespan startup enters cleanly on an isolated database."""
+    import asyncio
+
+    import db.session as db_session
+    import handlers.deps as deps
+    import main as _main
+
+    eng = _sqlite_engine()
+    test_session_local = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=eng))
+
+    def _discard_task(coro):
+        if hasattr(coro, "close"):
+            coro.close()
+        return MagicMock()
+
+    with (
+        patch.object(_main, "engine", eng),
+        patch.object(_main, "SessionLocal", test_session_local),
+        patch.object(deps, "engine", eng),
+        patch.object(deps, "SessionLocal", test_session_local),
+        patch.object(db_session, "engine", eng),
+        patch.object(db_session, "SessionLocal", test_session_local),
+        patch.object(_main, "set_memory_backstop"),
+        patch.object(_main, "start_memory_monitor"),
+        patch.object(_main.agent_registry, "start_gateway"),
+        patch.object(_main.agent_registry, "restart_channels_async", new_callable=AsyncMock),
+        patch.object(_main.agent_registry, "stop_gateway"),
+        patch.object(_main.asyncio, "create_task", side_effect=_discard_task),
+    ):
+        asyncio.run(_run_lifespan(_main))
+
+
+async def _run_lifespan(main_module):
+    async with main_module.lifespan(main_module.app):
+        return None
 
 
 def test_startup_agent_memory_writes_with_explicit_creator():
@@ -199,8 +298,8 @@ def test_startup_agent_memory_writes_with_explicit_creator():
     from datetime import UTC, datetime
     mem = AgentMemory(
         id=str(uuid.uuid4()),
-        creator_id="test-account",
-        agent_id="test-agent",
+        org_id=1,
+        creator_id=1,
         memory_type="file:TEST.md",
         content="test content",
         updated_at=datetime.now(UTC),
@@ -227,7 +326,8 @@ def test_startup_scheduled_task_creation_with_explicit_creator():
     from datetime import UTC, datetime
     task = ScheduledTask(
         id=str(uuid.uuid4()),
-        creator_id="test-account",
+        org_id=1,
+        creator_id=1,
         name="Test task",
         prompt="Do something",
         schedule="0 9 * * *",

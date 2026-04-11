@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { getToken } from "@/lib/auth";
 import { Loader2, Play, Zap, ChevronLeft, ChevronDown, ChevronUp, Wand2, Save, PlusCircle, CheckCircle2, Trash2, XCircle, Star, Wrench } from "lucide-react";
-import { graphqlQuery, VENDORS_QUERY } from "@/data/api";
+import { listVendors } from "@/graphql/client";
 
 // ─── types ───────────────────────────────────────────────────────────────────
 
@@ -238,7 +238,7 @@ useEffect(() => {
 
   useEffect(() => {
     setVendorsLoading(true);
-    graphqlQuery<{ vendors: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string }[] }>(VENDORS_QUERY)
+    listVendors()
       .then(data => {
         setVendors((data.vendors ?? []).map(v => ({
           id: v.uid,

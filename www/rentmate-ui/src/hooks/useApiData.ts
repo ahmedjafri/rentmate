@@ -1,6 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
-import { graphqlQuery, HOUSES_QUERY, TENANTS_QUERY, TASKS_QUERY, VENDORS_QUERY, SUGGESTIONS_QUERY } from '@/data/api';
 import { Property, Tenant, Vendor, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, TaskParticipant, LinkedConversation } from '@/data/mockData';
+import {
+  fromGraphqlEnum,
+  fromGraphqlTaskStatus,
+  listHouses,
+  listSuggestions,
+  listTasks,
+  listTenants,
+  listVendors,
+} from '@/graphql/client';
 
 interface ApiState {
   properties: Property[];
@@ -55,11 +63,11 @@ export function useApiData(): ApiState {
 
     async function fetchAll() {
       const [housesResult, tenantsResult, tasksResult, vendorsResult, suggestionsResult] = await Promise.allSettled([
-        graphqlQuery<{ houses: ApiHouse[] }>(HOUSES_QUERY),
-        graphqlQuery<{ tenants: ApiTenant[] }>(TENANTS_QUERY),
-        graphqlQuery<{ tasks: ApiTask[] }>(TASKS_QUERY),
-        graphqlQuery<{ vendors: ApiVendor[] }>(VENDORS_QUERY),
-        graphqlQuery<{ suggestions: ApiSuggestion[] }>(SUGGESTIONS_QUERY, {}),
+        listHouses(),
+        listTenants(),
+        listTasks(),
+        listVendors(),
+        listSuggestions(),
       ]);
 
       if (cancelled) return;
@@ -99,12 +107,12 @@ export function useApiData(): ApiState {
 
       // Action Desk: all tasks except dismissed (suggested → active with waiting_approval mode)
       const actionDeskTasks: ActionDeskTask[] = allTasks
-        .filter(t => t.taskStatus !== 'dismissed')
+        .filter(t => fromGraphqlTaskStatus(t.taskStatus) !== 'cancelled')
         .map(apiTaskToActionDesk);
 
       // Maintenance tickets: category=maintenance tasks
       const tickets: MaintenanceTicket[] = allTasks
-        .filter(t => t.category === 'maintenance')
+        .filter(t => fromGraphqlEnum(t.category) === 'maintenance')
         .map(apiTaskToTicket);
 
       // Suggestions: fetched from dedicated suggestions query
@@ -157,7 +165,7 @@ export function apiMessagesToChatThread(messages: ApiTaskMessage[]): ChatMessage
     content: m.body ?? '',
     timestamp: parseUtc(m.sentAt),
     senderName: m.senderName ?? undefined,
-    messageType: (m.messageType as ChatMessage['messageType']) ?? 'message',
+    messageType: (fromGraphqlEnum(m.messageType) as ChatMessage['messageType']) ?? 'message',
     draftReply: m.draftReply ?? undefined,
     approvalStatus: (m.approvalStatus as ChatMessage['approvalStatus']) ?? undefined,
     suggestionId: m.suggestionId ?? undefined,
@@ -208,20 +216,21 @@ function apiTaskParticipants(t: ApiTask): TaskParticipant[] {
 function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
   const thread = apiMessagesToChatThread(t.messages ?? []);
   const last = thread[thread.length - 1];
+  const status = fromGraphqlTaskStatus(t.taskStatus) ?? 'active';
   return {
-    id: t.uid,
+    id: String(t.uid),
     taskNumber: t.taskNumber ?? null,
     title: t.title ?? '(untitled)',
-    mode: (t.taskMode as ActionDeskTask['mode']) ?? 'manual',
-    status: (t.taskStatus === 'suggested' ? 'active' : (t.taskStatus as ActionDeskTask['status'])) ?? 'active',
+    mode: (fromGraphqlEnum(t.taskMode) as ActionDeskTask['mode']) ?? 'manual',
+    status,
     participants: apiTaskParticipants(t),
     lastMessage: last?.content ?? '',
     lastMessageBy: last?.senderName ?? '',
     lastMessageAt: last ? new Date(last.timestamp) : parseUtc(t.createdAt),
     unreadCount: 0,
     propertyId: t.propertyId ?? undefined,
-    category: (t.category as ActionDeskTask['category']) ?? 'maintenance',
-    urgency: (t.urgency as ActionDeskTask['urgency']) ?? 'low',
+    category: (fromGraphqlEnum(t.category) as ActionDeskTask['category']) ?? 'maintenance',
+    urgency: (fromGraphqlEnum(t.urgency) as ActionDeskTask['urgency']) ?? 'low',
     chatThread: thread,
     confidential: t.confidential ?? false,
     requireVendorType: t.requireVendorType,
@@ -235,7 +244,7 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
     linkedConversations: (t.linkedConversations ?? []).map(lc => ({
       uid: lc.uid,
       label: lc.label,
-      conversationType: lc.conversationType,
+      conversationType: fromGraphqlEnum(lc.conversationType) ?? lc.conversationType,
       lastMessageAt: lc.lastMessageAt,
       messageCount: lc.messageCount,
       participants: lc.participants ?? [],
@@ -245,7 +254,7 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
 
 function apiTaskToTicket(t: ApiTask): MaintenanceTicket {
   return {
-    id: t.uid,
+    id: String(t.uid),
     tenantId: '',
     tenantName: t.tenantName ?? '',
     propertyId: t.propertyId ?? '',
@@ -260,21 +269,23 @@ function apiTaskToTicket(t: ApiTask): MaintenanceTicket {
 }
 
 function ticketStatusFromTaskStatus(s: string | undefined): MaintenanceTicket['status'] {
-  if (s === 'resolved') return 'resolved';
-  if (s === 'cancelled') return 'closed';
-  if (s === 'paused') return 'in_progress';
+  const status = fromGraphqlTaskStatus(s);
+  if (status === 'resolved') return 'resolved';
+  if (status === 'cancelled') return 'closed';
+  if (status === 'paused') return 'in_progress';
   return 'open';
 }
 
 function apiSuggestionToSuggestion(s: ApiSuggestion): Suggestion {
+  const status = fromGraphqlEnum(s.status);
   return {
-    id: s.uid,
+    id: String(s.uid),
     title: s.title ?? '',
     body: s.body ?? undefined,
-    category: (s.category as Suggestion['category']) ?? 'maintenance',
-    urgency: (s.urgency as Suggestion['urgency']) ?? 'low',
-    status: s.status === 'pending' ? 'pending' : s.status === 'accepted' ? 'accepted' : 'dismissed',
-    source: s.source ?? undefined,
+    category: (fromGraphqlEnum(s.category) as Suggestion['category']) ?? 'maintenance',
+    urgency: (fromGraphqlEnum(s.urgency) as Suggestion['urgency']) ?? 'low',
+    status: (status as Suggestion['status']) ?? 'pending',
+    source: fromGraphqlEnum(s.source) ?? undefined,
     automationKey: s.automationKey ?? undefined,
     options: s.options ?? undefined,
     actionTaken: s.actionTaken ?? undefined,

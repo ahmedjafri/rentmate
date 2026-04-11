@@ -7,6 +7,7 @@ Otherwise, falls back to the local agent.
 the AI agent, runs a conversation, and bridges progress events.
 """
 import asyncio
+import contextvars
 import json
 import os
 import queue
@@ -15,6 +16,12 @@ from typing import Any, Callable, Optional
 
 import httpx
 
+from backends.local_auth import (
+    reset_fallback_request_context,
+    resolve_account_id,
+    resolve_org_id,
+    set_fallback_request_context,
+)
 from llm.registry import agent_registry
 from llm.tracing import log_trace
 
@@ -33,12 +40,8 @@ _TOOL_LABELS = {
     "lookup_vendors": "Searching vendors",
     "propose_task": "Proposing task",
     "close_task": "Closing task",
-    "set_mode": "Changing mode",
-    "attach_vendor": "Assigning vendor",
-    "attach_entity": "Attaching to task",
     "message_person": "Sending message",
     "create_vendor": "Creating vendor",
-    "update_steps": "Updating progress",
     "save_memory": "Saving note",
     "recall_memory": "Checking memory",
     "edit_memory": "Editing memory",
@@ -127,20 +130,12 @@ async def chat_with_agent(
                     et = args.get("entity_type")
                     if et:
                         hint = f" ({et})"
-                elif tool_name == "attach_entity":
-                    etype = args.get("entity_type", "")
-                    hint = f" ({etype})" if etype else ""
                 elif tool_name == "message_person":
                     etype = args.get("entity_type", "")
                     draft = args.get("draft_message", "")
                     hint = f" → {etype}"
                     if draft:
                         hint += f": {draft[:80]}"
-                elif tool_name == "update_steps":
-                    steps = args.get("steps")
-                    if steps and isinstance(steps, list):
-                        labels = [s.get("label", "") for s in steps[:3] if isinstance(s, dict)]
-                        hint = f": {', '.join(l for l in labels if l)}" if labels else ""
                 elif tool_name == "create_property":
                     addr = args.get("address", "")
                     hint = f": {addr[:60]}" if addr else ""
@@ -169,9 +164,6 @@ async def chat_with_agent(
                     hint = f" → {et}" if et else ""
                 elif tool_name == "close_task":
                     hint = ""
-                elif tool_name == "set_mode":
-                    mode = args.get("mode", "")
-                    hint = f" → {mode}" if mode else ""
             msg = f"{label}{hint}"
             progress_events.append(msg)
             progress_queue.put(msg)
@@ -230,9 +222,11 @@ async def chat_with_agent(
 
     async def _run_with_progress():
         loop = asyncio.get_event_loop()
+        executor_context = contextvars.copy_context()
         task = loop.run_in_executor(
             None,
-            lambda: agent.run_conversation(
+            lambda: executor_context.run(
+                agent.run_conversation,
                 user_message=user_message,
                 system_message=system_message,
                 conversation_history=conversation_history if conversation_history else None,
@@ -372,6 +366,14 @@ async def _local_fallback(
     from llm.tools import pending_suggestion_messages
 
     token = pending_suggestion_messages.set([])
+    fallback_token = None
+    try:
+        fallback_token = set_fallback_request_context(
+            account_id=resolve_account_id(),
+            org_id=resolve_org_id(),
+        )
+    except RuntimeError:
+        fallback_token = None
     try:
         reply = await chat_with_agent(agent_id, session_key, messages, on_progress)
         side_effects = []
@@ -382,4 +384,6 @@ async def _local_fallback(
             })
         return AgentResponse(reply=reply, side_effects=side_effects)
     finally:
+        if fallback_token is not None:
+            reset_fallback_request_context(fallback_token)
         pending_suggestion_messages.reset(token)

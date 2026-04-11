@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Button } from '@/components/ui/button';
 import { MessageCircle, Plus } from 'lucide-react';
-import { graphqlQuery, DELETE_CONVERSATION_MUTATION } from '@/data/api';
+import { deleteConversation } from '@/graphql/client';
 import { toast } from 'sonner';
 import { ConvRow, TAB_CONFIG } from '@/components/chat/ConvRow';
 import type { TabKey } from '@/components/chat/ConvRow';
@@ -62,7 +62,7 @@ const Chats = () => {
             onClick={() => openChat({ conversationId: conv.uid })}
             onDelete={async () => {
               try {
-                await graphqlQuery(DELETE_CONVERSATION_MUTATION, { uid: conv.uid });
+                await deleteConversation(conv.uid);
                 removeConversation(conv.uid);
                 toast.success('Conversation deleted');
               } catch {

@@ -12,11 +12,52 @@ class TaskCategory(str, enum.Enum):
     OTHER = "other"
 
 
-class Urgency(str, enum.Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    CRITICAL = "critical"
+class Urgency(int, enum.Enum):
+    LOW = 1
+    MEDIUM = 2
+    HIGH = 3
+    CRITICAL = 4
+
+
+def parse_urgency(value: "Urgency | str | int | None") -> "Urgency | None":
+    if value is None or value == "":
+        return None
+    if isinstance(value, Urgency):
+        return value
+    if isinstance(value, int):
+        return Urgency(value)
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if normalized.isdigit():
+            return Urgency(int(normalized))
+        return Urgency[normalized.upper()]
+    raise ValueError(f"Unsupported urgency value: {value!r}")
+
+
+class TaskStatus(int, enum.Enum):
+    SUGGESTED = 1
+    ACTIVE = 2
+    PAUSED = 3
+    RESOLVED = 4
+    DISMISSED = 5
+
+
+class TaskMode(int, enum.Enum):
+    MANUAL = 1
+    WAITING_APPROVAL = 2
+    AUTONOMOUS = 3
+
+
+class TaskPriority(int, enum.Enum):
+    ROUTINE = 1
+    URGENT = 2
+
+
+class ChannelType(int, enum.Enum):
+    SMS = 1
+    EMAIL = 2
 
 
 class TaskSource(str, enum.Enum):
@@ -27,6 +68,18 @@ class TaskSource(str, enum.Enum):
     DOCUMENT = "document"
     TENANT_REPORT = "tenant_report"
     DEV_SIM = "dev_sim"
+
+
+class SuggestionSourceEnum(str, enum.Enum):
+    AUTOMATION = "automation"
+    AGENT = "agent"
+
+
+class SuggestionStatus(str, enum.Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    DISMISSED = "dismissed"
+    EXPIRED = "expired"
 
 
 # ─── Suggestion source (union) ───────────────────────────────────────────────
@@ -53,5 +106,5 @@ class SuggestionOption:
     """A single action button rendered in the suggestion UI."""
     key: str
     label: str
-    action: str      # value passed to act_on_suggestion (e.g. "accept_task")
+    action: str      # value passed to act_on_suggestion (e.g. "send_and_create_task")
     variant: str     # UI style: "default", "outline", "ghost"

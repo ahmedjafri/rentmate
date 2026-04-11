@@ -7,7 +7,7 @@ import {
   SuggestionStatus, ActionDeskTask as ADT,
 } from '@/data/mockData';
 import { useApiData } from '@/hooks/useApiData';
-import { graphqlQuery, UPDATE_TASK_MUTATION } from '@/data/api';
+import { updateTask as updateTaskMutation } from '@/graphql/client';
 import { getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 
@@ -266,12 +266,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateTask = useCallback((taskId: string, updates: Partial<ActionDeskTask>) => {
     // Persist mode/status changes to backend (fire-and-forget)
     if (updates.mode !== undefined || updates.status !== undefined) {
-      graphqlQuery(UPDATE_TASK_MUTATION, {
-        input: {
-          uid: taskId,
-          taskMode: updates.mode ?? null,
-          taskStatus: updates.status ?? null,
-        }
+      updateTaskMutation({
+        uid: taskId,
+        taskMode: updates.mode ?? null,
+        taskStatus: updates.status ?? null,
       }).catch((err: Error) => console.warn('Failed to update task:', err));
     }
     setActionDeskTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...updates } : t));

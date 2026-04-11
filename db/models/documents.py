@@ -1,27 +1,22 @@
-import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
     Column,
     DateTime,
-    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
     String,
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import relationship
 
-from .base import Base, HasAccountId, HasContext
+from .base import Base, HasContext, HasCreatorId, OrgId, PrimaryId
 
 
-class Document(Base, HasAccountId, HasContext):
-    """
-    An uploaded document (e.g. lease PDF).
-    """
+class Document(Base, OrgId, PrimaryId, HasCreatorId, HasContext):
+    """An uploaded document (e.g. lease PDF)."""
     __tablename__ = "documents"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
 
     filename = Column(String(255), nullable=False)
     content_type = Column(String(100), nullable=True)
@@ -34,41 +29,52 @@ class Document(Base, HasAccountId, HasContext):
     extracted_data = Column(JSON, nullable=True)
     error_message = Column(Text, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     processed_at = Column(DateTime, nullable=True)
     sha256_checksum = Column(String(64), nullable=True, index=True)
-    suggestion_states = Column(JSON, nullable=True)  # {category: 'accepted'|'rejected'}
     confirmed_at = Column(DateTime, nullable=True)
-    extraction_meta = Column(JSON, nullable=True)   # {llm_model, text_extractor, page_count, raw_text_chars, form_fields_found, form_fields_filled, input_chars_sent_to_llm}
+    extraction_meta = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_documents_server"),
+        ForeignKeyConstraint(
+            ["org_id", "creator_id"],
+            ["users.org_id", "users.id"],
+        ),
+    )
 
 
-class DocumentTask(Base):
-    """
-    Many-to-many junction: one document can spawn multiple tasks;
-    one task can reference multiple documents.
-    """
-    __tablename__ = "document_tasks"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    document_id = Column(String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
-    task_id = Column(String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-
-    task = relationship("Task", back_populates="document_tasks")
-
-    __table_args__ = (UniqueConstraint("document_id", "task_id", name="uq_document_task"),)
-
-
-class DocumentTag(Base):
-    """
-    Links a document to a property, unit, or tenant for the Documents UI tagging feature.
-    """
+class DocumentTag(Base, OrgId, PrimaryId):
+    """Links a document to a property, unit, or tenant for the Documents UI tagging feature."""
     __tablename__ = "document_tags"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    document_id = Column(String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(String(36), nullable=False, index=True)
     tag_type = Column(String(20), nullable=False)  # property/unit/tenant
-    property_id = Column(String(36), ForeignKey("properties.id", ondelete="CASCADE"), nullable=True)
-    unit_id = Column(String(36), ForeignKey("units.id", ondelete="CASCADE"), nullable=True)
-    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    property_id = Column(String(36), nullable=True)
+    unit_id = Column(String(36), nullable=True)
+    tenant_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_document_tags_server"),
+        ForeignKeyConstraint(
+            ["org_id", "document_id"],
+            ["documents.org_id", "documents.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "property_id"],
+            ["properties.org_id", "properties.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "unit_id"],
+            ["units.org_id", "units.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "tenant_id"],
+            ["tenants.org_id", "tenants.id"],
+            ondelete="CASCADE",
+        ),
+    )

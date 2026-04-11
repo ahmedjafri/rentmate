@@ -1,11 +1,11 @@
-import uuid
 from datetime import UTC, date as _date, datetime
 from typing import Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import Lease as SqlLease, Tenant as SqlTenant, Unit as SqlUnit
+from backends.local_auth import resolve_account_id, resolve_org_id
+from db.models import Lease as SqlLease, Tenant as SqlTenant, Unit as SqlUnit, User
 from gql.services import portal_auth
 from gql.types import AddLeaseForTenantInput, CreateTenantWithLeaseInput
 
@@ -13,7 +13,13 @@ from gql.types import AddLeaseForTenantInput, CreateTenantWithLeaseInput
 class TenantService:
     @staticmethod
     def delete_tenant(sess: Session, uid: str) -> bool:
-        tenant = sess.execute(select(SqlTenant).where(SqlTenant.id == uid)).scalar_one_or_none()
+        tenant = sess.execute(
+            select(SqlTenant).where(
+                SqlTenant.external_id == uid,
+                SqlTenant.org_id == resolve_org_id(),
+                SqlTenant.creator_id == resolve_account_id(),
+            )
+        ).scalar_one_or_none()
         if not tenant:
             raise ValueError(f"Tenant {uid} not found")
         sess.delete(tenant)
@@ -25,26 +31,40 @@ class TenantService:
         sess: Session, input: CreateTenantWithLeaseInput
     ) -> tuple[SqlTenant, SqlUnit, SqlLease]:
         unit = sess.execute(
-            select(SqlUnit).where(SqlUnit.id == input.unit_id, SqlUnit.property_id == input.property_id)
+            select(SqlUnit).where(
+                SqlUnit.id == input.unit_id,
+                SqlUnit.property_id == input.property_id,
+                SqlUnit.org_id == resolve_org_id(),
+            )
         ).scalar_one_or_none()
         if not unit:
             raise ValueError(f"Unit {input.unit_id} not found on property {input.property_id}")
 
-        from backends.local_auth import resolve_account_id
-        tenant = SqlTenant(
-            id=str(uuid.uuid4()),
+        shadow_user = User(
+            org_id=resolve_org_id(),
             creator_id=resolve_account_id(),
+            user_type="tenant",
             first_name=input.first_name,
             last_name=input.last_name,
             email=input.email,
             phone=input.phone,
+            active=True,
+            created_at=datetime.now(UTC),
+        )
+        sess.add(shadow_user)
+        sess.flush()
+
+        tenant = SqlTenant(
+            org_id=resolve_org_id(),
+            creator_id=resolve_account_id(),
+            user_id=shadow_user.id,
             created_at=datetime.now(UTC),
         )
         sess.add(tenant)
         sess.flush()
 
         lease = SqlLease(
-            id=str(uuid.uuid4()),
+            org_id=resolve_org_id(),
             creator_id=resolve_account_id(),
             tenant_id=tenant.id,
             unit_id=unit.id,
@@ -63,19 +83,28 @@ class TenantService:
     def add_lease_for_tenant(
         sess: Session, input: AddLeaseForTenantInput
     ) -> tuple[SqlTenant, SqlUnit, SqlLease]:
-        tenant = sess.execute(select(SqlTenant).where(SqlTenant.id == input.tenant_id)).scalar_one_or_none()
+        tenant = sess.execute(
+            select(SqlTenant).where(
+                SqlTenant.external_id == input.tenant_id,
+                SqlTenant.org_id == resolve_org_id(),
+                SqlTenant.creator_id == resolve_account_id(),
+            )
+        ).scalar_one_or_none()
         if not tenant:
             raise ValueError(f"Tenant {input.tenant_id} not found")
 
         unit = sess.execute(
-            select(SqlUnit).where(SqlUnit.id == input.unit_id, SqlUnit.property_id == input.property_id)
+            select(SqlUnit).where(
+                SqlUnit.id == input.unit_id,
+                SqlUnit.property_id == input.property_id,
+                SqlUnit.org_id == resolve_org_id(),
+            )
         ).scalar_one_or_none()
         if not unit:
             raise ValueError(f"Unit {input.unit_id} not found on property {input.property_id}")
 
-        from backends.local_auth import resolve_account_id
         lease = SqlLease(
-            id=str(uuid.uuid4()),
+            org_id=resolve_org_id(),
             creator_id=resolve_account_id(),
             tenant_id=tenant.id,
             unit_id=unit.id,
@@ -101,12 +130,12 @@ class TenantService:
         tenant = TenantService._find_by_portal_token(sess, token)
         if not tenant:
             raise ValueError("Invalid portal link")
-        jwt_token = portal_auth.create_portal_jwt("tenant", str(tenant.id))
+        jwt_token = portal_auth.create_portal_jwt("tenant", tenant.external_id)
         return tenant, jwt_token
 
     @staticmethod
     def get_portal_url(tenant: SqlTenant) -> str:
-        token = (tenant.extra or {}).get("portal_token")
+        token = portal_auth.parse_portal_entity_extra(tenant.extra).portal_token
         if not token:
             return ""
         return portal_auth.build_portal_url(token)

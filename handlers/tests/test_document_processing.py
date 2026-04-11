@@ -89,6 +89,7 @@ class TestProcessDocument:
         doc_id = str(uuid.uuid4())
         doc = Document(
             id=doc_id,
+            creator_id=1,
             filename="sample_rental_agreement.pdf",
             content_type="application/pdf",
             storage_path=f"documents/{doc_id}/sample_rental_agreement.pdf",
@@ -100,6 +101,20 @@ class TestProcessDocument:
         self.db.add(doc)
         self.db.flush()
         return doc_id
+
+    def _session_factory(self):
+        class _SessionProxy:
+            def __init__(self, session):
+                self._session = session
+
+            def __getattr__(self, name):
+                return getattr(self._session, name)
+
+            def close(self):
+                # The test fixture owns the real session lifecycle.
+                return None
+
+        return lambda: _SessionProxy(self.db)
 
     def test_process_document_full_pipeline(self):
         """Upload a real PDF and verify text extraction, chunking, vector
@@ -120,12 +135,12 @@ class TestProcessDocument:
         ]
 
         with (
-            patch("llm.document_processor._get_session_factory", return_value=lambda: self.db),
+            patch("llm.document_processor._get_session_factory", return_value=self._session_factory()),
             patch("llm.document_processor._set_progress"),
             patch("backends.wire.storage_backend.download", new_callable=AsyncMock, return_value=pdf_bytes),
             patch("litellm.completion", return_value=fake_llm_response),
         ):
-            asyncio.get_event_loop().run_until_complete(process_document(doc_id))
+            asyncio.run(process_document(doc_id))
 
         doc = self.db.query(Document).filter_by(id=doc_id).one()
 
@@ -153,12 +168,12 @@ class TestProcessDocument:
         doc_id = self._create_doc()
 
         with (
-            patch("llm.document_processor._get_session_factory", return_value=lambda: self.db),
+            patch("llm.document_processor._get_session_factory", return_value=self._session_factory()),
             patch("llm.document_processor._set_progress"),
             patch("backends.wire.storage_backend.download", new_callable=AsyncMock, side_effect=FileNotFoundError("gone")),
         ):
             with pytest.raises(FileNotFoundError, match="gone"):
-                asyncio.get_event_loop().run_until_complete(process_document(doc_id))
+                asyncio.run(process_document(doc_id))
 
     def test_extraction_produces_extracted_data(self):
         """Verify the LLM extraction step populates extracted_data."""
@@ -169,12 +184,12 @@ class TestProcessDocument:
         fake_llm.choices = [MagicMock(message=MagicMock(content='{"leases": [{"tenant_first_name": "Test"}]}'))]
 
         with (
-            patch("llm.document_processor._get_session_factory", return_value=lambda: self.db),
+            patch("llm.document_processor._get_session_factory", return_value=self._session_factory()),
             patch("llm.document_processor._set_progress"),
             patch("backends.wire.storage_backend.download", new_callable=AsyncMock, return_value=pdf_bytes),
             patch("litellm.completion", return_value=fake_llm),
         ):
-            asyncio.get_event_loop().run_until_complete(process_document(doc_id))
+            asyncio.run(process_document(doc_id))
 
         doc = self.db.query(Document).filter_by(id=doc_id).one()
         assert doc.extracted_data is not None

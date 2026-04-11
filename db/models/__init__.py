@@ -1,10 +1,25 @@
+# ruff: noqa: E402
+# Composite FKs all share org_id, causing harmless overlap warnings.
+# org_id is always the same within an org, so the concurrent writes are safe.
+import warnings
+
+from sqlalchemy.exc import SAWarning
+
+warnings.filterwarnings("ignore", message=r".*will copy column.*\.org_id.*", category=SAWarning)
+
 from db.enums import (
     AgentSource,
     AutomationSource,
+    ChannelType,
     SuggestionOption,
     SuggestionSource,
+    SuggestionSourceEnum,
+    SuggestionStatus,
     TaskCategory,
+    TaskMode,
+    TaskPriority,
     TaskSource,
+    TaskStatus,
     Urgency,
 )
 
@@ -13,13 +28,13 @@ from .agent_memory import AgentMemory
 from .agent_trace import AgentTrace
 
 # AutomationRevision removed — replaced by ScheduledTask
-from .base import Base, EntityNote, HasAccountId, HasCreatorId
-from .documents import Document, DocumentTag, DocumentTask
+from .base import Base, EntityNote, HasCreatorId
+from .documents import Document, DocumentTag
 from .messaging import (
     Conversation,
     ConversationParticipant,
     ConversationType,
-    ExternalContact,
+    DraftApprovalStatus,
     Message,
     MessageReceipt,
     MessageType,
@@ -35,7 +50,6 @@ __all__ = [
     "User",
     "Base",
     "HasCreatorId",
-    "HasAccountId",
     "EntityNote",
     "Property",
     "Unit",
@@ -44,7 +58,7 @@ __all__ = [
     "ParticipantType",
     "ConversationType",
     "MessageType",
-    "ExternalContact",
+    "DraftApprovalStatus",
     "Task",
     "TaskNumberSequence",
     "Suggestion",
@@ -53,17 +67,22 @@ __all__ = [
     "Message",
     "MessageReceipt",
     "Document",
-    "DocumentTask",
     "DocumentTag",
     "AgentMemory",
     "AgentTrace",
     "AppSetting",
     "ScheduledTask",
+    "ChannelType",
     "TaskCategory",
-    "Urgency",
+    "TaskMode",
+    "TaskPriority",
     "TaskSource",
+    "TaskStatus",
+    "Urgency",
     "AutomationSource",
     "AgentSource",
     "SuggestionSource",
+    "SuggestionSourceEnum",
+    "SuggestionStatus",
     "SuggestionOption",
 ]

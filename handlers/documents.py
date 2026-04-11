@@ -5,9 +5,10 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
-from backends.local_auth import resolve_account_id
+from backends.local_auth import resolve_account_id, resolve_org_id
 from backends.wire import storage_backend
-from db.models import Document, DocumentTask
+from db.models import Document
+from gql.services.document_service import dump_document_extraction_meta
 from handlers.deps import get_db, require_user
 
 router = APIRouter()
@@ -27,13 +28,12 @@ async def upload_document(
     file_bytes = await file.read()
     checksum = hashlib.sha256(file_bytes).hexdigest()
 
-    existing = db.query(Document).filter(Document.sha256_checksum == checksum).one_or_none()
+    existing = db.query(Document).filter(
+        Document.sha256_checksum == checksum,
+        Document.org_id == resolve_org_id(),
+        Document.creator_id == resolve_account_id(),
+    ).one_or_none()
     if existing:
-        if task_id:
-            exists = db.query(DocumentTask).filter_by(document_id=existing.id, task_id=task_id).one_or_none()
-            if not exists:
-                db.add(DocumentTask(document_id=existing.id, task_id=task_id))
-                db.commit()
         return {"document_id": existing.id, "duplicate": True}
 
     doc_id = str(_uuid.uuid4())
@@ -43,6 +43,7 @@ async def upload_document(
 
     doc = Document(
         id=doc_id,
+        org_id=resolve_org_id(),
         creator_id=resolve_account_id(),
         filename=file.filename,
         content_type=file.content_type,
@@ -50,10 +51,9 @@ async def upload_document(
         document_type=document_type,
         status="pending",
         sha256_checksum=checksum,
+        extraction_meta=dump_document_extraction_meta(task_id=task_id) if task_id else None,
     )
     db.add(doc)
-    if task_id:
-        db.add(DocumentTask(document_id=doc_id, task_id=task_id))
     db.commit()
 
     if not skip_extraction:
@@ -72,7 +72,11 @@ async def reprocess_document(
 ):
     """Clear extracted data and re-run document processing with the current extraction prompt."""
     await require_user(request)
-    doc = db.query(Document).filter(Document.id == document_id).one_or_none()
+    doc = db.query(Document).filter(
+        Document.id == document_id,
+        Document.org_id == resolve_org_id(),
+        Document.creator_id == resolve_account_id(),
+    ).one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     if not doc.storage_path:
@@ -100,7 +104,11 @@ async def get_document(
     db: Session = Depends(get_db),
 ):
     await require_user(request)
-    doc = db.query(Document).filter(Document.id == document_id).one_or_none()
+    doc = db.query(Document).filter(
+        Document.id == document_id,
+        Document.org_id == resolve_org_id(),
+        Document.creator_id == resolve_account_id(),
+    ).one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     return {
@@ -126,7 +134,11 @@ async def delete_document(
     db: Session = Depends(get_db),
 ):
     await require_user(request)
-    doc = db.query(Document).filter(Document.id == document_id).one_or_none()
+    doc = db.query(Document).filter(
+        Document.id == document_id,
+        Document.org_id == resolve_org_id(),
+        Document.creator_id == resolve_account_id(),
+    ).one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -156,7 +168,10 @@ async def get_document_tags(
     await require_user(request)
     from db.models import DocumentTag, Property as SqlProperty, Tenant as SqlTenant, Unit as SqlUnit
     from db.queries import format_address as _format_address
-    tags = db.query(DocumentTag).filter(DocumentTag.document_id == document_id).all()
+    tags = db.query(DocumentTag).filter(
+        DocumentTag.document_id == document_id,
+        DocumentTag.org_id == resolve_org_id(),
+    ).all()
     result = []
     for tag in tags:
         entry: Dict[str, Any] = {
@@ -177,9 +192,10 @@ async def get_document_tags(
                 prop_label = (prop.name or _format_address(prop)) if prop else ""
                 entry["label"] = f"{unit.label}" + (f" — {prop_label}" if prop_label else "")
         if tag.tenant_id:
-            tenant = db.query(SqlTenant).filter_by(id=tag.tenant_id).first()
+            tenant = db.query(SqlTenant).filter_by(id=tag.tenant_id, org_id=resolve_org_id()).first()
             if tenant:
-                entry["label"] = f"{tenant.first_name} {tenant.last_name}"
+                user = tenant.user
+                entry["label"] = f"{user.first_name or ''} {user.last_name or ''}".strip()
         result.append(entry)
     return result
 
@@ -201,7 +217,7 @@ async def add_document_tag_rest(
     if not tag_type:
         raise HTTPException(status_code=400, detail="tag_type required")
     # Prevent duplicates
-    q = db.query(DocumentTag).filter_by(document_id=document_id)
+    q = db.query(DocumentTag).filter_by(document_id=document_id, org_id=resolve_org_id())
     if property_id:
         q = q.filter_by(property_id=property_id)
     if unit_id:
@@ -213,6 +229,7 @@ async def add_document_tag_rest(
         return {"id": str(existing.id), "existed": True}
     tag = DocumentTag(
         id=str(_uuid.uuid4()),
+        org_id=resolve_org_id(),
         document_id=document_id,
         tag_type=tag_type,
         property_id=property_id,
@@ -233,7 +250,7 @@ async def delete_document_tag(
     """Remove a document tag."""
     await require_user(request)
     from db.models import DocumentTag
-    tag = db.query(DocumentTag).filter_by(id=tag_id).first()
+    tag = db.query(DocumentTag).filter_by(id=tag_id, org_id=resolve_org_id()).first()
     if not tag:
         raise HTTPException(status_code=404, detail="Tag not found")
     db.delete(tag)
@@ -250,7 +267,10 @@ async def get_property_documents(
     """Return documents tagged to a property."""
     await require_user(request)
     from db.models import Document as DocModel, DocumentTag
-    tags = db.query(DocumentTag).filter(DocumentTag.property_id == property_id).all()
+    tags = db.query(DocumentTag).filter(
+        DocumentTag.property_id == property_id,
+        DocumentTag.org_id == resolve_org_id(),
+    ).all()
     doc_ids = [t.document_id for t in tags]
     if not doc_ids:
         return []
@@ -275,6 +295,10 @@ async def list_documents(
     await require_user(request)
     docs = (
         db.query(Document)
+        .filter(
+            Document.org_id == resolve_org_id(),
+            Document.creator_id == resolve_account_id(),
+        )
         .order_by(Document.created_at.desc())
         .limit(50)
         .all()

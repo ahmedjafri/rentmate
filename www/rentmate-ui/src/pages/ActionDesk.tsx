@@ -9,7 +9,7 @@ import { Lightbulb, CheckCircle2, XCircle, Loader2, MessageCircle, Send, X, Buil
 import { formatMessageTime } from '@/components/chat/ChatMessage';
 import { PageLoader } from '@/components/ui/page-loader';
 
-import { graphqlQuery, ACT_ON_SUGGESTION_MUTATION } from '@/data/api';
+import { actOnSuggestion } from '@/graphql/client';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -39,11 +39,11 @@ export function SuggestionCard({ suggestion, onAction, isActive, compact }: {
   const [editedDraft, setEditedDraft] = useState(draftText);
 
   const opts = suggestion.options ?? [
-    { key: 'accept', label: 'Accept', action: 'accept_task', variant: 'default' },
-    { key: 'reject', label: 'Reject', action: 'reject_task', variant: 'ghost' },
+    { key: 'create', label: 'Create Task', action: 'send_and_create_task', variant: 'default' },
+    { key: 'dismiss', label: 'Dismiss', action: 'reject_task', variant: 'ghost' },
   ];
 
-  const sendAction = opts.some(o => o.action === 'attach_vendor_send') ? 'attach_vendor_send' : 'approve_draft';
+  const sendAction = 'send_and_create_task';
 
   const handleAction = async (action: string, body?: string) => {
     setLoading(action);
@@ -150,7 +150,7 @@ export function SuggestionCard({ suggestion, onAction, isActive, compact }: {
               className={cn("h-7 text-xs rounded-lg", compact && "w-full")}
               disabled={loading !== null}
               onClick={() => {
-                if (opt.action === 'edit_draft') {
+                if (opt.action === 'edit_message') {
                   setEditing(true);
                 } else {
                   handleAction(opt.action);
@@ -182,12 +182,9 @@ const ActionDesk = () => {
 
   const handleAction = async (suggestionId: string, action: string, editedBody?: string) => {
     try {
-      const result = await graphqlQuery<{ actOnSuggestion: { uid: string; status: string; taskId?: string } }>(
-        ACT_ON_SUGGESTION_MUTATION,
-        { uid: suggestionId, action, editedBody: editedBody ?? null },
-      );
+      const result = await actOnSuggestion(suggestionId, action, editedBody ?? null);
       const { status, taskId } = result.actOnSuggestion;
-      updateSuggestionStatus(suggestionId, status as 'accepted' | 'dismissed');
+      updateSuggestionStatus(suggestionId, status.toLowerCase() as 'accepted' | 'dismissed');
       if (status === 'accepted') {
         toast.success(taskId ? 'Task created' : 'Suggestion accepted');
       } else {

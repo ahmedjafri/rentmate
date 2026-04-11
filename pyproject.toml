@@ -27,9 +27,11 @@ alembic = "^1.17.1"
 testcontainers = {extras = ["postgres"], version = "^4.14.2"}
 psycopg2-binary = "^2.9"
 ruff = "^0.15.9"
+pytest-cov = "^7.1.0"
 
 [tool.pytest.ini_options]
-addopts = "-m 'not eval'"
+addopts = "--import-mode=prepend -m 'not eval'"
+pythonpath = ["."]
 markers = [
   "eval: LLM-judge eval cases (run with -m eval)",
   "postgres: integration tests that require Docker + a running Postgres container",

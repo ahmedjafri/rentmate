@@ -1,5 +1,4 @@
 """Tenant-facing REST endpoints. All require a tenant JWT."""
-import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
@@ -34,14 +33,17 @@ def tenant_me(request: Request):
         raise HTTPException(status_code=404, detail="Tenant not found")
     return {
         "id": str(tenant.id),
-        "name": f"{tenant.first_name} {tenant.last_name}".strip(),
-        "email": tenant.email,
-        "phone": tenant.phone,
+        "name": tenant.user.name,
+        "email": tenant.user.email,
+        "phone": tenant.user.phone,
     }
 
 
 def _tenant_tasks(db, tenant_id: str) -> list:
     """Find tasks linked to this tenant via unit, property, or conversation."""
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant:
+        return []
     task_ids: set[str] = set()
 
     # Via lease → unit → task
@@ -65,7 +67,7 @@ def _tenant_tasks(db, tenant_id: str) -> list:
     # Via conversation participant (tenant is on a linked conversation)
     participant_convos = db.execute(
         select(ConversationParticipant.conversation_id).where(
-            ConversationParticipant.tenant_id == tenant_id,
+            ConversationParticipant.user_id == tenant.user_id,
             ConversationParticipant.is_active.is_(True),
         )
     ).scalars().all()
@@ -104,6 +106,9 @@ def tenant_tasks(request: Request):
 
 def _task_messages_for_tenant(db, task: Task, tenant_id: str) -> list:
     """Return messages from the tenant conversation on this task."""
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant:
+        return []
     # Check parent_conversation_id first (tenant convos usually linked here)
     conv_id = None
     for cid in [task.parent_conversation_id, task.external_conversation_id]:
@@ -116,7 +121,7 @@ def _task_messages_for_tenant(db, task: Task, tenant_id: str) -> list:
         participant = db.execute(
             select(ConversationParticipant).where(
                 ConversationParticipant.conversation_id == cid,
-                ConversationParticipant.tenant_id == tenant_id,
+                ConversationParticipant.user_id == tenant.user_id,
             )
         ).scalar_one_or_none()
         if participant:
@@ -147,6 +152,9 @@ def _task_messages_for_tenant(db, task: Task, tenant_id: str) -> list:
 
 def _verify_tenant_task(db, task_id: str, tenant_id: str) -> Task:
     """Load a task and verify the tenant has access."""
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
     task = db.execute(select(Task).where(Task.id == task_id)).scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -173,7 +181,7 @@ def _verify_tenant_task(db, task_id: str, tenant_id: str) -> Task:
             participant = db.execute(
                 select(ConversationParticipant).where(
                     ConversationParticipant.conversation_id == cid,
-                    ConversationParticipant.tenant_id == tenant_id,
+                    ConversationParticipant.user_id == tenant.user_id,
                 )
             ).scalar_one_or_none()
             if participant:
@@ -217,7 +225,7 @@ def tenant_send_message(task_id: str, msg: SendMessageBody, request: Request):
     db = get_db(request)
     task = _verify_tenant_task(db, task_id, info["tenant_id"])
     tenant = db.get(Tenant, info["tenant_id"])
-    tenant_name = f"{tenant.first_name} {tenant.last_name}".strip() if tenant else "Tenant"
+    tenant_name = tenant.user.name if tenant and tenant.user else "Tenant"
 
     # Find the tenant conversation
     conv_id = None
@@ -227,7 +235,7 @@ def tenant_send_message(task_id: str, msg: SendMessageBody, request: Request):
         participant = db.execute(
             select(ConversationParticipant).where(
                 ConversationParticipant.conversation_id == cid,
-                ConversationParticipant.tenant_id == info["tenant_id"],
+                ConversationParticipant.user_id == tenant.user_id,
             )
         ).scalar_one_or_none()
         if participant:
@@ -239,9 +247,10 @@ def tenant_send_message(task_id: str, msg: SendMessageBody, request: Request):
 
     now = datetime.now(UTC)
     message = Message(
-        id=str(uuid.uuid4()),
+        org_id=tenant.org_id,
         conversation_id=conv_id,
         sender_type=ParticipantType.TENANT,
+        sender_id=participant.id if participant else None,
         body=msg.body,
         message_type=MessageType.MESSAGE,
         sender_name=tenant_name,

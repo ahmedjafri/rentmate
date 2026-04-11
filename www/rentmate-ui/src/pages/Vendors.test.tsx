@@ -1,7 +1,7 @@
 /**
  * Tests for the Vendors page.
  *
- * Strategy: mock useApp (context) and graphqlQuery (API) so tests are fast and
+ * Strategy: mock useApp (context) and the GraphQL client so tests are fast and
  * hermetic.  We verify:
  *   - empty state renders correctly
  *   - vendor cards render the right fields
@@ -37,20 +37,25 @@ vi.mock('@/context/AppContext', () => ({
   }),
 }));
 
-const mockGraphqlQuery = vi.fn().mockImplementation((query: string) => {
-  // EntityContextCard fetches private notes — return empty
-  if (typeof query === 'string' && query.includes('entityNote')) {
-    return Promise.resolve({ entityNote: null });
-  }
-  return Promise.resolve({});
-});
-vi.mock('@/data/api', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@/data/api')>();
-  return {
-    ...original,
-    graphqlQuery: (...args: unknown[]) => mockGraphqlQuery(...args),
-  };
-});
+const mockGetVendorTypes = vi.fn();
+const mockCreateVendor = vi.fn();
+const mockUpdateVendorMutation = vi.fn();
+const mockDeleteVendorMutation = vi.fn();
+const mockSendSms = vi.fn();
+const mockGetEntityNote = vi.fn();
+const mockSaveEntityNote = vi.fn();
+const mockUpdateEntityContext = vi.fn();
+
+vi.mock('@/graphql/client', () => ({
+  getVendorTypes: (...args: unknown[]) => mockGetVendorTypes(...args),
+  createVendor: (...args: unknown[]) => mockCreateVendor(...args),
+  updateVendor: (...args: unknown[]) => mockUpdateVendorMutation(...args),
+  deleteVendor: (...args: unknown[]) => mockDeleteVendorMutation(...args),
+  sendSms: (...args: unknown[]) => mockSendSms(...args),
+  getEntityNote: (...args: unknown[]) => mockGetEntityNote(...args),
+  saveEntityNote: (...args: unknown[]) => mockSaveEntityNote(...args),
+  updateEntityContext: (...args: unknown[]) => mockUpdateEntityContext(...args),
+}));
 
 // Radix Select uses ResizeObserver internally
 global.ResizeObserver = class {
@@ -87,14 +92,16 @@ describe('Vendors page', () => {
     mockAddVendor.mockReset();
     mockUpdateVendor.mockReset();
     mockRemoveVendor.mockReset();
-    mockGraphqlQuery.mockReset();
-    // Default: handle entity note queries + vendorTypes
-    mockGraphqlQuery.mockImplementation((query: string) => {
-      if (typeof query === 'string' && query.includes('entityNote')) {
-        return Promise.resolve({ entityNote: null });
-      }
-      return Promise.resolve({ vendorTypes: ['Plumber', 'Electrician', 'HVAC', 'Landscaper'] });
-    });
+    mockGetVendorTypes.mockReset();
+    mockCreateVendor.mockReset();
+    mockUpdateVendorMutation.mockReset();
+    mockDeleteVendorMutation.mockReset();
+    mockSendSms.mockReset();
+    mockGetEntityNote.mockReset();
+    mockSaveEntityNote.mockReset();
+    mockUpdateEntityContext.mockReset();
+    mockGetEntityNote.mockResolvedValue({ entityNote: null });
+    mockGetVendorTypes.mockResolvedValue({ vendorTypes: ['Plumber', 'Electrician', 'HVAC', 'Landscaper'] });
   });
 
   // --- Render without crash ---
@@ -191,12 +198,9 @@ describe('Vendors page', () => {
   });
 
   it.skip('calls createVendor mutation and addVendor on submit', async () => {
-    mockGraphqlQuery.mockImplementation((query: string) => {
-      if (typeof query === 'string' && query.includes('entityNote')) return Promise.resolve({ entityNote: null });
-      if (typeof query === 'string' && query.includes('createVendor')) return Promise.resolve({
-        createVendor: { uid: 'new-id', name: 'New Guy', company: null, vendorType: null, phone: null, email: null, notes: null },
-      });
-      return Promise.resolve({ vendorTypes: ['Plumber'] });
+    mockGetVendorTypes.mockResolvedValue({ vendorTypes: ['Plumber'] });
+    mockCreateVendor.mockResolvedValue({
+      createVendor: { uid: 'new-id', name: 'New Guy', company: null, vendorType: null, phone: null, email: null, notes: null },
     });
 
     renderPage();
@@ -210,7 +214,7 @@ describe('Vendors page', () => {
     fireEvent.click(submitButton);
 
     await waitFor(() => {
-      expect(mockGraphqlQuery).toHaveBeenCalledWith(expect.stringContaining('createVendor'), expect.anything());
+      expect(mockCreateVendor).toHaveBeenCalled();
       expect(mockAddVendor).toHaveBeenCalledWith(expect.objectContaining({ id: 'new-id', name: 'New Guy' }));
     });
   });
@@ -222,10 +226,7 @@ describe('Vendors page', () => {
     const submitButton = within(dialog).getByRole('button', { name: /add vendor/i });
     fireEvent.click(submitButton);
     await waitFor(() => {
-      // Should not call createVendor mutation (entity note queries are OK)
-      expect(mockGraphqlQuery).not.toHaveBeenCalledWith(
-        expect.stringContaining('createVendor'), expect.anything(),
-      );
+      expect(mockCreateVendor).not.toHaveBeenCalled();
     });
   });
 
@@ -244,12 +245,9 @@ describe('Vendors page', () => {
 
   it('calls updateVendor mutation and updateVendor on submit', async () => {
     mockVendors = [makeVendor()];
-    mockGraphqlQuery.mockImplementation((query: string) => {
-      if (typeof query === 'string' && query.includes('entityNote')) return Promise.resolve({ entityNote: null });
-      if (typeof query === 'string' && query.includes('updateVendor')) return Promise.resolve({
-        updateVendor: { uid: 'v1', name: 'Jane Updated', company: 'Smith Plumbing', vendorType: 'Plumber', phone: '555-1234', email: 'jane@example.com', notes: 'Reliable' },
-      });
-      return Promise.resolve({ vendorTypes: ['Plumber'] });
+    mockGetVendorTypes.mockResolvedValue({ vendorTypes: ['Plumber'] });
+    mockUpdateVendorMutation.mockResolvedValue({
+      updateVendor: { uid: 'v1', name: 'Jane Updated', company: 'Smith Plumbing', vendorType: 'Plumber', phone: '555-1234', email: 'jane@example.com', notes: 'Reliable' },
     });
 
     renderPage();
@@ -263,7 +261,7 @@ describe('Vendors page', () => {
     fireEvent.click(screen.getByRole('button', { name: /update/i }));
 
     await waitFor(() => {
-      expect(mockGraphqlQuery).toHaveBeenCalledWith(expect.stringContaining('updateVendor'), expect.anything());
+      expect(mockUpdateVendorMutation).toHaveBeenCalled();
       expect(mockUpdateVendor).toHaveBeenCalledWith('v1', expect.objectContaining({ name: 'Jane Updated' }));
     });
   });
@@ -281,11 +279,7 @@ describe('Vendors page', () => {
 
   it('calls deleteVendor mutation and removeVendor on confirm', async () => {
     mockVendors = [makeVendor()];
-    mockGraphqlQuery.mockImplementation((query: string) => {
-      if (typeof query === 'string' && query.includes('entityNote')) return Promise.resolve({ entityNote: null });
-      if (typeof query === 'string' && query.includes('deleteVendor')) return Promise.resolve({ deleteVendor: true });
-      return Promise.resolve({ vendorTypes: ['Plumber'] });
-    });
+    mockDeleteVendorMutation.mockResolvedValue({ deleteVendor: true });
 
     renderPage();
     const card = screen.getByText('Jane Smith').closest('[class*="p-4"]')!;
@@ -294,10 +288,7 @@ describe('Vendors page', () => {
     fireEvent.click(screen.getByRole('button', { name: /confirm/i }));
 
     await waitFor(() => {
-      expect(mockGraphqlQuery).toHaveBeenCalledWith(
-        expect.stringContaining('deleteVendor'),
-        expect.objectContaining({ uid: 'v1' }),
-      );
+      expect(mockDeleteVendorMutation).toHaveBeenCalledWith('v1');
       expect(mockRemoveVendor).toHaveBeenCalledWith('v1');
     });
   });

@@ -1,16 +1,19 @@
 """Service for creating and acting on Suggestions."""
 from datetime import UTC, datetime
+from typing import Annotated, Literal
 
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from backends.local_auth import resolve_account_id
+from backends.local_auth import resolve_account_id, resolve_org_id
 from db.enums import (
     AutomationSource,
     SuggestionOption,
     SuggestionSource,
     TaskCategory,
     Urgency,
+    parse_urgency,
 )
 from db.models import (
     Conversation,
@@ -22,7 +25,71 @@ from db.models import (
 )
 
 
-def _get_creator_id(sess: Session, property_id: str | None, unit_id: str | None) -> str:
+class SuggestionOptionRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    label: str
+    action: str
+    variant: str
+
+
+class SuggestionActionPayloadBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str
+
+
+class SendMsgAndCreateTaskPayload(SuggestionActionPayloadBase):
+    action: Literal["send_and_create_task", "edit_message"]
+    vendor_id: str | int
+    vendor_name: str | None = None
+    draft_message: str | None = None
+    steps: list[dict] | None = None
+
+
+class MessagePersonPayload(SuggestionActionPayloadBase):
+    action: Literal["message_person"]
+    entity_id: str | int
+    entity_type: str
+    entity_name: str | None = None
+    entity_phone: str | None = None
+    draft_message: str
+
+
+SuggestionActionPayload = Annotated[
+    SendMsgAndCreateTaskPayload | MessagePersonPayload,
+    Field(discriminator="action"),
+]
+_ACTION_PAYLOAD_ADAPTER = TypeAdapter(SuggestionActionPayload)
+
+
+def dump_suggestion_options(options: list[SuggestionOption | SuggestionOptionRecord] | None) -> list[dict] | None:
+    if not options:
+        return None
+    records = [
+        option if isinstance(option, SuggestionOptionRecord) else SuggestionOptionRecord.model_validate(option.__dict__)
+        for option in options
+    ]
+    return [record.model_dump(exclude_none=True) for record in records]
+
+
+def coerce_action_payload(action_payload: BaseModel | dict | None) -> dict | None:
+    if action_payload is None:
+        return None
+    if isinstance(action_payload, BaseModel):
+        return action_payload.model_dump(exclude_none=True)
+
+    data = dict(action_payload)
+    if "action" not in data:
+        if "entity_type" in data and "entity_id" in data and data.get("draft_message"):
+            data["action"] = "message_person"
+        elif "vendor_id" in data:
+            data["action"] = "send_and_create_task"
+    return _ACTION_PAYLOAD_ADAPTER.validate_python(data).model_dump(exclude_none=True)
+
+
+def _get_creator_id(sess: Session, property_id: str | None, unit_id: str | None) -> int:
     try:
         if property_id:
             res = sess.execute(text("SELECT creator_id FROM properties WHERE id = :id"), {"id": property_id}).fetchone()
@@ -34,7 +101,7 @@ def _get_creator_id(sess: Session, property_id: str | None, unit_id: str | None)
                 return res[0]
     except Exception:
         pass
-    return 1
+    return resolve_account_id()
 
 
 def create_suggestion(
@@ -45,8 +112,8 @@ def create_suggestion(
     category: TaskCategory | None = None,
     urgency: Urgency | None = None,
     source: SuggestionSource = AutomationSource(automation_key=""),
-    options: list[SuggestionOption] | None = None,
-    action_payload: dict | None = None,
+    options: list[SuggestionOption | SuggestionOptionRecord] | None = None,
+    action_payload: BaseModel | dict | None = None,
     property_id: str | None = None,
     unit_id: str | None = None,
     risk_score: int | None = None,
@@ -64,9 +131,9 @@ def create_suggestion(
             The automation key is used for per-check config lookup and deduplication.
         options: Action buttons rendered in the suggestion UI.
             Built by ``settings_service.build_suggestion_options()``.
-        action_payload: Arbitrary context needed to execute the chosen action.  Common
-            keys: ``vendor_id``, ``vendor_name`` (to wire up a vendor conversation on
-            accept), ``draft_message`` (pre-written outreach text for approve_draft).
+        action_payload: Arbitrary context needed to execute the chosen action. Common
+            keys: ``vendor_id``, ``vendor_name`` and ``draft_message`` for the
+            send-and-create-task flow.
         property_id: Scoping FK — the property this suggestion relates to.
         unit_id: Scoping FK — the unit this suggestion relates to.
     """
@@ -82,13 +149,11 @@ def create_suggestion(
         automation_key = None
 
     # Serialize options to dicts for JSON storage
-    options_dicts = [
-        {"key": o.key, "label": o.label, "action": o.action, "variant": o.variant}
-        for o in options
-    ] if options else None
+    options_dicts = dump_suggestion_options(options)
 
     # Create AI conversation for this suggestion
     ai_convo = Conversation(
+        org_id=resolve_org_id(),
         subject=title,
         property_id=property_id,
         creator_id=resolve_account_id(),
@@ -103,16 +168,17 @@ def create_suggestion(
     sess.flush()
 
     suggestion = Suggestion(
+        org_id=resolve_org_id(),
         creator_id=creator_id,
         title=title,
         body=ai_context,
         category=category,
-        urgency=urgency,
+        urgency=parse_urgency(urgency),
         source=source_str,
         automation_key=automation_key,
         status="pending",
         options=options_dicts,
-        action_payload=action_payload,
+        action_payload=coerce_action_payload(action_payload),
         property_id=property_id,
         unit_id=unit_id,
         ai_conversation_id=ai_convo.id,
@@ -127,6 +193,7 @@ def create_suggestion(
     # Add context message to AI conversation
     if ai_context:
         sess.add(Message(
+            org_id=resolve_org_id(),
             conversation_id=ai_convo.id,
             sender_type=PT.ACCOUNT_USER,
             body=ai_context,
@@ -155,12 +222,16 @@ def act_on_suggestion(
 
     Args:
         suggestion_id: The suggestion to act on.
-        action: The action key from the suggestion's options (e.g. "accept_task",
-            "approve_draft", "reject_task", "close_task", "set_mode").
+        action: The action key from the suggestion's options (e.g.
+            "send_and_create_task", "edit_message", "reject_task", "close_task").
         task_id: Optional task ID to link to the suggestion on accept.
     """
     suggestion = sess.execute(
-        select(Suggestion).where(Suggestion.id == suggestion_id)
+        select(Suggestion).where(
+            Suggestion.id == suggestion_id,
+            Suggestion.org_id == resolve_org_id(),
+            Suggestion.creator_id == resolve_account_id(),
+        )
     ).scalar_one_or_none()
     if not suggestion:
         raise ValueError(f"Suggestion {suggestion_id} not found")
@@ -169,10 +240,10 @@ def act_on_suggestion(
 
     now = datetime.now(UTC)
 
-    if action in ("accept_task", "approve_draft", "close_task", "set_mode", "attach_vendor", "attach_vendor_send", "attach_entity", "message_person_send", "update_steps"):
+    if action in ("send_and_create_task", "edit_message", "close_task", "message_person_send"):
         suggestion.status = "accepted"
         if task_id:
-            suggestion.task_id = task_id
+            suggestion.task_id = int(task_id)
     elif action == "reject_task":
         suggestion.status = "dismissed"
     else:
@@ -193,6 +264,10 @@ def get_suggestions(
 ) -> list[Suggestion]:
     """Fetch suggestions, optionally filtered by status."""
     q = select(Suggestion).order_by(Suggestion.created_at.desc()).limit(limit)
+    q = q.where(
+        Suggestion.org_id == resolve_org_id(),
+        Suggestion.creator_id == resolve_account_id(),
+    )
     if status:
         q = q.where(Suggestion.status == status)
     return list(sess.execute(q).scalars().all())

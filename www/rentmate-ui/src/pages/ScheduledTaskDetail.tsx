@@ -11,7 +11,7 @@ import {
   ArrowLeft, Zap, Play, Pause, Trash2, Clock, CheckCircle2, XCircle,
   Loader2, Save, FlaskConical,
 } from 'lucide-react';
-import { graphqlQuery } from '@/data/api';
+import { deleteScheduledTask, getScheduledTask, runScheduledTask, updateScheduledTask } from '@/graphql/client';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { PageLoader } from '@/components/ui/page-loader';
@@ -36,34 +36,17 @@ interface ScheduledTask {
   createdAt: string;
 }
 
-const QUERY = `
-  query($uid: String!) {
-    scheduledTask(uid: $uid) {
-      uid name prompt schedule scheduleDisplay isDefault enabled state
-      repeat completedCount nextRunAt lastRunAt lastStatus lastOutput simulatedAt createdAt
-    }
-  }
-`;
-
-const UPDATE = `
-  mutation($uid: String!, $name: String, $prompt: String, $schedule: String, $enabled: Boolean) {
-    updateScheduledTask(uid: $uid, name: $name, prompt: $prompt, schedule: $schedule, enabled: $enabled) { uid }
-  }
-`;
-
-const DELETE = `mutation($uid: String!) { deleteScheduledTask(uid: $uid) }`;
-
-const RUN = `
-  mutation($uid: String!) {
-    runScheduledTask(uid: $uid) {
-      uid lastStatus lastOutput lastRunAt
-    }
-  }
-`;
-
-const SIMULATE = `
-  mutation($uid: String!) { simulateScheduledTask(uid: $uid) }
-`;
+interface SimulatedSuggestion {
+  id: string;
+  title: string;
+  body: string;
+  category?: string | null;
+  urgency?: string | null;
+  property_id?: string | null;
+  task_id?: string | null;
+  risk_score?: number | null;
+  action_payload?: Record<string, unknown> | null;
+}
 
 const ScheduledTaskDetail = () => {
   const { id } = useParams<{ id: string }>();
@@ -76,6 +59,7 @@ const ScheduledTaskDetail = () => {
   const [simulating, setSimulating] = useState(false);
   const [simTrace, setSimTrace] = useState<string[]>([]);
   const [simOutput, setSimOutput] = useState<string | null>(null);
+  const [simSuggestions, setSimSuggestions] = useState<SimulatedSuggestion[]>([]);
   const simScrollRef = useRef<HTMLPreElement>(null);
 
   // Edit form
@@ -86,7 +70,7 @@ const ScheduledTaskDetail = () => {
   const fetchTask = async () => {
     if (!id) return;
     try {
-      const data = await graphqlQuery<{ scheduledTask: ScheduledTask | null }>(QUERY, { uid: id });
+      const data = await getScheduledTask(id);
       const st = data.scheduledTask;
       setTask(st);
       if (st) {
@@ -103,8 +87,7 @@ const ScheduledTaskDetail = () => {
     if (!task || task.isDefault) return;
     setSaving(true);
     try {
-      await graphqlQuery(UPDATE, {
-        uid: task.uid,
+      await updateScheduledTask(task.uid, {
         name: editName || undefined,
         prompt: editPrompt || undefined,
         schedule: editSchedule || undefined,
@@ -118,7 +101,7 @@ const ScheduledTaskDetail = () => {
   const handleToggle = async () => {
     if (!task) return;
     try {
-      await graphqlQuery(UPDATE, { uid: task.uid, enabled: !task.enabled });
+      await updateScheduledTask(task.uid, { enabled: !task.enabled });
       toast.success(task.enabled ? 'Paused' : 'Resumed');
       fetchTask();
     } catch { toast.error('Failed'); }
@@ -128,7 +111,7 @@ const ScheduledTaskDetail = () => {
     if (!task || task.isDefault) return;
     if (!confirm(`Delete "${task.name}"?`)) return;
     try {
-      await graphqlQuery(DELETE, { uid: task.uid });
+      await deleteScheduledTask(task.uid);
       toast.success('Deleted');
       navigate('/scheduled-tasks');
     } catch { toast.error('Failed'); }
@@ -138,7 +121,7 @@ const ScheduledTaskDetail = () => {
     if (!task) return;
     setRunning(true);
     try {
-      const data = await graphqlQuery<{ runScheduledTask: Partial<ScheduledTask> }>(RUN, { uid: task.uid });
+      const data = await runScheduledTask(task.uid);
       const result = data.runScheduledTask;
       setTask(prev => prev ? { ...prev, ...result } as ScheduledTask : prev);
       toast.success(result.lastStatus === 'ok' ? 'Run completed' : 'Run failed');
@@ -151,6 +134,7 @@ const ScheduledTaskDetail = () => {
     setSimulating(true);
     setSimTrace([]);
     setSimOutput(null);
+    setSimSuggestions([]);
     try {
       const res = await authFetch(`/api/scheduled-task/${task.uid}/simulate`, { method: 'POST' });
       if (!res.ok) {
@@ -175,8 +159,10 @@ const ScheduledTaskDetail = () => {
               simScrollRef.current?.scrollTo(0, simScrollRef.current.scrollHeight);
             } else if (event.type === 'done') {
               setSimOutput(event.reply);
+              setSimSuggestions(Array.isArray(event.suggestions) ? event.suggestions : []);
             } else if (event.type === 'error') {
               setSimOutput(`Error: ${event.message}`);
+              setSimSuggestions([]);
             }
           } catch { /* skip malformed */ }
         }
@@ -297,7 +283,7 @@ const ScheduledTaskDetail = () => {
         </div>
 
         {/* Simulation trace + output */}
-        {(simTrace.length > 0 || simOutput !== null) && (
+        {(simTrace.length > 0 || simOutput !== null || simSuggestions.length > 0) && (
           <div className="space-y-2">
             {/* Live trace */}
             {simTrace.length > 0 && (
@@ -334,6 +320,53 @@ const ScheduledTaskDetail = () => {
                 <pre className="rounded-lg bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 p-3 text-xs whitespace-pre-wrap font-mono max-h-80 overflow-y-auto">
                   {simOutput}
                 </pre>
+              </div>
+            )}
+
+            {simSuggestions.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <FlaskConical className="h-3.5 w-3.5 text-violet-500" />
+                  <span className="text-xs font-semibold text-violet-600 dark:text-violet-400">
+                    Suggestions That Would Be Created
+                  </span>
+                </div>
+                <div className="space-y-3">
+                  {simSuggestions.map((suggestion, index) => (
+                    <Card
+                      key={suggestion.id || `${suggestion.title}-${index}`}
+                      className="rounded-xl border-violet-200 bg-violet-50/70 p-4 dark:border-violet-900 dark:bg-violet-950/20"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <h3 className="text-sm font-semibold text-foreground">{suggestion.title}</h3>
+                          <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                            {suggestion.category && <Badge variant="secondary">{suggestion.category}</Badge>}
+                            {suggestion.urgency && <Badge variant="outline">{suggestion.urgency}</Badge>}
+                            {suggestion.property_id && <span>Property: {suggestion.property_id}</span>}
+                            {suggestion.task_id && <span>Task: {suggestion.task_id}</span>}
+                            {suggestion.risk_score !== null && suggestion.risk_score !== undefined && (
+                              <span>Risk: {suggestion.risk_score}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      {suggestion.body && (
+                        <p className="mt-3 whitespace-pre-wrap text-sm text-foreground/90">{suggestion.body}</p>
+                      )}
+                      {suggestion.action_payload && Object.keys(suggestion.action_payload).length > 0 && (
+                        <div className="mt-3 space-y-1.5">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            Action Payload
+                          </div>
+                          <pre className="overflow-x-auto rounded-lg border bg-background/80 p-3 text-[11px] whitespace-pre-wrap font-mono">
+                            {JSON.stringify(suggestion.action_payload, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </Card>
+                  ))}
+                </div>
               </div>
             )}
           </div>

@@ -10,35 +10,26 @@
 
 import { test, expect, Page } from '@playwright/test';
 
+import {
+  CreatePropertyDocument,
+  GetConversationsDocument,
+  HousesDocument,
+  ScheduledTasksDocument,
+  SuggestionsDocument,
+  TasksDocument,
+  TenantsDocument,
+} from '@/graphql/generated';
+import { graphqlRequest, loginViaGraphql } from './graphql';
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 let cachedToken: string | null = null;
 
 async function getToken(page: Page): Promise<string> {
   if (cachedToken) return cachedToken;
-  const res = await page.request.post('/graphql', {
-    data: {
-      query: `mutation { login(input: { password: "rentmate" }) { token } }`,
-    },
-  });
-  const body = await res.json();
-  cachedToken = body.data?.login?.token;
-  if (!cachedToken) throw new Error(`Login failed: ${JSON.stringify(body)}`);
+  cachedToken = await loginViaGraphql(page);
+  if (!cachedToken) throw new Error('Login failed');
   return cachedToken;
-}
-
-async function gql(page: Page, query: string, variables: Record<string, unknown> = {}) {
-  const token = await getToken(page);
-  const res = await page.request.post('/graphql', {
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    data: { query, variables },
-  });
-  expect(res.status()).toBe(200);
-  const body = await res.json();
-  if (body.errors?.length) {
-    throw new Error(`GraphQL error: ${JSON.stringify(body.errors)}`);
-  }
-  return body.data;
 }
 
 async function rest(page: Page, method: string, path: string, body?: unknown) {
@@ -67,35 +58,39 @@ test.describe('Full-stack smoke tests', () => {
   });
 
   test('GraphQL queries return data (not 401 or 500)', async ({ page }) => {
+    const token = await getToken(page);
     // Properties
-    const props = await gql(page, '{ houses { uid address } }');
+    const props = await graphqlRequest(page, HousesDocument, {}, token);
     expect(props.houses).toBeInstanceOf(Array);
 
     // Tenants
-    const tenants = await gql(page, '{ tenants { uid firstName lastName } }');
+    const tenants = await graphqlRequest(page, TenantsDocument, {}, token);
     expect(tenants.tenants).toBeInstanceOf(Array);
 
     // Tasks
-    const tasks = await gql(page, '{ tasks { uid title } }');
+    const tasks = await graphqlRequest(page, TasksDocument, { category: null, source: null, status: null }, token);
     expect(tasks.tasks).toBeInstanceOf(Array);
 
     // Suggestions
-    const sugs = await gql(page, '{ suggestions { uid title } }');
+    const sugs = await graphqlRequest(page, SuggestionsDocument, { status: null }, token);
     expect(sugs.suggestions).toBeInstanceOf(Array);
 
     // Conversations
-    const convs = await gql(page, '{ conversations(conversationType: "user_ai") { uid title } }');
+    const convs = await graphqlRequest(page, GetConversationsDocument, { conversationType: 'USER_AI', limit: 20 }, token);
     expect(convs.conversations).toBeInstanceOf(Array);
 
     // Scheduled tasks
-    const scheduled = await gql(page, '{ scheduledTasks { uid name schedule } }');
+    const scheduled = await graphqlRequest(page, ScheduledTasksDocument, {}, token);
     expect(scheduled.scheduledTasks).toBeInstanceOf(Array);
   });
 
   test('can create a property via GraphQL', async ({ page }) => {
-    const result = await gql(page,
-      `mutation($input: CreatePropertyInput!) { createProperty(input: $input) { uid address } }`,
-      { input: { address: 'E2E Test Property 123', propertyType: 'single_family' } }
+    const token = await getToken(page);
+    const result = await graphqlRequest(
+      page,
+      CreatePropertyDocument,
+      { input: { address: 'E2E Test Property 123', propertyType: 'single_family' } },
+      token,
     );
     expect(result.createProperty.uid).toBeTruthy();
     expect(result.createProperty.address).toContain('E2E Test');

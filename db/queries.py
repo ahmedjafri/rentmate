@@ -10,7 +10,9 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from db.models import Conversation, ConversationParticipant, ExternalContact, Lease, Message, Property, Task, Tenant
+from backends.local_auth import resolve_account_id
+from db.enums import TaskCategory, TaskSource, TaskStatus
+from db.models import Conversation, ConversationParticipant, Lease, Message, Property, Task, Tenant, User
 
 # ---------------------------------------------------------------------------
 # Formatting helpers (pure functions over ORM models)
@@ -28,7 +30,10 @@ def format_address(p: Property) -> str:
 
 
 def tenant_display_name(t: Tenant) -> str:
-    return f"{t.first_name} {t.last_name}".strip()
+    u = t.user
+    if u:
+        return f"{u.first_name or ''} {u.last_name or ''}".strip()
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +42,6 @@ def tenant_display_name(t: Tenant) -> str:
 
 def _account_id() -> int:
     """Get the current request's account_id from context."""
-    from backends.local_auth import resolve_account_id
     return resolve_account_id()
 
 
@@ -52,7 +56,7 @@ def fetch_properties(db: Session) -> list[Property]:
             .where(Property.creator_id == _account_id())
             .options(
                 selectinload(Property.units),
-                selectinload(Property.leases).selectinload(Lease.tenant),
+                selectinload(Property.leases).selectinload(Lease.tenant).selectinload(Tenant.user),
                 selectinload(Property.leases).selectinload(Lease.unit),
             )
         )
@@ -67,6 +71,7 @@ def fetch_tenants(db: Session) -> list[Tenant]:
             select(Tenant)
             .where(Tenant.creator_id == _account_id())
             .options(
+                selectinload(Tenant.user),
                 selectinload(Tenant.leases).selectinload(Lease.property),
                 selectinload(Tenant.leases).selectinload(Lease.unit),
             )
@@ -82,7 +87,7 @@ def fetch_leases(db: Session) -> list[Lease]:
             select(Lease)
             .where(Lease.creator_id == _account_id())
             .options(
-                selectinload(Lease.tenant),
+                selectinload(Lease.tenant).selectinload(Tenant.user),
                 selectinload(Lease.property),
                 selectinload(Lease.unit),
             )
@@ -94,16 +99,15 @@ def fetch_leases(db: Session) -> list[Lease]:
 
 def fetch_tasks(
     db: Session,
-    *, category: Optional[str] = None,
-    status: Optional[str] = None,
-    source: Optional[str] = None,
+    *, category: Optional[TaskCategory] = None,
+    status: Optional[list[TaskStatus]] = None,
+    source: Optional[TaskSource] = None,
 ) -> list[Task]:
     q = select(Task).where(Task.creator_id == _account_id())
     if category:
         q = q.where(Task.category == category)
     if status:
-        statuses = [s.strip() for s in status.split(",")]
-        q = q.where(Task.task_status.in_(statuses))
+        q = q.where(Task.task_status.in_(status))
     if source:
         q = q.where(Task.source == source)
     q = q.options(
@@ -111,22 +115,23 @@ def fetch_tasks(
         selectinload(Task.parent_conversation).selectinload(Conversation.messages),
         selectinload(Task.external_conversation).selectinload(Conversation.messages),
         selectinload(Task.unit),
-        selectinload(Task.lease).selectinload(Lease.tenant),
+        selectinload(Task.lease).selectinload(Lease.tenant).selectinload(Tenant.user),
         selectinload(Task.lease).selectinload(Lease.unit),
     )
     return db.execute(q).scalars().all()
 
 
-def fetch_task(db: Session, uid: str) -> Optional[Task]:
+def fetch_task(db: Session, task_id: int) -> Optional[Task]:
     return db.execute(
         select(Task)
-        .where(Task.id == uid)
+        .where(Task.id == task_id)
+        .where(Task.creator_id == _account_id())
         .options(
             selectinload(Task.ai_conversation).selectinload(Conversation.messages),
             selectinload(Task.parent_conversation).selectinload(Conversation.messages),
             selectinload(Task.external_conversation).selectinload(Conversation.messages),
             selectinload(Task.unit),
-            selectinload(Task.lease).selectinload(Lease.tenant),
+            selectinload(Task.lease).selectinload(Lease.tenant).selectinload(Tenant.user),
             selectinload(Task.lease).selectinload(Lease.unit),
         )
     ).scalar_one_or_none()
@@ -146,9 +151,7 @@ def fetch_conversations(
         .where(Conversation.creator_id == _account_id())
         .options(
             selectinload(Conversation.participants)
-            .selectinload(ConversationParticipant.tenant),
-            selectinload(Conversation.participants)
-            .selectinload(ConversationParticipant.external_contact),
+            .selectinload(ConversationParticipant.user),
             selectinload(Conversation.messages),
             selectinload(Conversation.property),
         )
@@ -159,15 +162,25 @@ def fetch_conversations(
     return db.execute(q).scalars().all()
 
 
-def fetch_vendors(db: Session) -> list[ExternalContact]:
-    return db.execute(select(ExternalContact).where(ExternalContact.creator_id == _account_id())).scalars().all()
+def fetch_vendors(db: Session) -> list[User]:
+    return db.execute(
+        select(User).where(User.creator_id == _account_id(), User.user_type == "vendor")
+    ).scalars().all()
 
 
 def fetch_messages(db: Session, conversation_id: str) -> list[Message]:
+    conversation = db.execute(
+        select(Conversation).where(
+            Conversation.external_id == conversation_id,
+            Conversation.creator_id == _account_id(),
+        )
+    ).scalar_one_or_none()
+    if conversation is None:
+        return []
     return (
         db.execute(
             select(Message)
-            .where(Message.conversation_id == conversation_id)
+            .where(Message.conversation_id == conversation.id)
             .order_by(Message.sent_at)
         )
         .scalars()

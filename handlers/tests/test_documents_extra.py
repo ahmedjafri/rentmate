@@ -2,14 +2,15 @@
 import os
 import unittest
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-DEFAULT_USER_ID = "1"  # test-only JWT sub claim
-from db.models import Document, DocumentTag, Property
+from backends.local_auth import get_org_external_id, set_request_context
+from db.models import Document, DocumentTag, Property, User
 from handlers.deps import get_db
 from main import app
 
@@ -17,6 +18,7 @@ from main import app
 def _make_property(db, prop_id):
     prop = Property(
         id=prop_id,
+        creator_id=1,
         address_line1="1 Main St",
         city="Toronto",
     )
@@ -28,7 +30,7 @@ def _make_property(db, prop_id):
 def make_token():
     import jwt
     return jwt.encode(
-        {"sub": DEFAULT_USER_ID, "email": "admin@localhost"},
+        {"sub": "1", "uid": "1", "org_uid": get_org_external_id(), "email": "admin@localhost"},
         os.getenv("JWT_SECRET", "rentmate-local-secret"),
         algorithm="HS256",
     )
@@ -37,9 +39,18 @@ def make_token():
 AUTH = {"Authorization": f"Bearer {make_token()}"}
 
 
+async def _fake_require_user(request):
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.replace("Bearer ", "").strip():
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    set_request_context(account_id=1, org_id=1)
+    return {"account_id": 1, "org_id": 1, "uid": "1", "email": "admin@localhost"}
+
+
 def _make_doc(db, doc_id=None, status="done", extracted_data=None):
     doc = Document(
         id=doc_id or str(uuid.uuid4()),
+        creator_id=1,
         filename="test.pdf",
         content_type="application/pdf",
         storage_path=f"documents/{doc_id or 'test'}/test.pdf",
@@ -47,7 +58,7 @@ def _make_doc(db, doc_id=None, status="done", extracted_data=None):
         status=status,
         sha256_checksum="abc123",
         extracted_data=extracted_data,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
     db.add(doc)
     db.flush()
@@ -63,8 +74,11 @@ class TestListDocuments(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
         app.dependency_overrides[get_db] = lambda: self.db
+        self.require_user_patcher = patch("handlers.documents.require_user", side_effect=_fake_require_user)
+        self.require_user_patcher.start()
 
     def tearDown(self):
+        self.require_user_patcher.stop()
         app.dependency_overrides = {}
 
     def test_requires_auth(self):
@@ -86,6 +100,31 @@ class TestListDocuments(unittest.TestCase):
         assert docs[0]["filename"] == "test.pdf"
         assert docs[0]["status"] == "done"
 
+    def test_excludes_documents_from_other_org(self):
+        _make_doc(self.db, doc_id="doc-001")
+        other_org_user = User(id=2, org_id=2, email="org2-docs@example.com", active=True)
+        self.db.add(other_org_user)
+        self.db.flush()
+        other_doc = Document(
+            id="doc-002",
+            org_id=2,
+            creator_id=2,
+            filename="other.pdf",
+            content_type="application/pdf",
+            storage_path="documents/doc-002/other.pdf",
+            document_type="lease",
+            status="done",
+            sha256_checksum="other-checksum",
+            created_at=datetime.now(UTC),
+        )
+        self.db.add(other_doc)
+        self.db.flush()
+
+        response = self.client.get("/api/documents", headers=AUTH)
+
+        assert response.status_code == 200
+        assert [doc["id"] for doc in response.json()] == ["doc-001"]
+
 
 # ---------------------------------------------------------------------------
 # GET /document/{document_id}
@@ -96,8 +135,11 @@ class TestGetDocument(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
         app.dependency_overrides[get_db] = lambda: self.db
+        self.require_user_patcher = patch("handlers.documents.require_user", side_effect=_fake_require_user)
+        self.require_user_patcher.start()
 
     def tearDown(self):
+        self.require_user_patcher.stop()
         app.dependency_overrides = {}
 
     def test_requires_auth(self):
@@ -127,8 +169,11 @@ class TestDeleteDocument(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
         app.dependency_overrides[get_db] = lambda: self.db
+        self.require_user_patcher = patch("handlers.documents.require_user", side_effect=_fake_require_user)
+        self.require_user_patcher.start()
 
     def tearDown(self):
+        self.require_user_patcher.stop()
         app.dependency_overrides = {}
 
     def test_requires_auth(self):
@@ -179,8 +224,11 @@ class TestDocumentTags(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
         app.dependency_overrides[get_db] = lambda: self.db
+        self.require_user_patcher = patch("handlers.documents.require_user", side_effect=_fake_require_user)
+        self.require_user_patcher.start()
 
     def tearDown(self):
+        self.require_user_patcher.stop()
         app.dependency_overrides = {}
 
     def test_get_tags_empty(self):
@@ -239,8 +287,11 @@ class TestDeleteDocumentTag(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
         app.dependency_overrides[get_db] = lambda: self.db
+        self.require_user_patcher = patch("handlers.documents.require_user", side_effect=_fake_require_user)
+        self.require_user_patcher.start()
 
     def tearDown(self):
+        self.require_user_patcher.stop()
         app.dependency_overrides = {}
 
     def test_not_found(self):
@@ -274,8 +325,11 @@ class TestUploadDocument(unittest.TestCase):
     def setUp(self):
         self.client = TestClient(app)
         app.dependency_overrides[get_db] = lambda: self.db
+        self.require_user_patcher = patch("handlers.documents.require_user", side_effect=_fake_require_user)
+        self.require_user_patcher.start()
 
     def tearDown(self):
+        self.require_user_patcher.stop()
         app.dependency_overrides = {}
 
     def test_requires_auth(self):

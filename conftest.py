@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from db.models import Base
+from db.models import Base, User
 
 # Load .env into os.environ so LLM-dependent tests (evals, document extraction)
 # pick up credentials without needing the env vars set externally.
@@ -24,7 +24,7 @@ if _ENV_FILE.exists():
 def _set_creator_context():
     """Set a default creator context for tests so entity creation works."""
     from backends.local_auth import reset_request_context, set_request_context
-    tokens = set_request_context(account_id=1)
+    tokens = set_request_context(account_id=1, org_id=1)
     yield
     reset_request_context(tokens)
 
@@ -101,5 +101,26 @@ def db(Session, engine, request):
         yield session
     finally:
         session.close()
-        trans.rollback()
+        if trans.is_active and connection.in_transaction():
+            trans.rollback()
         connection.close()
+
+
+@pytest.fixture(autouse=True)
+def _seed_current_user(db):
+    """Ensure the default authenticated test user exists."""
+    user = db.get(User, 1)
+    if user is None:
+        user = User(
+            id=1,
+            org_id=1,
+            external_id="test-user-1",
+            email="test-admin@example.com",
+            active=True,
+        )
+        db.add(user)
+        db.flush()
+    elif user.external_id != "test-user-1":
+        user.external_id = "test-user-1"
+        db.flush()
+    return user

@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EntityContextCard, propertyTopics } from '@/components/context/EntityContextCard';
 import { Users, ArrowLeft, MapPin, Bot, Wrench, User, Clock, MessageCircle, Zap, ShieldCheck, Hand, Lock, ChevronRight, Building2, Home, FileText, Trash2, Plus, X, Loader2, Pencil } from 'lucide-react';
-import { graphqlQuery, DELETE_PROPERTY_MUTATION, UPDATE_PROPERTY_MUTATION, CREATE_TENANT_WITH_LEASE_MUTATION, ADD_LEASE_FOR_TENANT_MUTATION } from '@/data/api';
+import { addLeaseForTenant, createTenantWithLease, deleteProperty, updateProperty as updatePropertyMutation } from '@/graphql/client';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -61,7 +61,7 @@ const PropertyDetail = () => {
     if (!confirmDelete) { setConfirmDelete(true); return; }
     setDeleting(true);
     try {
-      await graphqlQuery(DELETE_PROPERTY_MUTATION, { uid: id });
+      await deleteProperty(id);
       removeProperty(id!);
       toast.success('Property deleted');
       navigate('/properties');
@@ -83,13 +83,11 @@ const PropertyDetail = () => {
     if (!id) return;
     setSaving(true);
     try {
-      await graphqlQuery(UPDATE_PROPERTY_MUTATION, {
-        input: {
-          uid: id,
-          name: editForm.name || null,
-          address: editForm.address || null,
-          propertyType: editForm.propertyType || null,
-        },
+      await updatePropertyMutation({
+        uid: id,
+        name: editForm.name || null,
+        address: editForm.address || null,
+        propertyType: editForm.propertyType || null,
       });
       updateProperty(id, {
         name: editForm.name,
@@ -115,37 +113,27 @@ const PropertyDetail = () => {
       let t: TenantResult;
       if (addMode === 'existing') {
         if (!selectedExistingId) { toast.error('Select a tenant'); return; }
-        const result = await graphqlQuery<{ addLeaseForTenant: TenantResult }>(
-          ADD_LEASE_FOR_TENANT_MUTATION,
-          {
-            input: {
-              tenantId: selectedExistingId,
-              propertyId: id,
-              unitId: tenantForm.unitId,
-              leaseStart: tenantForm.leaseStart,
-              leaseEnd: tenantForm.leaseEnd,
-              rentAmount: parseFloat(tenantForm.rentAmount),
-            },
-          }
-        );
+        const result = await addLeaseForTenant({
+          tenantId: selectedExistingId,
+          propertyId: id,
+          unitId: tenantForm.unitId,
+          leaseStart: tenantForm.leaseStart,
+          leaseEnd: tenantForm.leaseEnd,
+          rentAmount: parseFloat(tenantForm.rentAmount),
+        });
         t = result.addLeaseForTenant;
       } else {
-        const result = await graphqlQuery<{ createTenantWithLease: TenantResult }>(
-          CREATE_TENANT_WITH_LEASE_MUTATION,
-          {
-            input: {
-              firstName: tenantForm.firstName,
-              lastName: tenantForm.lastName,
-              email: tenantForm.email || null,
-              phone: tenantForm.phone || null,
-              propertyId: id,
-              unitId: tenantForm.unitId,
-              leaseStart: tenantForm.leaseStart,
-              leaseEnd: tenantForm.leaseEnd,
-              rentAmount: parseFloat(tenantForm.rentAmount),
-            },
-          }
-        );
+        const result = await createTenantWithLease({
+          firstName: tenantForm.firstName,
+          lastName: tenantForm.lastName,
+          email: tenantForm.email || null,
+          phone: tenantForm.phone || null,
+          propertyId: id,
+          unitId: tenantForm.unitId,
+          leaseStart: tenantForm.leaseStart,
+          leaseEnd: tenantForm.leaseEnd,
+          rentAmount: parseFloat(tenantForm.rentAmount),
+        });
         t = result.createTenantWithLease;
       }
       addTenant({

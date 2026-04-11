@@ -7,8 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Building2, Users, ChevronRight, Home, Plus, X, Loader2, FileText } from 'lucide-react';
 import { PageLoader } from '@/components/ui/page-loader';
 import { Link } from 'react-router-dom';
-import { graphqlQuery } from '@/data/api';
-import { CREATE_PROPERTY_MUTATION } from '@/data/api';
+import { createProperty } from '@/graphql/client';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -52,8 +51,8 @@ const Properties = () => {
       if (propertyType === 'multi_family') {
         input.unitLabels = unitLabels.map(l => l.trim()).filter(Boolean);
       }
-      const data = await graphqlQuery(CREATE_PROPERTY_MUTATION, { input });
-      const p = (data as Record<string, unknown>).createProperty as Record<string, unknown>;
+      const data = await createProperty(input);
+      const p = data.createProperty as Record<string, unknown>;
       addProperty({
         id: p.uid as string,
         name: (p.name || p.address) as string,

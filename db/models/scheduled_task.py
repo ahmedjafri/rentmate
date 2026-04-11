@@ -1,20 +1,17 @@
-import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKeyConstraint, Integer, String, Text, UniqueConstraint
 
-from .base import Base, HasCreatorId
+from .base import Base, HasCreatorId, OrgId, PrimaryId
 
 
-class ScheduledTask(Base, HasCreatorId):
+class ScheduledTask(Base, OrgId, PrimaryId, HasCreatorId):
     """A recurring or one-shot task executed by the AI agent on a schedule.
 
     Replaces the old Property-Flow DSL automation system with natural language
     prompts executed on cron schedules.
     """
     __tablename__ = "scheduled_tasks"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
 
     name = Column(String(255), nullable=False)
     prompt = Column(Text, nullable=False)  # Natural language task for the agent
@@ -40,3 +37,11 @@ class ScheduledTask(Base, HasCreatorId):
 
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_scheduled_tasks_org"),
+        ForeignKeyConstraint(
+            ["org_id", "creator_id"],
+            ["users.org_id", "users.id"],
+        ),
+    )

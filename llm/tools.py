@@ -1,6 +1,6 @@
 """RentMate agent tool classes.
 
-Includes suggestion tools (propose_task, close_task, set_mode, attach_entity, message_person).
+Includes suggestion tools (propose_task, close_task, message_person).
 
 When a tool creates a suggestion during a chat, it queues a SUGGESTION message
 via ``pending_suggestion_messages``.  The chat handler flushes these *after*
@@ -14,8 +14,10 @@ import json
 from abc import ABC, abstractmethod
 from typing import Any
 
+from backends.local_auth import resolve_account_id
 from db.enums import AgentSource, SuggestionOption, TaskCategory, Urgency
 from db.models import MessageType
+from gql.services.task_service import dump_task_steps
 
 
 class Tool(ABC):
@@ -49,6 +51,65 @@ pending_suggestion_messages: contextvars.ContextVar[list[dict]] = contextvars.Co
     "pending_suggestion_messages", default=None,
 )
 
+# When set, suggestion-producing tools run in dry-run mode and append the
+# suggestion payloads here instead of writing Suggestion rows to the DB.
+simulation_suggestions: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
+    "simulation_suggestions", default=None,
+)
+
+
+def _queue_simulation_suggestion(payload: dict[str, Any]) -> str | None:
+    pending = simulation_suggestions.get()
+    if pending is None:
+        return None
+    suggestion_id = f"sim-{len(pending) + 1}"
+    pending.append({
+        "id": suggestion_id,
+        **payload,
+    })
+    return suggestion_id
+
+
+def _public_entity_id(entity: Any) -> str:
+    external_id = getattr(entity, "external_id", None)
+    return str(external_id or entity.id)
+
+
+def _load_vendor_by_public_id(db: Any, vendor_id: str):
+    from db.models import User
+
+    return (
+        db.query(User)
+        .filter_by(external_id=str(vendor_id), user_type="vendor")
+        .first()
+    )
+
+
+def _load_tenant_by_public_id(db: Any, tenant_id: str):
+    from db.models import Tenant
+
+    return db.query(Tenant).filter_by(external_id=str(tenant_id)).first()
+
+
+def _load_entity_by_public_id(db: Any, entity_type: str, entity_id: str):
+    import db.models as models
+
+    model_map = {
+        "property": models.Property,
+        "unit": models.Unit,
+        "tenant": models.Tenant,
+        "vendor": models.User,
+        "document": models.Document,
+    }
+    model_cls = model_map.get(entity_type)
+    if not model_cls:
+        return None
+
+    filters = {"external_id": str(entity_id)} if hasattr(model_cls, "external_id") else {"id": entity_id}
+    if entity_type == "vendor":
+        filters["user_type"] = "vendor"
+    return db.query(model_cls).filter_by(**filters).first()
+
 
 def _create_suggestion(
     *,
@@ -68,6 +129,20 @@ def _create_suggestion(
     If ``active_conversation_id`` is set, also adds an APPROVAL message to
     that conversation so the suggestion appears inline in the chat.
     """
+    simulated_id = _queue_simulation_suggestion({
+        "title": title,
+        "body": ai_context,
+        "category": category,
+        "urgency": urgency,
+        "action_payload": action_payload,
+        "task_id": task_id,
+        "property_id": property_id,
+        "risk_score": risk_score,
+        "suggestion_type": suggestion_type,
+    })
+    if simulated_id is not None:
+        return simulated_id
+
     from db.models import Suggestion
     from db.session import SessionLocal
     from gql.services import suggestion_service
@@ -104,6 +179,7 @@ def _create_suggestion(
             suggestion.risk_score = risk_score
         if suggestion_type:
             suggestion.suggestion_type = suggestion_type
+        suggestion_id = suggestion.id
 
         # Queue a suggestion message to be flushed after the AI reply so it
         # appears below the agent response in the conversation timeline.
@@ -128,7 +204,7 @@ def _create_suggestion(
                 "sender_name": "RentMate",
                 "is_ai": True,
                 "draft_reply": action_payload.get("draft_message") if action_payload else None,
-                "related_task_ids": {"suggestion_id": suggestion.id},
+                "related_task_ids": {"suggestion_id": suggestion_id},
             })
 
         db.commit()
@@ -138,11 +214,11 @@ def _create_suggestion(
         log_trace(
             "suggestion_created", "agent", title,
             task_id=task_id,
-            suggestion_id=suggestion.id,
+            suggestion_id=suggestion_id,
             detail=action_payload,
         )
 
-        return suggestion.id
+        return suggestion_id
     finally:
         db.close()
 
@@ -171,11 +247,8 @@ class ProposeTaskTool(Tool):
     def description(self) -> str:
         return (
             "Propose a new task for a genuinely separate issue. "
-            "IMPORTANT: If you already have a task open and need another vendor "
-            "(e.g. second quote), do NOT create a new task — use attach_entity "
-            "to add the vendor to the current task, then message_person to contact them. "
-            "Only use propose_task for a completely different issue. "
-            "You MUST provide a vendor_id — use lookup_vendors first. "
+            "Only use propose_task for a genuinely separate issue that needs its own task. "
+            "You MUST provide a vendor_id external UUID — use lookup_vendors first. "
             "Include a draft_message and steps (3-6 steps)."
         )
 
@@ -197,7 +270,7 @@ class ProposeTaskTool(Tool):
                     "description": "Urgency level (default: medium)",
                 },
                 "description": {"type": "string", "description": "Detailed context for the task"},
-                "vendor_id": {"type": "string", "description": "ID of the vendor to assign (use lookup_vendors to find this)"},
+                "vendor_id": {"type": "string", "description": "External UUID of the vendor to assign (use lookup_vendors to find this)"},
                 "draft_message": {"type": "string", "description": "Draft message to send to the vendor on approval"},
                 "property_id": {"type": "string", "description": "Property ID (if applicable)"},
                 "task_id": {"type": "string", "description": "Originating task ID (if applicable)"},
@@ -227,13 +300,12 @@ class ProposeTaskTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        vendor_id = kwargs["vendor_id"]
+        vendor_id = str(kwargs["vendor_id"])
 
-        from db.models import ExternalContact
         from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
-            vendor = db.query(ExternalContact).filter_by(id=vendor_id).first()
+            vendor = _load_vendor_by_public_id(db, vendor_id)
             vendor_name = vendor.name if vendor else "Vendor"
         finally:
             db.close()
@@ -247,17 +319,17 @@ class ProposeTaskTool(Tool):
             action_payload["draft_message"] = draft_message
         steps = kwargs.get("steps")
         if steps:
-            action_payload["steps"] = steps
+            action_payload["steps"] = dump_task_steps(steps)
 
         if draft_message:
             options = [
-                SuggestionOption(key="send", label=f"Send to {vendor_name}", action="approve_draft", variant="default"),
-                SuggestionOption(key="edit", label="Edit Message", action="edit_draft", variant="outline"),
+                SuggestionOption(key="send", label=f"Send to {vendor_name}", action="send_and_create_task", variant="default"),
+                SuggestionOption(key="edit", label="Edit Message", action="edit_message", variant="outline"),
                 SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
             ]
         else:
             options = [
-                SuggestionOption(key="accept", label=f"Assign {vendor_name}", action="accept_task", variant="default"),
+                SuggestionOption(key="send", label=f"Assign {vendor_name}", action="send_and_create_task", variant="default"),
                 SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
             ]
 
@@ -341,53 +413,6 @@ class CloseTaskTool(Tool):
             db.close()
 
 
-class SetModeTool(Tool):
-    """Change a task's operating mode directly."""
-
-    @property
-    def name(self) -> str:
-        return "set_mode"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Change a task's operating mode (autonomous, manual, "
-            "or waiting_approval). Takes effect immediately."
-        )
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "required": ["task_id", "mode"],
-            "properties": {
-                "task_id": {"type": "string", "description": "ID of the task"},
-                "mode": {
-                    "type": "string",
-                    "enum": ["autonomous", "manual", "waiting_approval"],
-                    "description": "New operating mode",
-                },
-            },
-        }
-
-    async def execute(self, **kwargs: Any) -> str:
-        task_id = kwargs["task_id"]
-        mode = kwargs["mode"]
-
-        from db.models import Task as TaskModel
-        from db.session import SessionLocal
-        db = SessionLocal.session_factory()
-        try:
-            task = db.query(TaskModel).filter_by(id=task_id).first()
-            if not task:
-                return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
-            task.task_mode = mode
-            db.commit()
-            return json.dumps({"status": "ok", "message": f"Task mode changed to {mode}."})
-        finally:
-            db.close()
-
-
 def _get_task_category(task_id: str) -> str | None:
     """Look up a task's category for autonomy checks."""
     from db.models import Task
@@ -431,98 +456,6 @@ def _auto_execute_suggestion(suggestion_id: str, action: str) -> str | None:
         db.close()
 
 
-class AttachEntityToTaskTool(Tool):
-    """Attach any entity (vendor, tenant, property, unit) to a task."""
-
-    @property
-    def name(self) -> str:
-        return "attach_entity"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Attach an entity to an existing task. For vendors and tenants, this also "
-            "creates/links a conversation. For properties and units, sets the FK on the task. "
-            "Use lookup_vendors first if you need to find a vendor ID."
-        )
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "required": ["task_id", "entity_id", "entity_type"],
-            "properties": {
-                "task_id": {"type": "string", "description": "ID of the task"},
-                "entity_id": {"type": "string", "description": "ID of the entity to attach"},
-                "entity_type": {
-                    "type": "string",
-                    "enum": ["vendor", "tenant", "property", "unit"],
-                    "description": "Type of entity",
-                },
-            },
-        }
-
-    async def execute(self, **kwargs: Any) -> str:
-        task_id = kwargs["task_id"]
-        entity_id = kwargs["entity_id"]
-        entity_type = kwargs["entity_type"]
-        task_title = _get_task_title(task_id)
-
-        from db.models import ExternalContact, Property, Tenant, Unit
-        from db.session import SessionLocal
-        db = SessionLocal.session_factory()
-        try:
-            if entity_type == "vendor":
-                entity = db.query(ExternalContact).filter_by(id=entity_id).first()
-                entity_name = entity.name if entity else "Vendor"
-            elif entity_type == "tenant":
-                entity = db.query(Tenant).filter_by(id=entity_id).first()
-                entity_name = f"{entity.first_name} {entity.last_name}".strip() if entity else "Tenant"
-            elif entity_type == "property":
-                entity = db.query(Property).filter_by(id=entity_id).first()
-                entity_name = entity.name or entity.address_line1 if entity else "Property"
-            elif entity_type == "unit":
-                entity = db.query(Unit).filter_by(id=entity_id).first()
-                entity_name = entity.label if entity else "Unit"
-            else:
-                return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
-
-            if not entity:
-                return json.dumps({"status": "error", "message": f"{entity_type.title()} {entity_id} not found"})
-        finally:
-            db.close()
-
-        action_payload = {
-            "action": "attach_entity",
-            "entity_id": entity_id,
-            "entity_type": entity_type,
-            "entity_name": entity_name,
-        }
-        options = [
-            SuggestionOption(key="attach", label=f"Attach {entity_name}", action="attach_entity", variant="default"),
-            SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
-        ]
-
-        sid = _create_suggestion(
-            title=f"Attach {entity_type}: {entity_name} to {task_title}",
-            ai_context=f"The agent recommends attaching {entity_type} '{entity_name}' to this task.",
-            options=options,
-            action_payload=action_payload,
-            task_id=task_id,
-        )
-
-        # Auto-execute in autonomous mode
-        from gql.services import settings_service
-        category = _get_task_category(task_id)
-        if settings_service.get_autonomy_for_category(category) == "autonomous":
-            err = _auto_execute_suggestion(sid, "attach_entity")
-            if err:
-                return json.dumps({"status": "error", "suggestion_id": sid, "message": f"Failed to attach {entity_name}: {err}. Suggestion saved for manual review."})
-            return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"{entity_type.title()} '{entity_name}' attached to task (auto-approved)."})
-
-        return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Suggestion to attach {entity_name} created for manager review."})
-
-
 class MessageExternalPersonTool(Tool):
     """Send a message to an external person (tenant or vendor) on a task."""
 
@@ -533,7 +466,7 @@ class MessageExternalPersonTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Send a message to a tenant or vendor on a task. Use the Tenant ID or Vendor ID "
+            "Send a message to a tenant or vendor on a task. Use the Tenant ID or Vendor ID external UUID "
             "from the task context — you already have them, do not ask for contact info. "
             "In autonomous mode, sends immediately via SMS + portal link. "
             "If the person is not yet linked to the task, a conversation will be created."
@@ -546,7 +479,7 @@ class MessageExternalPersonTool(Tool):
             "required": ["task_id", "entity_id", "entity_type", "draft_message"],
             "properties": {
                 "task_id": {"type": "string", "description": "ID of the task"},
-                "entity_id": {"type": "string", "description": "ID of the tenant or vendor"},
+                "entity_id": {"type": "string", "description": "External UUID of the tenant or vendor"},
                 "entity_type": {
                     "type": "string",
                     "enum": ["tenant", "vendor"],
@@ -558,23 +491,22 @@ class MessageExternalPersonTool(Tool):
 
     async def execute(self, **kwargs: Any) -> str:
         task_id = kwargs["task_id"]
-        entity_id = kwargs["entity_id"]
+        entity_id = str(kwargs["entity_id"])
         entity_type = kwargs["entity_type"]
         draft_message = kwargs["draft_message"]
         task_title = _get_task_title(task_id)
 
-        from db.models import ExternalContact, Tenant
         from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
             if entity_type == "vendor":
-                entity = db.query(ExternalContact).filter_by(id=entity_id).first()
+                entity = _load_vendor_by_public_id(db, entity_id)
                 entity_name = entity.name if entity else "Vendor"
                 entity_phone = entity.phone if entity else None
             elif entity_type == "tenant":
-                entity = db.query(Tenant).filter_by(id=entity_id).first()
-                entity_name = f"{entity.first_name} {entity.last_name}".strip() if entity else "Tenant"
-                entity_phone = entity.phone if entity else None
+                entity = _load_tenant_by_public_id(db, entity_id)
+                entity_name = entity.user.name if entity and entity.user else "Tenant"
+                entity_phone = entity.user.phone if entity and entity.user else None
             else:
                 return json.dumps({"status": "error", "message": f"Can only message tenants or vendors, not {entity_type}"})
 
@@ -593,7 +525,7 @@ class MessageExternalPersonTool(Tool):
         }
         options = [
             SuggestionOption(key="send", label=f"Send to {entity_name}", action="message_person_send", variant="default"),
-            SuggestionOption(key="edit", label="Edit Message", action="edit_draft", variant="outline"),
+            SuggestionOption(key="edit", label="Edit Message", action="edit_message", variant="outline"),
             SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
         ]
 
@@ -631,7 +563,7 @@ class LookupVendorsTool(Tool):
     def description(self) -> str:
         return (
             "Search for vendors/contractors in the system. "
-            "Returns a list of vendors with their name, company, type, phone, and email. "
+            "Returns a list of vendors with their external UUID, name, company, type, phone, and email. "
             "Optionally filter by vendor_type (e.g. 'Plumber', 'Electrician', 'Landscaper')."
         )
 
@@ -652,7 +584,7 @@ class LookupVendorsTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        from db.models import ExternalContact
+        from db.models import User
         from db.session import SessionLocal
 
         vendor_type = kwargs.get("vendor_type")
@@ -660,7 +592,7 @@ class LookupVendorsTool(Tool):
 
         db = SessionLocal.session_factory()
         try:
-            vendors = db.query(ExternalContact).all()
+            vendors = db.query(User).filter_by(user_type="vendor").all()
             results = []
             for v in vendors:
                 if vendor_type and (v.role_label or "").lower() != vendor_type.lower():
@@ -668,7 +600,7 @@ class LookupVendorsTool(Tool):
                 if query and query not in (v.name or "").lower() and query not in (v.company or "").lower():
                     continue
                 results.append({
-                    "id": str(v.id),
+                    "id": str(v.external_id),
                     "name": v.name,
                     "company": v.company,
                     "vendor_type": v.role_label,
@@ -678,75 +610,6 @@ class LookupVendorsTool(Tool):
             if not results:
                 return json.dumps({"vendors": [], "message": "No vendors found matching the criteria."})
             return json.dumps({"vendors": results, "count": len(results)})
-        finally:
-            db.close()
-
-
-class UpdateStepsTool(Tool):
-    """Update the ordered progress steps for a task."""
-
-    @property
-    def name(self) -> str:
-        return "update_steps"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Set or update the ordered progress steps for a task. Each step "
-            "has a key, label, status (pending/active/done), and optional note. "
-            "Pass the full list of steps — it replaces the current list. "
-            "Use this when you have enough context to lay out a plan, or when "
-            "a conversation indicates a step has been completed. "
-            "This is a read-write tool that updates immediately (no approval needed)."
-        )
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "required": ["task_id", "steps"],
-            "properties": {
-                "task_id": {"type": "string", "description": "ID of the task"},
-                "steps": {
-                    "type": "array",
-                    "description": "Ordered list of progress steps",
-                    "items": {
-                        "type": "object",
-                        "required": ["key", "label", "status"],
-                        "properties": {
-                            "key": {"type": "string", "description": "Short unique key (e.g. 'find_vendor')"},
-                            "label": {"type": "string", "description": "Human-readable step label"},
-                            "status": {
-                                "type": "string",
-                                "enum": ["pending", "active", "done"],
-                                "description": "Step status",
-                            },
-                            "note": {"type": "string", "description": "Optional note (e.g. 'Vendor confirmed Thursday 2pm')"},
-                        },
-                    },
-                },
-            },
-        }
-
-    async def execute(self, **kwargs: Any) -> str:
-        task_id = kwargs["task_id"]
-        steps = kwargs["steps"]
-
-        from sqlalchemy.orm.attributes import flag_modified
-
-        from db.models import Task
-        from db.session import SessionLocal
-
-        db = SessionLocal.session_factory()
-        try:
-            task = db.query(Task).filter_by(id=task_id).first()
-            if not task:
-                return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
-            task.steps = steps
-            flag_modified(task, "steps")
-            db.commit()
-            step_summary = ", ".join(s["label"] for s in steps)
-            return json.dumps({"status": "ok", "message": f"Steps updated: {step_summary}"})
         finally:
             db.close()
 
@@ -797,7 +660,7 @@ class CreateVendorTool(Tool):
             ))
             return json.dumps({
                 "status": "ok",
-                "vendor_id": str(vendor.id),
+                "vendor_id": str(vendor.external_id),
                 "name": vendor.name,
                 "message": f"Vendor '{vendor.name}' created successfully.",
             })
@@ -857,7 +720,7 @@ class SaveMemoryTool(Tool):
                 },
                 "entity_id": {
                     "type": "string",
-                    "description": "Entity ID (required when scope='entity').",
+                    "description": "Entity external UUID when available (required when scope='entity').",
                 },
                 "entity_label": {
                     "type": "string",
@@ -899,7 +762,6 @@ class SaveMemoryTool(Tool):
 
         if entity_type == "general" or not entity_id:
             # General notes go to agent_memory table
-            from backends.local_auth import resolve_account_id
             from llm.memory_store import DbMemoryStore
             store = DbMemoryStore(str(resolve_account_id()))
             store.add_note(content=content, entity_type="general", entity_id="", entity_label="")
@@ -924,12 +786,10 @@ class SaveMemoryTool(Tool):
                     "property": "Property",
                     "unit": "Unit",
                     "tenant": "Tenant",
-                    "vendor": "ExternalContact",
+                    "vendor": "User",
                     "document": "Document",
                 }
-                import db.models as models
-                model_cls = getattr(models, _MODEL_MAP[entity_type])
-                entity = db.query(model_cls).filter_by(id=entity_id).first()
+                entity = _load_entity_by_public_id(db, entity_type, entity_id)
                 if not entity:
                     return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
                 existing = entity.context or ""
@@ -942,8 +802,9 @@ class SaveMemoryTool(Tool):
                 # Write to EntityNote (private to this account)
                 from db.models import EntityNote
                 creator_id = resolve_account_id()
+                note_entity_id = str(entity_id)
                 note = db.query(EntityNote).filter_by(
-                    creator_id=creator_id, entity_type=entity_type, entity_id=entity_id,
+                    creator_id=creator_id, entity_type=entity_type, entity_id=note_entity_id,
                 ).first()
                 if note:
                     existing = note.content or ""
@@ -953,7 +814,7 @@ class SaveMemoryTool(Tool):
                     note = EntityNote(
                         creator_id=creator_id,
                         entity_type=entity_type,
-                        entity_id=entity_id,
+                        entity_id=note_entity_id,
                         content=entry,
                         created_at=now,
                         updated_at=now,
@@ -991,7 +852,7 @@ class RecallMemoryTool(Tool):
                 },
                 "entity_id": {
                     "type": "string",
-                    "description": "Filter by specific entity ID. Omit to get all notes of the given type.",
+                    "description": "Filter by specific entity external UUID when available. Omit to get all notes of the given type.",
                 },
             },
         }
@@ -1001,7 +862,6 @@ class RecallMemoryTool(Tool):
         entity_id = kwargs.get("entity_id")
 
         if entity_type == "general" or (not entity_type and not entity_id):
-            from backends.local_auth import resolve_account_id
             from llm.memory_store import DbMemoryStore
             store = DbMemoryStore(str(resolve_account_id()))
             notes = store.get_notes(entity_type="general")
@@ -1013,7 +873,7 @@ class RecallMemoryTool(Tool):
             "property": "Property",
             "unit": "Unit",
             "tenant": "Tenant",
-            "vendor": "ExternalContact",
+            "vendor": "User",
             "document": "Document",
         }
         model_name = _MODEL_MAP.get(entity_type or "")
@@ -1029,7 +889,7 @@ class RecallMemoryTool(Tool):
             creator_id = resolve_account_id()
 
             if entity_id:
-                entity = db.query(model_cls).filter_by(id=entity_id).first()
+                entity = _load_entity_by_public_id(db, entity_type, entity_id)
                 entities = [entity] if entity else []
             else:
                 entities = db.query(model_cls).all()
@@ -1041,14 +901,15 @@ class RecallMemoryTool(Tool):
                 label = getattr(e, "name", None) or getattr(e, "label", None) or str(e.id)[:8]
                 shared = e.context or ""
                 # Get private notes for this creator
+                public_entity_id = _public_entity_id(e)
                 private_note = db.query(EntityNote).filter_by(
-                    creator_id=creator_id, entity_type=entity_type, entity_id=str(e.id),
+                    creator_id=creator_id, entity_type=entity_type, entity_id=public_entity_id,
                 ).first()
                 private = private_note.content if private_note else ""
                 if shared or private:
                     results.append({
                         "entity_type": entity_type,
-                        "entity_id": str(e.id),
+                        "entity_id": public_entity_id,
                         "label": label,
                         "shared_context": shared,
                         "private_notes": private,
@@ -1089,7 +950,7 @@ class EditMemoryTool(Tool):
                 },
                 "entity_id": {
                     "type": "string",
-                    "description": "ID of the entity.",
+                    "description": "External UUID of the entity when available.",
                 },
                 "new_context": {
                     "type": "string",
@@ -1121,12 +982,10 @@ class EditMemoryTool(Tool):
                     "property": "Property",
                     "unit": "Unit",
                     "tenant": "Tenant",
-                    "vendor": "ExternalContact",
+                    "vendor": "User",
                     "document": "Document",
                 }
-                import db.models as models
-                model_cls = getattr(models, _MODEL_MAP[entity_type])
-                entity = db.query(model_cls).filter_by(id=entity_id).first()
+                entity = _load_entity_by_public_id(db, entity_type, entity_id)
                 if not entity:
                     return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
                 entity.context = new_context.strip() or None
@@ -1317,7 +1176,8 @@ class CreateTenantTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        from db.models import Tenant as SqlTenant
+        from db.models import Tenant as SqlTenant, User
+        from db.models.account import create_shadow_user
         from db.session import SessionLocal
 
         first_name = kwargs["first_name"]
@@ -1332,27 +1192,34 @@ class CreateTenantTool(Tool):
             from sqlalchemy import func
             existing = (
                 db.query(SqlTenant)
+                .join(User, SqlTenant.user_id == User.id)
                 .filter(
-                    func.lower(SqlTenant.first_name) == first_name.lower(),
-                    func.lower(SqlTenant.last_name) == last_name.lower(),
+                    func.lower(User.first_name) == first_name.lower(),
+                    func.lower(User.last_name) == last_name.lower(),
                 )
                 .first()
             )
             if existing:
                 return json.dumps({
                     "status": "already_exists",
-                    "tenant_id": str(existing.id),
+                    "tenant_id": str(existing.external_id),
                     "message": f"Tenant {first_name} {last_name} already exists.",
                 })
 
             # Always create the tenant first
-            tenant = SqlTenant(
-                id=str(uuid.uuid4()),
+            shadow_user = create_shadow_user(
+                db,
+                org_id=1,
                 creator_id=resolve_account_id(),
                 first_name=first_name,
                 last_name=last_name,
                 email=kwargs.get("email"),
                 phone=kwargs.get("phone"),
+                user_type="tenant",
+            )
+            tenant = SqlTenant(
+                creator_id=resolve_account_id(),
+                user_id=shadow_user.id,
                 created_at=datetime.now(UTC),
             )
             db.add(tenant)
@@ -1360,7 +1227,7 @@ class CreateTenantTool(Tool):
 
             result: dict[str, Any] = {
                 "status": "ok",
-                "tenant_id": str(tenant.id),
+                "tenant_id": str(tenant.external_id),
                 "message": f"Created tenant {first_name} {last_name}.",
             }
 
@@ -1667,6 +1534,25 @@ class CreateSuggestionTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        simulated_id = _queue_simulation_suggestion({
+            "title": kwargs["title"],
+            "body": kwargs["body"],
+            "category": kwargs["suggestion_type"],
+            "urgency": kwargs.get("urgency", "medium"),
+            "property_id": kwargs.get("property_id"),
+            "unit_id": kwargs.get("unit_id"),
+            "document_id": kwargs.get("document_id"),
+            "action_payload": kwargs.get("action_payload"),
+            "risk_score": kwargs.get("risk_score", 5),
+            "suggestion_type": kwargs["suggestion_type"],
+        })
+        if simulated_id is not None:
+            return json.dumps({
+                "status": "ok",
+                "suggestion_id": simulated_id,
+                "message": f"Suggestion simulated: {kwargs['title']}",
+            })
+
         from db.session import SessionLocal
         from gql.services import suggestion_service
 

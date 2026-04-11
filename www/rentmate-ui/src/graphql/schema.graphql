@@ -1,0 +1,547 @@
+input AddDocumentTagInput {
+  documentId: String!
+  tagType: String!
+  propertyId: String = null
+  unitId: String = null
+  tenantId: String = null
+}
+
+input AddLeaseForTenantInput {
+  tenantId: String!
+  propertyId: String!
+  unitId: String!
+  leaseStart: String!
+  leaseEnd: String!
+  rentAmount: Float!
+}
+
+type AuthPayload {
+  token: String!
+  user: UserType!
+}
+
+type ChatMessageType {
+  uid: String!
+  body: String
+  messageType: MessageType
+  senderName: String
+  senderType: String
+  isAi: Boolean!
+  isSystem: Boolean!
+  draftReply: String
+  approvalStatus: String
+  relatedTaskIds: JSON
+  suggestionId: String
+  sentAt: String!
+}
+
+type ConversationParticipantType {
+  name: String!
+  participantType: String!
+  entityId: String
+  portalUrl: String
+}
+
+type ConversationSummaryType {
+  uid: String!
+  conversationType: ConversationType!
+  title: String
+  lastMessageAt: String
+  updatedAt: String!
+  lastMessageBody: String
+  lastMessageSenderName: String
+  propertyName: String
+  participantCount: Int!
+  unreadCount: Int!
+}
+
+enum ConversationType {
+  TENANT
+  VENDOR
+  USER_AI
+  TASK_AI
+  SUGGESTION_AI
+}
+
+input CreatePropertyInput {
+  address: String!
+  propertyType: String! = "multi_family"
+  name: String = null
+  city: String = null
+  state: String = null
+  postalCode: String = null
+  unitLabels: [String!] = null
+}
+
+input CreateTaskInput {
+  title: String!
+  source: TaskSource!
+  taskStatus: TaskStatus! = ACTIVE
+  category: TaskCategory = null
+  urgency: Urgency = null
+  priority: TaskPriority = null
+  taskMode: TaskMode = null
+  propertyId: String = null
+  unitId: String = null
+  confidential: Boolean! = false
+}
+
+input CreateTenantWithLeaseInput {
+  firstName: String!
+  lastName: String!
+  propertyId: String!
+  unitId: String!
+  leaseStart: String!
+  leaseEnd: String!
+  rentAmount: Float!
+  email: String = null
+  phone: String = null
+}
+
+input CreateVendorInput {
+  name: String!
+  phone: String!
+  company: String = null
+  vendorType: String = null
+  email: String = null
+  notes: String = null
+}
+
+type DocumentTagType {
+  uid: String!
+  documentId: String!
+  tagType: String!
+  propertyId: String
+  unitId: String
+  tenantId: String
+  createdAt: String!
+}
+
+type DocumentType {
+  uid: String!
+  filename: String!
+  documentType: String!
+  status: String!
+  progress: String
+  extractedData: JSON
+  extractionMeta: JSON
+  context: String
+  rawText: String
+  errorMessage: String
+  createdAt: String
+  processedAt: String
+}
+
+type ExtraPropertyType {
+  key: String!
+  value: String!
+}
+
+type HouseType {
+  uid: String!
+  name: String!
+  address: String!
+  propertyType: String
+  source: String
+  context: String
+  units: Int
+  occupiedUnits: Int
+  monthlyRevenue: Float
+  unitList: [UnitType!]!
+  tenants: [TenantType!]!
+  leases: [LeaseType!]!
+}
+
+"""
+The `JSON` scalar type represents JSON values as specified by [ECMA-404](https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf).
+"""
+scalar JSON @specifiedBy(url: "https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf")
+
+type LeaseType {
+  uid: String!
+  startDate: String!
+  endDate: String!
+  rentAmount: Float!
+  tenant: TenantType
+  house: HouseType
+}
+
+type LinkedConversationType {
+  uid: String!
+  label: String!
+  conversationType: ConversationType!
+  lastMessageAt: String
+  messageCount: Int!
+  participants: [ConversationParticipantType!]!
+}
+
+input LoginInput {
+  password: String!
+  username: String = null
+  email: String = null
+}
+
+enum MessageType {
+  MESSAGE
+  INTERNAL
+  APPROVAL
+  SUGGESTION
+  CONTEXT
+  THREAD
+  DRAFT_AI_REPLY
+}
+
+type Mutation {
+  login(input: LoginInput!): AuthPayload!
+
+  """Delete a tenant and all their leases (cascade)"""
+  deleteTenant(uid: String!): Boolean!
+
+  """Create a new task"""
+  createTask(input: CreateTaskInput!): TaskType!
+
+  """Transition task_status (e.g. suggested→active, active→resolved)"""
+  updateTaskStatus(uid: Int!, status: TaskStatus!): TaskType!
+
+  """Tag a document to a property, unit, or tenant"""
+  addDocumentTag(input: AddDocumentTagInput!): DocumentTagType!
+
+  """Add a message to any conversation"""
+  sendMessage(input: SendMessageInput!): ChatMessageType!
+
+  """Send an SMS message to a vendor via Quo"""
+  sendSms(vendorId: String!, body: String!, taskId: Int = null): ChatMessageType!
+
+  """Permanently delete a task and all its messages"""
+  deleteTask(uid: Int!): Boolean!
+
+  """Update task mode and/or status"""
+  updateTask(input: UpdateTaskInput!): TaskType!
+
+  """Update the ordered progress steps for a task"""
+  updateTaskSteps(uid: Int!, steps: JSON!): TaskType!
+
+  """Archive (soft-delete) a conversation"""
+  deleteConversation(uid: String!): Boolean!
+
+  """Manually create a property with optional units"""
+  createProperty(input: CreatePropertyInput!): HouseType!
+
+  """Update a property's name, address, or type"""
+  updateProperty(input: UpdatePropertyInput!): HouseType!
+
+  """
+  Update the agent context for any entity (property, unit, tenant, vendor)
+  """
+  updateEntityContext(entityType: String!, entityId: String!, context: String!): Boolean!
+
+  """Save private (per-account) notes for an entity"""
+  saveEntityNote(entityType: String!, entityId: String!, content: String!): Boolean!
+
+  """Create a scheduled task"""
+  createScheduledTask(name: String!, prompt: String!, schedule: String!, repeat: Int = null): ScheduledTaskType!
+
+  """Update a scheduled task"""
+  updateScheduledTask(uid: String!, name: String = null, prompt: String = null, schedule: String = null, enabled: Boolean = null): ScheduledTaskType!
+
+  """Delete a scheduled task"""
+  deleteScheduledTask(uid: String!): Boolean!
+
+  """Run a scheduled task immediately and return its output"""
+  runScheduledTask(uid: String!): ScheduledTaskType!
+
+  """
+  Simulate a scheduled task — dry run that returns what the agent would do
+  """
+  simulateScheduledTask(uid: String!): String!
+
+  """Delete a property and all its units/leases (cascade)"""
+  deleteProperty(uid: String!): Boolean!
+
+  """Set confirmed_at on a document"""
+  confirmDocument(documentId: String!): Boolean!
+
+  """Attach a new lease to an existing tenant on an existing unit"""
+  addLeaseForTenant(input: AddLeaseForTenantInput!): TenantType!
+
+  """Create a tenant and attach a lease to an existing unit"""
+  createTenantWithLease(input: CreateTenantWithLeaseInput!): TenantType!
+
+  """Assign a vendor to a task"""
+  assignVendorToTask(taskId: Int!, vendorId: String!): TaskType!
+
+  """Create a new vendor contact"""
+  createVendor(input: CreateVendorInput!): VendorType!
+
+  """Update an existing vendor contact"""
+  updateVendor(input: UpdateVendorInput!): VendorType!
+
+  """Delete a vendor contact"""
+  deleteVendor(uid: String!): Boolean!
+
+  """Act on a suggestion (accept, reject, approve draft, etc.)"""
+  actOnSuggestion(uid: Int!, action: String!, editedBody: String = null): SuggestionType!
+
+  """Spawn a Task from an existing conversation, linking lineage"""
+  spawnTask(input: SpawnTaskInput!): TaskType!
+}
+
+type Query {
+  """Return the current authenticated user"""
+  me: UserType!
+
+  """Returns a single document by ID"""
+  document(uid: String!): DocumentType
+
+  """Returns all scheduled tasks"""
+  scheduledTasks(enabled: Boolean = null): [ScheduledTaskType!]!
+
+  """Returns a single scheduled task by ID"""
+  scheduledTask(uid: String!): ScheduledTaskType
+
+  """Get private (per-account) notes for an entity"""
+  entityNote(entityType: String!, entityId: String!): String
+
+  """Returns all properties with their tenants and leases"""
+  houses: [HouseType!]!
+
+  """Returns all tenants with their leases and properties"""
+  tenants: [TenantType!]!
+
+  """Returns tasks. Filters: category, status list, source"""
+  tasks(category: TaskCategory = null, status: [TaskStatus!] = null, source: TaskSource = null): [TaskType!]!
+
+  """Returns a single task by uid, including its full message thread"""
+  task(uid: Int!): TaskType
+
+  """Returns all leases with nested tenant and property"""
+  leases: [LeaseType!]!
+
+  """Returns messages for a conversation by uid"""
+  conversationMessages(uid: String!): [ChatMessageType!]!
+
+  """Returns all vendors"""
+  vendors: [VendorType!]!
+
+  """Returns the list of valid vendor type labels"""
+  vendorTypes: [String!]!
+
+  """Returns suggestions, optionally filtered by status and/or document"""
+  suggestions(status: SuggestionStatus = null, documentId: String = null, limit: Int! = 50): [SuggestionType!]!
+
+  """Returns conversations by type (tenant/vendor/user_ai/task_ai)"""
+  conversations(conversationType: ConversationType!, limit: Int! = 50, offset: Int! = 0): [ConversationSummaryType!]!
+}
+
+type ScheduledTaskType {
+  uid: String!
+  name: String!
+  prompt: String!
+  schedule: String!
+  scheduleDisplay: String
+  isDefault: Boolean!
+  enabled: Boolean!
+  state: String!
+  repeat: Int
+  completedCount: Int!
+  nextRunAt: String
+  lastRunAt: String
+  lastStatus: String
+  lastOutput: String
+  simulatedAt: String
+  createdAt: String!
+}
+
+input SendMessageInput {
+  conversationId: String!
+  body: String!
+  messageType: MessageType! = MESSAGE
+  senderName: String! = "You"
+  isAi: Boolean! = false
+}
+
+input SpawnTaskInput {
+  parentConversationId: String!
+  objective: String!
+  category: TaskCategory = null
+  urgency: Urgency = null
+  priority: TaskPriority = null
+  taskMode: TaskMode! = AUTONOMOUS
+  source: TaskSource! = MANUAL
+}
+
+enum SuggestionSource {
+  AUTOMATION
+  AGENT
+}
+
+enum SuggestionStatus {
+  PENDING
+  ACCEPTED
+  DISMISSED
+  EXPIRED
+}
+
+type SuggestionType {
+  uid: Int!
+  title: String
+  body: String
+  category: TaskCategory
+  urgency: Urgency
+  status: SuggestionStatus!
+  source: SuggestionSource
+  automationKey: String
+  options: JSON
+  actionTaken: String
+  suggestionType: String
+  riskScore: Int
+  propertyId: String
+  unitId: String
+  taskId: String
+  vendorName: String
+  propertyName: String
+  draftMessage: String
+  messages: [ChatMessageType!]!
+  createdAt: String!
+}
+
+enum TaskCategory {
+  RENT
+  MAINTENANCE
+  LEASING
+  COMPLIANCE
+  OTHER
+}
+
+enum TaskMode {
+  MANUAL
+  WAITING_APPROVAL
+  AUTONOMOUS
+}
+
+enum TaskPriority {
+  ROUTINE
+  URGENT
+}
+
+enum TaskSource {
+  MANUAL
+  AI_SUGGESTION
+  AUTOMATION
+  AGENT
+  DOCUMENT
+  TENANT_REPORT
+  DEV_SIM
+}
+
+enum TaskStatus {
+  SUGGESTED
+  ACTIVE
+  PAUSED
+  RESOLVED
+  DISMISSED
+}
+
+type TaskType {
+  uid: Int!
+  taskNumber: Int
+  title: String
+  taskStatus: TaskStatus
+  taskMode: TaskMode
+  source: TaskSource
+  category: TaskCategory
+  urgency: Urgency
+  priority: TaskPriority
+  confidential: Boolean!
+  lastMessageAt: String
+  propertyId: String
+  unitId: String
+  createdAt: String!
+  messages: [ChatMessageType!]!
+  tenantName: String
+  unitLabel: String
+  aiTriageSuggestion: String
+  vendorAssigned: String
+  aiConversationId: String
+  parentConversationId: String
+  ancestorIds: [String!]
+  requireVendorType: String
+  assignedVendorId: String
+  assignedVendorName: String
+  externalConversationId: String
+  steps: JSON
+  suggestionOptions: JSON
+  linkedConversations: [LinkedConversationType!]!
+}
+
+type TenantType {
+  uid: String!
+  name: String!
+  email: String
+  unitLabel: String
+  leaseEndDate: String
+  rentAmount: Float
+  paymentStatus: String
+  isActive: Boolean!
+  context: String
+  portalUrl: String
+  rents: [HouseType!]!
+  leases: [LeaseType!]!
+  extraProperties: [ExtraPropertyType!]!
+}
+
+type UnitType {
+  uid: String!
+  label: String!
+  isOccupied: Boolean!
+  context: String
+}
+
+input UpdatePropertyInput {
+  uid: String!
+  name: String = null
+  address: String = null
+  propertyType: String = null
+}
+
+input UpdateTaskInput {
+  uid: Int!
+  taskMode: TaskMode = null
+  taskStatus: TaskStatus = null
+}
+
+input UpdateVendorInput {
+  uid: String!
+  name: String = null
+  company: String = null
+  vendorType: String = null
+  phone: String = null
+  email: String = null
+  notes: String = null
+}
+
+enum Urgency {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+type UserType {
+  uid: String!
+  username: String!
+  role: String
+}
+
+type VendorType {
+  uid: String!
+  name: String!
+  company: String
+  vendorType: String
+  phone: String
+  email: String
+  notes: String
+  context: String
+  portalUrl: String
+  createdAt: String!
+}

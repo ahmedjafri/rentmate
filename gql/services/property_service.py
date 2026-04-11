@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backends.local_auth import resolve_account_id, resolve_org_id
 from db.models import Property as SqlProperty, Unit as SqlUnit
 
 
@@ -19,9 +20,9 @@ class PropertyService:
         postal_code: str | None = None,
         unit_labels: list[str] | None = None,
     ) -> tuple[SqlProperty, list[SqlUnit]]:
-        from backends.local_auth import resolve_account_id
         prop = SqlProperty(
             id=str(uuid.uuid4()),
+            org_id=resolve_org_id(),
             creator_id=resolve_account_id(),
             name=name,
             address_line1=address,
@@ -37,7 +38,14 @@ class PropertyService:
 
         units: list[SqlUnit] = []
         if property_type == "single_family":
-            unit = SqlUnit(id=str(uuid.uuid4()), creator_id=resolve_account_id(), property_id=prop.id, label="Main", created_at=datetime.now(UTC))
+            unit = SqlUnit(
+                id=str(uuid.uuid4()),
+                org_id=resolve_org_id(),
+                creator_id=resolve_account_id(),
+                property_id=prop.id,
+                label="Main",
+                created_at=datetime.now(UTC),
+            )
             sess.add(unit)
             sess.flush()
             units.append(unit)
@@ -46,7 +54,14 @@ class PropertyService:
                 label = label.strip()
                 if not label:
                     continue
-                unit = SqlUnit(id=str(uuid.uuid4()), creator_id=resolve_account_id(), property_id=prop.id, label=label, created_at=datetime.now(UTC))
+                unit = SqlUnit(
+                    id=str(uuid.uuid4()),
+                    org_id=resolve_org_id(),
+                    creator_id=resolve_account_id(),
+                    property_id=prop.id,
+                    label=label,
+                    created_at=datetime.now(UTC),
+                )
                 sess.add(unit)
                 sess.flush()
                 units.append(unit)
@@ -56,7 +71,13 @@ class PropertyService:
 
     @staticmethod
     def update_property(sess: Session, input) -> SqlProperty:
-        prop = sess.execute(select(SqlProperty).where(SqlProperty.id == input.uid)).scalar_one_or_none()
+        prop = sess.execute(
+            select(SqlProperty).where(
+                SqlProperty.id == input.uid,
+                SqlProperty.org_id == resolve_org_id(),
+                SqlProperty.creator_id == resolve_account_id(),
+            )
+        ).scalar_one_or_none()
         if not prop:
             raise ValueError(f"Property {input.uid} not found")
         if input.name is not None:
@@ -70,7 +91,13 @@ class PropertyService:
 
     @staticmethod
     def delete_property(sess: Session, uid: str) -> bool:
-        prop = sess.execute(select(SqlProperty).where(SqlProperty.id == uid)).scalar_one_or_none()
+        prop = sess.execute(
+            select(SqlProperty).where(
+                SqlProperty.id == uid,
+                SqlProperty.org_id == resolve_org_id(),
+                SqlProperty.creator_id == resolve_account_id(),
+            )
+        ).scalar_one_or_none()
         if not prop:
             raise ValueError(f"Property {uid} not found")
         sess.delete(prop)

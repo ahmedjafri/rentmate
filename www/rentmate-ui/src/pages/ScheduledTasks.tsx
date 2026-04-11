@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Zap, Plus, Play, Pause, Trash2, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
-import { graphqlQuery } from '@/data/api';
+import { createScheduledTask, deleteScheduledTask, listScheduledTasks, updateScheduledTask } from '@/graphql/client';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { PageLoader } from '@/components/ui/page-loader';
@@ -31,24 +31,6 @@ interface ScheduledTask {
   createdAt: string;
 }
 
-const QUERY = `
-  query { scheduledTasks { uid name prompt schedule scheduleDisplay enabled state repeat completedCount nextRunAt lastRunAt lastStatus lastOutput createdAt } }
-`;
-
-const CREATE = `
-  mutation($name: String!, $prompt: String!, $schedule: String!, $repeat: Int) {
-    createScheduledTask(name: $name, prompt: $prompt, schedule: $schedule, repeat: $repeat) { uid }
-  }
-`;
-
-const UPDATE = `
-  mutation($uid: String!, $name: String, $prompt: String, $schedule: String, $enabled: Boolean) {
-    updateScheduledTask(uid: $uid, name: $name, prompt: $prompt, schedule: $schedule, enabled: $enabled) { uid }
-  }
-`;
-
-const DELETE = `mutation($uid: String!) { deleteScheduledTask(uid: $uid) }`;
-
 const ScheduledTasksPage = () => {
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
@@ -59,7 +41,7 @@ const ScheduledTasksPage = () => {
 
   const fetchTasks = async () => {
     try {
-      const data = await graphqlQuery<{ scheduledTasks: ScheduledTask[] }>(QUERY);
+      const data = await listScheduledTasks();
       setTasks(data.scheduledTasks ?? []);
     } catch { /* ignore */ } finally { setLoading(false); }
   };
@@ -69,7 +51,7 @@ const ScheduledTasksPage = () => {
   const handleCreate = async () => {
     if (!form.name.trim() || !form.prompt.trim() || !form.schedule.trim()) return;
     try {
-      await graphqlQuery(CREATE, { name: form.name, prompt: form.prompt, schedule: form.schedule });
+      await createScheduledTask(form.name, form.prompt, form.schedule);
       toast.success('Scheduled task created');
       setCreating(false);
       setForm({ name: '', prompt: '', schedule: '' });
@@ -79,7 +61,7 @@ const ScheduledTasksPage = () => {
 
   const toggle = async (task: ScheduledTask) => {
     try {
-      await graphqlQuery(UPDATE, { uid: task.uid, enabled: !task.enabled });
+      await updateScheduledTask(task.uid, { enabled: !task.enabled });
       toast.success(task.enabled ? 'Paused' : 'Resumed');
       fetchTasks();
     } catch { toast.error('Failed'); }
@@ -88,7 +70,7 @@ const ScheduledTasksPage = () => {
   const remove = async (task: ScheduledTask) => {
     if (!confirm(`Delete "${task.name}"?`)) return;
     try {
-      await graphqlQuery(DELETE, { uid: task.uid });
+      await deleteScheduledTask(task.uid);
       setTasks(prev => prev.filter(t => t.uid !== task.uid));
       toast.success('Deleted');
     } catch { toast.error('Failed'); }

@@ -7,6 +7,8 @@ import json
 import uuid
 from datetime import UTC, datetime
 
+from backends.local_auth import resolve_account_id
+
 
 def log_trace(
     trace_type: str,
@@ -40,6 +42,7 @@ def log_trace(
                 summary=summary[:500],
                 detail=detail,
                 suggestion_id=suggestion_id,
+                creator_id=resolve_account_id(),
             ))
             db.commit()
         finally:

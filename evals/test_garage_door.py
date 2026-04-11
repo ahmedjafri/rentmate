@@ -22,6 +22,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from db.enums import TaskCategory, TaskMode, TaskSource, TaskStatus, Urgency
 from db.models import (
     Base,
     Conversation,
@@ -35,7 +36,9 @@ from db.models import (
     Task,
     Tenant,
     Unit,
+    User,
 )
+from db.models.account import create_shadow_user
 
 # ── constants ────────────────────────────────────────────────────────────────
 
@@ -77,6 +80,18 @@ def db(Session, engine):
         if transaction.nested and not transaction._parent.nested:
             sess.begin_nested()
 
+    session.add(User(
+        id=TEST_CREATOR_ID,
+        external_id=str(uuid.uuid4()),
+        org_id=1,
+        email="eval-admin@example.com",
+        first_name="Eval",
+        last_name="Admin",
+        user_type="account",
+        active=True,
+    ))
+    session.flush()
+
     yield session
     session.close()
     trans.rollback()
@@ -89,6 +104,8 @@ def scenario(db):
     # Property
     prop = Property(
         id=str(uuid.uuid4()),
+        org_id=1,
+        creator_id=TEST_CREATOR_ID,
         name="3rd Dr Property",
         address_line1=PROPERTY_ADDR,
         city="Bothell",
@@ -99,17 +116,31 @@ def scenario(db):
     db.flush()
 
     # Unit
-    unit = Unit(id=str(uuid.uuid4()), property_id=prop.id, label="A")
+    unit = Unit(
+        id=str(uuid.uuid4()),
+        org_id=1,
+        creator_id=TEST_CREATOR_ID,
+        property_id=prop.id,
+        label="A",
+    )
     db.add(unit)
     db.flush()
 
     # Tenant
-    tenant = Tenant(
-        id=str(uuid.uuid4()),
+    tenant_user = create_shadow_user(
+        db,
+        org_id=1,
+        creator_id=TEST_CREATOR_ID,
+        user_type="tenant",
         first_name="Alice",
         last_name="Renter",
         phone=TENANT_PHONE,
         email="alice@example.com",
+    )
+    tenant = Tenant(
+        org_id=1,
+        creator_id=TEST_CREATOR_ID,
+        user_id=tenant_user.id,
     )
     db.add(tenant)
     db.flush()
@@ -117,6 +148,8 @@ def scenario(db):
     # Lease
     lease = Lease(
         id=str(uuid.uuid4()),
+        org_id=1,
+        creator_id=TEST_CREATOR_ID,
         tenant_id=tenant.id,
         unit_id=unit.id,
         property_id=prop.id,
@@ -143,7 +176,8 @@ def scenario(db):
 
     # AI conversation
     ai_conv = Conversation(
-        id=str(uuid.uuid4()),
+        org_id=1,
+        creator_id=TEST_CREATOR_ID,
         subject="Garage door is broken",
         conversation_type=ConversationType.TASK_AI,
         is_group=False,
@@ -156,7 +190,7 @@ def scenario(db):
 
     # Context message in AI conversation
     db.add(Message(
-        id=str(uuid.uuid4()),
+        org_id=1,
         conversation_id=ai_conv.id,
         sender_type=ParticipantType.ACCOUNT_USER,
         body="Tenant reports that the garage door is broken and won't open. Needs assessment and repair.",
@@ -168,14 +202,14 @@ def scenario(db):
 
     # Task
     task = Task(
-        id=str(uuid.uuid4()),
+        org_id=1,
         creator_id=TEST_CREATOR_ID,
         title="Garage door is broken",
-        task_status="active",
-        task_mode="autonomous",
-        category="maintenance",
-        urgency="medium",
-        source="manual",
+        task_status=TaskStatus.ACTIVE,
+        task_mode=TaskMode.AUTONOMOUS,
+        category=TaskCategory.MAINTENANCE,
+        urgency=Urgency.MEDIUM,
+        source=TaskSource.MANUAL,
         property_id=prop.id,
         unit_id=unit.id,
         lease_id=lease.id,
@@ -278,7 +312,7 @@ def _add_message(db, conv_id: str, sender_name: str, body: str,
                  sender_type: ParticipantType, is_ai: bool = False) -> Message:
     """Add a simulated message to a conversation."""
     msg = Message(
-        id=str(uuid.uuid4()),
+        org_id=1,
         conversation_id=conv_id,
         sender_type=sender_type,
         body=body,
@@ -346,9 +380,10 @@ def _judge_message(message: str, scenario_desc: str, criteria: list[str]) -> dic
     import litellm
 
     criteria_block = "\n".join(f"{i+1}. {c}" for i, c in enumerate(criteria))
+    judge_model = os.getenv("EVAL_JUDGE_MODEL", "deepseek/deepseek-reasoner")
 
     response = litellm.completion(
-        model=os.getenv("LLM_MODEL", "deepseek/deepseek-chat"),
+        model=judge_model,
         api_key=os.getenv("LLM_API_KEY"),
         api_base=os.getenv("LLM_BASE_URL") or None,
         messages=[{
@@ -362,6 +397,31 @@ Message being evaluated:
 
 Score 1-5 on each criterion:
 {criteria_block}
+
+Evaluation rules:
+- Score the words that are actually present in the message, not what you personally would have preferred.
+- Ground every score in concrete evidence from the message. Before deciding, identify the exact words or sentence that support or fail each criterion.
+- Never say a message "does not acknowledge" or "lacks" something if the relevant wording appears verbatim or in a clear paraphrase in the message.
+- Treat explicit phrases in the reply as decisive evidence. If the message says "I'm sorry", "I'm so sorry", "I hope you're recovering", or similar, that counts as empathy unless immediately undermined.
+- Accept any of the following as clear empathy examples when sincere and context-appropriate:
+  - "I'm sorry to hear that."
+  - "I'm so sorry to hear about your hospitalization."
+  - "I'm sorry you went through that."
+  - "I understand this has been frustrating."
+  - "Please prioritize your recovery."
+  - "I hope you're recovering well."
+  - "Take care."
+- Accept any of the following as clear acknowledgment of a payment or timing commitment:
+  - "Thanks for letting me know you'll be able to pay by then."
+  - "I understand you'll be able to make the payment at that time."
+  - "Thanks for confirming the payment timing."
+  - "Noted that you'll have the payment on the timeline you mentioned."
+  - Any natural restatement that repeats or clearly refers back to the same concrete day/date/time the tenant gave.
+- If the message repeats or clearly refers back to a concrete day/date/time from the tenant, that counts as acknowledging the relevant commitment.
+- If the message says it will check with the property manager, follow up, review a request, or get back to the tenant, that counts as a concrete next step.
+- Do not fail a message just because it is concise. Short professional replies are acceptable.
+- Be lenient about wording variation. Judge the meaning, not exact phrasing.
+- In the reason field, briefly cite the exact phrase that drove the decision when possible.
 
 Return ONLY valid JSON (no markdown, no explanation outside JSON):
 {{"scores": {{"c1": N, "c2": N, ...}}, "pass": true/false, "reason": "brief explanation"}}

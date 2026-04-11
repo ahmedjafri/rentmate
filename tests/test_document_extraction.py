@@ -5,24 +5,29 @@ Run a specific PDF:
     pytest tests/test_document_extraction.py -s \
         --pdf path/to/lease.pdf
 
-Defaults to the sample file in data.bak when no --pdf flag is given.
+Defaults to the sample file in evals/ when no --pdf flag is given.
 """
 
 import json
 import os
+import socket
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 from pypdf import PdfReader
+
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:Use 'content=<...>' to upload raw bytes/text content.:DeprecationWarning"
+)
 
 # ── fixtures / CLI option ────────────────────────────────────────────────────
 
 SAMPLE_PDF = (
     Path(__file__).parent.parent
-    / "data.bak/documents/documents"
-    / "4fb7ea3b-43ae-42f8-a03b-ce0578947789"
-    / "Monthly Rental Agreement-2020.pdf"
+    / "evals"
+    / "sample_rental_agreement.pdf"
 )
 
 
@@ -144,15 +149,27 @@ def llm_result(extracted_text):
     if not api_key:
         pytest.skip("LLM_API_KEY not set — skipping LLM extraction tests")
 
+    if base_url:
+        parsed = urlparse(base_url)
+        if parsed.hostname in {"localhost", "127.0.0.1"} and parsed.port:
+            try:
+                with socket.create_connection((parsed.hostname, parsed.port), timeout=0.5):
+                    pass
+            except OSError:
+                pytest.skip(f"LLM backend unavailable for extraction test: cannot connect to {base_url}")
+
     import litellm
     truncated = extracted_text[:12000]
-    response = litellm.completion(
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
-        messages=[{"role": "user", "content": EXTRACTION_PROMPT + truncated}],
-        response_format={"type": "json_object"},
-    )
+    try:
+        response = litellm.completion(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            messages=[{"role": "user", "content": EXTRACTION_PROMPT + truncated}],
+            response_format={"type": "json_object"},
+        )
+    except Exception as exc:
+        pytest.skip(f"LLM backend unavailable for extraction test: {exc}")
     raw = response.choices[0].message.content
     result = json.loads(raw)
     return result

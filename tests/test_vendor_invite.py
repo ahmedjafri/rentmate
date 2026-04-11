@@ -104,7 +104,7 @@ class TestAuthenticateByToken:
         assert jwt_token is not None
 
         info = VendorService.validate_vendor_token(jwt_token)
-        assert info["vendor_id"] == str(vendor.id)
+        assert info["vendor_id"] == str(vendor.external_id)
         assert info["type"] == "vendor"
 
     def test_invalid_token_raises(self, db):
@@ -146,7 +146,7 @@ class TestVendorTokenEndpoint:
         assert result["name"] == "Kelly"
         assert "access_token" in result
         info = VendorService.validate_vendor_token(result["access_token"])
-        assert info["vendor_id"] == str(vendor.id)
+        assert info["vendor_id"] == str(vendor.external_id)
 
     def test_returns_404_for_unknown_token(self, db):
         with pytest.raises(HTTPException) as exc_info:

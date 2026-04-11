@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 import unittest.mock
 from unittest.mock import AsyncMock, Mock, patch
@@ -11,6 +12,7 @@ from db.models import (
     ConversationParticipant,
     Message,
     Tenant,
+    User,
 )
 from db.utils import normalize_phone
 from gql.services.sms_service import send_sms_reply
@@ -35,12 +37,19 @@ class TestQuoWebhook(unittest.TestCase):
         self.from_number = "5550001234"   # tenant
         self.to_number = "5559876543"     # admin
 
-        self.tenant = Tenant(
+        tenant_user = User(
+            org_id=1,
+            creator_id=1,
+            user_type="tenant",
             first_name="Test",
             last_name="Tenant",
             email=None,
             phone=normalize_phone(self.from_number),
+            active=True,
         )
+        self.db.add(tenant_user)
+        self.db.flush()
+        self.tenant = Tenant(org_id=1, creator_id=1, user_id=tenant_user.id)
         self.db.add(self.tenant)
         self.db.flush()
 
@@ -88,7 +97,7 @@ class TestQuoWebhook(unittest.TestCase):
         conv = (
             self.db.query(Conversation)
             .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
-            .filter(ConversationParticipant.tenant_id == self.tenant.id)
+            .filter(ConversationParticipant.user_id == self.tenant.user_id)
             .one()
         )
         self.assertFalse(conv.is_archived)
@@ -97,7 +106,7 @@ class TestQuoWebhook(unittest.TestCase):
             self.db.query(Message)
             .filter(
                 Message.conversation_id == conv.id,
-                Message.sender_tenant_id == self.tenant.id,
+                Message.sender_id == conv.participants[0].id,
             )
             .one()
         )
@@ -148,8 +157,8 @@ class TestQuoWebhook(unittest.TestCase):
 
         app.dependency_overrides = {}
 
-    @patch('handlers.chat.httpx.AsyncClient')
-    async def test_send_sms_reply_success(self, mock_client_class):
+    @patch('gql.services.sms_service.httpx.AsyncClient')
+    def test_send_sms_reply_success(self, mock_client_class):
         """
         Test the `send_sms_reply` function to ensure it makes a successful API call.
         """
@@ -158,13 +167,13 @@ class TestQuoWebhook(unittest.TestCase):
         mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
         mock_client.post = AsyncMock(return_value=httpx.Response(200, json={"status": "ok"}))
 
-        await send_sms_reply("5559876543", "5550001234", "This is a test reply.")
+        asyncio.run(send_sms_reply("5559876543", "5550001234", "This is a test reply.", api_key="test-key"))
 
         mock_client.post.assert_called_once()
         args, kwargs = mock_client.post.call_args
         self.assertIn("https://api.openphone.com/v1/messages", args[0])
-        self.assertEqual(kwargs["json"]["from"], "5559876543")
-        self.assertIn("5550001234", kwargs["json"]["to"])
+        self.assertEqual(kwargs["json"]["from"], "+15559876543")
+        self.assertIn("+15550001234", kwargs["json"]["to"])
         self.assertEqual(kwargs["json"]["content"], "This is a test reply.")
 
     def test_is_in_whitelist(self):

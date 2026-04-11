@@ -10,8 +10,8 @@ export interface SuggestionOption {
 }
 
 const DEFAULT_OPTIONS: SuggestionOption[] = [
-  { key: 'accept', label: 'Accept', action: 'accept_task', variant: 'default' },
-  { key: 'reject', label: 'Reject', action: 'reject_task', variant: 'ghost' },
+  { key: 'create', label: 'Create Task', action: 'send_and_create_task', variant: 'default' },
+  { key: 'dismiss', label: 'Dismiss', action: 'reject_task', variant: 'ghost' },
 ];
 
 interface SuggestionOptionsProps {

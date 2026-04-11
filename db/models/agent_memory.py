@@ -1,21 +1,23 @@
-"""Agent memory storage — DB-backed replacement for nanobot's file-based memory."""
-import uuid
+"""Agent memory storage -- DB-backed replacement for nanobot's file-based memory."""
 from datetime import UTC, datetime
 
-from sqlalchemy import Column, DateTime, Index, String, Text
+from sqlalchemy import Column, DateTime, ForeignKeyConstraint, Index, String, Text, UniqueConstraint
 
-from .base import Base, HasAccountId
+from .base import Base, HasCreatorId, OrgId, PrimaryId
 
 
-class AgentMemory(Base, HasAccountId):
+class AgentMemory(Base, OrgId, PrimaryId, HasCreatorId):
     __tablename__ = "agent_memory"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    agent_id = Column(String(100), nullable=False)
     memory_type = Column(String(20), nullable=False)  # 'long_term' | 'history'
     content = Column(Text, nullable=False, default="")
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
     __table_args__ = (
-        Index("ix_agent_memory_agent_type", "agent_id", "memory_type"),
+        UniqueConstraint("org_id", "id", name="uq_agent_memory_org"),
+        Index("ix_agent_memory_agent_type", "creator_id", "memory_type"),
+        ForeignKeyConstraint(
+            ["org_id", "creator_id"],
+            ["users.org_id", "users.id"],
+        ),
     )

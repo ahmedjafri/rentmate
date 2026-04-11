@@ -1,7 +1,10 @@
 """Tests for llm/agent_query.py, llm/agent_action.py, and llm/agent_data.py."""
+import asyncio
 import json
 import os
-from datetime import date, datetime
+import sys
+import types
+from datetime import UTC, date, datetime
 from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
@@ -52,6 +55,35 @@ class TestValidateSql:
 
     def test_leading_whitespace_allowed(self):
         assert _validate_sql("   SELECT 1") is None
+
+
+def test_chat_with_agent_propagates_simulation_context_into_executor_thread():
+    from llm.client import chat_with_agent
+    from llm.tools import simulation_suggestions
+
+    class FakeAIAgent:
+        def __init__(self, *args, **kwargs):
+            self.tools = []
+
+        def _build_api_kwargs(self, messages):
+            return {}
+
+        def run_conversation(self, **kwargs):
+            pending = simulation_suggestions.get()
+            assert pending is not None
+            pending.append({"title": "simulated from thread"})
+            return {"final_response": "ok"}
+
+    fake_module = types.SimpleNamespace(AIAgent=FakeAIAgent)
+    token = simulation_suggestions.set([])
+    try:
+        with patch.dict(sys.modules, {"run_agent": fake_module}), \
+             patch("llm.client.agent_registry.build_system_prompt", return_value="system"):
+            reply = asyncio.run(chat_with_agent("agent-1", "simulate:test", [{"role": "user", "content": "hi"}]))
+        assert reply == "ok"
+        assert simulation_suggestions.get() == [{"title": "simulated from thread"}]
+    finally:
+        simulation_suggestions.reset(token)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +189,7 @@ def _mock_task(task_id="task-1"):
     c.priority = 1
     c.source = "manual"
     c.property_id = "prop-1"
-    c.created_at = datetime.utcnow()
+    c.created_at = datetime.now(UTC)
     c.last_message_at = None
     c.lease = None
     c.unit = None
@@ -278,7 +310,7 @@ class TestSerializeTask:
         msg.message_type = "text"
         msg.sender_name = "Alice"
         msg.is_ai = False
-        msg.sent_at = datetime.utcnow()
+        msg.sent_at = datetime.now(UTC)
         msg.sender_type = ParticipantType.TENANT
         c.messages = [msg]
         result = _serialize_task(c)
@@ -298,7 +330,7 @@ class TestSerializeMessages:
         msg.message_type = "text"
         msg.sender_name = "Bob"
         msg.is_ai = False
-        msg.sent_at = datetime.utcnow()
+        msg.sent_at = datetime.now(UTC)
         result = _serialize_messages([msg], "conv-1")
         assert isinstance(result, list)
         assert result[0]["body"] == "Test"

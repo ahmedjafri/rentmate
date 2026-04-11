@@ -10,11 +10,11 @@ from sqlalchemy.orm import Session, joinedload
 
 from backends.local_auth import resolve_account_id
 
+from .enums import TaskMode, TaskStatus, parse_urgency
 from .models import (
     Conversation,
     ConversationParticipant,
     ConversationType,
-    ExternalContact,
     Lease,
     Message,
     MessageReceipt,
@@ -23,8 +23,17 @@ from .models import (
     Task,
     Tenant,
     Unit,
+    User,
 )
+from .models.account import create_shadow_user
 from .utils import normalize_phone
+
+
+def _tenant_name(tenant: Tenant) -> str:
+    user = tenant.user
+    if not user:
+        return "Tenant"
+    return " ".join(part for part in [user.first_name, user.last_name] if part).strip() or "Tenant"
 
 
 def _normalize_address(addr: str) -> str:
@@ -97,18 +106,25 @@ def get_or_create_tenant_by_phone(
 
     tenant = (
         db.query(Tenant)
-        .filter(Tenant.phone == phone_norm)
+        .join(User, Tenant.user_id == User.id)
+        .filter(User.phone == phone_norm)
         .one_or_none()
     )
     if tenant:
         return tenant
 
-    tenant = Tenant(
-        id=str(uuid.uuid4()),
+    shadow_user = create_shadow_user(
+        db,
+        org_id=1,
         creator_id=resolve_account_id(),
+        user_type="tenant",
         first_name=first_name,
         last_name=last_name,
         phone=phone_norm,
+    )
+    tenant = Tenant(
+        creator_id=resolve_account_id(),
+        user_id=shadow_user.id,
         created_at=datetime.now(UTC),
     )
     db.add(tenant)
@@ -131,7 +147,7 @@ def get_or_create_conversation_for_tenant(
         .join(ConversationParticipant)
         .filter(
             Conversation.is_archived.is_(False),
-            ConversationParticipant.tenant_id == tenant.id,
+            ConversationParticipant.user_id == tenant.user_id,
         )
         .order_by(Conversation.updated_at.desc())
         .all()
@@ -139,14 +155,13 @@ def get_or_create_conversation_for_tenant(
 
     for conv in convs:
         active_parts = [p for p in conv.participants if p.is_active]
-        if len(active_parts) == 1 and active_parts[0].tenant_id == tenant.id:
+        if len(active_parts) == 1 and active_parts[0].user_id == tenant.user_id:
             return conv
 
     now = datetime.now(UTC)
     conv = Conversation(
-        id=str(uuid.uuid4()),
         creator_id=resolve_account_id(),
-        subject=subject or f"Conversation with {tenant.first_name} {tenant.last_name}",
+        subject=subject or f"Conversation with {_tenant_name(tenant)}",
         is_group=False,
         is_archived=False,
         created_at=now,
@@ -156,12 +171,12 @@ def get_or_create_conversation_for_tenant(
     db.flush()
 
     participant = ConversationParticipant(
-        id=str(uuid.uuid4()),
+        org_id=1,
+        creator_id=resolve_account_id(),
         conversation_id=conv.id,
+        user_id=tenant.user_id,
         participant_type=ParticipantType.TENANT,
-        tenant_id=tenant.id,
         is_active=True,
-        joined_at=now,
     )
     db.add(participant)
     db.flush()
@@ -178,7 +193,7 @@ def add_message(
     meta: Optional[dict] = None,
     attachments: Optional[dict] = None,
     sender_tenant: Optional[Tenant] = None,
-    sender_external_contact: Optional[ExternalContact] = None,
+    sender_external_contact: Optional[User] = None,
     is_system: bool = False,
 ) -> Message:
     """
@@ -187,12 +202,24 @@ def add_message(
     """
     now = datetime.now(UTC)
 
+    sender_user_id = sender_tenant.user_id if sender_tenant else sender_external_contact.id if sender_external_contact else None
+    sender_participant = None
+    if sender_user_id is not None:
+        sender_participant = (
+            db.query(ConversationParticipant)
+            .filter(
+                ConversationParticipant.conversation_id == conversation.id,
+                ConversationParticipant.user_id == sender_user_id,
+                ConversationParticipant.is_active.is_(True),
+            )
+            .first()
+        )
+
     msg = Message(
-        id=str(uuid.uuid4()),
+        org_id=1,
         conversation_id=conversation.id,
         sender_type=sender_type,
-        sender_tenant_id=sender_tenant.id if sender_tenant else None,
-        sender_external_contact_id=sender_external_contact.id if sender_external_contact else None,
+        sender_id=sender_participant.id if sender_participant else None,
         body=body,
         body_html=body_html,
         attachments=attachments,
@@ -200,8 +227,6 @@ def add_message(
         is_system=is_system,
         sent_at=now,
     )
-
-    msg.validate_sender()
 
     db.add(msg)
 
@@ -215,6 +240,8 @@ def add_message(
     for p in active_participants:
         receipt = MessageReceipt(
             id=str(uuid.uuid4()),
+            conversation_id=conversation.id,
+            org_id=1,
             message_id=msg.id,
             conversation_participant_id=p.id,
             delivered_at=now,
@@ -254,9 +281,7 @@ def get_conversation_with_messages(
         db.query(Conversation)
         .options(
             joinedload(Conversation.participants)
-            .joinedload(ConversationParticipant.tenant),
-            joinedload(Conversation.participants)
-            .joinedload(ConversationParticipant.external_contact),
+            .joinedload(ConversationParticipant.user),
             joinedload(Conversation.messages),
         )
         .filter(Conversation.id == conversation_id)
@@ -340,7 +365,7 @@ def route_inbound_to_task(
         .filter(
             Task.task_status == "active",
             Conversation.updated_at >= recency_cutoff,
-            ConversationParticipant.tenant_id == tenant.id,
+            ConversationParticipant.user_id == tenant.user_id,
             ConversationParticipant.is_active.is_(True),
         )
         .order_by(Conversation.updated_at.desc())
@@ -374,13 +399,11 @@ def route_inbound_to_task(
 
     if task_created or conv is None:
         task = Task(
-            id=str(uuid.uuid4()),
             creator_id=creator_id,
-            title=f"Message from {tenant.first_name} {tenant.last_name}",
-            task_status="active",
-            task_mode="autonomous",
+            title=f"Message from {_tenant_name(tenant)}",
+            task_status=TaskStatus.ACTIVE,
+            task_mode=TaskMode.AUTONOMOUS,
             source=channel_type,
-            channel_type=channel_type,
             created_at=now,
             updated_at=now,
         )
@@ -395,9 +418,8 @@ def route_inbound_to_task(
         task.task_number = max_num + 1
 
         conv = Conversation(
-            id=str(uuid.uuid4()),
             creator_id=resolve_account_id(),
-            subject=f"Message from {tenant.first_name} {tenant.last_name}",
+            subject=f"Message from {_tenant_name(tenant)}",
             is_group=False,
             is_archived=False,
             created_at=now,
@@ -409,12 +431,12 @@ def route_inbound_to_task(
         task.ai_conversation_id = conv.id
 
         participant = ConversationParticipant(
-            id=str(uuid.uuid4()),
+            org_id=1,
+            creator_id=resolve_account_id(),
             conversation_id=conv.id,
+            user_id=tenant.user_id,
             participant_type=ParticipantType.TENANT,
-            tenant_id=tenant.id,
             is_active=True,
-            joined_at=now,
         )
         db.add(participant)
         db.flush()
@@ -461,7 +483,13 @@ def record_sms_from_quo(
         )
         return None, None
 
-    _creator_id, tenant, direction = resolved
+    if len(resolved) == 4:
+        _creator_id, tenant, direction, _entity_type = resolved
+    elif len(resolved) == 3:
+        _creator_id, tenant, direction = resolved
+        _entity_type = "tenant"
+    else:
+        raise ValueError(f"Unexpected SMS router result shape: {resolved!r}")
 
     if direction != "inbound":
         # Outbound messages from the admin side — just record as plain message
@@ -533,7 +561,7 @@ def route_inbound_to_tenant_chat(
         .filter(
             Conversation.conversation_type == ConversationType.TENANT,
             Conversation.is_archived.is_(False),
-            ConversationParticipant.tenant_id == tenant.id,
+            ConversationParticipant.user_id == tenant.user_id,
             ConversationParticipant.is_active.is_(True),
         )
         .order_by(Conversation.updated_at.desc())
@@ -542,9 +570,8 @@ def route_inbound_to_tenant_chat(
 
     if existing is None:
         existing = Conversation(
-            id=str(uuid.uuid4()),
             creator_id=resolve_account_id(),
-            subject=f"Conversation with {tenant.first_name} {tenant.last_name}",
+            subject=f"Conversation with {_tenant_name(tenant)}",
             is_group=False,
             is_archived=False,
             conversation_type=ConversationType.TENANT,
@@ -555,12 +582,12 @@ def route_inbound_to_tenant_chat(
         db.flush()
 
         participant = ConversationParticipant(
-            id=str(uuid.uuid4()),
+            org_id=1,
+            creator_id=resolve_account_id(),
             conversation_id=existing.id,
+            user_id=tenant.user_id,
             participant_type=ParticipantType.TENANT,
-            tenant_id=tenant.id,
             is_active=True,
-            joined_at=now,
         )
         db.add(participant)
         db.flush()
@@ -614,14 +641,13 @@ def spawn_task_from_conversation(
     now = datetime.now(UTC)
 
     task = Task(
-        id=str(uuid.uuid4()),
         creator_id=creator_id,
         title=objective,
-        task_status="active",
-        task_mode=task_mode,
+        task_status=TaskStatus.ACTIVE,
+        task_mode=TaskMode[task_mode.upper()] if isinstance(task_mode, str) else task_mode,
         source=source,
         category=category,
-        urgency=urgency,
+        urgency=parse_urgency(urgency),
         priority=priority,
         created_at=now,
         updated_at=now,
@@ -637,7 +663,6 @@ def spawn_task_from_conversation(
     task.task_number = max_num + 1
 
     convo = Conversation(
-        id=str(uuid.uuid4()),
         creator_id=resolve_account_id(),
         subject=objective,
         is_group=False,
@@ -686,7 +711,6 @@ def get_or_create_user_ai_conversation(
 
     # Create a new user_ai conversation
     conv = Conversation(
-        id=str(uuid.uuid4()),
         creator_id=resolve_account_id(),
         subject=session_key or "Chat with RentMate",
         is_group=False,
@@ -786,26 +810,33 @@ def apply_document_extraction(
     if email:
         tenant = (
             db.query(Tenant)
-            .filter(func.lower(Tenant.email) == email.lower())
+            .join(User, Tenant.user_id == User.id)
+            .filter(func.lower(User.email) == email.lower())
             .first()
         )
     if not tenant and first_name and last_name:
         tenant = (
             db.query(Tenant)
             .filter(
-                func.lower(Tenant.first_name) == first_name.lower(),
-                func.lower(Tenant.last_name) == last_name.lower(),
+                func.lower(User.first_name) == first_name.lower(),
+                func.lower(User.last_name) == last_name.lower(),
             )
             .first()
         )
     if not tenant and _should("create_tenant"):
-        tenant = Tenant(
-            id=str(uuid.uuid4()),
+        shadow_user = create_shadow_user(
+            db,
+            org_id=1,
             creator_id=resolve_account_id(),
+            user_type="tenant",
             first_name=first_name or "Unknown",
             last_name=last_name or "Tenant",
             email=email,
             phone=normalize_phone(phone) if phone else None,
+        )
+        tenant = Tenant(
+            creator_id=resolve_account_id(),
+            user_id=shadow_user.id,
             created_at=datetime.now(UTC),
         )
         db.add(tenant)
@@ -813,19 +844,19 @@ def apply_document_extraction(
         created.append("tenant")
     elif tenant and _should("update_tenant"):
         changed = False
-        if email and email.lower() != (tenant.email or "").lower():
-            tenant.email = email
+        if email and email.lower() != ((tenant.user.email or "").lower()):
+            tenant.user.email = email
             changed = True
         if phone:
             normalized = normalize_phone(phone)
-            if normalized and normalized != tenant.phone:
-                tenant.phone = normalized
+            if normalized and normalized != tenant.user.phone:
+                tenant.user.phone = normalized
                 changed = True
-        if first_name and first_name.lower() != (tenant.first_name or "").lower():
-            tenant.first_name = first_name
+        if first_name and first_name.lower() != ((tenant.user.first_name or "").lower()):
+            tenant.user.first_name = first_name
             changed = True
-        if last_name and last_name.lower() != (tenant.last_name or "").lower():
-            tenant.last_name = last_name
+        if last_name and last_name.lower() != ((tenant.user.last_name or "").lower()):
+            tenant.user.last_name = last_name
             changed = True
         if changed:
             db.flush()
@@ -900,11 +931,10 @@ def apply_document_extraction(
         _append_context(unit, data["unit_context"])
     if tenant and data.get("tenant_context"):
         _append_context(tenant, data["tenant_context"])
-    # Lease doesn't have a context field — store on tenant notes
     if tenant and data.get("lease_context"):
-        existing_notes = tenant.notes or ""
+        existing_notes = tenant.user.notes or ""
         lease_ctx = data["lease_context"].strip()
-        tenant.notes = (existing_notes + "\n" + lease_ctx).strip() if existing_notes else lease_ctx
+        tenant.user.notes = (existing_notes + "\n" + lease_ctx).strip() if existing_notes else lease_ctx
 
     db.commit()
 

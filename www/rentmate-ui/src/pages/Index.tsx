@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { ConvRow } from '@/components/chat/ConvRow';
 import { useConversations } from '@/hooks/useConversations';
-import { graphqlQuery, DELETE_CONVERSATION_MUTATION, ACT_ON_SUGGESTION_MUTATION } from '@/data/api';
+import { actOnSuggestion, deleteConversation } from '@/graphql/client';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { SuggestionCard } from './ActionDesk';
@@ -90,12 +90,9 @@ const Index = () => {
 
   const handleSuggestionAction = async (suggestionId: string, action: string, editedBody?: string) => {
     try {
-      const result = await graphqlQuery<{ actOnSuggestion: { uid: string; status: string; taskId?: string } }>(
-        ACT_ON_SUGGESTION_MUTATION,
-        { uid: suggestionId, action, editedBody: editedBody ?? null },
-      );
+      const result = await actOnSuggestion(suggestionId, action, editedBody ?? null);
       const { status, taskId } = result.actOnSuggestion;
-      updateSuggestionStatus(suggestionId, status as 'accepted' | 'dismissed');
+      updateSuggestionStatus(suggestionId, status.toLowerCase() as 'accepted' | 'dismissed');
       // Re-fetch so new tasks appear immediately
       refreshData();
       if (status === 'accepted') {
@@ -149,7 +146,7 @@ const Index = () => {
               onClick={() => { setShowNewChat(false); openChat({ conversationId: conv.uid }); }}
               onDelete={async () => {
                 try {
-                  await graphqlQuery(DELETE_CONVERSATION_MUTATION, { uid: conv.uid });
+                  await deleteConversation(conv.uid);
                   removeConversation(conv.uid);
                   toast.success('Conversation deleted');
                 } catch {

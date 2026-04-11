@@ -7,7 +7,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { FileText, AlertTriangle, CheckCircle2, Bot, ChevronRight, Loader2 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
-import { graphqlQuery, UPDATE_ENTITY_CONTEXT_MUTATION, ENTITY_NOTE_QUERY, SAVE_ENTITY_NOTE_MUTATION } from '@/data/api';
+import { getEntityNote, saveEntityNote, updateEntityContext } from '@/graphql/client';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { Globe, Lock } from 'lucide-react';
@@ -106,7 +106,7 @@ export function EntityContextCard({ entityId, entityName, entityType, agentConte
     // Fetch private notes from DB (not supported for documents)
     if (entityType && entityType !== 'document') {
       try {
-        const result = await graphqlQuery<{ entityNote: string | null }>(ENTITY_NOTE_QUERY, { entityType, entityId });
+        const result = await getEntityNote(entityType, entityId);
         const notes = result.entityNote || '';
         setPrivateDraft(notes);
         setPrivateNotes(notes);
@@ -125,17 +125,13 @@ export function EntityContextCard({ entityId, entityName, entityType, agentConte
 
       // Save shared context if changed
       if (entityType && sharedDraft !== (agentContext || '')) {
-        await graphqlQuery(UPDATE_ENTITY_CONTEXT_MUTATION, {
-          entityType, entityId, context: sharedDraft.trim(),
-        });
+        await updateEntityContext(entityType, entityId, sharedDraft.trim());
         onAgentContextSaved?.(sharedDraft.trim());
       }
 
       // Save private notes if changed (not supported for documents)
       if (entityType && entityType !== 'document' && privateDraft !== privateNotes) {
-        await graphqlQuery(SAVE_ENTITY_NOTE_MUTATION, {
-          entityType, entityId, content: privateDraft.trim(),
-        });
+        await saveEntityNote(entityType, entityId, privateDraft.trim());
         setPrivateNotes(privateDraft.trim());
       }
 

@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Users, Search, ChevronRight, CalendarDays, DollarSign, Trash2 } from 'lucide-react';
 import { PageLoader } from '@/components/ui/page-loader';
-import { graphqlQuery, DELETE_TENANT_MUTATION } from '@/data/api';
+import { deleteTenant } from '@/graphql/client';
 import { toast } from 'sonner';
 
 const paymentConfig = {
@@ -161,7 +161,7 @@ const Tenants = () => {
                     e.stopPropagation();
                     if (!confirm(`Delete tenant ${tenant.name}? This will also remove their leases.`)) return;
                     try {
-                      await graphqlQuery(DELETE_TENANT_MUTATION, { uid: tenant.id });
+                      await deleteTenant(tenant.id);
                       removeTenant(tenant.id);
                       toast.success(`${tenant.name} deleted`);
                     } catch {

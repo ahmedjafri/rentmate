@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { graphqlQuery, CONVERSATIONS_QUERY } from '@/data/api';
 import { useApp } from '@/context/AppContext';
 import type { ConvSummary, TabKey } from '@/components/chat/ConvRow';
+import { fromGraphqlEnum, getConversations } from '@/graphql/client';
 
 export function useConversations(conversationType: TabKey, limit = 50) {
   const { chatPanel } = useApp();
@@ -15,9 +15,14 @@ export function useConversations(conversationType: TabKey, limit = 50) {
     let cancelled = false;
     setLoading(true);
 
-    graphqlQuery<{ conversations: ConvSummary[] }>(CONVERSATIONS_QUERY, { conversationType, limit })
+    getConversations(conversationType, limit)
       .then((data) => {
-        if (!cancelled) setConversations(data.conversations ?? []);
+        if (!cancelled) {
+          setConversations((data.conversations ?? []).map((conversation) => ({
+            ...conversation,
+            conversationType: fromGraphqlEnum(conversation.conversationType) ?? conversation.conversationType,
+          })) as ConvSummary[]);
+        }
       })
       .catch(() => { if (!cancelled) setConversations([]); })
       .finally(() => { if (!cancelled) setLoading(false); });

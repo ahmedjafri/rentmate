@@ -7,20 +7,14 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
+import { CreateVendorDocument } from '@/graphql/generated';
+import { graphqlRequest, loginViaGraphql } from './graphql';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Log in via the backend and inject the JWT into localStorage. */
 async function login(page: Page) {
-  // Hit the login mutation directly to get a real JWT
-  const res = await page.request.post('/graphql', {
-    data: {
-      query: `mutation { login(input: { password: "rentmate" }) { token } }`,
-    },
-  });
-  const body = await res.json();
-  const token = body.data?.login?.token;
-  if (!token) throw new Error(`Login failed: ${JSON.stringify(body)}`);
+  const token = await loginViaGraphql(page);
 
   // Inject into localStorage before the page loads
   await page.addInitScript((t: string) => {
@@ -28,33 +22,9 @@ async function login(page: Page) {
   }, token);
 }
 
-/** Make an authenticated GraphQL request via the page's request context. */
-async function gql(page: Page, query: string, variables: Record<string, unknown> = {}) {
-  // Read token from a prior login call stored in test state
-  const tokenRes = await page.request.post('/graphql', {
-    data: {
-      query: `mutation { login(input: { password: "rentmate" }) { token } }`,
-    },
-  });
-  const token = (await tokenRes.json()).data?.login?.token;
-
-  const res = await page.request.post('/graphql', {
-    headers: { Authorization: `Bearer ${token}` },
-    data: { query, variables },
-  });
-  const body = await res.json();
-  if (body.errors?.length) throw new Error(`GraphQL error: ${JSON.stringify(body.errors)}`);
-  return body.data;
-}
-
 /** Make an authenticated REST request. */
 async function apiPost(page: Page, path: string, body: Record<string, unknown>) {
-  const tokenRes = await page.request.post('/graphql', {
-    data: {
-      query: `mutation { login(input: { password: "rentmate" }) { token } }`,
-    },
-  });
-  const token = (await tokenRes.json()).data?.login?.token;
+  const token = await loginViaGraphql(page);
 
   return page.request.post(path, {
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -71,18 +41,20 @@ test.describe('Task vendor flow (full stack)', () => {
   test.beforeAll(async ({ browser }) => {
     // Create a vendor via GraphQL before the test suite runs
     const page = await browser.newPage();
-    const data = await gql(page, `
-      mutation {
-        createVendor(input: {
-          name: "E2E Plumbing Co"
-          contactMethod: "email"
-          vendorType: "plumber"
-        }) {
-          uid
-          name
-        }
-      }
-    `);
+    const token = await loginViaGraphql(page);
+    const data = await graphqlRequest(
+      page,
+      CreateVendorDocument,
+      {
+        input: {
+          name: 'E2E Plumbing Co',
+          phone: '555-0100',
+          vendorType: 'plumber',
+          email: 'e2e-plumber@example.com',
+        },
+      },
+      token,
+    );
     vendorId = data.createVendor.uid;
     vendorName = data.createVendor.name;
     await page.close();

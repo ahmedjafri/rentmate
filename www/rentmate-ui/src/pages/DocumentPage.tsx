@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { authFetch } from '@/lib/auth';
-import { graphqlQuery, DOCUMENT_QUERY } from '@/data/api';
+import { getDocument } from '@/graphql/client';
 import { useApp } from '@/context/AppContext';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -82,7 +82,7 @@ const DocumentPage = () => {
   useEffect(() => {
     if (!id) return;
     Promise.all([
-      graphqlQuery<{ document: DocumentDetail | null }>(DOCUMENT_QUERY, { uid: id }).then(r => r.document),
+      getDocument(id).then(r => r.document),
       authFetch(`/api/document/${id}/tags`).then(r => r.ok ? r.json() : []),
     ]).then(([docData, tagsData]) => {
       if (docData) {

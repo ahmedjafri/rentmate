@@ -1,28 +1,9 @@
-const TOKEN_KEY = 'jwtToken';
-const GRAPHQL_URL = '/graphql';
+import { loginMutation } from '@/graphql/client';
 
-const LOGIN_MUTATION = `
-  mutation Login($input: LoginInput!) {
-    login(input: $input) {
-      token
-      user { uid username }
-    }
-  }
-`;
+const TOKEN_KEY = 'jwtToken';
 
 export async function login(password: string, email?: string): Promise<void> {
-  const res = await fetch(GRAPHQL_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      query: LOGIN_MUTATION,
-      variables: { input: { password, ...(email ? { email } : {}) } },
-    }),
-  });
-  const text = await res.text();
-  if (!text) throw new Error(`Server error (HTTP ${res.status})`);
-  const { data, errors } = JSON.parse(text);
-  if (errors?.length) throw new Error(errors[0].message);
+  const data = await loginMutation({ password, ...(email ? { email } : {}) });
   const token = data?.login?.token;
   if (!token) throw new Error('Login failed. Please check your credentials.');
   localStorage.setItem(TOKEN_KEY, token);
