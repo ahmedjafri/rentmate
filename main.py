@@ -288,16 +288,22 @@ async def cache_control_middleware(request: Request, call_next):
     return response
 
 
+_pre_request_hook = None  # callable(request, db_session) -> None, set by downstream wrappers
+
+
 @app.middleware("http")
 async def db_session_middleware(request: Request, call_next):
-    from backends.local_auth import _current_account_id
+    from backends.local_auth import _current_account_id, _current_org_id
 
-    # Clear account context at the start of every request to prevent
+    # Clear context at the start of every request to prevent
     # stale values from a previous request leaking into this one.
     _current_account_id.set(None)
+    _current_org_id.set(None)
 
     request.state.db_session = SessionLocal()
     try:
+        if _pre_request_hook:
+            _pre_request_hook(request, request.state.db_session)
         response = await call_next(request)
     finally:
         request.state.db_session.close()

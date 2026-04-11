@@ -4,7 +4,13 @@ version = "0.1.0"
 description = "Fair source property management assistant"
 authors = ["RentMate Contributors"]
 readme = "README.md"
-packages = [{ include = "llm" }]
+packages = [
+  { include = "db" },
+  { include = "gql" },
+  { include = "handlers" },
+  { include = "backends" },
+  { include = "llm" },
+]
 
 [tool.poetry.dependencies]
 python = "^3.12"
@@ -20,6 +26,7 @@ hermes-agent = {git = "https://github.com/nousresearch/hermes-agent.git"}
 memray = "^1.19.2"
 croniter = "^6.2.2"
 bcrypt = "^5.0.0"
+chromadb = "^1.5.7"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.0"
