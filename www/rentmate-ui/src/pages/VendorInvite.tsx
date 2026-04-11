@@ -17,8 +17,18 @@ const PortalInvite = () => {
     fetch(`/api/vendor-token/${token}`)
       .then((res) => {
         if (res.ok) return res.json().then((data) => {
-          setVendorToken(data.access_token);
-          navigate('/vendor-portal');
+          if (data.access_token) {
+            setVendorToken(data.access_token);
+            navigate(`/vendor-portal?token=${encodeURIComponent(token)}`);
+            return;
+          }
+          if (data.login_required) {
+            const params = new URLSearchParams({ mode: 'login', token });
+            if (data.email) params.set('email', data.email);
+            navigate(`/vendor-portal?${params.toString()}`);
+            return;
+          }
+          throw new Error('Invalid or expired link');
         });
         // Not a vendor token — try tenant
         return fetch(`/api/tenant-token/${token}`)

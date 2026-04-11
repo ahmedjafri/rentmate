@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Wrench, LogOut, ArrowLeft } from 'lucide-react';
 import { ChatMessageBubble } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { ChatMessage, ChatSenderType } from '@/data/mockData';
-import { getVendorToken, isVendorAuthenticated, vendorLogout } from '@/lib/vendorAuth';
+import { getVendorToken, isVendorAuthenticated, setVendorToken, vendorLogout } from '@/lib/vendorAuth';
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -16,6 +19,7 @@ interface VendorMe {
   company?: string;
   vendor_type?: string;
   email?: string;
+  has_account?: boolean;
 }
 
 interface VendorTask {
@@ -78,6 +82,93 @@ function taskMessageToChat(m: TaskMessage): ChatMessage {
     timestamp: new Date(m.sent_at),
     messageType: 'message',
   };
+}
+
+function VendorAuthCard({
+  mode,
+  initialEmail,
+  portalToken,
+  onLogin,
+}: {
+  mode: 'login' | 'signup';
+  initialEmail?: string;
+  portalToken?: string;
+  onLogin: (token: string) => void;
+}) {
+  const [email, setEmail] = useState(initialEmail ?? '');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      const response = await fetch('/api/vendor/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, token: portalToken || null }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.access_token) {
+        throw new Error(data.detail || 'Unable to sign in');
+      }
+      onLogin(data.access_token);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-muted/30 p-4">
+      <Card className="w-full max-w-md p-8 space-y-6">
+        <div className="text-center space-y-2">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10">
+            <Wrench className="h-6 w-6 text-primary" />
+          </div>
+          <h1 className="text-xl font-semibold">Vendor Portal</h1>
+          <p className="text-sm text-muted-foreground">
+            {mode === 'signup'
+              ? 'Finish creating your vendor account to keep using the portal.'
+              : portalToken
+                ? 'Sign in to link your existing account and access the vendor portal.'
+                : 'Sign in to access your assigned tasks and conversations.'}
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="vendor-email">Email</Label>
+            <Input
+              id="vendor-email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="vendor@example.com"
+              autoFocus
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="vendor-password">Password</Label>
+            <Input
+              id="vendor-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your password"
+            />
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <Button type="submit" className="w-full" disabled={loading}>
+            {loading ? 'Signing in...' : 'Sign in'}
+          </Button>
+        </form>
+      </Card>
+    </div>
+  );
 }
 
 // ─── chat panel ───────────────────────────────────────────────────────────────
@@ -184,16 +275,23 @@ function ChatPanel({ task, onBack }: { task: TaskDetail; onBack: () => void }) {
 
 const VendorPortal = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [me, setMe] = useState<VendorMe | null>(null);
   const [tasks, setTasks] = useState<VendorTask[]>([]);
   const [activeTask, setActiveTask] = useState<TaskDetail | null>(null);
   const [loadingTask, setLoadingTask] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [authVersion, setAuthVersion] = useState(0);
+  const [accountEmail, setAccountEmail] = useState(searchParams.get('email') || '');
+  const [accountPassword, setAccountPassword] = useState('');
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const [accountSaving, setAccountSaving] = useState(false);
+  const initialMode = searchParams.get('mode') === 'login' ? 'login' : 'signup';
+  const portalToken = searchParams.get('token') || '';
 
   useEffect(() => {
     if (!isVendorAuthenticated()) {
-      setError('Please use your invite link to access the vendor portal.');
       setLoading(false);
       return;
     }
@@ -211,10 +309,47 @@ const VendorPortal = () => {
       .then(([meData, tasksData]) => {
         setMe(meData);
         setTasks(tasksData);
+        if (meData.email) setAccountEmail(prev => prev || meData.email);
       })
       .catch((e) => setError((e as Error).message))
       .finally(() => setLoading(false));
-  }, [navigate]);
+  }, [authVersion, navigate]);
+
+  const handleAccountCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAccountError(null);
+    setAccountSaving(true);
+    try {
+      const r = await fetch('/api/vendor/account', {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ email: accountEmail, password: accountPassword }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.access_token) {
+        throw new Error(data.detail || 'Unable to create account');
+      }
+      setVendorToken(data.access_token);
+      setMe(prev => prev ? { ...prev, email: data.email, has_account: true } : prev);
+      setAccountPassword('');
+      const next = new URLSearchParams(searchParams);
+      next.delete('token');
+      next.delete('mode');
+      next.delete('email');
+      setSearchParams(next, { replace: true });
+    } catch (err) {
+      setAccountError((err as Error).message);
+    } finally {
+      setAccountSaving(false);
+    }
+  };
+
+  const handleVendorLogin = (token: string) => {
+    setVendorToken(token);
+    setError(null);
+    setLoading(true);
+    setAuthVersion((value) => value + 1);
+  };
 
   const openTask = async (taskId: string) => {
     setLoadingTask(taskId);
@@ -229,11 +364,23 @@ const VendorPortal = () => {
 
   const handleLogout = () => {
     vendorLogout();
-    setError('You have been logged out. Use your invite link to sign back in.');
+    setError(null);
     setMe(null);
     setTasks([]);
     setActiveTask(null);
+    setAuthVersion((value) => value + 1);
   };
+
+  if (!isVendorAuthenticated()) {
+    return (
+      <VendorAuthCard
+        mode={initialMode}
+        initialEmail={searchParams.get('email') || undefined}
+        portalToken={portalToken || undefined}
+        onLogin={handleVendorLogin}
+      />
+    );
+  }
 
   if (loading) {
     return (
@@ -281,7 +428,63 @@ const VendorPortal = () => {
         <div className={`${activeTask ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-72 lg:w-80 border-r bg-background shrink-0`}>
           <div className="px-4 py-3 border-b">
             <h2 className="font-semibold text-sm">Assigned Tasks</h2>
+            {me && !me.has_account && (
+              <p className="mt-1 text-xs text-muted-foreground">Create a login to keep using the portal without an invite link.</p>
+            )}
           </div>
+          {me && !me.has_account && (
+            <div className="border-b p-4 bg-muted/20">
+              <form onSubmit={handleAccountCreate} className="space-y-3">
+                <div className="space-y-1">
+                  <Label htmlFor="vendor-account-email" className="text-xs">Email</Label>
+                  <Input
+                    id="vendor-account-email"
+                    type="email"
+                    value={accountEmail}
+                    onChange={(e) => setAccountEmail(e.target.value)}
+                    placeholder="vendor@example.com"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="vendor-account-password" className="text-xs">Password</Label>
+                  <Input
+                    id="vendor-account-password"
+                    type="password"
+                    value={accountPassword}
+                    onChange={(e) => setAccountPassword(e.target.value)}
+                    placeholder="Create a password"
+                  />
+                </div>
+                {accountError && <p className="text-xs text-destructive">{accountError}</p>}
+                <div className="flex gap-2">
+                  <Button type="submit" size="sm" className="flex-1" disabled={accountSaving}>
+                    {accountSaving ? 'Creating account...' : 'Create account'}
+                  </Button>
+                  {portalToken && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="flex-1"
+                      onClick={() => {
+                        vendorLogout();
+                        const next = new URLSearchParams(searchParams);
+                        next.set('mode', 'login');
+                        next.set('token', portalToken);
+                        if (accountEmail) next.set('email', accountEmail);
+                        setSearchParams(next, { replace: true });
+                        setMe(null);
+                        setTasks([]);
+                        setActiveTask(null);
+                      }}
+                    >
+                      Sign in instead
+                    </Button>
+                  )}
+                </div>
+              </form>
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto">
             {tasks.length === 0 ? (
               <p className="text-sm text-muted-foreground p-4">No tasks assigned yet.</p>
