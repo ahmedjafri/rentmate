@@ -26,6 +26,7 @@ from db.enums import (
 from .account import User
 from .agent_memory import AgentMemory
 from .agent_trace import AgentTrace
+from .memory_item import MemoryItem
 
 # AutomationRevision removed — replaced by ScheduledTask
 from .base import Base, EntityNote, HasCreatorId
@@ -70,6 +71,7 @@ __all__ = [
     "DocumentTag",
     "AgentMemory",
     "AgentTrace",
+    "MemoryItem",
     "AppSetting",
     "ScheduledTask",
     "ChannelType",

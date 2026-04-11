@@ -66,6 +66,29 @@ def upgrade() -> None:
     )
     op.create_index('ix_agent_memory_agent_type', 'agent_memory', ['creator_id', 'memory_type'], unique=False)
     op.create_index(op.f('ix_agent_memory_org_id'), 'agent_memory', ['org_id'], unique=False)
+    op.create_table('memory_items',
+    sa.Column('source_type', sa.String(length=50), nullable=False),
+    sa.Column('source_id', sa.String(length=64), nullable=False),
+    sa.Column('entity_type', sa.String(length=30), nullable=False),
+    sa.Column('entity_id', sa.String(length=64), nullable=False),
+    sa.Column('visibility', sa.String(length=20), nullable=False),
+    sa.Column('title', sa.String(length=255), nullable=True),
+    sa.Column('content', sa.Text(), nullable=False),
+    sa.Column('content_hash', sa.String(length=64), nullable=False),
+    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
+    sa.Column('org_id', sa.Integer(), nullable=False),
+    sa.Column('id', sa.String(length=36), nullable=False),
+    sa.Column('creator_id', sa.Integer(), nullable=False),
+    sa.ForeignKeyConstraint(['org_id', 'creator_id'], ['users.org_id', 'users.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('org_id', 'creator_id', 'source_type', 'source_id', name='uq_memory_item_source'),
+    sa.UniqueConstraint('org_id', 'id', name='uq_memory_items_org')
+    )
+    op.create_index('ix_memory_items_lookup', 'memory_items', ['org_id', 'creator_id', 'entity_type', 'entity_id'], unique=False)
+    op.create_index(op.f('ix_memory_items_org_id'), 'memory_items', ['org_id'], unique=False)
+    op.create_index(op.f('ix_memory_items_updated_at'), 'memory_items', ['updated_at'], unique=False)
+    op.create_index('ix_memory_items_visibility', 'memory_items', ['org_id', 'creator_id', 'visibility'], unique=False)
     op.create_table('agent_traces',
     sa.Column('timestamp', sa.DateTime(), nullable=False),
     sa.Column('trace_type', sa.String(length=30), nullable=False),
@@ -366,7 +389,7 @@ def upgrade() -> None:
     sa.Column('attachments', sa.JSON(), nullable=True),
     sa.Column('meta', sa.JSON(), nullable=True),
     sa.Column('is_system', sa.Boolean(), nullable=False),
-    sa.Column('message_type', sa.Enum('MESSAGE', 'INTERNAL', 'APPROVAL', 'SUGGESTION', 'CONTEXT', 'THREAD', 'DRAFT_AI_REPLY', name='message_type_enum'), nullable=True),
+    sa.Column('message_type', sa.Enum('MESSAGE', 'INTERNAL', 'APPROVAL', 'SUGGESTION', 'CONTEXT', 'THREAD', 'DRAFT_AI_REPLY', 'ACTION', name='message_type_enum'), nullable=True),
     sa.Column('sender_name', sa.String(length=255), nullable=True),
     sa.Column('is_ai', sa.Boolean(), nullable=False),
     sa.Column('draft_approval_status', sa.Enum('PENDING', 'APPROVED', 'REJECTED', 'EDITED', name='draft_approval_status_enum'), nullable=True),
@@ -496,6 +519,11 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_agent_traces_org_id'), table_name='agent_traces')
     op.drop_table('agent_traces')
     op.drop_index(op.f('ix_agent_memory_org_id'), table_name='agent_memory')
+    op.drop_index('ix_memory_items_visibility', table_name='memory_items')
+    op.drop_index(op.f('ix_memory_items_updated_at'), table_name='memory_items')
+    op.drop_index(op.f('ix_memory_items_org_id'), table_name='memory_items')
+    op.drop_index('ix_memory_items_lookup', table_name='memory_items')
+    op.drop_table('memory_items')
     op.drop_index('ix_agent_memory_agent_type', table_name='agent_memory')
     op.drop_table('agent_memory')
     op.drop_index(op.f('ix_users_org_id'), table_name='users')

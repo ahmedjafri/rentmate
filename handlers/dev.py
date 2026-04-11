@@ -12,7 +12,7 @@ GET  /dev/history/{tenant_id} — returns the most recent dev_sim task messages
 
 import asyncio
 from datetime import UTC, datetime
-from typing import List
+from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -33,6 +33,13 @@ from db.models import (
 from handlers.deps import get_db, require_user
 from llm.context import build_task_context
 from llm.registry import agent_registry
+from llm.retrieval import (
+    ChromaMemoryIndex,
+    RetrievalRequest,
+    list_memory_items,
+    retrieve_context,
+    sync_memory_index,
+)
 
 router = APIRouter()
 
@@ -61,6 +68,31 @@ class DevChatMessage(BaseModel):
 class DevHistoryResponse(BaseModel):
     task_id: str | None
     messages: List[DevChatMessage]
+
+
+class MemoryItemResponse(BaseModel):
+    id: str
+    source_type: str
+    source_id: str
+    entity_type: str
+    entity_id: str
+    visibility: str
+    title: str | None
+    content: str
+    metadata: dict[str, Any]
+    updated_at: str | None
+
+
+class RetrievalDebugRequest(BaseModel):
+    query: str = ""
+    intent: str = "answer_question"
+    surface: str = "dev"
+    task_id: str | None = None
+    property_id: str | None = None
+    unit_id: str | None = None
+    tenant_id: str | None = None
+    vendor_id: str | None = None
+    limit: int = 12
 
 
 @router.post("/simulate-inbound", response_model=SimulateInboundResponse)
@@ -320,6 +352,95 @@ async def wipe_chats(request: Request, db: Session = Depends(get_db)):
         db.delete(c)
     db.commit()
     return {"deleted_conversations": len(convos), "unlinked_tasks": len(tasks)}
+
+
+@router.get("/memory-items", response_model=list[MemoryItemResponse])
+async def get_memory_items(
+    request: Request,
+    db: Session = Depends(get_db),
+    query: str = "",
+    source_type: str | None = None,
+    entity_type: str | None = None,
+    visibility: str | None = None,
+    limit: int = 200,
+):
+    await require_user(request)
+    sync_memory_index(db)
+    rows = list_memory_items(db, query=query, limit=min(limit, 500))
+    if source_type:
+        rows = [row for row in rows if row.source_type == source_type]
+    if entity_type:
+        rows = [row for row in rows if row.entity_type == entity_type]
+    if visibility:
+        rows = [row for row in rows if row.visibility == visibility]
+    return [
+        MemoryItemResponse(
+            id=row.id,
+            source_type=row.source_type,
+            source_id=row.source_id,
+            entity_type=row.entity_type,
+            entity_id=row.entity_id,
+            visibility=row.visibility,
+            title=row.title,
+            content=row.content,
+            metadata=row.metadata_json or {},
+            updated_at=row.updated_at.isoformat() if row.updated_at else None,
+        )
+        for row in rows
+    ]
+
+
+@router.post("/retrieve-context")
+async def dev_retrieve_context(
+    body: RetrievalDebugRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    await require_user(request)
+    bundle = retrieve_context(db, RetrievalRequest(
+        surface=body.surface,
+        intent=body.intent,
+        query=body.query,
+        task_id=body.task_id,
+        property_id=body.property_id,
+        unit_id=body.unit_id,
+        tenant_id=body.tenant_id,
+        vendor_id=body.vendor_id,
+        limit=min(body.limit, 30),
+    ))
+    return {
+        "request": body.model_dump(),
+        "items": [
+            {
+                "memory_item_id": item.memory_item_id,
+                "source_type": item.source_type,
+                "source_id": item.source_id,
+                "entity_type": item.entity_type,
+                "entity_id": item.entity_id,
+                "title": item.title,
+                "content": item.content,
+                "metadata": item.metadata,
+                "heuristic_score": item.heuristic_score,
+                "vector_score": item.vector_score,
+                "final_score": item.final_score,
+                "reasons": item.reasons,
+            }
+            for item in bundle.items
+        ],
+    }
+
+
+@router.post("/reindex-memory")
+async def reindex_memory(
+    request: Request,
+    db: Session = Depends(get_db),
+    reset_index: bool = False,
+):
+    await require_user(request)
+    if reset_index:
+        ChromaMemoryIndex().reset()
+    count = sync_memory_index(db)
+    return {"count": count, "reset_index": reset_index}
 
 
 @router.get("/traces")

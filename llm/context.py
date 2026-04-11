@@ -1,79 +1,53 @@
-from datetime import date
-from typing import Optional
-
 from sqlalchemy.orm import Session
 
-from backends.local_auth import resolve_account_id
-from db.models import Lease, MessageType, Property, Task, Tenant, Unit
+from db.models import Conversation, MessageType, Task
+from llm.retrieval import RetrievalRequest, compose_prompt_context, retrieve_context
 
 
-def load_account_context(db: Session) -> str:
-    properties = db.query(Property).all()
-    today = date.today()
-    active_leases = db.query(Lease).filter(Lease.end_date >= today).all()
+def load_account_context(db: Session, query: str | None = None) -> str:
+    bundle = retrieve_context(db, RetrievalRequest(
+        surface="chat",
+        intent="account_overview",
+        query=query or "account overview active leases properties tenants vendors important notes",
+        limit=12,
+    ))
+    return compose_prompt_context(bundle, title="Account overview")
 
-    lines: list[str] = []
 
-    if properties:
-        lines.append("Properties:")
-        for prop in properties:
-            parts = [prop.address_line1, prop.city, prop.state, prop.postal_code]
-            addr = ", ".join(p for p in parts if p)
-            label = prop.name or addr
-            lines.append(f"  - {label} ({addr}) [id: {prop.id}]")
-
-    if active_leases:
-        lines.append("Active Leases:")
-        for lease in active_leases:
-            tenant = lease.tenant
-            unit = lease.unit
-            prop = lease.property
-            tenant_user = tenant.user if tenant else None
-            if not tenant_user or not unit:
-                continue
-            name = tenant_user.name or "Tenant"
-            phone = tenant_user.phone or "no phone"
-            email = tenant_user.email or "no email"
-            prop_label = prop.name if prop else "?"
-            start = lease.start_date.strftime("%Y-%m-%d") if lease.start_date else "?"
-            end = lease.end_date.strftime("%Y-%m-%d") if lease.end_date else "?"
-            rent = f"${lease.rent_amount:,.0f}/mo" if lease.rent_amount else "?"
-            status = lease.payment_status or "current"
-            lines.append(
-                f"  - {name} | {phone} | {email} | {prop_label} {unit.label} "
-                f"| {start}–{end} | {rent} | payment: {status}"
+def _resolve_task(db: Session, task_or_conversation_id: str) -> Task | None:
+    task = db.query(Task).filter_by(id=task_or_conversation_id).first()
+    if task:
+        return task
+    conversation = db.query(Conversation).filter_by(id=task_or_conversation_id).first()
+    if conversation:
+        return (
+            db.query(Task)
+            .filter(
+                (Task.ai_conversation_id == conversation.id)
+                | (Task.parent_conversation_id == conversation.id)
+                | (Task.external_conversation_id == conversation.id)
             )
-
-    return "\n".join(lines)
-
-
-def _append_lease_context(lines: list[str], lease: Lease) -> None:
-    """Append tenant and lease details to context lines."""
-    tenant = lease.tenant
-    tenant_user = tenant.user if tenant else None
-    if tenant_user:
-        name = tenant_user.name or "Tenant"
-        phone = tenant_user.phone or "no phone"
-        email = tenant_user.email or "no email"
-        lines.append(f"Current Tenant: {name} | {phone} | {email}")
-        lines.append(f"Tenant ID: {tenant.external_id}")
-    start = lease.start_date.strftime("%Y-%m-%d") if lease.start_date else "?"
-    end = lease.end_date.strftime("%Y-%m-%d") if lease.end_date else "?"
-    rent = f"${lease.rent_amount:,.0f}/mo" if lease.rent_amount else "?"
-    lines.append(
-        f"Lease: {start} to {end} | {rent} | payment: {lease.payment_status or 'current'}"
-    )
+            .order_by(Task.id.asc())
+            .first()
+        )
+    return None
 
 
-def build_task_context(db: Session, task_id: str) -> str:
-    """
-    Build a rich context string for a task, including
-    task details, property, unit, current tenant, and account overview.
-    task_id may be a Task.id or a Conversation.id linked to a task.
-    """
-    task = db.query(Task).filter_by(id=task_id).first()
+def build_task_context(db: Session, task_id: str, query: str | None = None) -> str:
+    """Build a retrieval-driven context string for a task or linked conversation."""
+    task = _resolve_task(db, task_id)
     if not task:
-        return load_account_context(db)
+        return load_account_context(db, query=query)
+
+    bundle = retrieve_context(db, RetrievalRequest(
+        surface="task",
+        intent="task_context",
+        query=query or task.title or f"task {task.id}",
+        task_id=str(task.id),
+        property_id=str(task.property_id) if task.property_id else None,
+        unit_id=str(task.unit_id) if task.unit_id else None,
+        limit=14,
+    ))
 
     lines = [
         f"Task ID: {task.id}",
@@ -84,103 +58,17 @@ def build_task_context(db: Session, task_id: str) -> str:
         f"Mode: {task.task_mode or 'manual'}",
     ]
 
-    # Task description (first context message from the AI conversation)
     ai_convo = task.ai_conversation
     all_msgs = list(ai_convo.messages) if ai_convo else []
     context_msgs = [m for m in all_msgs if m.message_type == MessageType.CONTEXT]
     if context_msgs:
         lines.append(f"Description: {context_msgs[0].body}")
 
-    # Task-scoped notes (quotes, findings, scheduling)
     if task.context:
-        lines.append(f"\nTask notes:\n{task.context}")
-
-    # Property context (include ID so the agent can use it for save_memory)
-    prop: Optional[Property] = None
-    unit_obj: Optional[Unit] = None
-    tenant_obj: Optional[Tenant] = None
-    vendor_obj = None
-
-    if task.property_id:
-        prop = db.query(Property).filter_by(id=task.property_id).first()
-        if prop:
-            parts = [prop.address_line1, prop.city, prop.state, prop.postal_code]
-            addr = ", ".join(p for p in parts if p)
-            lines.append(f"Property: {prop.name or addr} ({addr})")
-            lines.append(f"Property ID: {prop.id}")
-
-    # Unit + tenant + lease context
-    today = date.today()
-    if task.unit_id:
-        unit_obj = db.query(Unit).filter_by(id=task.unit_id).first()
-        if unit_obj:
-            lines.append(f"Unit: {unit_obj.label}")
-            lines.append(f"Unit ID: {unit_obj.id}")
-            active = [l for l in unit_obj.leases if l.end_date >= today]
-            if active:
-                tenant_obj = active[0].tenant
-                _append_lease_context(lines, active[0])
-            else:
-                lines.append("Unit is currently vacant.")
-    elif task.property_id:
-        # No unit set — find tenants via property's active leases
-        active = db.query(Lease).filter(
-            Lease.property_id == task.property_id,
-            Lease.end_date >= today,
-        ).all()
-        if active:
-            lease = active[0]
-            tenant_obj = lease.tenant
-            if lease.unit_id:
-                unit_obj = db.query(Unit).filter_by(id=lease.unit_id).first()
-                if unit_obj:
-                    lines.append(f"Unit: {unit_obj.label}")
-                    lines.append(f"Unit ID: {unit_obj.id}")
-            _append_lease_context(lines, lease)
-
-    # Vendor context (from AI conversation extra)
-    ai_convo = task.ai_conversation
-    if ai_convo:
-        extra = ai_convo.extra or {}
-        vendor_id = extra.get("assigned_vendor_id")
-        vendor_name = extra.get("assigned_vendor_name")
-        if vendor_id:
-            from db.models import User
-            vendor_obj = db.query(User).filter_by(id=vendor_id, user_type="vendor").first()
-            if vendor_obj:
-                lines.append(f"Assigned Vendor: {vendor_obj.name} | {vendor_obj.phone or 'no phone'} | {vendor_obj.email or 'no email'}")
-                lines.append(f"Vendor ID: {vendor_obj.external_id}")
-            elif vendor_name:
-                lines.append(f"Assigned Vendor: {vendor_name}")
-                lines.append(f"Vendor ID: {vendor_id}")
-
-    # Entity context notes — both shared (entity.context) and private (EntityNote)
-    from db.models import EntityNote
-    creator_id = resolve_account_id()
-
-    def _entity_notes(entity, entity_type: str, label: str):
-        notes = []
-        if entity and entity.context:
-            notes.append(f"[shared] {label} notes: {entity.context}")
-        if entity:
-            note_entity_id = str(getattr(entity, "external_id", entity.id))
-            private = db.query(EntityNote).filter_by(
-                creator_id=creator_id, entity_type=entity_type, entity_id=note_entity_id,
-            ).first()
-            if private and private.content:
-                notes.append(f"[private] {label} notes: {private.content}")
-        return notes
-
-    context_notes: list[str] = []
-    context_notes.extend(_entity_notes(prop, "property", "Property"))
-    context_notes.extend(_entity_notes(unit_obj, "unit", "Unit"))
-    context_notes.extend(_entity_notes(tenant_obj, "tenant", "Tenant"))
-    context_notes.extend(_entity_notes(vendor_obj, "vendor", "Vendor"))
-    if context_notes:
         lines.append("")
-        lines.extend(context_notes)
+        lines.append("Task notes:")
+        lines.append(task.context)
 
-    # Pending suggestions — so the agent knows what's already queued
     from db.models import Suggestion
     pending_suggestions = db.query(Suggestion).filter(
         Suggestion.task_id == task.id,
@@ -197,12 +85,10 @@ def build_task_context(db: Session, task_id: str) -> str:
                 entry += f" — draft: {draft[:80]}"
             lines.append(entry)
 
-    # Only include the full account overview if the task doesn't already
-    # have property context — avoids dumping all properties when only one
-    # is relevant.
-    if not task.property_id:
+    ranked_block = compose_prompt_context(bundle, title="Ranked context")
+    if ranked_block:
         lines.append("")
-        lines.append(load_account_context(db))
+        lines.append(ranked_block)
 
     return "\n".join(lines)
 

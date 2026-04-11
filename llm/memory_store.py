@@ -1,13 +1,9 @@
-"""DB-backed memory store for the RentMate agent.
-
-Entity-scoped context is stored directly on entity tables (properties, units,
-tenants, vendors) via the `context` column. General notes use the
-agent_memory table.
-"""
+"""DB-backed memory store for the RentMate agent."""
 import uuid
 from datetime import UTC, datetime
 
 from backends.local_auth import resolve_account_id, resolve_org_id
+from llm.retrieval import RetrievalRequest, compose_prompt_context, retrieve_context
 
 
 class DbMemoryStore:
@@ -67,96 +63,22 @@ class DbMemoryStore:
     # ── System prompt context ────────────────────────────────────────────
 
     def get_memory_context(self) -> str:
-        """Build a memory block for the system prompt from entity context columns."""
+        """Build a memory block for the system prompt via ranked retrieval."""
         db = self._get_db()
         try:
-            parts = []
-
-            # Entity context from the actual tables
-            from db.models import Property, Tenant, Unit, User
-            from db.queries import format_address
-
-            props = (
-                db.query(Property)
-                .filter(
-                    Property.org_id == self.org_id,
-                    Property.context.isnot(None),
-                )
-                .all()
-            )
-            if props:
-                parts.append("### Properties")
-                for p in props:
-                    label = p.name or format_address(p)
-                    parts.append(f"**{label}**\n{p.context}")
-
-            units = (
-                db.query(Unit)
-                .filter(
-                    Unit.org_id == self.org_id,
-                    Unit.context.isnot(None),
-                )
-                .all()
-            )
-            if units:
-                parts.append("### Units")
-                for u in units:
-                    parts.append(f"**{u.label}**\n{u.context}")
-
-            tenants = (
-                db.query(Tenant)
-                .filter(
-                    Tenant.org_id == self.org_id,
-                    Tenant.context.isnot(None),
-                )
-                .all()
-            )
-            if tenants:
-                parts.append("### Tenants")
-                for t in tenants:
-                    name = t.user.name if t.user else "Tenant"
-                    parts.append(f"**{name}**\n{t.context}")
-
-            vendors = (
-                db.query(User)
-                .filter(
-                    User.org_id == self.org_id,
-                    User.user_type == "vendor",
-                    User.context.isnot(None),
-                )
-                .all()
-            )
-            if vendors:
-                parts.append("### Vendors")
-                for v in vendors:
-                    parts.append(f"**{v.name}**\n{v.context}")
-
-            # General notes from agent_memory
-            from db.models import AgentMemory
-            general = (
-                db.query(AgentMemory)
-                .filter(
-                    AgentMemory.org_id == self.org_id,
-                    AgentMemory.creator_id == self.creator_id,
-                    AgentMemory.memory_type == "note:general",
-                )
-                .order_by(AgentMemory.updated_at.desc())
-                .limit(20)
-                .all()
-            )
-            if general:
-                parts.append("### General")
-                for g in general:
-                    parts.append(f"- {g.content}")
-
-            if not parts:
-                # Fall back to legacy long_term
-                legacy = self.read_long_term()
-                if legacy:
-                    return f"## Memory Notes\n{legacy}"
-                return ""
-
-            return "## Memory Notes\n\n" + "\n\n".join(parts)
+            bundle = retrieve_context(db, RetrievalRequest(
+                surface="system_prompt",
+                intent="system_prompt",
+                query="property management account overview memory notes active leases vendors tasks",
+                creator_id=self.creator_id,
+                org_id=self.org_id,
+                limit=12,
+            ))
+            block = compose_prompt_context(bundle, title="Memory Notes")
+            if block:
+                return block
+            legacy = self.read_long_term()
+            return f"## Memory Notes\n{legacy}" if legacy else ""
         finally:
             db.close()
 

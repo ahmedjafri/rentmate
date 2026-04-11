@@ -37,12 +37,42 @@ interface TraceEntry {
   suggestion_id: string | null;
 }
 
+interface MemoryItemEntry {
+  id: string;
+  source_type: string;
+  source_id: string;
+  entity_type: string;
+  entity_id: string;
+  visibility: string;
+  title: string | null;
+  content: string;
+  metadata: Record<string, unknown>;
+  updated_at: string | null;
+}
+
+interface RankedMemoryEntry {
+  memory_item_id: string;
+  source_type: string;
+  source_id: string;
+  entity_type: string;
+  entity_id: string;
+  title: string | null;
+  content: string;
+  metadata: Record<string, unknown>;
+  heuristic_score: number;
+  vector_score: number;
+  final_score: number;
+  reasons: string[];
+}
+
 const TRACE_COLORS: Record<string, string> = {
   tool_call: 'bg-blue-100 text-blue-800',
   tool_result: 'bg-green-100 text-green-800',
   llm_reply: 'bg-purple-100 text-purple-800',
   suggestion_created: 'bg-yellow-100 text-yellow-800',
   suggestion_executed: 'bg-orange-100 text-orange-800',
+  memory_sync: 'bg-cyan-100 text-cyan-800',
+  memory_rank: 'bg-indigo-100 text-indigo-800',
   error: 'bg-red-100 text-red-800',
 };
 
@@ -134,6 +164,8 @@ function TracesPanel() {
             <option value="llm_reply">LLM replies</option>
             <option value="suggestion_created">Suggestions created</option>
             <option value="suggestion_executed">Suggestions executed</option>
+            <option value="memory_sync">Memory sync</option>
+            <option value="memory_rank">Memory rank</option>
             <option value="error">Errors</option>
           </select>
           <Button variant="ghost" size="sm" onClick={loadTraces} disabled={loading} className="h-7 w-7 p-0">
@@ -184,6 +216,262 @@ function TracesPanel() {
                 {t.suggestion_id && (
                   <p className="text-[10px] text-muted-foreground">Suggestion: {t.suggestion_id}</p>
                 )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function MemoryIndexPanel() {
+  const [items, setItems] = useState<MemoryItemEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState('');
+  const [sourceType, setSourceType] = useState('');
+  const [entityType, setEntityType] = useState('');
+  const [visibility, setVisibility] = useState('');
+  const [reindexing, setReindexing] = useState(false);
+
+  const loadItems = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: '100' });
+      if (query.trim()) params.set('query', query.trim());
+      if (sourceType) params.set('source_type', sourceType);
+      if (entityType) params.set('entity_type', entityType);
+      if (visibility) params.set('visibility', visibility);
+      const res = await fetch(`/dev/memory-items?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setItems(await res.json());
+    } catch (err) {
+      toast.error(`Failed to load memory items: ${(err as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [entityType, query, sourceType, visibility]);
+
+  useEffect(() => { loadItems(); }, [loadItems]);
+
+  const handleReindex = async (resetIndex: boolean) => {
+    setReindexing(true);
+    try {
+      const res = await authFetch(`/dev/reindex-memory?reset_index=${resetIndex ? 'true' : 'false'}`, {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      toast.success(`Synced ${data.count} memory items`);
+      await loadItems();
+    } catch (err) {
+      toast.error(`Reindex failed: ${(err as Error).message}`);
+    } finally {
+      setReindexing(false);
+    }
+  };
+
+  return (
+    <Card className="p-4 rounded-xl space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="font-semibold text-sm">Memory Index</h2>
+          <p className="text-xs text-muted-foreground mt-1">Normalized memory items stored for ranking and retrieval.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" disabled={reindexing} onClick={() => handleReindex(false)}>
+            {reindexing ? 'Syncing…' : 'Sync'}
+          </Button>
+          <Button variant="outline" size="sm" disabled={reindexing} onClick={() => handleReindex(true)}>
+            {reindexing ? 'Resetting…' : 'Reset + Sync'}
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+        <Textarea
+          className="md:col-span-2 min-h-[44px]"
+          rows={1}
+          placeholder="Filter by title/content…"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+        />
+        <Select value={sourceType || 'all'} onValueChange={v => setSourceType(v === 'all' ? '' : v)}>
+          <SelectTrigger><SelectValue placeholder="Source type" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All sources</SelectItem>
+            <SelectItem value="property">Property</SelectItem>
+            <SelectItem value="unit">Unit</SelectItem>
+            <SelectItem value="tenant">Tenant</SelectItem>
+            <SelectItem value="vendor">Vendor</SelectItem>
+            <SelectItem value="lease">Lease</SelectItem>
+            <SelectItem value="task">Task</SelectItem>
+            <SelectItem value="entity_note">Entity note</SelectItem>
+            <SelectItem value="agent_memory">General note</SelectItem>
+            <SelectItem value="conversation">Conversation</SelectItem>
+            <SelectItem value="document">Document</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={`${entityType || 'all'}:${visibility || 'all'}`} onValueChange={v => {
+          const [nextEntityType, nextVisibility] = v.split(':');
+          setEntityType(nextEntityType === 'all' ? '' : nextEntityType);
+          setVisibility(nextVisibility === 'all' ? '' : nextVisibility);
+        }}>
+          <SelectTrigger><SelectValue placeholder="Entity / visibility" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all:all">All entities / visibility</SelectItem>
+            <SelectItem value="property:shared">Property / shared</SelectItem>
+            <SelectItem value="unit:shared">Unit / shared</SelectItem>
+            <SelectItem value="tenant:shared">Tenant / shared</SelectItem>
+            <SelectItem value="vendor:shared">Vendor / shared</SelectItem>
+            <SelectItem value="general:private">General / private</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="max-h-[420px] overflow-y-auto space-y-2">
+        {loading && <p className="text-sm text-muted-foreground py-4">Loading memory items…</p>}
+        {!loading && items.length === 0 && <p className="text-sm text-muted-foreground py-4">No memory items matched the current filters.</p>}
+        {items.map(item => (
+          <div key={item.id} className="border rounded-lg p-3 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className="text-[10px]">{item.source_type}</Badge>
+              <Badge variant="outline" className="text-[10px]">{item.entity_type}</Badge>
+              <Badge className={cn("text-[10px]", item.visibility === 'private' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700')}>
+                {item.visibility}
+              </Badge>
+              <span className="text-xs font-medium truncate">{item.title || `${item.source_type}:${item.source_id}`}</span>
+            </div>
+            <p className="text-xs text-muted-foreground whitespace-pre-wrap">{item.content}</p>
+            <div className="flex flex-wrap gap-3 text-[10px] text-muted-foreground">
+              <span>Entity: {item.entity_id}</span>
+              <span>Source ID: {item.source_id}</span>
+              {item.updated_at && <span>Updated: {new Date(item.updated_at).toLocaleString()}</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function RetrievalDebugger() {
+  const [query, setQuery] = useState('');
+  const [intent, setIntent] = useState('answer_question');
+  const [surface, setSurface] = useState('dev');
+  const [taskId, setTaskId] = useState('');
+  const [propertyId, setPropertyId] = useState('');
+  const [unitId, setUnitId] = useState('');
+  const [tenantId, setTenantId] = useState('');
+  const [vendorId, setVendorId] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [items, setItems] = useState<RankedMemoryEntry[]>([]);
+
+  const handleRun = async () => {
+    setLoading(true);
+    try {
+      const res = await authFetch('/dev/retrieve-context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query,
+          intent,
+          surface,
+          task_id: taskId || null,
+          property_id: propertyId || null,
+          unit_id: unitId || null,
+          tenant_id: tenantId || null,
+          vendor_id: vendorId || null,
+          limit: 10,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setItems(data.items ?? []);
+    } catch (err) {
+      toast.error(`Retrieval failed: ${(err as Error).message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Card className="p-4 rounded-xl space-y-3">
+      <div>
+        <h2 className="font-semibold text-sm">Retrieval Playground</h2>
+        <p className="text-xs text-muted-foreground mt-1">Run the hybrid retriever with live ranking signals and inspect why items won.</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+        <Textarea
+          className="md:col-span-2 min-h-[72px]"
+          rows={2}
+          placeholder="Ask a domain-specific question or draft goal…"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+        />
+        <Select value={intent} onValueChange={setIntent}>
+          <SelectTrigger><SelectValue placeholder="Intent" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="answer_question">answer_question</SelectItem>
+            <SelectItem value="draft_message">draft_message</SelectItem>
+            <SelectItem value="triage">triage</SelectItem>
+            <SelectItem value="follow_up">follow_up</SelectItem>
+            <SelectItem value="summarize">summarize</SelectItem>
+            <SelectItem value="task_context">task_context</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={surface} onValueChange={setSurface}>
+          <SelectTrigger><SelectValue placeholder="Surface" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="dev">dev</SelectItem>
+            <SelectItem value="chat">chat</SelectItem>
+            <SelectItem value="task">task</SelectItem>
+            <SelectItem value="scheduler">scheduler</SelectItem>
+            <SelectItem value="eval">eval</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+        <Textarea rows={1} className="min-h-[44px]" placeholder="Task ID" value={taskId} onChange={e => setTaskId(e.target.value)} />
+        <Textarea rows={1} className="min-h-[44px]" placeholder="Property ID" value={propertyId} onChange={e => setPropertyId(e.target.value)} />
+        <Textarea rows={1} className="min-h-[44px]" placeholder="Unit ID" value={unitId} onChange={e => setUnitId(e.target.value)} />
+        <Textarea rows={1} className="min-h-[44px]" placeholder="Tenant ID" value={tenantId} onChange={e => setTenantId(e.target.value)} />
+        <Textarea rows={1} className="min-h-[44px]" placeholder="Vendor ID" value={vendorId} onChange={e => setVendorId(e.target.value)} />
+      </div>
+
+      <div className="flex justify-end">
+        <Button onClick={handleRun} disabled={loading || !query.trim()}>
+          {loading ? 'Ranking…' : 'Run Retrieval'}
+        </Button>
+      </div>
+
+      <div className="max-h-[420px] overflow-y-auto space-y-2">
+        {!loading && items.length === 0 && (
+          <p className="text-sm text-muted-foreground py-4">No ranked results yet. Run a retrieval query to inspect the scoring output.</p>
+        )}
+        {items.map((item, index) => (
+          <div key={item.memory_item_id} className="border rounded-lg p-3 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge className="bg-slate-900 text-white text-[10px]">#{index + 1}</Badge>
+              <Badge variant="outline" className="text-[10px]">{item.source_type}</Badge>
+              <Badge variant="outline" className="text-[10px]">{item.entity_type}</Badge>
+              <span className="text-xs font-medium">{item.title || `${item.source_type}:${item.source_id}`}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-[10px] text-muted-foreground">
+              <span>Final: {item.final_score.toFixed(2)}</span>
+              <span>Vector: {item.vector_score.toFixed(2)}</span>
+              <span>Heuristic: {item.heuristic_score.toFixed(2)}</span>
+            </div>
+            <p className="text-xs whitespace-pre-wrap">{item.content}</p>
+            {item.reasons.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {item.reasons.map(reason => (
+                  <Badge key={reason} variant="outline" className="text-[10px]">{reason}</Badge>
+                ))}
               </div>
             )}
           </div>
@@ -505,6 +793,11 @@ const DevTools = () => {
 
       {/* Traces */}
       <TracesPanel />
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <RetrievalDebugger />
+        <MemoryIndexPanel />
+      </div>
 
       {/* Danger zone */}
       <Card className="p-4 rounded-xl border-destructive/30">
