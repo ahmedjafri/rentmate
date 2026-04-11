@@ -51,6 +51,24 @@ pending_suggestion_messages: contextvars.ContextVar[list[dict]] = contextvars.Co
     "pending_suggestion_messages", default=None,
 )
 
+# When set, suggestion-producing tools run in dry-run mode and append the
+# suggestion payloads here instead of writing Suggestion rows to the DB.
+simulation_suggestions: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
+    "simulation_suggestions", default=None,
+)
+
+
+def _queue_simulation_suggestion(payload: dict[str, Any]) -> str | None:
+    pending = simulation_suggestions.get()
+    if pending is None:
+        return None
+    suggestion_id = f"sim-{len(pending) + 1}"
+    pending.append({
+        "id": suggestion_id,
+        **payload,
+    })
+    return suggestion_id
+
 
 def _public_entity_id(entity: Any) -> str:
     external_id = getattr(entity, "external_id", None)
@@ -111,6 +129,20 @@ def _create_suggestion(
     If ``active_conversation_id`` is set, also adds an APPROVAL message to
     that conversation so the suggestion appears inline in the chat.
     """
+    simulated_id = _queue_simulation_suggestion({
+        "title": title,
+        "body": ai_context,
+        "category": category,
+        "urgency": urgency,
+        "action_payload": action_payload,
+        "task_id": task_id,
+        "property_id": property_id,
+        "risk_score": risk_score,
+        "suggestion_type": suggestion_type,
+    })
+    if simulated_id is not None:
+        return simulated_id
+
     from db.models import Suggestion
     from db.session import SessionLocal
     from gql.services import suggestion_service
@@ -270,7 +302,6 @@ class ProposeTaskTool(Tool):
     async def execute(self, **kwargs: Any) -> str:
         vendor_id = str(kwargs["vendor_id"])
 
-        from db.models import User
         from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
@@ -465,7 +496,6 @@ class MessageExternalPersonTool(Tool):
         draft_message = kwargs["draft_message"]
         task_title = _get_task_title(task_id)
 
-        from db.models import Tenant, User
         from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
@@ -732,7 +762,6 @@ class SaveMemoryTool(Tool):
 
         if entity_type == "general" or not entity_id:
             # General notes go to agent_memory table
-            from backends.local_auth import resolve_account_id
             from llm.memory_store import DbMemoryStore
             store = DbMemoryStore(str(resolve_account_id()))
             store.add_note(content=content, entity_type="general", entity_id="", entity_label="")
@@ -760,8 +789,6 @@ class SaveMemoryTool(Tool):
                     "vendor": "User",
                     "document": "Document",
                 }
-                import db.models as models
-                model_cls = getattr(models, _MODEL_MAP[entity_type])
                 entity = _load_entity_by_public_id(db, entity_type, entity_id)
                 if not entity:
                     return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
@@ -835,7 +862,6 @@ class RecallMemoryTool(Tool):
         entity_id = kwargs.get("entity_id")
 
         if entity_type == "general" or (not entity_type and not entity_id):
-            from backends.local_auth import resolve_account_id
             from llm.memory_store import DbMemoryStore
             store = DbMemoryStore(str(resolve_account_id()))
             notes = store.get_notes(entity_type="general")
@@ -959,8 +985,6 @@ class EditMemoryTool(Tool):
                     "vendor": "User",
                     "document": "Document",
                 }
-                import db.models as models
-                model_cls = getattr(models, _MODEL_MAP[entity_type])
                 entity = _load_entity_by_public_id(db, entity_type, entity_id)
                 if not entity:
                     return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
@@ -1510,6 +1534,25 @@ class CreateSuggestionTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        simulated_id = _queue_simulation_suggestion({
+            "title": kwargs["title"],
+            "body": kwargs["body"],
+            "category": kwargs["suggestion_type"],
+            "urgency": kwargs.get("urgency", "medium"),
+            "property_id": kwargs.get("property_id"),
+            "unit_id": kwargs.get("unit_id"),
+            "document_id": kwargs.get("document_id"),
+            "action_payload": kwargs.get("action_payload"),
+            "risk_score": kwargs.get("risk_score", 5),
+            "suggestion_type": kwargs["suggestion_type"],
+        })
+        if simulated_id is not None:
+            return json.dumps({
+                "status": "ok",
+                "suggestion_id": simulated_id,
+                "message": f"Suggestion simulated: {kwargs['title']}",
+            })
+
         from db.session import SessionLocal
         from gql.services import suggestion_service
 

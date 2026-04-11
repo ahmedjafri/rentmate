@@ -11,7 +11,6 @@ GET  /dev/history/{tenant_id} — returns the most recent dev_sim task messages
 """
 
 import asyncio
-import uuid
 from datetime import UTC, datetime
 from typing import List
 
@@ -19,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from backends.local_auth import resolve_account_id
 from db.lib import get_conversation_with_messages, route_inbound_to_task
 from db.models import (
     Conversation,
@@ -180,7 +180,6 @@ async def simulate_inbound(
         messages.append({"role": "assistant" if m.is_ai else "user", "content": m.body or ""})
     messages.append({"role": "user", "content": body.message})
 
-    from backends.local_auth import resolve_account_id
     from llm.client import call_agent
     from llm.side_effects import process_side_effects
     agent_id = agent_registry.ensure_agent(str(resolve_account_id()), db)

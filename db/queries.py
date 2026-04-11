@@ -10,6 +10,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from backends.local_auth import resolve_account_id
 from db.enums import TaskCategory, TaskSource, TaskStatus
 from db.models import Conversation, ConversationParticipant, Lease, Message, Property, Task, Tenant, User
 
@@ -41,7 +42,6 @@ def tenant_display_name(t: Tenant) -> str:
 
 def _account_id() -> int:
     """Get the current request's account_id from context."""
-    from backends.local_auth import resolve_account_id
     return resolve_account_id()
 
 

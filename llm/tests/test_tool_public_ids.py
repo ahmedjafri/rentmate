@@ -2,8 +2,16 @@ import asyncio
 import json
 from unittest.mock import patch
 
-from db.models import Suggestion, Task, Tenant, User
-from llm.tools import CreateTenantTool, CreateVendorTool, LookupVendorsTool, MessageExternalPersonTool, ProposeTaskTool
+from db.models import EntityNote, Suggestion, Task, Tenant, User
+from llm.tools import (
+    CreateTenantTool,
+    CreateVendorTool,
+    LookupVendorsTool,
+    MessageExternalPersonTool,
+    ProposeTaskTool,
+    RecallMemoryTool,
+    SaveMemoryTool,
+)
 
 
 def _run_tool(tool, **kwargs):
@@ -122,3 +130,94 @@ def test_propose_task_tool_uses_external_vendor_id_in_payload(db):
 
     suggestion = db.query(Suggestion).filter_by(id=payload["suggestion_id"]).one()
     assert suggestion.action_payload["vendor_id"] == vendor.external_id
+
+
+def test_save_memory_private_entity_note_uses_current_account(db):
+    property_owner = User(
+        org_id=1,
+        creator_id=1,
+        user_type="account",
+        email="owner@example.com",
+        active=True,
+    )
+    db.add(property_owner)
+    db.flush()
+
+    from db.models import Property
+
+    property_row = Property(
+        org_id=1,
+        creator_id=property_owner.id,
+        address_line1="123 Test St",
+        property_type="single_family",
+    )
+    db.add(property_row)
+    db.flush()
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None), \
+         patch("llm.tools.resolve_account_id", return_value=property_owner.id):
+        payload = json.loads(_run_tool(
+            SaveMemoryTool(),
+            content="Owner prefers weekend vendor visits only.",
+            scope="entity",
+            entity_type="property",
+            entity_id=property_row.id,
+            entity_label="123 Test St",
+            visibility="private",
+        ))
+
+    assert payload["status"] == "ok"
+    note = db.query(EntityNote).filter_by(
+        creator_id=property_owner.id,
+        entity_type="property",
+        entity_id=property_row.id,
+    ).one()
+    assert "weekend vendor visits" in note.content
+
+
+def test_recall_memory_private_entity_note_uses_current_account(db):
+    property_owner = User(
+        org_id=1,
+        creator_id=1,
+        user_type="account",
+        email="owner@example.com",
+        active=True,
+    )
+    db.add(property_owner)
+    db.flush()
+
+    from db.models import Property
+
+    property_row = Property(
+        org_id=1,
+        creator_id=property_owner.id,
+        address_line1="123 Test St",
+        property_type="single_family",
+        context="Shared note for all staff.",
+    )
+    db.add(property_row)
+    db.flush()
+
+    db.add(EntityNote(
+        creator_id=property_owner.id,
+        entity_type="property",
+        entity_id=property_row.id,
+        content="Private preference: use the side gate.",
+    ))
+    db.commit()
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None), \
+         patch("llm.tools.resolve_account_id", return_value=property_owner.id):
+        payload = json.loads(_run_tool(
+            RecallMemoryTool(),
+            entity_type="property",
+            entity_id=property_row.id,
+        ))
+
+    assert payload["count"] == 1
+    note = payload["notes"][0]
+    assert note["entity_id"] == property_row.id
+    assert note["shared_context"] == "Shared note for all staff."
+    assert note["private_notes"] == "Private preference: use the side gate."

@@ -1,7 +1,7 @@
 """Tests for llm/agent_query.py, llm/agent_action.py, and llm/agent_data.py."""
 import json
 import os
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ def _mock_task(task_id="task-1"):
     c.priority = 1
     c.source = "manual"
     c.property_id = "prop-1"
-    c.created_at = datetime.utcnow()
+    c.created_at = datetime.now(UTC)
     c.last_message_at = None
     c.lease = None
     c.unit = None
@@ -278,7 +278,7 @@ class TestSerializeTask:
         msg.message_type = "text"
         msg.sender_name = "Alice"
         msg.is_ai = False
-        msg.sent_at = datetime.utcnow()
+        msg.sent_at = datetime.now(UTC)
         msg.sender_type = ParticipantType.TENANT
         c.messages = [msg]
         result = _serialize_task(c)
@@ -298,7 +298,7 @@ class TestSerializeMessages:
         msg.message_type = "text"
         msg.sender_name = "Bob"
         msg.is_ai = False
-        msg.sent_at = datetime.utcnow()
+        msg.sent_at = datetime.now(UTC)
         result = _serialize_messages([msg], "conv-1")
         assert isinstance(result, list)
         assert result[0]["body"] == "Test"

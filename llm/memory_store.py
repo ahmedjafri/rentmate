@@ -7,12 +7,16 @@ agent_memory table.
 import uuid
 from datetime import UTC, datetime
 
+from backends.local_auth import resolve_account_id, resolve_org_id
+
 
 class DbMemoryStore:
     """Reads/writes agent memory from entity context columns + agent_memory."""
 
     def __init__(self, agent_id: str):
         self.agent_id = agent_id
+        self.creator_id = int(agent_id) if str(agent_id).isdigit() else resolve_account_id()
+        self.org_id = resolve_org_id()
 
     def _get_db(self):
         from db.session import SessionLocal
@@ -29,7 +33,8 @@ class DbMemoryStore:
             note_id = str(uuid.uuid4())
             db.add(AgentMemory(
                 id=note_id,
-                agent_id=self.agent_id,
+                org_id=self.org_id,
+                creator_id=self.creator_id,
                 memory_type="note:general",
                 content=content,
                 updated_at=datetime.now(UTC),
@@ -48,7 +53,8 @@ class DbMemoryStore:
             rows = (
                 db.query(AgentMemory)
                 .filter(
-                    AgentMemory.agent_id == self.agent_id,
+                    AgentMemory.org_id == self.org_id,
+                    AgentMemory.creator_id == self.creator_id,
                     AgentMemory.memory_type == "note:general",
                 )
                 .order_by(AgentMemory.updated_at.desc())
@@ -70,27 +76,56 @@ class DbMemoryStore:
             from db.models import Property, Tenant, Unit, User
             from db.queries import format_address
 
-            props = db.query(Property).filter(Property.context.isnot(None)).all()
+            props = (
+                db.query(Property)
+                .filter(
+                    Property.org_id == self.org_id,
+                    Property.context.isnot(None),
+                )
+                .all()
+            )
             if props:
                 parts.append("### Properties")
                 for p in props:
                     label = p.name or format_address(p)
                     parts.append(f"**{label}**\n{p.context}")
 
-            units = db.query(Unit).filter(Unit.context.isnot(None)).all()
+            units = (
+                db.query(Unit)
+                .filter(
+                    Unit.org_id == self.org_id,
+                    Unit.context.isnot(None),
+                )
+                .all()
+            )
             if units:
                 parts.append("### Units")
                 for u in units:
                     parts.append(f"**{u.label}**\n{u.context}")
 
-            tenants = db.query(Tenant).filter(Tenant.context.isnot(None)).all()
+            tenants = (
+                db.query(Tenant)
+                .filter(
+                    Tenant.org_id == self.org_id,
+                    Tenant.context.isnot(None),
+                )
+                .all()
+            )
             if tenants:
                 parts.append("### Tenants")
                 for t in tenants:
                     name = t.user.name if t.user else "Tenant"
                     parts.append(f"**{name}**\n{t.context}")
 
-            vendors = db.query(User).filter(User.user_type == "vendor", User.context.isnot(None)).all()
+            vendors = (
+                db.query(User)
+                .filter(
+                    User.org_id == self.org_id,
+                    User.user_type == "vendor",
+                    User.context.isnot(None),
+                )
+                .all()
+            )
             if vendors:
                 parts.append("### Vendors")
                 for v in vendors:
@@ -101,7 +136,8 @@ class DbMemoryStore:
             general = (
                 db.query(AgentMemory)
                 .filter(
-                    AgentMemory.agent_id == self.agent_id,
+                    AgentMemory.org_id == self.org_id,
+                    AgentMemory.creator_id == self.creator_id,
                     AgentMemory.memory_type == "note:general",
                 )
                 .order_by(AgentMemory.updated_at.desc())
@@ -132,7 +168,7 @@ class DbMemoryStore:
         try:
             row = (
                 db.query(AgentMemory)
-                .filter_by(agent_id=self.agent_id, memory_type="long_term")
+                .filter_by(org_id=self.org_id, creator_id=self.creator_id, memory_type="long_term")
                 .first()
             )
             return row.content if row else ""
@@ -145,7 +181,7 @@ class DbMemoryStore:
         try:
             row = (
                 db.query(AgentMemory)
-                .filter_by(agent_id=self.agent_id, memory_type="long_term")
+                .filter_by(org_id=self.org_id, creator_id=self.creator_id, memory_type="long_term")
                 .first()
             )
             now = datetime.now(UTC)
@@ -155,7 +191,8 @@ class DbMemoryStore:
             else:
                 db.add(AgentMemory(
                     id=str(uuid.uuid4()),
-                    agent_id=self.agent_id,
+                    org_id=self.org_id,
+                    creator_id=self.creator_id,
                     memory_type="long_term",
                     content=content,
                     updated_at=now,

@@ -15,6 +15,12 @@ from typing import Any, Callable, Optional
 
 import httpx
 
+from backends.local_auth import (
+    reset_fallback_request_context,
+    resolve_account_id,
+    resolve_org_id,
+    set_fallback_request_context,
+)
 from llm.registry import agent_registry
 from llm.tracing import log_trace
 
@@ -357,6 +363,14 @@ async def _local_fallback(
     from llm.tools import pending_suggestion_messages
 
     token = pending_suggestion_messages.set([])
+    fallback_token = None
+    try:
+        fallback_token = set_fallback_request_context(
+            account_id=resolve_account_id(),
+            org_id=resolve_org_id(),
+        )
+    except RuntimeError:
+        fallback_token = None
     try:
         reply = await chat_with_agent(agent_id, session_key, messages, on_progress)
         side_effects = []
@@ -367,4 +381,6 @@ async def _local_fallback(
             })
         return AgentResponse(reply=reply, side_effects=side_effects)
     finally:
+        if fallback_token is not None:
+            reset_fallback_request_context(fallback_token)
         pending_suggestion_messages.reset(token)

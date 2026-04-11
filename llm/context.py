@@ -3,6 +3,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from backends.local_auth import resolve_account_id
 from db.models import Lease, MessageType, Property, Task, Tenant, Unit
 
 
@@ -154,7 +155,6 @@ def build_task_context(db: Session, task_id: str) -> str:
                 lines.append(f"Vendor ID: {vendor_id}")
 
     # Entity context notes — both shared (entity.context) and private (EntityNote)
-    from backends.local_auth import resolve_account_id
     from db.models import EntityNote
     creator_id = resolve_account_id()
 
