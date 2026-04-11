@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import inspect as sa_inspect, text
 from strawberry.fastapi import GraphQLRouter
 
 from db.models import Base
@@ -119,6 +119,31 @@ def _ensure_schema():
         print("Run: poetry run alembic upgrade head")
         raise SystemExit(1)
 
+
+def _repair_enum_rows() -> None:
+    """Repair known bad lowercase enum rows written by older code paths."""
+    updates = {
+        "tasks": "urgency",
+        "suggestions": "urgency",
+    }
+    normalized = {
+        "low": "LOW",
+        "medium": "MEDIUM",
+        "high": "HIGH",
+        "critical": "CRITICAL",
+    }
+
+    with engine.begin() as conn:
+        existing_tables = set(sa_inspect(engine).get_table_names())
+        for table_name, column_name in updates.items():
+            if table_name not in existing_tables:
+                continue
+            for bad_value, good_value in normalized.items():
+                conn.execute(
+                    text(f"UPDATE {table_name} SET {column_name} = :good WHERE {column_name} = :bad"),
+                    {"good": good_value, "bad": bad_value},
+                )
+
 # ─── GraphQL ─────────────────────────────────────────────────────────────────
 
 async def get_context(request: Request):
@@ -165,6 +190,8 @@ async def lifespan(app: FastAPI):
         import sys
         sys.exit(1)
 
+    _repair_enum_rows()
+
     # Populate os.environ from DB-stored settings (must run after DB init)
     from gql.services.settings_service import load_agent_integrations_into_env, load_llm_into_env
     load_llm_into_env()
@@ -179,17 +206,6 @@ async def lifespan(app: FastAPI):
         if acct:
             set_request_context(account_id=acct.id, org_id=acct.org_id)
             agent_registry.populate_all_agents(db)
-        # Migrate vendors: ensure all have a short portal_token
-        from db.models import ExternalContact as _EC
-        from gql.services.vendor_service import VendorService as _VS
-        _migrated = 0
-        for v in db.query(_EC).all():
-            if not (v.extra or {}).get("portal_token"):
-                _VS.ensure_portal_token(db, v)
-                _migrated += 1
-        if _migrated:
-            db.commit()
-            print(f"Migrated {_migrated} vendor(s) to portal tokens")
         from db.models import Document as DocModel
         stuck = db.query(DocModel).filter(DocModel.status.in_(["pending", "processing"])).all()
         for doc in stuck:

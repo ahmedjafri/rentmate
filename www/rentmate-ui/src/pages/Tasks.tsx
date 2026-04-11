@@ -17,7 +17,7 @@ import { PageLoader } from '@/components/ui/page-loader';
 import { formatMessageTime } from '@/components/chat/ChatMessage';
 import { TaskMode, SuggestionCategory, SuggestionUrgency, categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
-import { graphqlQuery, ASSIGN_VENDOR_TO_TASK_MUTATION } from '@/data/api';
+import { assignVendorToTask } from '@/graphql/client';
 import { toast } from 'sonner';
 
 // ─── Mode badge ───────────────────────────────────────────────────────────────
@@ -255,7 +255,7 @@ const Tasks = () => {
   const handleAssignVendor = async (task: ActionDeskTask, vendor: Vendor) => {
     setAssigningVendor(true);
     try {
-      await graphqlQuery(ASSIGN_VENDOR_TO_TASK_MUTATION, { taskId: task.id, vendorId: vendor.id });
+      await assignVendorToTask(task.id, vendor.id);
       updateTask(task.id, { assignedVendorId: vendor.id, assignedVendorName: vendor.name });
       setVendorDialogTask(null);
       toast.success(`Assigned ${vendor.name} to task`);

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Vendor } from '@/data/mockData';
 import { EntityContextCard } from '@/components/context/EntityContextCard';
-import { graphqlQuery, CREATE_VENDOR_MUTATION, UPDATE_VENDOR_MUTATION, DELETE_VENDOR_MUTATION, VENDOR_TYPES_QUERY, SEND_SMS_MUTATION } from '@/data/api';
+import { createVendor, deleteVendor, getVendorTypes, sendSms, updateVendor as updateVendorMutation } from '@/graphql/client';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -100,7 +100,7 @@ const Vendors = () => {
   const [vendorTypes, setVendorTypes] = useState<string[]>([]);
 
   useEffect(() => {
-    graphqlQuery<{ vendorTypes: string[] }>(VENDOR_TYPES_QUERY)
+    getVendorTypes()
       .then(d => setVendorTypes(d.vendorTypes ?? []))
       .catch(() => {});
   }, []);
@@ -176,10 +176,7 @@ const Vendors = () => {
       };
 
       if (editingId) {
-        const data = await graphqlQuery<{ updateVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string; portalUrl?: string } }>(
-          UPDATE_VENDOR_MUTATION,
-          { input: { uid: editingId, ...input } },
-        );
+        const data = await updateVendorMutation({ uid: editingId, ...input });
         updateVendor(editingId, {
           name: data.updateVendor.name,
           company: data.updateVendor.company,
@@ -191,10 +188,7 @@ const Vendors = () => {
         });
         toast.success('Vendor updated');
       } else {
-        const data = await graphqlQuery<{ createVendor: { uid: string; name: string; company?: string; vendorType?: string; phone?: string; email?: string; notes?: string; portalUrl?: string } }>(
-          CREATE_VENDOR_MUTATION,
-          { input },
-        );
+        const data = await createVendor(input);
         addVendor({
           id: data.createVendor.uid,
           name: data.createVendor.name,
@@ -218,7 +212,7 @@ const Vendors = () => {
   const handleDelete = async (id: string) => {
     setDeleting(true);
     try {
-      await graphqlQuery(DELETE_VENDOR_MUTATION, { uid: id });
+      await deleteVendor(id);
       removeVendor(id);
       setConfirmDeleteId(null);
       toast.success('Vendor deleted');
@@ -462,10 +456,7 @@ const Vendors = () => {
                 if (!smsVendor) return;
                 setSmsSending(true);
                 try {
-                  await graphqlQuery(SEND_SMS_MUTATION, {
-                    vendorId: smsVendor.id,
-                    body: smsBody.trim(),
-                  });
+                  await sendSms(smsVendor.id, smsBody.trim());
                   toast.success(`SMS sent to ${smsVendor.name}`);
                   setSmsVendor(null);
                   setSmsBody('');

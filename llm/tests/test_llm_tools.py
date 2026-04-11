@@ -1,6 +1,9 @@
 """Tests for llm/agent_query.py, llm/agent_action.py, and llm/agent_data.py."""
+import asyncio
 import json
 import os
+import sys
+import types
 from datetime import UTC, date, datetime
 from unittest.mock import MagicMock, patch
 
@@ -52,6 +55,35 @@ class TestValidateSql:
 
     def test_leading_whitespace_allowed(self):
         assert _validate_sql("   SELECT 1") is None
+
+
+def test_chat_with_agent_propagates_simulation_context_into_executor_thread():
+    from llm.client import chat_with_agent
+    from llm.tools import simulation_suggestions
+
+    class FakeAIAgent:
+        def __init__(self, *args, **kwargs):
+            self.tools = []
+
+        def _build_api_kwargs(self, messages):
+            return {}
+
+        def run_conversation(self, **kwargs):
+            pending = simulation_suggestions.get()
+            assert pending is not None
+            pending.append({"title": "simulated from thread"})
+            return {"final_response": "ok"}
+
+    fake_module = types.SimpleNamespace(AIAgent=FakeAIAgent)
+    token = simulation_suggestions.set([])
+    try:
+        with patch.dict(sys.modules, {"run_agent": fake_module}), \
+             patch("llm.client.agent_registry.build_system_prompt", return_value="system"):
+            reply = asyncio.run(chat_with_agent("agent-1", "simulate:test", [{"role": "user", "content": "hi"}]))
+        assert reply == "ok"
+        assert simulation_suggestions.get() == [{"title": "simulated from thread"}]
+    finally:
+        simulation_suggestions.reset(token)
 
 
 # ---------------------------------------------------------------------------

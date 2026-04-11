@@ -16,8 +16,16 @@ import { ProgressSteps } from './ProgressSteps';
 import { OnboardingChips, OnboardingChoice } from './OnboardingChips';
 import { OnboardingProgress } from './OnboardingProgress';
 import { useOnboarding } from '@/hooks/useOnboarding';
-import { graphqlQuery, TASK_QUERY, SEND_MESSAGE_MUTATION, DELETE_TASK_MUTATION, CONVERSATION_MESSAGES_QUERY } from '@/data/api';
 import { apiMessagesToChatThread } from '@/hooks/useApiData';
+import {
+  actOnSuggestion,
+  deleteTask,
+  fromGraphqlEnum,
+  getConversationMessages,
+  getTask,
+  sendMessage,
+  updateTaskStatus,
+} from '@/graphql/client';
 
 function authHeaders() {
   const t = getToken();
@@ -63,10 +71,14 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
     const taskId = chatPanel.taskId;
     setDismissing(true);
     try {
-      await graphqlQuery<unknown>(`mutation { updateTaskStatus(uid: "${taskId}", status: "dismissed") { uid } }`);
+      await updateTaskStatus(taskId, 'dismissed');
       if (activeTask?.aiConversationId) {
-        await graphqlQuery(SEND_MESSAGE_MUTATION, {
-          input: { conversationId: activeTask.aiConversationId, body: 'Task dismissed — this item will not be re-created by automations.', messageType: 'internal', senderName: 'RentMate', isAi: true },
+        await sendMessage({
+          conversationId: activeTask.aiConversationId,
+          body: 'Task dismissed — this item will not be re-created by automations.',
+          messageType: 'internal',
+          senderName: 'RentMate',
+          isAi: true,
         });
       }
       addChatMessage({ taskId }, { id: `dismiss-${Date.now()}`, role: 'assistant', content: 'Task dismissed — this item will not be re-created by automations.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' });
@@ -85,7 +97,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
     const taskId = chatPanel.taskId;
     setDeleting(true);
     try {
-      await graphqlQuery(DELETE_TASK_MUTATION, { uid: taskId });
+      await deleteTask(taskId);
       removeTask(taskId);
       closeChat();
     } catch {
@@ -129,9 +141,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
   useEffect(() => {
     if (activeTask || activeSuggestion) { setConvMessages([]); return; }
     if (!activeConversationId) { setConvMessages([]); onboardingStartedRef.current = false; return; }
-    graphqlQuery<{ conversationMessages: Array<{ uid: string; body: string; messageType: string; senderName: string; senderType: string | null; isAi: boolean; isSystem: boolean; draftReply?: string; suggestionId?: string; sentAt: string }> }>(
-      CONVERSATION_MESSAGES_QUERY, { uid: activeConversationId }
-    ).then(result => {
+    getConversationMessages(activeConversationId).then(result => {
       setConvMessages((result.conversationMessages ?? []).map(m => ({
         id: m.uid,
         role: m.isAi ? 'assistant' as const : 'user' as const,
@@ -139,7 +149,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
         timestamp: new Date(m.sentAt),
         senderName: m.senderName,
         senderType: m.isAi ? 'ai' as const : 'manager' as const,
-        messageType: m.messageType as ChatMessage['messageType'],
+        messageType: (fromGraphqlEnum(m.messageType) as ChatMessage['messageType']) ?? 'message',
         draftReply: m.draftReply ?? undefined,
         suggestionId: m.suggestionId ?? undefined,
       })));
@@ -198,9 +208,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
 
   // Refresh task messages from DB whenever a task is opened + poll for new ones
   const loadTaskMessages = (taskId: string) => {
-    graphqlQuery<{ task: { messages: Parameters<typeof apiMessagesToChatThread>[0] } | null }>(
-      TASK_QUERY, { uid: taskId }
-    ).then(result => {
+    getTask(taskId).then(result => {
       if (result.task) {
         setTaskMessages(taskId, apiMessagesToChatThread(result.task.messages ?? []));
       }
@@ -255,9 +263,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
   // Load + poll participant messages when chat tab is active
   const loadParticipantMessages = (convoId: string, showLoading = false) => {
     if (showLoading) setParticipantLoading(true);
-    graphqlQuery<{ conversationMessages: Array<{ uid: string; body: string; messageType: string; senderName: string; senderType: string | null; isAi: boolean; isSystem: boolean; sentAt: string }> }>(
-      CONVERSATION_MESSAGES_QUERY, { uid: convoId }
-    ).then(result => {
+    getConversationMessages(convoId).then(result => {
       const msgs: ChatMessage[] = (result.conversationMessages ?? []).map(m => {
         let st: ChatMessage['senderType'] = 'manager';
         if (m.isAi) st = 'ai';
@@ -270,7 +276,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
           timestamp: new Date(m.sentAt),
           senderName: m.senderName,
           senderType: st,
-          messageType: m.messageType as ChatMessage['messageType'],
+          messageType: (fromGraphqlEnum(m.messageType) as ChatMessage['messageType']) ?? 'message',
         };
       });
       setParticipantMessages(msgs);
@@ -361,9 +367,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
         if (active && !reconnectDone && taskId) {
           activeStreamIdRef.current = null;
           setTimeout(() => {
-            graphqlQuery<{ task: { messages: Parameters<typeof apiMessagesToChatThread>[0] } | null }>(
-              TASK_QUERY, { uid: taskId }
-            ).then(result => {
+            getTask(taskId).then(result => {
               if (result.task) setTaskMessages(taskId, apiMessagesToChatThread(result.task.messages ?? []));
             }).catch(() => {});
           }, 2000);
@@ -519,9 +523,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
       if (!receivedDone && taskId) {
         activeStreamIdRef.current = null;
         setTimeout(() => {
-          graphqlQuery<{ task: { messages: Parameters<typeof apiMessagesToChatThread>[0] } | null }>(
-            TASK_QUERY, { uid: taskId }
-          ).then(result => {
+          getTask(taskId).then(result => {
             if (result.task) setTaskMessages(taskId, apiMessagesToChatThread(result.task.messages ?? []));
           }).catch(() => {});
         }, 2000);
@@ -982,9 +984,13 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
                   className="h-7 rounded-lg text-[11px] px-2.5 gap-1.5 shrink-0"
                   onClick={async () => {
                     const taskId = chatPanel.taskId!;
-                    await graphqlQuery<unknown>(`mutation { updateTaskStatus(uid: "${taskId}", status: "active") { uid } }`);
-                    if (activeTask?.aiConversationId) await graphqlQuery(SEND_MESSAGE_MUTATION, {
-                      input: { conversationId: activeTask.aiConversationId, body: 'Task re-opened.', messageType: 'internal', senderName: 'RentMate', isAi: true },
+                    await updateTaskStatus(taskId, 'active');
+                    if (activeTask?.aiConversationId) await sendMessage({
+                      conversationId: activeTask.aiConversationId,
+                      body: 'Task re-opened.',
+                      messageType: 'internal',
+                      senderName: 'RentMate',
+                      isAi: true,
                     });
                     updateTask(taskId, { status: 'active' });
                     addChatMessage({ taskId }, { id: `msg-${Date.now()}`, role: 'assistant', content: 'Task re-opened.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' });
@@ -1103,9 +1109,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
                       };
                       setParticipantMessages(prev => [...prev, msg]);
                       try {
-                        await graphqlQuery(SEND_MESSAGE_MUTATION, {
-                          input: { conversationId: lc.uid, body: content },
-                        });
+                        await sendMessage({ conversationId: lc.uid, body: content });
                       } catch {
                         toast.error('Failed to send message');
                       }
@@ -1225,13 +1229,9 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
             <SuggestionOptions
               options={activeSuggestion.options}
               onAction={async (action) => {
-                const { graphqlQuery: gql, ACT_ON_SUGGESTION_MUTATION } = await import('@/data/api');
-                const result = await gql<{ actOnSuggestion: { uid: string; status: string; taskId?: string } }>(
-                  ACT_ON_SUGGESTION_MUTATION,
-                  { uid: activeSuggestion.id, action },
-                );
+                const result = await actOnSuggestion(activeSuggestion.id, action);
                 const { status } = result.actOnSuggestion;
-                updateSuggestionStatus(activeSuggestion.id, status as 'accepted' | 'dismissed');
+                updateSuggestionStatus(activeSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
                 closeChat();
               }}
             />

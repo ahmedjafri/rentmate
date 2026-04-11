@@ -19,6 +19,23 @@ class Urgency(int, enum.Enum):
     CRITICAL = 4
 
 
+def parse_urgency(value: "Urgency | str | int | None") -> "Urgency | None":
+    if value is None or value == "":
+        return None
+    if isinstance(value, Urgency):
+        return value
+    if isinstance(value, int):
+        return Urgency(value)
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if normalized.isdigit():
+            return Urgency(int(normalized))
+        return Urgency[normalized.upper()]
+    raise ValueError(f"Unsupported urgency value: {value!r}")
+
+
 class TaskStatus(int, enum.Enum):
     SUGGESTED = 1
     ACTIVE = 2
@@ -89,5 +106,5 @@ class SuggestionOption:
     """A single action button rendered in the suggestion UI."""
     key: str
     label: str
-    action: str      # value passed to act_on_suggestion (e.g. "accept_task")
+    action: str      # value passed to act_on_suggestion (e.g. "send_and_create_task")
     variant: str     # UI style: "default", "outline", "ghost"

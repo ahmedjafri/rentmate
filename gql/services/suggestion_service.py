@@ -13,6 +13,7 @@ from db.enums import (
     SuggestionSource,
     TaskCategory,
     Urgency,
+    parse_urgency,
 )
 from db.models import (
     Conversation,
@@ -39,7 +40,7 @@ class SuggestionActionPayloadBase(BaseModel):
     action: str
 
 
-class SendVendorMsgAndCreateTaskPayload(SuggestionActionPayloadBase):
+class SendMsgAndCreateTaskPayload(SuggestionActionPayloadBase):
     action: Literal["send_and_create_task", "edit_message"]
     vendor_id: str | int
     vendor_name: str | None = None
@@ -57,7 +58,7 @@ class MessagePersonPayload(SuggestionActionPayloadBase):
 
 
 SuggestionActionPayload = Annotated[
-    SendVendorMsgAndCreateTaskPayload | MessagePersonPayload,
+    SendMsgAndCreateTaskPayload | MessagePersonPayload,
     Field(discriminator="action"),
 ]
 _ACTION_PAYLOAD_ADAPTER = TypeAdapter(SuggestionActionPayload)
@@ -172,7 +173,7 @@ def create_suggestion(
         title=title,
         body=ai_context,
         category=category,
-        urgency=urgency,
+        urgency=parse_urgency(urgency),
         source=source_str,
         automation_key=automation_key,
         status="pending",
@@ -226,7 +227,11 @@ def act_on_suggestion(
         task_id: Optional task ID to link to the suggestion on accept.
     """
     suggestion = sess.execute(
-        select(Suggestion).where(Suggestion.id == suggestion_id)
+        select(Suggestion).where(
+            Suggestion.id == suggestion_id,
+            Suggestion.org_id == resolve_org_id(),
+            Suggestion.creator_id == resolve_account_id(),
+        )
     ).scalar_one_or_none()
     if not suggestion:
         raise ValueError(f"Suggestion {suggestion_id} not found")

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { CheckCircle2, X, Loader2, XCircle, Zap, ShieldCheck, Hand } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { graphqlQuery, UPDATE_TASK_MUTATION } from '@/data/api';
+import { updateTask as updateTaskMutation } from '@/graphql/client';
 import { useApp } from '@/context/AppContext';
 import { toast } from 'sonner';
 
@@ -36,15 +36,11 @@ export function AgentActionConfirm({ proposal, onDismiss }: Props) {
     setConfirming(true);
     try {
       if (proposal.action === 'close_task') {
-        await graphqlQuery(UPDATE_TASK_MUTATION, {
-          input: { uid: proposal.taskId, taskStatus: 'resolved', taskMode: null },
-        });
+        await updateTaskMutation({ uid: proposal.taskId, taskStatus: 'resolved', taskMode: null });
         updateTask(proposal.taskId, { status: 'resolved' });
         toast.success('Task closed');
       } else if (proposal.action === 'set_mode') {
-        await graphqlQuery(UPDATE_TASK_MUTATION, {
-          input: { uid: proposal.taskId, taskMode: proposal.mode, taskStatus: null },
-        });
+        await updateTaskMutation({ uid: proposal.taskId, taskMode: proposal.mode, taskStatus: null });
         updateTask(proposal.taskId, { mode: proposal.mode });
         toast.success(`Task mode set to ${modeLabels[proposal.mode]}`);
       }

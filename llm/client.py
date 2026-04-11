@@ -7,6 +7,7 @@ Otherwise, falls back to the local agent.
 the AI agent, runs a conversation, and bridges progress events.
 """
 import asyncio
+import contextvars
 import json
 import os
 import queue
@@ -221,9 +222,11 @@ async def chat_with_agent(
 
     async def _run_with_progress():
         loop = asyncio.get_event_loop()
+        executor_context = contextvars.copy_context()
         task = loop.run_in_executor(
             None,
-            lambda: agent.run_conversation(
+            lambda: executor_context.run(
+                agent.run_conversation,
                 user_message=user_message,
                 system_message=system_message,
                 conversation_history=conversation_history if conversation_history else None,

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from backends.local_auth import resolve_account_id
 
+from .enums import TaskMode, TaskStatus, parse_urgency
 from .models import (
     Conversation,
     ConversationParticipant,
@@ -159,7 +160,6 @@ def get_or_create_conversation_for_tenant(
 
     now = datetime.now(UTC)
     conv = Conversation(
-        id=str(uuid.uuid4()),
         creator_id=resolve_account_id(),
         subject=subject or f"Conversation with {_tenant_name(tenant)}",
         is_group=False,
@@ -401,8 +401,8 @@ def route_inbound_to_task(
         task = Task(
             creator_id=creator_id,
             title=f"Message from {_tenant_name(tenant)}",
-            task_status="active",
-            task_mode="autonomous",
+            task_status=TaskStatus.ACTIVE,
+            task_mode=TaskMode.AUTONOMOUS,
             source=channel_type,
             created_at=now,
             updated_at=now,
@@ -483,7 +483,13 @@ def record_sms_from_quo(
         )
         return None, None
 
-    _creator_id, tenant, direction, _entity_type = resolved
+    if len(resolved) == 4:
+        _creator_id, tenant, direction, _entity_type = resolved
+    elif len(resolved) == 3:
+        _creator_id, tenant, direction = resolved
+        _entity_type = "tenant"
+    else:
+        raise ValueError(f"Unexpected SMS router result shape: {resolved!r}")
 
     if direction != "inbound":
         # Outbound messages from the admin side — just record as plain message
@@ -635,14 +641,13 @@ def spawn_task_from_conversation(
     now = datetime.now(UTC)
 
     task = Task(
-        id=str(uuid.uuid4()),
         creator_id=creator_id,
         title=objective,
-        task_status="active",
-        task_mode=task_mode,
+        task_status=TaskStatus.ACTIVE,
+        task_mode=TaskMode[task_mode.upper()] if isinstance(task_mode, str) else task_mode,
         source=source,
         category=category,
-        urgency=urgency,
+        urgency=parse_urgency(urgency),
         priority=priority,
         created_at=now,
         updated_at=now,
@@ -658,7 +663,6 @@ def spawn_task_from_conversation(
     task.task_number = max_num + 1
 
     convo = Conversation(
-        id=str(uuid.uuid4()),
         creator_id=resolve_account_id(),
         subject=objective,
         is_group=False,
@@ -707,7 +711,6 @@ def get_or_create_user_ai_conversation(
 
     # Create a new user_ai conversation
     conv = Conversation(
-        id=str(uuid.uuid4()),
         creator_id=resolve_account_id(),
         subject=session_key or "Chat with RentMate",
         is_group=False,

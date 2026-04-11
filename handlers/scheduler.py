@@ -347,20 +347,27 @@ async def simulate_scheduled_task_sse(task_id: str, request: Request):
             media_type="text/event-stream",
         )
 
+    scheduled_task_id = st.id
+    creator_id = st.creator_id
+    org_id = st.org_id
     sim_prompt = (
-        "[SIMULATION — do NOT take direct action. Instead of creating entities "
-        "or sending messages, describe what you WOULD do and create suggestions "
-        "for each action.]\n\n" + st.prompt
+        "[SIMULATION — do NOT take direct action. Query the real data, decide what actions "
+        "should happen, and call the normal suggestion-producing tools for each action you "
+        "would stage. Do not persist side effects. Do not answer with a generic plan or "
+        "high-level summary. The simulation result should be the concrete suggestions that "
+        "would be created for manager review.]\n\n" + st.prompt
     )
+    db.close()
 
     async def generate():
         from backends.local_auth import reset_request_context, set_request_context
         from llm.client import call_agent
         from llm.context import load_account_context
         from llm.registry import agent_registry
+        from llm.tools import simulation_suggestions
 
-        creator_id = st.creator_id
-        tokens = set_request_context(account_id=creator_id, org_id=st.org_id)
+        tokens = set_request_context(account_id=creator_id, org_id=org_id)
+        sim_token = simulation_suggestions.set([])
 
         try:
             inner_db = SessionLocal()
@@ -388,7 +395,7 @@ async def simulate_scheduled_task_sse(task_id: str, request: Request):
             async def _progress_cb(text: str, **_kwargs):
                 await queue.put(text)
 
-            session_key = f"simulate:{st.id}"
+            session_key = f"simulate:{scheduled_task_id}"
 
             # Run agent in background task, stream progress from queue
             async def _run():
@@ -398,7 +405,7 @@ async def simulate_scheduled_task_sse(task_id: str, request: Request):
                         messages=messages, on_progress=_progress_cb,
                     )
                     await queue.put(None)  # sentinel
-                    return resp.reply
+                    return resp
                 except Exception as exc:
                     await queue.put(None)
                     raise exc
@@ -412,8 +419,15 @@ async def simulate_scheduled_task_sse(task_id: str, request: Request):
                 yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
 
             try:
-                reply = agent_task.result()
-                yield f"data: {json.dumps({'type': 'done', 'reply': reply})}\n\n"
+                agent_resp = agent_task.result()
+                suggestions = _collect_simulation_suggestions(
+                    simulation_suggestions.get() or [],
+                    getattr(agent_resp, "side_effects", []) or [],
+                )
+                if not suggestions:
+                    suggestions = _parse_suggestions_from_reply(getattr(agent_resp, "reply", ""))
+                reply = _format_simulation_reply(getattr(agent_resp, "reply", ""), suggestions)
+                yield f"data: {json.dumps({'type': 'done', 'reply': reply, 'suggestions': suggestions})}\n\n"
 
                 # Update simulated_at
                 update_db = SessionLocal()
@@ -429,6 +443,7 @@ async def simulate_scheduled_task_sse(task_id: str, request: Request):
                 yield f"data: {json.dumps({'type': 'error', 'message': str(exc)[:500]})}\n\n"
 
         finally:
+            simulation_suggestions.reset(sim_token)
             reset_request_context(tokens)
 
     return StreamingResponse(
@@ -436,3 +451,79 @@ async def simulate_scheduled_task_sse(task_id: str, request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _normalize_side_effect_suggestions(side_effects: list[dict]) -> list[dict]:
+    normalized: list[dict] = []
+    for index, effect in enumerate(side_effects, start=1):
+        effect_type = effect.get("type", "")
+        if effect_type.endswith("_suggestion") or effect_type == "create_suggestion":
+            normalized.append({
+                "id": f"side-{index}",
+                "title": effect.get("title", "Untitled suggestion"),
+                "body": effect.get("ai_context") or effect.get("body") or "",
+                "category": effect.get("category") or effect.get("suggestion_type"),
+                "urgency": effect.get("urgency"),
+                "property_id": effect.get("property_id"),
+                "task_id": effect.get("task_id"),
+                "action_payload": effect.get("action_payload"),
+                "risk_score": effect.get("risk_score"),
+                "suggestion_type": effect.get("suggestion_type"),
+            })
+    return normalized
+
+
+def _collect_simulation_suggestions(simulated: list[dict], side_effects: list[dict]) -> list[dict]:
+    suggestions = simulated or _normalize_side_effect_suggestions(side_effects)
+    return suggestions
+
+
+def _parse_suggestions_from_reply(agent_reply: str) -> list[dict]:
+    suggestions: list[dict] = []
+    pattern = re.compile(
+        r"^\s*(\d+)\.\s+\*\*(?P<title>[^*]+)\*\*\s*(?:[-:]\s*(?P<body>.+))?$",
+        re.MULTILINE,
+    )
+    for index, match in enumerate(pattern.finditer(agent_reply or ""), start=1):
+        suggestions.append({
+            "id": f"reply-{index}",
+            "title": match.group("title").strip(),
+            "body": (match.group("body") or "").strip(),
+        })
+    return suggestions
+
+
+def _format_simulation_reply(agent_reply: str, suggestions: list[dict]) -> str:
+    if not suggestions:
+        return agent_reply or "(no output)"
+
+    lines = [
+        f"I would create {len(suggestions)} suggestion{'s' if len(suggestions) != 1 else ''}:",
+        "",
+    ]
+    for index, suggestion in enumerate(suggestions, start=1):
+        header = f"{index}. {suggestion.get('title') or 'Untitled suggestion'}"
+        meta: list[str] = []
+        if suggestion.get("category"):
+            meta.append(f"category={suggestion['category']}")
+        if suggestion.get("urgency"):
+            meta.append(f"urgency={suggestion['urgency']}")
+        if suggestion.get("property_id"):
+            meta.append(f"property={suggestion['property_id']}")
+        if suggestion.get("task_id"):
+            meta.append(f"task={suggestion['task_id']}")
+        if suggestion.get("risk_score") is not None:
+            meta.append(f"risk={suggestion['risk_score']}")
+        lines.append(header if not meta else f"{header} ({', '.join(meta)})")
+
+        body = (suggestion.get("body") or "").strip()
+        if body:
+            lines.append(body)
+
+        action_payload = suggestion.get("action_payload") or {}
+        if action_payload:
+            lines.append("Action payload:")
+            lines.append(json.dumps(action_payload, indent=2, sort_keys=True))
+        lines.append("")
+
+    return "\n".join(lines).strip()

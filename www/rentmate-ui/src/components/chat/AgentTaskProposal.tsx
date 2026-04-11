@@ -3,7 +3,7 @@ import { Plus, X, Zap, Wrench, FileText, ShieldCheck, Loader2 } from 'lucide-rea
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { graphqlQuery, CREATE_TASK_MUTATION, SEND_MESSAGE_MUTATION } from '@/data/api';
+import { createTask, sendMessage } from '@/graphql/client';
 import { useApp } from '@/context/AppContext';
 import { ActionDeskTask } from '@/data/mockData';
 import { toast } from 'sonner';
@@ -46,38 +46,32 @@ export function AgentTaskProposal({ proposal, onDismiss }: Props) {
   const handleCreate = async () => {
     setCreating(true);
     try {
-      const result = await graphqlQuery<{ createTask: { uid: string; title: string; taskStatus: string; taskMode: string; category: string; urgency: string; source: string; propertyId?: string; createdAt: string } }>(
-        CREATE_TASK_MUTATION,
-        {
-          input: {
-            title: proposal.title,
-            source: 'agent',
-            taskStatus: 'active',
-            taskMode: 'manual',
-            category: proposal.category,
-            urgency: proposal.urgency,
-            propertyId: proposal.propertyId ?? null,
-          },
-        }
-      );
+      const result = await createTask({
+        title: proposal.title,
+        source: 'agent',
+        taskStatus: 'active',
+        taskMode: 'manual',
+        category: proposal.category,
+        urgency: proposal.urgency,
+        propertyId: proposal.propertyId ?? null,
+        confidential: false,
+      });
       const t = result.createTask;
 
       // Seed the task thread with context if the agent provided a description
       const contextBody = proposal.description?.trim();
       if (contextBody && t.aiConversationId) {
-        await graphqlQuery(SEND_MESSAGE_MUTATION, {
-          input: {
-            conversationId: t.aiConversationId,
-            body: contextBody,
-            messageType: 'context',
-            senderName: 'RentMate',
-            isAi: true,
-          },
+        await sendMessage({
+          conversationId: t.aiConversationId,
+          body: contextBody,
+          messageType: 'context',
+          senderName: 'RentMate',
+          isAi: true,
         });
       }
 
       const newTask: ActionDeskTask = {
-        id: t.uid,
+        id: String(t.uid),
         title: t.title ?? proposal.title,
         mode: (t.taskMode as ActionDeskTask['mode']) ?? 'manual',
         status: 'active',

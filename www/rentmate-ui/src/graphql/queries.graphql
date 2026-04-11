@@ -1,0 +1,491 @@
+fragment TaskMessageFields on ChatMessageType {
+  uid
+  body
+  messageType
+  senderName
+  senderType
+  isAi
+  isSystem
+  draftReply
+  approvalStatus
+  relatedTaskIds
+  suggestionId
+  sentAt
+}
+
+fragment TaskFields on TaskType {
+  uid
+  taskNumber
+  title
+  taskStatus
+  taskMode
+  source
+  category
+  urgency
+  priority
+  confidential
+  lastMessageAt
+  propertyId
+  unitId
+  createdAt
+  tenantName
+  unitLabel
+  aiTriageSuggestion
+  vendorAssigned
+  requireVendorType
+  assignedVendorId
+  assignedVendorName
+  aiConversationId
+  parentConversationId
+  externalConversationId
+  steps
+  suggestionOptions
+  linkedConversations {
+    uid
+    label
+    conversationType
+    lastMessageAt
+    messageCount
+    participants {
+      name
+      participantType
+      entityId
+      portalUrl
+    }
+  }
+  messages {
+    ...TaskMessageFields
+  }
+}
+
+query Houses {
+  houses {
+    uid
+    name
+    address
+    propertyType
+    source
+    units
+    occupiedUnits
+    monthlyRevenue
+    context
+    unitList {
+      uid
+      label
+      isOccupied
+      context
+    }
+    tenants {
+      uid
+      name
+    }
+    leases {
+      uid
+      startDate
+      endDate
+      rentAmount
+      tenant {
+        uid
+        name
+      }
+    }
+  }
+}
+
+query Tenants {
+  tenants {
+    uid
+    name
+    email
+    unitLabel
+    leaseEndDate
+    rentAmount
+    paymentStatus
+    isActive
+    context
+    portalUrl
+    extraProperties {
+      key
+      value
+    }
+    rents {
+      uid
+      name
+      address
+    }
+    leases {
+      uid
+      rentAmount
+      startDate
+      endDate
+    }
+  }
+}
+
+query Tasks($category: TaskCategory, $status: [TaskStatus!], $source: TaskSource) {
+  tasks(category: $category, status: $status, source: $source) {
+    ...TaskFields
+  }
+}
+
+query Task($uid: Int!) {
+  task(uid: $uid) {
+    ...TaskFields
+  }
+}
+
+query Suggestions($status: SuggestionStatus) {
+  suggestions(status: $status) {
+    uid
+    title
+    body
+    category
+    urgency
+    status
+    source
+    automationKey
+    options
+    actionTaken
+    propertyId
+    unitId
+    taskId
+    vendorName
+    propertyName
+    draftMessage
+    createdAt
+    messages {
+      uid
+      body
+      messageType
+      senderName
+      isAi
+      isSystem
+      sentAt
+      draftReply
+      approvalStatus
+    }
+  }
+}
+
+query ConversationMessages($uid: String!) {
+  conversationMessages(uid: $uid) {
+    ...TaskMessageFields
+  }
+}
+
+query Vendors {
+  vendors {
+    uid
+    name
+    company
+    vendorType
+    phone
+    email
+    notes
+    context
+    portalUrl
+    createdAt
+  }
+}
+
+query VendorTypes {
+  vendorTypes
+}
+
+query EntityNote($entityType: String!, $entityId: String!) {
+  entityNote(entityType: $entityType, entityId: $entityId)
+}
+
+query GetDocument($uid: String!) {
+  document(uid: $uid) {
+    uid
+    filename
+    documentType
+    status
+    progress
+    extractedData
+    extractionMeta
+    context
+    rawText
+    errorMessage
+    createdAt
+    processedAt
+  }
+}
+
+query GetConversations($conversationType: ConversationType!, $limit: Int) {
+  conversations(conversationType: $conversationType, limit: $limit) {
+    uid
+    conversationType
+    title
+    lastMessageAt
+    updatedAt
+    lastMessageBody
+    lastMessageSenderName
+    propertyName
+    participantCount
+    unreadCount
+  }
+}
+
+query ScheduledTasks {
+  scheduledTasks {
+    uid
+    name
+    prompt
+    schedule
+    scheduleDisplay
+    enabled
+    state
+    repeat
+    completedCount
+    nextRunAt
+    lastRunAt
+    lastStatus
+    lastOutput
+    createdAt
+  }
+}
+
+query ScheduledTask($uid: String!) {
+  scheduledTask(uid: $uid) {
+    uid
+    name
+    prompt
+    schedule
+    scheduleDisplay
+    isDefault
+    enabled
+    state
+    repeat
+    completedCount
+    nextRunAt
+    lastRunAt
+    lastStatus
+    lastOutput
+    simulatedAt
+    createdAt
+  }
+}
+
+query Me {
+  me {
+    uid
+    username
+  }
+}
+
+mutation Login($input: LoginInput!) {
+  login(input: $input) {
+    token
+    user {
+      uid
+      username
+    }
+  }
+}
+
+mutation CreateProperty($input: CreatePropertyInput!) {
+  createProperty(input: $input) {
+    uid
+    name
+    address
+    propertyType
+    source
+    units
+    occupiedUnits
+    monthlyRevenue
+    unitList {
+      uid
+      label
+      isOccupied
+    }
+  }
+}
+
+mutation UpdateProperty($input: UpdatePropertyInput!) {
+  updateProperty(input: $input) {
+    uid
+    name
+    address
+    propertyType
+  }
+}
+
+mutation DeleteProperty($uid: String!) {
+  deleteProperty(uid: $uid)
+}
+
+mutation AddLeaseForTenant($input: AddLeaseForTenantInput!) {
+  addLeaseForTenant(input: $input) {
+    uid
+    name
+    email
+    unitLabel
+    leaseEndDate
+    rentAmount
+    paymentStatus
+    isActive
+  }
+}
+
+mutation CreateTenantWithLease($input: CreateTenantWithLeaseInput!) {
+  createTenantWithLease(input: $input) {
+    uid
+    name
+    email
+    unitLabel
+    leaseEndDate
+    rentAmount
+    paymentStatus
+    isActive
+  }
+}
+
+mutation DeleteTenant($uid: String!) {
+  deleteTenant(uid: $uid)
+}
+
+mutation CreateTask($input: CreateTaskInput!) {
+  createTask(input: $input) {
+    uid
+    title
+    taskStatus
+    taskMode
+    category
+    urgency
+    source
+    propertyId
+    unitId
+    aiConversationId
+    createdAt
+  }
+}
+
+mutation UpdateTask($input: UpdateTaskInput!) {
+  updateTask(input: $input) {
+    uid
+    taskStatus
+    taskMode
+  }
+}
+
+mutation UpdateTaskStatus($uid: Int!, $status: TaskStatus!) {
+  updateTaskStatus(uid: $uid, status: $status) {
+    uid
+    taskStatus
+  }
+}
+
+mutation DeleteTask($uid: Int!) {
+  deleteTask(uid: $uid)
+}
+
+mutation AssignVendorToTask($taskId: Int!, $vendorId: String!) {
+  assignVendorToTask(taskId: $taskId, vendorId: $vendorId) {
+    uid
+    assignedVendorId
+    assignedVendorName
+  }
+}
+
+mutation ActOnSuggestion($uid: Int!, $action: String!, $editedBody: String) {
+  actOnSuggestion(uid: $uid, action: $action, editedBody: $editedBody) {
+    uid
+    status
+    actionTaken
+    taskId
+  }
+}
+
+mutation SendMessage($input: SendMessageInput!) {
+  sendMessage(input: $input) {
+    uid
+    body
+    messageType
+    senderName
+    senderType
+    isAi
+    isSystem
+    draftReply
+    approvalStatus
+    suggestionId
+    sentAt
+  }
+}
+
+mutation SendSms($vendorId: String!, $body: String!, $taskId: Int) {
+  sendSms(vendorId: $vendorId, body: $body, taskId: $taskId) {
+    uid
+    body
+    senderName
+    sentAt
+  }
+}
+
+mutation DeleteConversation($uid: String!) {
+  deleteConversation(uid: $uid)
+}
+
+mutation CreateVendor($input: CreateVendorInput!) {
+  createVendor(input: $input) {
+    uid
+    name
+    company
+    vendorType
+    phone
+    email
+    notes
+    portalUrl
+  }
+}
+
+mutation UpdateVendor($input: UpdateVendorInput!) {
+  updateVendor(input: $input) {
+    uid
+    name
+    company
+    vendorType
+    phone
+    email
+    notes
+    portalUrl
+  }
+}
+
+mutation DeleteVendor($uid: String!) {
+  deleteVendor(uid: $uid)
+}
+
+mutation UpdateEntityContext($entityType: String!, $entityId: String!, $context: String!) {
+  updateEntityContext(entityType: $entityType, entityId: $entityId, context: $context)
+}
+
+mutation SaveEntityNote($entityType: String!, $entityId: String!, $content: String!) {
+  saveEntityNote(entityType: $entityType, entityId: $entityId, content: $content)
+}
+
+mutation CreateScheduledTask($name: String!, $prompt: String!, $schedule: String!, $repeat: Int) {
+  createScheduledTask(name: $name, prompt: $prompt, schedule: $schedule, repeat: $repeat) {
+    uid
+  }
+}
+
+mutation UpdateScheduledTask($uid: String!, $name: String, $prompt: String, $schedule: String, $enabled: Boolean) {
+  updateScheduledTask(uid: $uid, name: $name, prompt: $prompt, schedule: $schedule, enabled: $enabled) {
+    uid
+  }
+}
+
+mutation DeleteScheduledTask($uid: String!) {
+  deleteScheduledTask(uid: $uid)
+}
+
+mutation RunScheduledTask($uid: String!) {
+  runScheduledTask(uid: $uid) {
+    uid
+    lastStatus
+    lastOutput
+    lastRunAt
+  }
+}

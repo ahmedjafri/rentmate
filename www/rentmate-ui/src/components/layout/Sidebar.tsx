@@ -3,7 +3,7 @@ import { Home, Building2, Users, ClipboardList, Lightbulb, Settings, Bot, FileTe
 import { NavLink } from '@/components/NavLink';
 import { useLocation } from 'react-router-dom';
 import { logout } from '@/lib/auth';
-import { graphqlQuery } from '@/data/api';
+import { getMe } from '@/graphql/client';
 import {
   Sidebar as SidebarUI,
   SidebarContent,
@@ -31,8 +31,6 @@ const navItems = [
   { title: 'Settings', url: '/settings', icon: Settings },
 ];
 
-const ME_QUERY = `{ me { uid username } }`;
-
 export function AppSidebar() {
   const { state, setOpen, isMobile, setOpenMobile } = useSidebar();
   const dismissSidebar = () => isMobile ? setOpenMobile(false) : setOpen(false);
@@ -41,7 +39,7 @@ export function AppSidebar() {
   const [email, setEmail] = useState('');
 
   useEffect(() => {
-    graphqlQuery<{ me: { username: string } }>(ME_QUERY)
+    getMe()
       .then(({ me }) => setEmail(me.username))
       .catch(() => {});
   }, []);
