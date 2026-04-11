@@ -12,8 +12,9 @@ from db.models import (
     MessageType,
     ParticipantType,
     Task,
+    User,
 )
-from gql.services.vendor_service import VendorService, get_vendor_by_external_id
+from gql.services.vendor_service import VendorService, get_vendor_login_email, vendor_has_account
 from handlers.deps import get_db
 
 router = APIRouter(prefix="/api/vendor")
@@ -30,20 +31,32 @@ def _require_vendor(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
+def _load_vendor(db, vendor_external_id: str) -> User:
+    vendor = db.execute(
+        select(User).where(
+            User.external_id == vendor_external_id,
+            User.user_type == "vendor",
+            User.active.is_(True),
+        )
+    ).scalar_one_or_none()
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    return vendor
+
+
 @router.get("/me")
 def vendor_me(request: Request):
     info = _require_vendor(request)
     db = get_db(request)
-    vendor = get_vendor_by_external_id(db, info["vendor_id"])
-    if not vendor:
-        raise HTTPException(status_code=404, detail="Vendor not found")
+    vendor = _load_vendor(db, info["vendor_id"])
     return {
         "id": str(vendor.external_id),
         "name": vendor.name,
         "company": vendor.company,
         "vendor_type": vendor.role_label,
-        "email": vendor.email,
+        "email": get_vendor_login_email(db, vendor),
         "phone": vendor.phone,
+        "has_account": vendor_has_account(vendor),
     }
 
 
@@ -51,9 +64,7 @@ def vendor_me(request: Request):
 def vendor_tasks(request: Request):
     info = _require_vendor(request)
     db = get_db(request)
-    vendor = get_vendor_by_external_id(db, info["vendor_id"])
-    if not vendor:
-        raise HTTPException(status_code=404, detail="Vendor not found")
+    vendor = _load_vendor(db, info["vendor_id"])
     vendor_id = vendor.id
     # Find conversations where this vendor is assigned, then get their tasks
     from sqlalchemy import text
@@ -71,7 +82,7 @@ def vendor_tasks(request: Request):
     return [
         {
             "id": str(t.id),
-            "task_number": t.task_number,
+            "task_number": t.id,
             "title": t.title,
             "status": t.task_status,
             "category": t.category,
@@ -123,9 +134,7 @@ def _verify_vendor_task(db, task_id: str, vendor_id: int) -> Task:
 def vendor_task_detail(task_id: str, request: Request):
     info = _require_vendor(request)
     db = get_db(request)
-    vendor = get_vendor_by_external_id(db, info["vendor_id"])
-    if not vendor:
-        raise HTTPException(status_code=404, detail="Vendor not found")
+    vendor = _load_vendor(db, info["vendor_id"])
     task = _verify_vendor_task(db, task_id, vendor.id)
     # Check if someone is typing in the external conversation
     ai_typing = False
@@ -135,7 +144,7 @@ def vendor_task_detail(task_id: str, request: Request):
             ai_typing = True
     return {
         "id": str(task.id),
-        "task_number": task.task_number,
+        "task_number": task.id,
         "title": task.title,
         "status": task.task_status,
         "category": task.category,
@@ -150,15 +159,67 @@ class SendMessageBody(BaseModel):
     body: str
 
 
+class VendorLoginBody(BaseModel):
+    email: str
+    password: str
+    token: str | None = None
+
+
+class VendorAccountBody(BaseModel):
+    email: str
+    password: str
+
+
+@router.post("/login")
+def vendor_login(body: VendorLoginBody, request: Request):
+    db = get_db(request)
+    try:
+        vendor, access_token = VendorService.login_with_password(
+            db,
+            email=body.email,
+            password=body.password,
+            portal_token=body.token,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "access_token": access_token,
+        "vendor_id": str(vendor.external_id),
+        "name": vendor.name,
+        "email": get_vendor_login_email(db, vendor),
+    }
+
+
+@router.post("/account")
+def vendor_create_account(body: VendorAccountBody, request: Request):
+    info = _require_vendor(request)
+    db = get_db(request)
+    vendor = _load_vendor(db, info["vendor_id"])
+    try:
+        vendor, access_token = VendorService.create_account_from_vendor(
+            db,
+            vendor=vendor,
+            email=body.email,
+            password=body.password,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "access_token": access_token,
+        "vendor_id": str(vendor.external_id),
+        "name": vendor.name,
+        "email": vendor.email,
+        "has_account": True,
+    }
+
+
 @router.post("/tasks/{task_id}/messages")
 def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
     info = _require_vendor(request)
     if not body.body.strip():
         raise HTTPException(status_code=400, detail="Message body required")
     db = get_db(request)
-    vendor = get_vendor_by_external_id(db, info["vendor_id"])
-    if not vendor:
-        raise HTTPException(status_code=404, detail="Vendor not found")
+    vendor = _load_vendor(db, info["vendor_id"])
     task = _verify_vendor_task(db, task_id, vendor.id)
     if not task.external_conversation_id:
         raise HTTPException(status_code=400, detail="No external conversation for this task")

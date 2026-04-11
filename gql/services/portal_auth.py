@@ -24,6 +24,7 @@ class PortalEntityExtra(BaseModel):
 
     portal_token: str | None = None
     invite_token: str | None = None
+    linked_user_id: int | None = None
 
 
 def parse_portal_entity_extra(extra: dict | None) -> PortalEntityExtra:

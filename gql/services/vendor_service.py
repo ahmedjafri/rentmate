@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
+import bcrypt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -37,6 +38,50 @@ def get_vendor_by_external_id(sess: Session, uid: str) -> User | None:
 
 def get_vendor_by_id(sess: Session, vendor_id: int) -> User | None:
     return sess.execute(get_vendor_query(sess).where(User.id == vendor_id)).scalar_one_or_none()
+
+
+def _get_linked_user(sess: Session, vendor: User) -> User | None:
+    extra = portal_auth.parse_portal_entity_extra(vendor.extra)
+    if not extra.linked_user_id:
+        return None
+    return sess.get(User, extra.linked_user_id)
+
+
+def get_vendor_login_email(sess: Session, vendor: User) -> str | None:
+    linked = _get_linked_user(sess, vendor)
+    return linked.email if linked and linked.email else vendor.email
+
+
+def vendor_has_account(vendor: User) -> bool:
+    extra = portal_auth.parse_portal_entity_extra(vendor.extra)
+    return bool(vendor.password_hash or extra.linked_user_id)
+
+
+def _link_vendor_to_user(sess: Session, *, vendor: User, user: User) -> User:
+    extra = portal_auth.parse_portal_entity_extra(vendor.extra)
+    extra.linked_user_id = user.id
+    vendor.extra = portal_auth.dump_portal_entity_extra(extra)
+    sess.commit()
+    sess.refresh(vendor)
+    return vendor
+
+
+def _authenticate_user(sess: Session, *, email: str, password: str) -> User | None:
+    email = (email or "").strip().lower()
+    password = password or ""
+    if not email or not password:
+        return None
+    user = sess.execute(
+        select(User).where(
+            User.email == email,
+            User.active.is_(True),
+        )
+    ).scalar_one_or_none()
+    if not user or not user.password_hash:
+        return None
+    if not bcrypt.checkpw(password.encode(), user.password_hash.encode()):
+        return None
+    return user
 
 
 class VendorService:
@@ -112,6 +157,51 @@ class VendorService:
             raise ValueError("Invalid portal link")
         jwt_token = portal_auth.create_portal_jwt("vendor", str(vendor.external_id))
         return vendor, jwt_token
+
+    @staticmethod
+    def create_account_from_vendor(sess: Session, *, vendor: User, email: str, password: str) -> tuple[User, str]:
+        email = (email or "").strip().lower()
+        password = password or ""
+        if not email:
+            raise ValueError("Email is required")
+        if not password:
+            raise ValueError("Password is required")
+        if vendor_has_account(vendor):
+            raise ValueError("Vendor account already exists")
+
+        existing = sess.execute(
+            select(User).where(User.email == email, User.id != vendor.id)
+        ).scalar_one_or_none()
+        if existing:
+            raise ValueError("Email is already in use. Sign in to link your existing account.")
+
+        vendor.email = email
+        vendor.password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        sess.commit()
+        sess.refresh(vendor)
+        return vendor, portal_auth.create_portal_jwt("vendor", str(vendor.external_id))
+
+    @staticmethod
+    def login_with_password(sess: Session, *, email: str, password: str, portal_token: str | None = None) -> tuple[User, str]:
+        user = _authenticate_user(sess, email=email, password=password)
+        if not user:
+            raise ValueError("Invalid email or password")
+        if user.user_type == VENDOR_USER_TYPE:
+            vendor = user
+        else:
+            vendor = sess.execute(
+                select(User).where(
+                    User.user_type == VENDOR_USER_TYPE,
+                )
+            ).scalars().all()
+            vendor = next((candidate for candidate in vendor if portal_auth.parse_portal_entity_extra(candidate.extra).linked_user_id == user.id), None)
+            if vendor is None and portal_token:
+                vendor = VendorService._find_by_portal_token(sess, portal_token)
+                if vendor and vendor.user_type == VENDOR_USER_TYPE and not vendor_has_account(vendor):
+                    vendor = _link_vendor_to_user(sess, vendor=vendor, user=user)
+            if vendor is None:
+                raise ValueError("This account is not linked to a vendor portal")
+        return vendor, portal_auth.create_portal_jwt("vendor", str(vendor.external_id))
 
     @staticmethod
     def get_portal_url(vendor: User) -> str:
