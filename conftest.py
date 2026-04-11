@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import create_engine, event
@@ -124,3 +124,40 @@ def _seed_current_user(db):
         user.external_id = "test-user-1"
         db.flush()
     return user
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_sessionlocal(request, monkeypatch):
+    """Route app/session-factory access to the per-test DB session when a test uses `db`.
+
+    This prevents handler tests using TestClient(app) from touching the real app DB
+    via `main.SessionLocal`, middleware, or modules that import `db.session.SessionLocal`.
+    """
+    if "db" not in request.fixturenames:
+        yield
+        return
+
+    db = request.getfixturevalue("db")
+    original_close = db.close
+    monkeypatch.setattr(db, "close", lambda: None)
+
+    mock_sl = MagicMock(name="SessionLocal")
+    mock_sl.return_value = db
+    mock_sl.session_factory.return_value = db
+
+    for target in (
+        "db.session.SessionLocal",
+        "handlers.deps.SessionLocal",
+        "handlers.chat.SessionLocal",
+        "handlers.heartbeat.SessionLocal",
+        "handlers.scheduler.SessionLocal",
+        "main.SessionLocal",
+    ):
+        try:
+            monkeypatch.setattr(target, mock_sl)
+        except Exception:
+            pass
+
+    yield
+
+    db.close = original_close
