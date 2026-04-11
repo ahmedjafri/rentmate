@@ -84,7 +84,7 @@ const Index = () => {
 
   const stats = [
     { label: 'Properties', value: properties.length, icon: Building2, sub: `${totalUnits} units`, link: '/properties' },
-    { label: 'Tenants', value: tenants.length, icon: Users, sub: `${activeTenants.length} active` },
+    { label: 'Tenants', value: tenants.length, icon: Users, sub: `${activeTenants.length} active`, link: '/tenants' },
     { label: 'Vendors', value: vendors.length, icon: Wrench, sub: `contractors`, link: '/vendors' },
   ];
 

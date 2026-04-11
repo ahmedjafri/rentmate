@@ -50,6 +50,44 @@ function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }
   return modeConfig[task.mode];
 }
 
+export async function performTaskDismiss(args: {
+  taskId: string;
+  aiConversationId?: string | null;
+  updateTaskStatusFn: typeof updateTaskStatus;
+  sendMessageFn: typeof sendMessage;
+  addChatMessage: ReturnType<typeof useApp>['addChatMessage'];
+  updateTask: ReturnType<typeof useApp>['updateTask'];
+  removeTask: ReturnType<typeof useApp>['removeTask'];
+  closeChat: ReturnType<typeof useApp>['closeChat'];
+  refreshData: ReturnType<typeof useApp>['refreshData'];
+}) {
+  const { taskId, aiConversationId, updateTaskStatusFn, sendMessageFn, addChatMessage, updateTask, removeTask, closeChat, refreshData } = args;
+  await updateTaskStatusFn(taskId, 'dismissed');
+  if (aiConversationId) {
+    await sendMessageFn({
+      conversationId: aiConversationId,
+      body: 'Task dismissed — this item will not be re-created by automations.',
+      messageType: 'internal',
+      senderName: 'RentMate',
+      isAi: true,
+    });
+  }
+  addChatMessage({
+    taskId,
+  }, {
+    id: `dismiss-${Date.now()}`,
+    role: 'assistant',
+    content: 'Task dismissed — this item will not be re-created by automations.',
+    timestamp: new Date(),
+    senderName: 'RentMate',
+    messageType: 'internal',
+  });
+  updateTask(taskId, { status: 'cancelled' });
+  removeTask(taskId);
+  closeChat();
+  refreshData();
+}
+
 export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const { chatPanel, closeChat, openChat, setChatConversationId, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, addDocument, replaceDocument, removeDocument, refreshData } = useApp();
   const [dismissConfirm, setDismissConfirm] = useState(false);
@@ -71,18 +109,20 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
     const taskId = chatPanel.taskId;
     setDismissing(true);
     try {
-      await updateTaskStatus(taskId, 'dismissed');
-      if (activeTask?.aiConversationId) {
-        await sendMessage({
-          conversationId: activeTask.aiConversationId,
-          body: 'Task dismissed — this item will not be re-created by automations.',
-          messageType: 'internal',
-          senderName: 'RentMate',
-          isAi: true,
-        });
-      }
-      addChatMessage({ taskId }, { id: `dismiss-${Date.now()}`, role: 'assistant', content: 'Task dismissed — this item will not be re-created by automations.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' });
-      updateTask(taskId, { status: 'cancelled' });
+      await performTaskDismiss({
+        taskId,
+        aiConversationId: activeTask?.aiConversationId,
+        updateTaskStatusFn: updateTaskStatus,
+        sendMessageFn: sendMessage,
+        addChatMessage,
+        updateTask,
+        removeTask,
+        closeChat,
+        refreshData,
+      });
+      toast.info('Task dismissed');
+    } catch {
+      toast.error('Failed to dismiss task');
     } finally {
       setDismissing(false);
       setDismissConfirm(false);
@@ -152,6 +192,23 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
         messageType: (fromGraphqlEnum(m.messageType) as ChatMessage['messageType']) ?? 'message',
         draftReply: m.draftReply ?? undefined,
         suggestionId: m.suggestionId ?? undefined,
+        actionCard: m.actionCard ? {
+          kind: m.actionCard.kind as NonNullable<ChatMessage['actionCard']>['kind'],
+          title: m.actionCard.title,
+          summary: m.actionCard.summary ?? undefined,
+          fields: m.actionCard.fields?.map((field) => ({ label: field.label, value: field.value })) ?? undefined,
+          links: m.actionCard.links?.map((link) => ({
+            label: link.label,
+            entityType: link.entityType as 'suggestion' | 'property' | 'tenant' | 'unit',
+            entityId: link.entityId,
+            propertyId: link.propertyId ?? undefined,
+          })) ?? undefined,
+          units: m.actionCard.units?.map((unit) => ({
+            uid: unit.uid,
+            label: unit.label,
+            propertyId: unit.propertyId,
+          })) ?? undefined,
+        } : undefined,
       })));
     }).catch(() => {});
   }, [activeConversationId, activeTask, activeSuggestion]);
@@ -277,6 +334,23 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
           senderName: m.senderName,
           senderType: st,
           messageType: (fromGraphqlEnum(m.messageType) as ChatMessage['messageType']) ?? 'message',
+          actionCard: m.actionCard ? {
+            kind: m.actionCard.kind as NonNullable<ChatMessage['actionCard']>['kind'],
+            title: m.actionCard.title,
+            summary: m.actionCard.summary ?? undefined,
+            fields: m.actionCard.fields?.map((field) => ({ label: field.label, value: field.value })) ?? undefined,
+            links: m.actionCard.links?.map((link) => ({
+              label: link.label,
+              entityType: link.entityType as 'suggestion' | 'property' | 'tenant' | 'unit',
+              entityId: link.entityId,
+              propertyId: link.propertyId ?? undefined,
+            })) ?? undefined,
+            units: m.actionCard.units?.map((unit) => ({
+              uid: unit.uid,
+              label: unit.label,
+              propertyId: unit.propertyId,
+            })) ?? undefined,
+          } : undefined,
         };
       });
       setParticipantMessages(msgs);
@@ -339,22 +413,13 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
               }
               if (event.type === 'progress') {
                 setProgressLog(prev => [...prev, event.text as string]);
-              } else if (event.type === 'done') {
-                reconnectDone = true;
-                activeStreamIdRef.current = null;
-                addAiMessage(event.reply, { taskId });
-                if (event.suggestion_messages) {
-                  for (const sm of event.suggestion_messages as Array<{ id: string; body: string; suggestion_id?: string }>) {
-                    addChatMessage({ taskId }, {
-                      id: sm.id, role: 'assistant', content: sm.body,
-                      timestamp: new Date(), senderName: 'RentMate',
-                      senderType: 'ai', messageType: 'suggestion',
-                      suggestionId: sm.suggestion_id,
-                    });
-                  }
-                }
-                setIsTyping(false);
-              } else if (event.type === 'error') {
+	              } else if (event.type === 'done') {
+	                reconnectDone = true;
+	                activeStreamIdRef.current = null;
+	                addAiMessage(event.reply, { taskId });
+	                appendEffectMessages(event.effect_messages, { taskId });
+	                setIsTyping(false);
+	              } else if (event.type === 'error') {
                 activeStreamIdRef.current = null;
                 toast.error('Agent encountered an error');
                 setIsTyping(false);
@@ -398,6 +463,37 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
       setConvMessages(prev => [...prev, msg]);
     } else {
       addChatMessage(context, msg);
+    }
+  };
+
+  const appendEffectMessages = (
+    effectMessages: Array<{
+      id: string;
+      body?: string | null;
+      message_type?: string | null;
+      suggestion_id?: string | null;
+      action_card?: ChatMessage['actionCard'];
+    }> | undefined,
+    context: { taskId?: string | null; suggestionId?: string | null },
+  ) => {
+    if (!effectMessages) return;
+    for (const msg of effectMessages) {
+      const effectMessage: ChatMessage = {
+        id: msg.id,
+        role: 'assistant',
+        content: msg.body ?? '',
+        timestamp: new Date(),
+        senderName: 'RentMate',
+        senderType: 'ai',
+        messageType: (msg.message_type as ChatMessage['messageType']) ?? 'message',
+        suggestionId: msg.suggestion_id ?? undefined,
+        actionCard: msg.action_card ?? undefined,
+      };
+      if (!context.taskId && !context.suggestionId) {
+        setConvMessages(prev => [...prev, effectMessage]);
+      } else {
+        addChatMessage(context, effectMessage);
+      }
     }
   };
 
@@ -445,7 +541,16 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
         let sseError: Error | null = null;
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
-          let event: { type: string; text?: string; reply?: string; stream_id?: string; message?: string; conversation_id?: string; suggestion_messages?: Array<{ id: string; body: string; suggestion_id?: string }>; onboarding?: Parameters<typeof onboarding.update>[0] };
+          let event: {
+            type: string;
+            text?: string;
+            reply?: string;
+            stream_id?: string;
+            message?: string;
+            conversation_id?: string;
+            effect_messages?: Array<{ id: string; body?: string | null; message_type?: string | null; suggestion_id?: string | null; action_card?: ChatMessage['actionCard'] }>;
+            onboarding?: Parameters<typeof onboarding.update>[0];
+          };
           try { event = JSON.parse(line.slice(6)); } catch { continue; }
 
           if (event.type === 'stream_id') {
@@ -484,27 +589,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
             if (event.reply) {
               addAiMessage(event.reply, { taskId, suggestionId });
             }
-            // Append any suggestion messages the agent created (flushed
-            // after the AI reply so they appear below it).
-            if (event.suggestion_messages) {
-              for (const sm of event.suggestion_messages as Array<{ id: string; body: string; suggestion_id?: string }>) {
-                const sugMsg: ChatMessage = {
-                  id: sm.id,
-                  role: 'assistant',
-                  content: sm.body,
-                  timestamp: new Date(),
-                  senderName: 'RentMate',
-                  senderType: 'ai',
-                  messageType: 'suggestion',
-                  suggestionId: sm.suggestion_id,
-                };
-                if (!taskId && !suggestionId) {
-                  setConvMessages(prev => [...prev, sugMsg]);
-                } else {
-                  addChatMessage({ taskId, suggestionId }, sugMsg);
-                }
-              }
-            }
+            appendEffectMessages(event.effect_messages, { taskId, suggestionId });
             // Refresh data so new suggestions created by agent tools appear
             refreshData();
             // Update onboarding progress from SSE payload
@@ -826,7 +911,14 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
                         buf = lines.pop() ?? '';
                         for (const line of lines) {
                           if (!line.startsWith('data: ')) continue;
-                          let event: { type: string; text?: string; reply?: string | null; message_id?: string | null; conversation_id?: string; suggestion_messages?: Array<{ id: string; body: string; suggestion_id?: string }> };
+	                          let event: {
+	                            type: string;
+	                            text?: string;
+	                            reply?: string | null;
+	                            message_id?: string | null;
+	                            conversation_id?: string;
+	                            effect_messages?: Array<{ id: string; body?: string | null; message_type?: string | null; suggestion_id?: string | null; action_card?: ChatMessage['actionCard'] }>;
+	                          };
                           try { event = JSON.parse(line.slice(6)); } catch { continue; }
                           if (event.type === 'progress') {
                             progressLines.push(event.text as string);
@@ -850,16 +942,8 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
                                 senderName: 'RentMate', senderType: 'ai', messageType: 'message',
                               });
                             }
-                            if (event.suggestion_messages) {
-                              for (const sm of event.suggestion_messages) {
-                                addChatMessage({ taskId }, {
-                                  id: sm.id, role: 'assistant', content: sm.body,
-                                  timestamp: new Date(), senderName: 'RentMate',
-                                  senderType: 'ai', messageType: 'suggestion', suggestionId: sm.suggestion_id,
-                                });
-                              }
-                            }
-                            refreshData();
+	                            appendEffectMessages(event.effect_messages, { taskId });
+	                            refreshData();
                           }
                         }
                       }

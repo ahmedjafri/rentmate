@@ -172,14 +172,19 @@ async def chat_with_agent(
         elif event_type == "tool.completed":
             is_error = kwargs.get("is_error", False)
             if is_error:
-                error_detail = kwargs.get("error", "") or kwargs.get("result", "")
-                if isinstance(error_detail, str) and len(error_detail) > 120:
-                    error_detail = error_detail[:120] + "…"
-                msg = f"{label}: error" + (f" — {error_detail}" if error_detail else "")
+                raw_error_detail = kwargs.get("error", "") or kwargs.get("result", "")
+                display_error = raw_error_detail
+                if isinstance(display_error, str) and len(display_error) > 220:
+                    display_error = display_error[:220] + "…"
+                msg = f"{label}: error" + (f" — {display_error}" if display_error else "")
                 progress_events.append(msg)
                 progress_queue.put(msg)
                 log_trace("error", _trace_source, msg, task_id=_trace_task_id,
-                          tool_name=tool_name, detail={"error": str(error_detail)})
+                          tool_name=tool_name, detail={
+                              "error": str(raw_error_detail),
+                              "result": kwargs.get("result"),
+                              "tool_name": tool_name,
+                          })
             else:
                 result = kwargs.get("result", "")
                 if isinstance(result, str) and len(result) > 500:
@@ -379,7 +384,7 @@ async def _local_fallback(
         side_effects = []
         for pending in (pending_suggestion_messages.get() or []):
             side_effects.append({
-                "type": "suggestion_message",
+                "type": pending.get("type", "suggestion_message"),
                 **pending,
             })
         return AgentResponse(reply=reply, side_effects=side_effects)

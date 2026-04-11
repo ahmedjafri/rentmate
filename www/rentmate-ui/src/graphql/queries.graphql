@@ -10,6 +10,26 @@ fragment TaskMessageFields on ChatMessageType {
   approvalStatus
   relatedTaskIds
   suggestionId
+  actionCard {
+    kind
+    title
+    summary
+    fields {
+      label
+      value
+    }
+    links {
+      label
+      entityType
+      entityId
+      propertyId
+    }
+    units {
+      uid
+      label
+      propertyId
+    }
+  }
   sentAt
 }
 
@@ -410,6 +430,26 @@ mutation SendMessage($input: SendMessageInput!) {
     draftReply
     approvalStatus
     suggestionId
+    actionCard {
+      kind
+      title
+      summary
+      fields {
+        label
+        value
+      }
+      links {
+        label
+        entityType
+        entityId
+        propertyId
+      }
+      units {
+        uid
+        label
+        propertyId
+      }
+    }
     sentAt
   }
 }

@@ -11,7 +11,7 @@ import {
   ArrowLeft, Zap, Play, Pause, Trash2, Clock, CheckCircle2, XCircle,
   Loader2, Save, FlaskConical,
 } from 'lucide-react';
-import { deleteScheduledTask, getScheduledTask, runScheduledTask, updateScheduledTask } from '@/graphql/client';
+import { deleteScheduledTask, getScheduledTask, updateScheduledTask } from '@/graphql/client';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { PageLoader } from '@/components/ui/page-loader';
@@ -56,10 +56,13 @@ const ScheduledTaskDetail = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [runTrace, setRunTrace] = useState<string[]>([]);
+  const [runOutput, setRunOutput] = useState<string | null>(null);
   const [simulating, setSimulating] = useState(false);
   const [simTrace, setSimTrace] = useState<string[]>([]);
   const [simOutput, setSimOutput] = useState<string | null>(null);
   const [simSuggestions, setSimSuggestions] = useState<SimulatedSuggestion[]>([]);
+  const runScrollRef = useRef<HTMLPreElement>(null);
   const simScrollRef = useRef<HTMLPreElement>(null);
 
   // Edit form
@@ -120,12 +123,53 @@ const ScheduledTaskDetail = () => {
   const handleRun = async () => {
     if (!task) return;
     setRunning(true);
+    setRunTrace([]);
+    setRunOutput(null);
     try {
-      const data = await runScheduledTask(task.uid);
-      const result = data.runScheduledTask;
-      setTask(prev => prev ? { ...prev, ...result } as ScheduledTask : prev);
-      toast.success(result.lastStatus === 'ok' ? 'Run completed' : 'Run failed');
-    } catch (e) { toast.error(e instanceof Error ? e.message : 'Run failed'); }
+      const res = await authFetch(`/api/scheduled-task/${task.uid}/run`, { method: 'POST' });
+      if (!res.ok) {
+        setRunOutput(`Error: HTTP ${res.status}`);
+        return;
+      }
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === 'progress') {
+              setRunTrace(prev => [...prev, event.text]);
+              runScrollRef.current?.scrollTo(0, runScrollRef.current.scrollHeight);
+            } else if (event.type === 'done') {
+              setRunOutput(event.reply);
+              if (event.task) {
+                setTask(prev => prev ? {
+                  ...prev,
+                  lastStatus: event.task.lastStatus ?? prev.lastStatus,
+                  lastOutput: event.task.lastOutput ?? prev.lastOutput,
+                  lastRunAt: event.task.lastRunAt ?? prev.lastRunAt,
+                  completedCount: event.task.completedCount ?? prev.completedCount,
+                  nextRunAt: event.task.nextRunAt ?? prev.nextRunAt,
+                  state: event.task.state ?? prev.state,
+                  enabled: event.task.enabled ?? prev.enabled,
+                } as ScheduledTask : prev);
+              }
+            } else if (event.type === 'error') {
+              setRunOutput(`Error: ${event.message}`);
+            }
+          } catch { /* skip malformed */ }
+        }
+      }
+      fetchTask();
+      toast.success('Run completed');
+    } catch (e) { setRunOutput(`Error: ${e instanceof Error ? e.message : 'Run failed'}`); }
     finally { setRunning(false); }
   };
 
@@ -283,8 +327,44 @@ const ScheduledTaskDetail = () => {
         </div>
 
         {/* Simulation trace + output */}
-        {(simTrace.length > 0 || simOutput !== null || simSuggestions.length > 0) && (
+        {(runTrace.length > 0 || runOutput !== null || simTrace.length > 0 || simOutput !== null || simSuggestions.length > 0) && (
           <div className="space-y-2">
+            {runTrace.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <Play className="h-3.5 w-3.5 text-primary" />
+                  <span className="text-xs font-semibold text-primary">
+                    {running ? 'Run Reasoning…' : 'Run Trace'}
+                  </span>
+                </div>
+                <pre
+                  ref={runScrollRef}
+                  className="rounded-lg bg-muted/50 border p-3 text-[11px] whitespace-pre-wrap font-mono max-h-48 overflow-y-auto space-y-0.5"
+                >
+                  {runTrace.map((line, i) => (
+                    <div key={i} className={cn(
+                      "py-0.5",
+                      i === runTrace.length - 1 && running ? "text-foreground/80" : "text-muted-foreground/60"
+                    )}>
+                      {line}
+                    </div>
+                  ))}
+                </pre>
+              </div>
+            )}
+
+            {runOutput !== null && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <Play className="h-3.5 w-3.5 text-primary" />
+                  <span className="text-xs font-semibold text-primary">Run Result</span>
+                </div>
+                <pre className="rounded-lg bg-primary/5 border border-primary/20 p-3 text-xs whitespace-pre-wrap font-mono max-h-80 overflow-y-auto">
+                  {runOutput}
+                </pre>
+              </div>
+            )}
+
             {/* Live trace */}
             {simTrace.length > 0 && (
               <div className="space-y-1.5">

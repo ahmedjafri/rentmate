@@ -42,6 +42,7 @@ class MessageType(int, Enum):
     CONTEXT         = 5
     THREAD          = 6      # deprecated -- use MESSAGE
     DRAFT_AI_REPLY  = 7      # AI-generated draft; content lives in body/body_html
+    ACTION          = 8      # agent-created entity/action card rendered in chat
 
 
 class DraftApprovalStatus(int, Enum):

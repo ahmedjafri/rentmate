@@ -212,7 +212,7 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
     db.commit()
 
     from llm.client import call_agent
-    context = build_task_context(db, conv.id)
+    context = build_task_context(db, conv.id, query=body)
     messages = chat_service.build_agent_message_history(db, conv_id=conv.id, user_message=body, context=context, exclude_last=True)
 
     agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
@@ -289,9 +289,9 @@ async def chat_endpoint(
         conv = task_obj.ai_conversation
         if not conv:
             raise HTTPException(status_code=404, detail="Task has no AI conversation")
-        context = build_task_context(db, body.task_id)
+        context = build_task_context(db, body.task_id, query=body.message)
     else:
-        context = load_account_context(db)
+        context = load_account_context(db, query=body.message)
         # ── Onboarding start detection (must happen before conversation
         #    lookup so we can tag the conversation with the right subject) ──
         _is_onboarding_start = body.message.strip() == "[onboarding:start]"
@@ -453,9 +453,9 @@ async def chat_endpoint(
                         sent_at=now,
                     )
                     write_db.add(ai_msg)
-                    # Materialize side-effects (suggestions, vendor creation)
+                    # Materialize side-effects (suggestions, entity cards, vendor creation)
                     # after the AI reply so they appear below it.
-                    flushed_suggestions = process_side_effects(
+                    flushed_effect_messages = process_side_effects(
                         write_db, side_effects=agent_resp.side_effects, conversation_id=conv_id, base_time=now,
                     )
                     db_conv = write_db.query(Conversation).filter_by(id=conv_id).first()
@@ -465,7 +465,7 @@ async def chat_endpoint(
                     print(f"[chat] Persisted AI reply ({len(agent_resp.reply)} chars) to {conv_id}")
                     log_trace("llm_reply", "chat", agent_resp.reply[:200],
                         task_id=body.task_id, conversation_id=conv_id)
-                    return agent_resp.reply, ai_msg.id, flushed_suggestions
+                    return agent_resp.reply, ai_msg.id, flushed_effect_messages
                 except Exception as e:
                     write_db.rollback()
                     print(f"[chat] DB write failed: {e}")
@@ -495,7 +495,7 @@ async def chat_endpoint(
                 yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
 
             try:
-                reply, msg_id, suggestion_msgs = running.task.result()
+                reply, msg_id, effect_msgs = running.task.result()
             except Exception as exc:
                 print(f"[chat] SSE task failed: {exc!r}")
                 detail = _describe_agent_error(exc)
@@ -503,8 +503,8 @@ async def chat_endpoint(
                 return
 
             done_payload: dict = {'type': 'done', 'reply': reply, 'message_id': msg_id, 'conversation_id': public_conv_id}
-            if suggestion_msgs:
-                done_payload['suggestion_messages'] = suggestion_msgs
+            if effect_msgs:
+                done_payload['effect_messages'] = effect_msgs
             # Include onboarding state so frontend can update progress without re-fetching
             try:
                 from gql.services.settings_service import get_onboarding_state as _get_ob
@@ -620,7 +620,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
                 flag_modified(ext_conv, "extra")
 
         # Build context + message history
-        context = build_task_context(db, task_id)
+        context = build_task_context(db, task_id, query=body.message)
 
         # Gather progress steps
         steps_text = ""
@@ -814,7 +814,7 @@ async def assess_task_endpoint(
     if not conv:
         raise HTTPException(status_code=404, detail="Task has no AI conversation")
 
-    context = build_task_context(db, body.task_id)
+    context = build_task_context(db, body.task_id, query=body.message)
     conv_id = conv.id
     ext_conv_id = task_obj.external_conversation_id
 
@@ -925,7 +925,7 @@ async def assess_task_endpoint(
                         sent_at=now,
                     )
                     write_db.add(ai_msg)
-                    flushed_suggestions = process_side_effects(
+                    flushed_effect_messages = process_side_effects(
                         write_db, side_effects=agent_resp.side_effects, conversation_id=conv_id, base_time=now,
                     )
                     db_conv = write_db.query(Conversation).filter_by(id=conv_id).first()
@@ -935,7 +935,7 @@ async def assess_task_endpoint(
                     print(f"[assess] Persisted AI reply ({len(agent_resp.reply)} chars) to AI conv {conv_id}")
                     log_trace("llm_reply", "assess", agent_resp.reply[:200],
                          task_id=body.task_id, conversation_id=conv_id)
-                    return agent_resp.reply, ai_msg.id, flushed_suggestions
+                    return agent_resp.reply, ai_msg.id, flushed_effect_messages
                 except Exception as e:
                     write_db.rollback()
                     print(f"[assess] DB write failed: {e}")
@@ -971,15 +971,15 @@ async def assess_task_endpoint(
                 yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
 
             try:
-                reply, msg_id, suggestion_msgs = running.task.result()
+                reply, msg_id, effect_msgs = running.task.result()
             except Exception as exc:
                 print(f"[assess] SSE task failed: {exc!r}")
                 yield f"data: {json.dumps({'type': 'error', 'message': 'AI unavailable'})}\n\n"
                 return
 
             done_payload: dict = {'type': 'done', 'reply': reply, 'message_id': msg_id, 'conversation_id': conv_id}
-            if suggestion_msgs:
-                done_payload['suggestion_messages'] = suggestion_msgs
+            if effect_msgs:
+                done_payload['effect_messages'] = effect_msgs
             yield f"data: {json.dumps(done_payload)}\n\n"
         finally:
             if queue in running.subscribers:

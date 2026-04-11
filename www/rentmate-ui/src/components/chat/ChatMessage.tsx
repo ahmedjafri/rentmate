@@ -36,8 +36,9 @@ function ThinkingChain({ steps, isChain }: { steps: string[]; isChain: boolean }
     </div>
   );
 }
-import { ChatMessage as ChatMessageType } from '@/data/mockData';
+import { ChatActionCardLink, ChatMessage as ChatMessageType } from '@/data/mockData';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useApp } from '@/context/AppContext';
 
@@ -146,6 +147,109 @@ function ContextBubble({ message, taskId }: { message: ChatMessageType; taskId?:
   );
 }
 
+function ActionCardBubble({ message }: { message: ChatMessageType }) {
+  const navigate = useNavigate();
+  const card = message.actionCard;
+
+  if (!card) return null;
+
+  const kindConfig = {
+    suggestion: { icon: Lightbulb, label: 'Suggestion created', className: 'text-primary', badge: 'bg-primary/10 text-primary border-primary/20' },
+    property: { icon: Building2, label: 'Property created', className: 'text-blue-700 dark:text-blue-400', badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-800' },
+    tenant: { icon: User, label: 'Tenant created', className: 'text-emerald-700 dark:text-emerald-400', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800' },
+  } as const;
+
+  const cfg = kindConfig[card.kind];
+  const Icon = cfg.icon;
+
+  const openLink = (link: ChatActionCardLink) => {
+    if (link.entityType === 'suggestion') {
+      navigate(`/action-desk?suggestion=${link.entityId}`);
+      return;
+    }
+    if (link.entityType === 'tenant') {
+      navigate(`/tenants/${link.entityId}`);
+      return;
+    }
+    if (link.entityType === 'property') {
+      navigate(`/properties/${link.entityId}`);
+      return;
+    }
+    if (link.entityType === 'unit') {
+      navigate(`/properties/${link.propertyId ?? ''}?unit=${link.entityId}#unit-${link.entityId}`);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-primary/15 bg-card p-3 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-2">
+          <div className={cn('flex h-8 w-8 items-center justify-center rounded-lg bg-muted/60', cfg.className)}>
+            <Icon className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-sm font-semibold leading-tight">{card.title}</p>
+              <Badge variant="outline" className={cn('text-[10px] rounded-md', cfg.badge)}>
+                {cfg.label}
+              </Badge>
+            </div>
+            {card.summary && (
+              <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{card.summary}</p>
+            )}
+          </div>
+        </div>
+        <span className="text-[10px] text-muted-foreground shrink-0">{formatMessageTime(message.timestamp)}</span>
+      </div>
+
+      {card.fields && card.fields.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {card.fields.map((field) => (
+            <div key={`${field.label}-${field.value}`} className="rounded-lg bg-muted/40 px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{field.label}</p>
+              <p className="text-sm font-medium">{field.value}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {card.units && card.units.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Created units</p>
+          <div className="flex flex-wrap gap-2">
+            {card.units.map((unit) => (
+              <button
+                key={unit.uid}
+                onClick={() => openLink({ label: unit.label, entityType: 'unit', entityId: unit.uid, propertyId: unit.propertyId })}
+                className="inline-flex items-center gap-1.5 rounded-md bg-muted/60 px-2.5 py-1.5 text-xs font-medium hover:bg-muted"
+              >
+                <Building2 className="h-3 w-3" />
+                {unit.label}
+                <ArrowUpRight className="h-3 w-3 opacity-60" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {card.links && card.links.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {card.links.map((link) => (
+            <button
+              key={`${link.entityType}-${link.entityId}-${link.label}`}
+              onClick={() => openLink(link)}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 bg-primary/10 hover:bg-primary/15 rounded-md px-2.5 py-1.5 transition-colors"
+            >
+              <ArrowUpRight className="h-3.5 w-3.5" />
+              {link.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface Props {
   message: ChatMessageType;
   onApprove?: (messageId: string) => void;
@@ -177,6 +281,10 @@ export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onAppr
   // Context message — opening summary with optional cross-references
   if (msgType === 'context') {
     return <ContextBubble message={message} taskId={taskId} />;
+  }
+
+  if (isAssistant && msgType === 'action') {
+    return <ActionCardBubble message={message} />;
   }
 
   // Error message — red warning style, not a normal AI bubble

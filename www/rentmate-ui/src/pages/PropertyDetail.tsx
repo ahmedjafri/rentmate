@@ -1,4 +1,4 @@
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
@@ -31,6 +31,7 @@ const participantIcon: Record<TaskParticipantType, React.ElementType> = {
 
 const PropertyDetail = () => {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { properties, tenants, actionDeskTasks, openChat, removeProperty, updateProperty, addTenant } = useApp();
   const [deleting, setDeleting] = useState(false);
@@ -185,6 +186,7 @@ const PropertyDetail = () => {
     const months = (t.leaseEnd.getTime() - Date.now()) / (1000 * 60 * 60 * 24 * 30);
     return months <= 3 && months > 0;
   });
+  const highlightedUnitId = searchParams.get('unit');
 
   const autoContext = [
     { label: 'Property', value: property.name || property.address },
@@ -300,7 +302,14 @@ const PropertyDetail = () => {
           <h2 className="text-sm font-bold mb-2">Units</h2>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {property.unitList.map(u => (
-              <Card key={u.id} className="p-3 rounded-xl flex items-center gap-2">
+              <Card
+                key={u.id}
+                id={`unit-${u.id}`}
+                className={cn(
+                  'p-3 rounded-xl flex items-center gap-2 scroll-mt-24',
+                  highlightedUnitId === u.id && 'ring-2 ring-primary/40 bg-primary/5',
+                )}
+              >
                 <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{u.label}</p>

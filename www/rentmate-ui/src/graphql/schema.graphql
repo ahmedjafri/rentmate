@@ -20,6 +20,33 @@ type AuthPayload {
   user: UserType!
 }
 
+type ChatActionCardFieldType {
+  label: String!
+  value: String!
+}
+
+type ChatActionCardLinkType {
+  label: String!
+  entityType: String!
+  entityId: String!
+  propertyId: String
+}
+
+type ChatActionCardType {
+  kind: String!
+  title: String!
+  summary: String
+  fields: [ChatActionCardFieldType!]!
+  links: [ChatActionCardLinkType!]!
+  units: [ChatActionCardUnitType!]!
+}
+
+type ChatActionCardUnitType {
+  uid: String!
+  label: String!
+  propertyId: String!
+}
+
 type ChatMessageType {
   uid: String!
   body: String
@@ -32,6 +59,7 @@ type ChatMessageType {
   approvalStatus: String
   relatedTaskIds: JSON
   suggestionId: String
+  actionCard: ChatActionCardType
   sentAt: String!
 }
 
@@ -189,6 +217,7 @@ enum MessageType {
   CONTEXT
   THREAD
   DRAFT_AI_REPLY
+  ACTION
 }
 
 type Mutation {

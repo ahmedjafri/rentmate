@@ -8,6 +8,7 @@ import json
 import logging
 import re
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from croniter import croniter
 from fastapi import APIRouter, Request
@@ -294,118 +295,98 @@ async def _tick():
         db.close()
 
 
-async def _execute_task(task) -> str:
+async def _execute_task(task, *, on_progress=None, session_prefix: str = "scheduled") -> str:
     """Run the agent with the scheduled task's prompt."""
     from backends.local_auth import set_request_context
     from llm.client import call_agent
     from llm.context import load_account_context
     from llm.registry import agent_registry
 
-    # Set request context for the task's creator
+    task_id = task.id
     creator_id = task.creator_id
-    tokens = set_request_context(account_id=creator_id, org_id=getattr(task, "org_id", None))
+    org_id = getattr(task, "org_id", None)
+    prompt = task.prompt
+
+    # Set request context for the task's creator
+    tokens = set_request_context(account_id=creator_id, org_id=org_id)
 
     try:
         from db.session import SessionLocal
         db = SessionLocal()
         try:
             agent_id = agent_registry.ensure_agent(creator_id, db)
-            context = load_account_context(db)
+            context = load_account_context(db, query=prompt)
         finally:
             db.close()
 
         messages = [
             {"role": "system", "content": context},
-            {"role": "user", "content": task.prompt},
+            {"role": "user", "content": prompt},
         ]
 
-        session_key = f"scheduled:{task.id}"
-        resp = await call_agent(agent_id, session_key=session_key, messages=messages)
+        session_key = f"{session_prefix}:{task_id}"
+        resp = await call_agent(agent_id, session_key=session_key, messages=messages, on_progress=on_progress)
         return resp.reply
     finally:
         from backends.local_auth import reset_request_context
         reset_request_context(tokens)
 
 
-# ── SSE simulate endpoint ────────────────────────────────────────────────────
+def _task_not_found_stream() -> StreamingResponse:
+    return StreamingResponse(
+        iter([f"data: {json.dumps({'type': 'error', 'message': 'Task not found'})}\n\n"]),
+        media_type="text/event-stream",
+    )
 
 
-@router.post("/scheduled-task/{task_id}/simulate")
-async def simulate_scheduled_task_sse(task_id: str, request: Request):
-    """Stream a scheduled task simulation with progress events (SSE)."""
-    await require_user(request)
-
+def _load_task_snapshot(task_id: str) -> dict | None:
     from db.models import ScheduledTask
     from db.session import SessionLocal
 
     db = SessionLocal()
-    st = db.query(ScheduledTask).filter_by(id=task_id).first()
-    if not st:
+    try:
+        st = db.query(ScheduledTask).filter_by(id=task_id).first()
+        if not st:
+            return None
+        return {
+            "id": st.id,
+            "creator_id": st.creator_id,
+            "org_id": st.org_id,
+            "prompt": st.prompt,
+        }
+    finally:
         db.close()
-        return StreamingResponse(
-            iter([f"data: {json.dumps({'type': 'error', 'message': 'Task not found'})}\n\n"]),
-            media_type="text/event-stream",
-        )
 
-    scheduled_task_id = st.id
-    creator_id = st.creator_id
-    org_id = st.org_id
-    sim_prompt = (
-        "[SIMULATION — do NOT take direct action. Query the real data, decide what actions "
-        "should happen, and call the normal suggestion-producing tools for each action you "
-        "would stage. Do not persist side effects. Do not answer with a generic plan or "
-        "high-level summary. The simulation result should be the concrete suggestions that "
-        "would be created for manager review.]\n\n" + st.prompt
-    )
-    db.close()
+
+def _stream_scheduled_task_response(snapshot: dict, *, simulate: bool) -> StreamingResponse:
+    task_id = snapshot["id"]
+    creator_id = snapshot["creator_id"]
+    org_id = snapshot["org_id"]
+    prompt = snapshot["prompt"]
 
     async def generate():
         from backends.local_auth import reset_request_context, set_request_context
-        from llm.client import call_agent
-        from llm.context import load_account_context
-        from llm.registry import agent_registry
+        from db.models import ScheduledTask
+        from db.session import SessionLocal
         from llm.tools import simulation_suggestions
 
         tokens = set_request_context(account_id=creator_id, org_id=org_id)
-        sim_token = simulation_suggestions.set([])
-
+        sim_token = simulation_suggestions.set([]) if simulate else None
         try:
-            inner_db = SessionLocal()
-            try:
-                agent_id = agent_registry.ensure_agent(creator_id, inner_db)
-                context = load_account_context(inner_db)
-            finally:
-                inner_db.close()
-
-            messages = [
-                {"role": "system", "content": context},
-                {"role": "user", "content": sim_prompt},
-            ]
-
-            progress_lines = []
-
-            async def on_progress(text: str, **_kwargs):
-                progress_lines.append(text)
-                yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
-
-            # We can't yield from inside on_progress directly since it's a callback.
-            # Instead, collect progress and stream the final result.
             queue: asyncio.Queue = asyncio.Queue()
 
             async def _progress_cb(text: str, **_kwargs):
                 await queue.put(text)
 
-            session_key = f"simulate:{scheduled_task_id}"
-
-            # Run agent in background task, stream progress from queue
             async def _run():
                 try:
-                    resp = await call_agent(
-                        agent_id, session_key=session_key,
-                        messages=messages, on_progress=_progress_cb,
+                    reply = await _execute_task(
+                        SimpleNamespace(id=task_id, creator_id=creator_id, org_id=org_id, prompt=prompt),
+                        on_progress=_progress_cb,
+                        session_prefix="simulate" if simulate else "scheduled",
                     )
-                    await queue.put(None)  # sentinel
-                    return resp
+                    await queue.put(None)
+                    return reply
                 except Exception as exc:
                     await queue.put(None)
                     raise exc
@@ -419,31 +400,66 @@ async def simulate_scheduled_task_sse(task_id: str, request: Request):
                 yield f"data: {json.dumps({'type': 'progress', 'text': text})}\n\n"
 
             try:
-                agent_resp = agent_task.result()
-                suggestions = _collect_simulation_suggestions(
-                    simulation_suggestions.get() or [],
-                    getattr(agent_resp, "side_effects", []) or [],
-                )
-                if not suggestions:
-                    suggestions = _parse_suggestions_from_reply(getattr(agent_resp, "reply", ""))
-                reply = _format_simulation_reply(getattr(agent_resp, "reply", ""), suggestions)
-                yield f"data: {json.dumps({'type': 'done', 'reply': reply, 'suggestions': suggestions})}\n\n"
-
-                # Update simulated_at
+                reply = agent_task.result()
                 update_db = SessionLocal()
                 try:
                     row = update_db.query(ScheduledTask).filter_by(id=task_id).first()
-                    if row:
-                        row.simulated_at = datetime.now(UTC)
+                    now = datetime.now(UTC)
+                    payload = {"type": "done", "reply": reply}
+                    if simulate:
+                        if row:
+                            row.simulated_at = now
+                            update_db.commit()
+                        suggestions = _collect_simulation_suggestions(
+                            simulation_suggestions.get() or [],
+                            [],
+                        )
+                        if not suggestions:
+                            suggestions = _parse_suggestions_from_reply(reply)
+                        payload["reply"] = _format_simulation_reply(reply, suggestions)
+                        payload["suggestions"] = suggestions
+                    elif row:
+                        row.last_status = "ok"
+                        row.last_output = reply[:5000] if reply else ""
+                        row.last_run_at = now
+                        row.completed_count += 1
+                        row.updated_at = now
+                        if row.repeat is not None and row.completed_count >= row.repeat:
+                            row.state = "completed"
+                            row.enabled = False
+                        else:
+                            row.next_run_at = next_run(row.schedule, after=now)
+                        update_db.commit()
+                        payload["task"] = {
+                            "uid": row.id,
+                            "lastStatus": row.last_status,
+                            "lastOutput": row.last_output,
+                            "lastRunAt": row.last_run_at.isoformat() if row.last_run_at else None,
+                            "completedCount": row.completed_count,
+                            "nextRunAt": row.next_run_at.isoformat() if row.next_run_at else None,
+                            "state": row.state,
+                            "enabled": row.enabled,
+                        }
+                    yield f"data: {json.dumps(payload)}\n\n"
+                finally:
+                    update_db.close()
+            except Exception as exc:
+                update_db = SessionLocal()
+                try:
+                    row = update_db.query(ScheduledTask).filter_by(id=task_id).first()
+                    now = datetime.now(UTC)
+                    if row and not simulate:
+                        row.last_status = "error"
+                        row.last_output = str(exc)[:2000]
+                        row.last_run_at = now
+                        row.updated_at = now
                         update_db.commit()
                 finally:
                     update_db.close()
-
-            except Exception as exc:
                 yield f"data: {json.dumps({'type': 'error', 'message': str(exc)[:500]})}\n\n"
-
         finally:
-            simulation_suggestions.reset(sim_token)
+            if sim_token is not None:
+                simulation_suggestions.reset(sim_token)
             reset_request_context(tokens)
 
     return StreamingResponse(
@@ -451,6 +467,36 @@ async def simulate_scheduled_task_sse(task_id: str, request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/scheduled-task/{task_id}/run")
+async def run_scheduled_task_sse(task_id: str, request: Request):
+    """Stream a real scheduled-task run with progress events (SSE)."""
+    await require_user(request)
+    snapshot = _load_task_snapshot(task_id)
+    if not snapshot:
+        return _task_not_found_stream()
+    return _stream_scheduled_task_response(snapshot, simulate=False)
+
+
+# ── SSE simulate endpoint ────────────────────────────────────────────────────
+
+
+@router.post("/scheduled-task/{task_id}/simulate")
+async def simulate_scheduled_task_sse(task_id: str, request: Request):
+    """Stream a scheduled task simulation with progress events (SSE)."""
+    await require_user(request)
+    snapshot = _load_task_snapshot(task_id)
+    if not snapshot:
+        return _task_not_found_stream()
+    snapshot["prompt"] = (
+        "[SIMULATION — do NOT take direct action. Query the real data, decide what actions "
+        "should happen, and call the normal suggestion-producing tools for each action you "
+        "would stage. Do not persist side effects. Do not answer with a generic plan or "
+        "high-level summary. The simulation result should be the concrete suggestions that "
+        "would be created for manager review.]\n\n" + snapshot["prompt"]
+    )
+    return _stream_scheduled_task_response(snapshot, simulate=True)
 
 
 def _normalize_side_effect_suggestions(side_effects: list[dict]) -> list[dict]:

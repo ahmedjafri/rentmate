@@ -354,6 +354,37 @@ class LeaseType:
 
 
 @strawberry.type
+class ChatActionCardFieldType:
+    label: str
+    value: str
+
+
+@strawberry.type
+class ChatActionCardLinkType:
+    label: str
+    entity_type: str
+    entity_id: str
+    property_id: typing.Optional[str] = None
+
+
+@strawberry.type
+class ChatActionCardUnitType:
+    uid: str
+    label: str
+    property_id: str
+
+
+@strawberry.type
+class ChatActionCardType:
+    kind: str
+    title: str
+    summary: typing.Optional[str] = None
+    fields: typing.List[ChatActionCardFieldType] = strawberry.field(default_factory=list)
+    links: typing.List[ChatActionCardLinkType] = strawberry.field(default_factory=list)
+    units: typing.List[ChatActionCardUnitType] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
 class ChatMessageType:
     uid: str
     body: typing.Optional[str] = None
@@ -366,6 +397,7 @@ class ChatMessageType:
     approval_status: typing.Optional[str] = None
     related_task_ids: typing.Optional[strawberry.scalars.JSON] = None
     suggestion_id: typing.Optional[str] = None
+    action_card: typing.Optional[ChatActionCardType] = None
     sent_at: str = ""
 
     @classmethod
@@ -386,7 +418,33 @@ class ChatMessageType:
             draft_reply=meta.draft_reply,
             approval_status=getattr(msg, "approval_status", None),
             related_task_ids=meta.related_task_ids.model_dump(exclude_none=True) if meta.related_task_ids else None,
-            suggestion_id=None,
+            suggestion_id=str(meta.related_task_ids.suggestion_id) if meta.related_task_ids and meta.related_task_ids.suggestion_id is not None else None,
+            action_card=ChatActionCardType(
+                kind=meta.action_card.kind,
+                title=meta.action_card.title,
+                summary=meta.action_card.summary,
+                fields=[
+                    ChatActionCardFieldType(label=field.label, value=field.value)
+                    for field in (meta.action_card.fields or [])
+                ],
+                links=[
+                    ChatActionCardLinkType(
+                        label=link.label,
+                        entity_type=link.entity_type,
+                        entity_id=link.entity_id,
+                        property_id=link.property_id,
+                    )
+                    for link in (meta.action_card.links or [])
+                ],
+                units=[
+                    ChatActionCardUnitType(
+                        uid=unit.uid,
+                        label=unit.label,
+                        property_id=unit.property_id,
+                    )
+                    for unit in (meta.action_card.units or [])
+                ],
+            ) if meta.action_card else None,
             sent_at=_utc_iso(msg.sent_at),
         )
 

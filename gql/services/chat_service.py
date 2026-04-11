@@ -41,6 +41,41 @@ class MessageRelatedTaskIds(BaseModel):
     task_id: int | None = None
 
 
+class MessageActionCardField(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    value: str
+
+
+class MessageActionCardLink(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    entity_type: Literal["suggestion", "property", "tenant", "unit"]
+    entity_id: str
+    property_id: str | None = None
+
+
+class MessageActionCardUnit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    uid: str
+    label: str
+    property_id: str
+
+
+class MessageActionCard(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["suggestion", "property", "tenant"]
+    title: str
+    summary: str | None = None
+    fields: list[MessageActionCardField] | None = None
+    links: list[MessageActionCardLink] | None = None
+    units: list[MessageActionCardUnit] | None = None
+
+
 class MessageMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -48,6 +83,7 @@ class MessageMeta(BaseModel):
     direction: Literal["inbound", "outbound"] | None = None
     draft_reply: str | None = None
     related_task_ids: MessageRelatedTaskIds | None = None
+    action_card: MessageActionCard | None = None
 
 
 class MessageAttachment(BaseModel):
@@ -102,6 +138,8 @@ def dump_message_meta(meta: MessageMeta | dict | None = None, **updates) -> dict
     for key, value in updates.items():
         if key == "related_task_ids" and value is not None:
             value = MessageRelatedTaskIds.model_validate(value)
+        if key == "action_card" and value is not None:
+            value = MessageActionCard.model_validate(value)
         setattr(parsed, key, value)
     dumped = parsed.model_dump(exclude_none=True)
     return dumped or None

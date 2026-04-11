@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Property, Tenant, Vendor, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, TaskParticipant, LinkedConversation } from '@/data/mockData';
+import { Property, Tenant, Vendor, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, ChatActionCardLink, TaskParticipant, LinkedConversation } from '@/data/mockData';
 import {
   fromGraphqlEnum,
   fromGraphqlTaskStatus,
@@ -170,6 +170,25 @@ export function apiMessagesToChatThread(messages: ApiTaskMessage[]): ChatMessage
     approvalStatus: (m.approvalStatus as ChatMessage['approvalStatus']) ?? undefined,
     suggestionId: m.suggestionId ?? undefined,
     relatedTasks: m.relatedTaskIds ?? undefined,
+    actionCard: m.actionCard
+      ? {
+          kind: m.actionCard.kind as NonNullable<ChatMessage['actionCard']>['kind'],
+          title: m.actionCard.title,
+          summary: m.actionCard.summary ?? undefined,
+          fields: m.actionCard.fields?.map((field) => ({ label: field.label, value: field.value })) ?? undefined,
+          links: m.actionCard.links?.map((link) => ({
+            label: link.label,
+            entityType: link.entityType as ChatActionCardLink['entityType'],
+            entityId: link.entityId,
+            propertyId: link.propertyId ?? undefined,
+          })) ?? undefined,
+          units: m.actionCard.units?.map((unit) => ({
+            uid: unit.uid,
+            label: unit.label,
+            propertyId: unit.propertyId,
+          })) ?? undefined,
+        }
+      : undefined,
   }));
   // Pending approval messages should appear after other messages so they
   // don't sit at the top of the thread above the actual conversation.
@@ -359,6 +378,14 @@ interface ApiTaskMessage {
   approvalStatus?: string;
   relatedTaskIds?: { taskId: string; label: string }[];
   suggestionId?: string;
+  actionCard?: {
+    kind: string;
+    title: string;
+    summary?: string | null;
+    fields?: { label: string; value: string }[];
+    links?: { label: string; entityType: string; entityId: string; propertyId?: string | null }[];
+    units?: { uid: string; label: string; propertyId: string }[];
+  };
   sentAt: string;
 }
 

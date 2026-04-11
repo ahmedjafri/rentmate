@@ -204,6 +204,14 @@ def test_message_and_conversation_json_payloads_are_typed():
     meta = chat_service.dump_message_meta(
         draft_reply="Draft body",
         related_task_ids={"suggestion_id": 7},
+        action_card={
+            "kind": "suggestion",
+            "title": "Lease renewal suggestion",
+            "summary": "Create a renewal task",
+            "fields": [{"label": "Category", "value": "Leasing"}],
+            "links": [{"label": "Open suggestion", "entity_type": "suggestion", "entity_id": "7"}],
+            "units": [],
+        },
         source="quo",
         direction="inbound",
     )
@@ -214,6 +222,14 @@ def test_message_and_conversation_json_payloads_are_typed():
         "direction": "inbound",
         "draft_reply": "Draft body",
         "related_task_ids": {"suggestion_id": 7},
+        "action_card": {
+            "kind": "suggestion",
+            "title": "Lease renewal suggestion",
+            "summary": "Create a renewal task",
+            "fields": [{"label": "Category", "value": "Leasing"}],
+            "links": [{"label": "Open suggestion", "entity_type": "suggestion", "entity_id": "7"}],
+            "units": [],
+        },
     }
     assert extra == {"assigned_vendor_id": 12, "assigned_vendor_name": "Pat Vendor"}
 

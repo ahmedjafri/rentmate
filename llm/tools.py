@@ -2,15 +2,17 @@
 
 Includes suggestion tools (propose_task, close_task, message_person).
 
-When a tool creates a suggestion during a chat, it queues a SUGGESTION message
-via ``pending_suggestion_messages``.  The chat handler flushes these *after*
-persisting the AI reply so they appear below the agent response in the
+When a tool creates a visible entity/action during a chat, it queues a chat
+message via ``pending_suggestion_messages``.  The chat handler flushes these
+*after* persisting the AI reply so they appear below the agent response in the
 conversation timeline.  The conversation_id is communicated via the
 ``active_conversation_id`` context variable, set by the chat handler before
 the agent runs.
 """
 import contextvars
 import json
+import logging
+import traceback
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -18,6 +20,8 @@ from backends.local_auth import resolve_account_id
 from db.enums import AgentSource, SuggestionOption, TaskCategory, Urgency
 from db.models import MessageType
 from gql.services.task_service import dump_task_steps
+
+logger = logging.getLogger("rentmate.llm.tools")
 
 
 class Tool(ABC):
@@ -58,6 +62,21 @@ simulation_suggestions: contextvars.ContextVar[list[dict] | None] = contextvars.
 )
 
 
+def _trace_tool_error(tool_name: str, summary: str, *, detail: dict[str, Any] | None = None) -> None:
+    try:
+        from llm.tracing import log_trace
+
+        log_trace("error", "tool", summary, tool_name=tool_name, detail=detail)
+    except Exception:
+        pass
+
+
+def _log_tool_error(tool_name: str, summary: str, *, detail: dict[str, Any] | None = None) -> None:
+    safe_detail = detail or {}
+    logger.error("%s: %s | detail=%s", tool_name, summary, json.dumps(safe_detail, default=str))
+    _trace_tool_error(tool_name, summary, detail=safe_detail)
+
+
 def _queue_simulation_suggestion(payload: dict[str, Any]) -> str | None:
     pending = simulation_suggestions.get()
     if pending is None:
@@ -73,6 +92,34 @@ def _queue_simulation_suggestion(payload: dict[str, Any]) -> str | None:
 def _public_entity_id(entity: Any) -> str:
     external_id = getattr(entity, "external_id", None)
     return str(external_id or entity.id)
+
+
+def _queue_chat_message(
+    *,
+    body: str,
+    message_type: MessageType,
+    related_task_ids: dict[str, Any] | None = None,
+    draft_reply: str | None = None,
+    action_card: dict[str, Any] | None = None,
+) -> None:
+    conv_id = active_conversation_id.get()
+    if not conv_id:
+        return
+    pending = pending_suggestion_messages.get()
+    if pending is None:
+        pending = []
+        pending_suggestion_messages.set(pending)
+    pending.append({
+        "conversation_id": conv_id,
+        "type": "chat_message",
+        "body": body,
+        "message_type": message_type,
+        "sender_name": "RentMate",
+        "is_ai": True,
+        "draft_reply": draft_reply,
+        "related_task_ids": related_task_ids,
+        "meta": {"action_card": action_card} if action_card else None,
+    })
 
 
 def _load_vendor_by_public_id(db: Any, vendor_id: str):
@@ -109,6 +156,28 @@ def _load_entity_by_public_id(db: Any, entity_type: str, entity_id: str):
     if entity_type == "vendor":
         filters["user_type"] = "vendor"
     return db.query(model_cls).filter_by(**filters).first()
+
+
+def _action_card_field(label: str, value: Any) -> dict[str, str] | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return {"label": label, "value": text}
+
+
+def _enum_label(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "value"):
+        value = value.value
+    if isinstance(value, str):
+        return value.replace("_", " ").title()
+    try:
+        return str(Urgency(value).name).replace("_", " ").title()
+    except Exception:
+        return str(value)
 
 
 def _create_suggestion(
@@ -181,31 +250,41 @@ def _create_suggestion(
             suggestion.suggestion_type = suggestion_type
         suggestion_id = suggestion.id
 
-        # Queue a suggestion message to be flushed after the AI reply so it
-        # appears below the agent response in the conversation timeline.
-        conv_id = active_conversation_id.get()
-        if conv_id:
-            body_parts = [title]
-            if action_payload:
-                if action_payload.get("entity_name"):
-                    body_parts.append(f"{(action_payload.get('entity_type') or 'entity').title()}: {action_payload['entity_name']}")
-                elif action_payload.get("vendor_name"):
-                    body_parts.append(f"Vendor: {action_payload['vendor_name']}")
-                if action_payload.get("draft_message"):
-                    body_parts.append(f"Draft: {action_payload['draft_message'][:200]}")
-            pending = pending_suggestion_messages.get()
-            if pending is None:
-                pending = []
-                pending_suggestion_messages.set(pending)
-            pending.append({
-                "conversation_id": conv_id,
-                "body": "\n".join(body_parts),
-                "message_type": MessageType.SUGGESTION,
-                "sender_name": "RentMate",
-                "is_ai": True,
-                "draft_reply": action_payload.get("draft_message") if action_payload else None,
-                "related_task_ids": {"suggestion_id": suggestion_id},
+        fields = [
+                field
+                for field in [
+                _action_card_field("Category", _enum_label(category)),
+                _action_card_field("Urgency", _enum_label(urgency)),
+                _action_card_field("Vendor", action_payload.get("vendor_name") if action_payload else None),
+                _action_card_field("Entity", action_payload.get("entity_name") if action_payload else None),
+            ]
+            if field
+        ]
+        links = [{
+            "label": "Open suggestion",
+            "entity_type": "suggestion",
+            "entity_id": str(suggestion_id),
+        }]
+        if property_id:
+            links.append({
+                "label": "Property",
+                "entity_type": "property",
+                "entity_id": str(property_id),
             })
+        _queue_chat_message(
+            body=title,
+            message_type=MessageType.ACTION,
+            related_task_ids={"suggestion_id": suggestion_id},
+            draft_reply=action_payload.get("draft_message") if action_payload else None,
+            action_card={
+                "kind": "suggestion",
+                "title": title,
+                "summary": ai_context,
+                "fields": fields,
+                "links": links,
+                "units": [],
+            },
+        )
 
         db.commit()
 
@@ -486,6 +565,11 @@ class MessageExternalPersonTool(Tool):
                     "description": "Type of person to message",
                 },
                 "draft_message": {"type": "string", "description": "The message to send"},
+                "risk_level": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"],
+                    "description": "Estimated outbound-message risk level. Default: medium.",
+                },
             },
         }
 
@@ -494,6 +578,7 @@ class MessageExternalPersonTool(Tool):
         entity_id = str(kwargs["entity_id"])
         entity_type = kwargs["entity_type"]
         draft_message = kwargs["draft_message"]
+        risk_level = kwargs.get("risk_level", "medium")
         task_title = _get_task_title(task_id)
 
         from db.session import SessionLocal
@@ -537,10 +622,15 @@ class MessageExternalPersonTool(Tool):
             task_id=task_id,
         )
 
-        # Auto-execute in autonomous mode
-        from gql.services import settings_service
-        category = _get_task_category(task_id)
-        if settings_service.get_autonomy_for_category(category) == "autonomous":
+        # Auto-execute when outbound-message policy allows the requested risk level.
+        from llm.action_policy import ActionCandidate, evaluate_action_candidate
+
+        decision = evaluate_action_candidate(ActionCandidate(
+            action_class="outbound_message",
+            action_name="message_person_send",
+            risk_level=risk_level,
+        ))
+        if decision.allowed:
             err = _auto_execute_suggestion(sid, "message_person_send")
             if err:
                 return json.dumps({"status": "error", "suggestion_id": sid, "message": f"Failed to send message to {entity_name}: {err}. Suggestion saved for manual review."})
@@ -549,7 +639,12 @@ class MessageExternalPersonTool(Tool):
                 note += " Note: no phone number on file, message saved but not delivered via SMS."
             return json.dumps({"status": "ok", "suggestion_id": sid, "message": note})
 
-        return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Message suggestion for {entity_name} created for manager review."})
+        return json.dumps({
+            "status": "ok",
+            "suggestion_id": sid,
+            "message": f"Message suggestion for {entity_name} created for manager review.",
+            "policy_reason": decision.reason,
+        })
 
 
 class LookupVendorsTool(Tool):
@@ -1121,6 +1216,35 @@ class CreatePropertyTool(Tool):
 
             db.commit()
 
+            fields = [
+                field
+                for field in [
+                    _action_card_field("Address", prop.address_line1),
+                    _action_card_field("Type", "Single family" if property_type == "single_family" else "Multi-family"),
+                    _action_card_field("Created units", len(units)),
+                ]
+                if field
+            ]
+            _queue_chat_message(
+                body=f"Created property {prop.name or prop.address_line1}",
+                message_type=MessageType.ACTION,
+                action_card={
+                    "kind": "property",
+                    "title": prop.name or prop.address_line1,
+                    "summary": f"Created property at {prop.address_line1}" if not prop.name else f"Created property at {prop.address_line1}.",
+                    "fields": fields,
+                    "links": [{
+                        "label": "Open property",
+                        "entity_type": "property",
+                        "entity_id": str(prop.id),
+                    }],
+                    "units": [
+                        {"uid": str(u.id), "label": u.label, "property_id": str(prop.id)}
+                        for u in units
+                    ],
+                },
+            )
+
             unit_str = ", ".join(u.label for u in units) if units else "none"
             return json.dumps({
                 "status": "ok",
@@ -1232,11 +1356,15 @@ class CreateTenantTool(Tool):
             }
 
             # Link tenant to unit if property_id + unit_id provided
+            property_row = None
             unit = None
             if kwargs.get("property_id") and kwargs.get("unit_id"):
                 from sqlalchemy import select
 
-                from db.models import Unit as SqlUnit
+                from db.models import Property as SqlProperty, Unit as SqlUnit
+                property_row = db.execute(
+                    select(SqlProperty).where(SqlProperty.id == kwargs["property_id"])
+                ).scalar_one_or_none()
                 unit = db.execute(
                     select(SqlUnit).where(
                         SqlUnit.id == kwargs["unit_id"],
@@ -1294,6 +1422,49 @@ class CreateTenantTool(Tool):
                 flag_modified(tenant, "context")
 
             db.commit()
+            fields = [
+                field
+                for field in [
+                    _action_card_field("Email", shadow_user.email),
+                    _action_card_field("Phone", shadow_user.phone),
+                    _action_card_field("Property", property_row.name or property_row.address_line1 if property_row else None),
+                    _action_card_field("Unit", unit.label if unit else None),
+                    _action_card_field("Lease start", kwargs.get("lease_start")),
+                    _action_card_field("Lease end", kwargs.get("lease_end")),
+                    _action_card_field("Rent", f"${kwargs['rent_amount']}/mo" if kwargs.get("rent_amount") else None),
+                ]
+                if field
+            ]
+            links = [{
+                "label": "Open tenant",
+                "entity_type": "tenant",
+                "entity_id": str(tenant.external_id),
+            }]
+            if property_row:
+                links.append({
+                    "label": "Property",
+                    "entity_type": "property",
+                    "entity_id": str(property_row.id),
+                })
+            if unit:
+                links.append({
+                    "label": "Unit",
+                    "entity_type": "unit",
+                    "entity_id": str(unit.id),
+                    "property_id": str(unit.property_id),
+                })
+            _queue_chat_message(
+                body=result["message"],
+                message_type=MessageType.ACTION,
+                action_card={
+                    "kind": "tenant",
+                    "title": f"{first_name} {last_name}",
+                    "summary": result["message"],
+                    "fields": fields,
+                    "links": links,
+                    "units": [],
+                },
+            )
             return json.dumps(result)
         except Exception as e:
             db.rollback()
@@ -1346,11 +1517,34 @@ class ReadDocumentTool(Tool):
 
         db = SessionLocal.session_factory()
         try:
+            request_detail = {
+                "document_id": kwargs.get("document_id"),
+                "query": (kwargs.get("query") or "")[:200],
+                "list_recent": bool(kwargs.get("list_recent")),
+            }
             # --- Read specific document ---
             if kwargs.get("document_id"):
                 doc = db.query(Document).filter_by(id=kwargs["document_id"]).first()
                 if not doc:
-                    return json.dumps({"status": "error", "message": "Document not found"})
+                    detail = {**request_detail, "reason": "not_found"}
+                    _log_tool_error("read_document", "document not found", detail=detail)
+                    return json.dumps({"status": "error", "message": "Document not found", "detail": detail})
+                if doc.status == "error":
+                    detail = {
+                        **request_detail,
+                        "filename": doc.filename,
+                        "document_status": doc.status,
+                        "document_type": doc.document_type,
+                        "progress": doc.progress,
+                        "error_message": doc.error_message,
+                    }
+                    _log_tool_error("read_document", f"document in error state for {doc.filename}", detail=detail)
+                    return json.dumps({
+                        "status": "error",
+                        "message": doc.error_message or "Document processing failed",
+                        "detail": detail,
+                        "hint": "Retry analyze_document after fixing the processing issue.",
+                    })
                 # Hint when document hasn't been analyzed yet
                 if doc.status == "pending" and not doc.raw_text:
                     return json.dumps({
@@ -1420,7 +1614,15 @@ class ReadDocumentTool(Tool):
 
             return json.dumps({"status": "error", "message": "Provide document_id, query, or list_recent"})
         except Exception as e:
-            return json.dumps({"status": "error", "message": str(e)})
+            detail = {
+                "document_id": kwargs.get("document_id"),
+                "query": (kwargs.get("query") or "")[:200],
+                "list_recent": bool(kwargs.get("list_recent")),
+                "error_type": type(e).__name__,
+                "traceback": traceback.format_exc(limit=8),
+            }
+            _log_tool_error("read_document", f"crashed: {type(e).__name__}", detail=detail)
+            return json.dumps({"status": "error", "message": str(e), "detail": detail})
         finally:
             db.close()
 
@@ -1461,7 +1663,9 @@ class AnalyzeDocumentTool(Tool):
         try:
             doc = db.query(Document).filter_by(id=kwargs["document_id"]).first()
             if not doc:
-                return json.dumps({"status": "error", "message": "Document not found"})
+                detail = {"document_id": kwargs["document_id"], "reason": "not_found"}
+                _log_tool_error("analyze_document", "document not found", detail=detail)
+                return json.dumps({"status": "error", "message": "Document not found", "detail": detail})
             if doc.status == "done":
                 return json.dumps({"status": "already_done", "message": "Document already analyzed"})
             if doc.status == "processing":
@@ -1478,7 +1682,13 @@ class AnalyzeDocumentTool(Tool):
                 "filename": doc.filename,
             })
         except Exception as e:
-            return json.dumps({"status": "error", "message": str(e)})
+            detail = {
+                "document_id": kwargs.get("document_id"),
+                "error_type": type(e).__name__,
+                "traceback": traceback.format_exc(limit=8),
+            }
+            _log_tool_error("analyze_document", f"crashed: {type(e).__name__}", detail=detail)
+            return json.dumps({"status": "error", "message": str(e), "detail": detail})
         finally:
             db.close()
 

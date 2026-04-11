@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -6,14 +6,12 @@ import ScheduledTaskDetail from './ScheduledTaskDetail';
 
 const mockGetScheduledTask = vi.fn();
 const mockUpdateScheduledTask = vi.fn();
-const mockRunScheduledTask = vi.fn();
 const mockDeleteScheduledTask = vi.fn();
 const mockAuthFetch = vi.fn();
 
 vi.mock('@/graphql/client', () => ({
   getScheduledTask: (...args: unknown[]) => mockGetScheduledTask(...args),
   updateScheduledTask: (...args: unknown[]) => mockUpdateScheduledTask(...args),
-  runScheduledTask: (...args: unknown[]) => mockRunScheduledTask(...args),
   deleteScheduledTask: (...args: unknown[]) => mockDeleteScheduledTask(...args),
 }));
 
@@ -54,10 +52,48 @@ describe('ScheduledTaskDetail simulation', () => {
   beforeEach(() => {
     mockGetScheduledTask.mockReset();
     mockUpdateScheduledTask.mockReset();
-    mockRunScheduledTask.mockReset();
     mockDeleteScheduledTask.mockReset();
     mockAuthFetch.mockReset();
     mockGetScheduledTask.mockResolvedValue({ scheduledTask: task });
+  });
+
+  it('streams run reasoning traces and final output', async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          `data: ${JSON.stringify({ type: 'progress', text: 'Checking leases' })}\n\n`,
+        ));
+        controller.enqueue(new TextEncoder().encode(
+          `data: ${JSON.stringify({
+            type: 'done',
+            reply: 'Created 2 renewal suggestions.',
+            task: {
+              uid: 'task-1',
+              lastStatus: 'ok',
+              lastOutput: 'Created 2 renewal suggestions.',
+              lastRunAt: '2026-04-11T12:00:00Z',
+              completedCount: 1,
+              nextRunAt: '2026-04-18T09:00:00Z',
+              state: 'scheduled',
+              enabled: false,
+            },
+          })}\n\n`,
+        ));
+        controller.close();
+      },
+    });
+
+    mockAuthFetch.mockResolvedValue({ ok: true, body: stream });
+
+    renderPage();
+
+    await screen.findByDisplayValue('Lease expiry review');
+    fireEvent.click(screen.getByRole('button', { name: /run now/i }));
+
+    await screen.findByText('Run Trace');
+    expect(screen.getByText('Checking leases')).toBeInTheDocument();
+    expect(screen.getByText('Run Result')).toBeInTheDocument();
+    expect(screen.getByText('Created 2 renewal suggestions.')).toBeInTheDocument();
   });
 
   it('renders simulated suggestions as cards instead of plain prose', async () => {
