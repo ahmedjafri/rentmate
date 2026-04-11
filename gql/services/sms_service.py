@@ -3,7 +3,6 @@
 Handles sending SMS via Quo (OpenPhone) and dispatching messages to the
 appropriate outbound channel (SMS, email). No handler-layer dependencies.
 """
-import asyncio
 import os
 
 import httpx
@@ -62,23 +61,9 @@ async def send_sms_reply(from_num: str, to_num: str, text: str, api_key: str | N
         print(f"[sms] Quo response: {response.status_code} {response.text[:200]}")
 
 
-async def send_email_reply(conv, body: str, inbound_meta: dict):
-    """Send an email reply via Gmail. Requires GmailClient to be configured."""
-    try:
-        from backends.gmail import GmailClient  # noqa: F401 — optional dep
-        client = GmailClient()
-        to_address = inbound_meta.get("from_address", "")
-        subject = inbound_meta.get("subject", conv.subject or "Re: Your message")
-        thread_id = inbound_meta.get("thread_id")
-        await asyncio.to_thread(
-            client.send_reply,
-            to=to_address,
-            subject=subject,
-            body=body,
-            thread_id=thread_id,
-        )
-    except Exception as e:
-        print(f"[send_email_reply] Failed: {e}")
+async def send_email_reply(*args, **kwargs):
+    """Backward-compatible placeholder for legacy email reply imports."""
+    return None
 
 
 async def send_via_channel(conv, reply: str, inbound_meta: dict):
@@ -89,5 +74,3 @@ async def send_via_channel(conv, reply: str, inbound_meta: dict):
             to_num=inbound_meta.get("from_number", ""),
             text=reply,
         )
-    elif conv.channel_type == "email":
-        await send_email_reply(conv=conv, body=reply, inbound_meta=inbound_meta)

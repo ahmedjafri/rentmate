@@ -110,7 +110,7 @@ class TestTaskVendorFlow:
             ConversationParticipant.conversation_id == task.external_conversation_id,
         ).all()
         assert len(participants) == 1
-        assert participants[0].external_contact_id == vendor["id"]
+        assert participants[0].user_id == int(vendor["id"])
         assert participants[0].participant_type == ParticipantType.EXTERNAL_CONTACT
 
     def test_vendor_metadata_stored_in_ai_conversation(self, db):

@@ -9,13 +9,13 @@ from sqlalchemy import select
 from db.models import (
     Conversation,
     ConversationParticipant,
-    ExternalContact,
     Message,
     MessageType,
     ParticipantType,
     Task,
+    User,
 )
-from gql.services.vendor_service import VendorService
+from gql.services.vendor_service import VendorService, get_vendor_by_external_id
 from handlers.deps import get_db
 
 router = APIRouter(prefix="/api/vendor")
@@ -36,11 +36,11 @@ def _require_vendor(request: Request) -> dict:
 def vendor_me(request: Request):
     info = _require_vendor(request)
     db = get_db(request)
-    vendor = db.get(ExternalContact, info["vendor_id"])
+    vendor = get_vendor_by_external_id(db, info["vendor_id"])
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
     return {
-        "id": str(vendor.id),
+        "id": str(vendor.external_id),
         "name": vendor.name,
         "company": vendor.company,
         "vendor_type": vendor.role_label,
@@ -53,7 +53,10 @@ def vendor_me(request: Request):
 def vendor_tasks(request: Request):
     info = _require_vendor(request)
     db = get_db(request)
-    vendor_id = info["vendor_id"]
+    vendor = get_vendor_by_external_id(db, info["vendor_id"])
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    vendor_id = vendor.id
     # Find conversations where this vendor is assigned, then get their tasks
     from sqlalchemy import text
     convo_ids = [
@@ -106,7 +109,7 @@ def _task_messages_for_vendor(db, task: Task) -> list:
     ]
 
 
-def _verify_vendor_task(db, task_id: str, vendor_id: str) -> Task:
+def _verify_vendor_task(db, task_id: str, vendor_id: int) -> Task:
     """Load a task and verify the vendor is assigned to it."""
     task = db.execute(select(Task).where(Task.id == task_id)).scalar_one_or_none()
     if not task:
@@ -122,7 +125,10 @@ def _verify_vendor_task(db, task_id: str, vendor_id: str) -> Task:
 def vendor_task_detail(task_id: str, request: Request):
     info = _require_vendor(request)
     db = get_db(request)
-    task = _verify_vendor_task(db, task_id, info["vendor_id"])
+    vendor = get_vendor_by_external_id(db, info["vendor_id"])
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    task = _verify_vendor_task(db, task_id, vendor.id)
     # Check if someone is typing in the external conversation
     ai_typing = False
     if task.external_conversation_id:
@@ -152,44 +158,49 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
     if not body.body.strip():
         raise HTTPException(status_code=400, detail="Message body required")
     db = get_db(request)
-    task = _verify_vendor_task(db, task_id, info["vendor_id"])
-    if not task.external_conversation_id:
-        raise HTTPException(status_code=400, detail="No external conversation for this task")
-
-    vendor = db.get(ExternalContact, info["vendor_id"])
+    vendor = get_vendor_by_external_id(db, info["vendor_id"])
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found")
+    task = _verify_vendor_task(db, task_id, vendor.id)
+    if not task.external_conversation_id:
+        raise HTTPException(status_code=400, detail="No external conversation for this task")
 
     # Ensure vendor is a participant on the external conversation (idempotent)
     existing = db.execute(
         select(ConversationParticipant).where(
             ConversationParticipant.conversation_id == task.external_conversation_id,
             ConversationParticipant.participant_type == ParticipantType.EXTERNAL_CONTACT,
-            ConversationParticipant.external_contact_id == info["vendor_id"],
+            ConversationParticipant.user_id == vendor.id,
         )
     ).scalar_one_or_none()
     if not existing:
         db.add(ConversationParticipant(
-            id=str(uuid.uuid4()),
+            org_id=vendor.org_id,
+            creator_id=vendor.creator_id,
             conversation_id=task.external_conversation_id,
+            user_id=vendor.id,
             participant_type=ParticipantType.EXTERNAL_CONTACT,
-            external_contact_id=info["vendor_id"],
             is_active=True,
-            joined_at=datetime.now(UTC),
         ))
         db.flush()
+        existing = db.execute(
+            select(ConversationParticipant).where(
+                ConversationParticipant.conversation_id == task.external_conversation_id,
+                ConversationParticipant.participant_type == ParticipantType.EXTERNAL_CONTACT,
+                ConversationParticipant.user_id == vendor.id,
+            )
+        ).scalar_one()
 
     now = datetime.now(UTC)
     msg = Message(
-        id=str(uuid.uuid4()),
+        org_id=vendor.org_id,
         conversation_id=task.external_conversation_id,
         sender_type=ParticipantType.EXTERNAL_CONTACT,
-        sender_external_contact_id=info["vendor_id"],
+        sender_id=existing.id,
         body=body.body.strip(),
         message_type=MessageType.MESSAGE,
         sender_name=vendor.name,
         is_ai=False,
-        is_system=False,
         sent_at=now,
     )
     db.add(msg)

@@ -26,7 +26,7 @@ from db.lib import (
     route_inbound_to_tenant_chat,
     spawn_task_from_conversation,
 )
-from db.models import Conversation, ConversationType, Message, MessageType, ParticipantType, Task
+from db.models import Conversation, ConversationParticipant, ConversationType, Message, MessageType, ParticipantType, Task
 from db.session import SessionLocal
 from gql.services import chat_service
 from gql.services.sms_service import (  # noqa: F401 — re-exported for backward compat
@@ -141,7 +141,7 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
 
     # Set account context so entity creation resolves creator_id correctly
     from backends.local_auth import set_request_context
-    set_request_context(account_id=_creator_id)
+    set_request_context(account_id=_creator_id, org_id=getattr(entity, "org_id", None))
 
     if direction != "inbound":
         return False
@@ -154,14 +154,18 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
             db,
             conversation_type=ConversationType.VENDOR,
             subject=f"SMS with {vendor.name}",
-            vendor_id=str(vendor.id),
+            vendor_id=vendor.id,
         )
+        participant = db.query(ConversationParticipant).filter_by(
+            conversation_id=conv.id,
+            user_id=vendor.id,
+            participant_type=ParticipantType.EXTERNAL_CONTACT,
+        ).first()
         now = datetime.now(UTC)
         db.add(Message(
-            id=str(uuid.uuid4()),
             conversation_id=conv.id,
             sender_type=ParticipantType.EXTERNAL_CONTACT,
-            sender_external_contact_id=str(vendor.id),
+            sender_id=participant.id if participant else None,
             body=body,
             message_type=MessageType.MESSAGE,
             sender_name=vendor.name,
@@ -210,7 +214,6 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
 
     now = datetime.now(UTC)
     ai_msg = Message(
-        id=str(uuid.uuid4()),
         conversation_id=conv.id,
         sender_type=ParticipantType.ACCOUNT_USER,
         body=agent_resp.reply,
@@ -396,7 +399,6 @@ async def chat_endpoint(
                     pre_db = _SL()
                     try:
                         pre_db.add(Message(
-                            id=str(uuid.uuid4()),
                             conversation_id=conv_id,
                             sender_type=ParticipantType.ACCOUNT_USER,
                             body=user_message,
@@ -422,7 +424,6 @@ async def chat_endpoint(
                     trace_lines = [l for l in running.progress_log if l != "Thinking\u2026"]
                     if trace_lines:
                         write_db.add(Message(
-                            id=str(uuid.uuid4()),
                             conversation_id=conv_id,
                             sender_type=ParticipantType.ACCOUNT_USER,
                             body="\n".join(trace_lines),
@@ -433,7 +434,6 @@ async def chat_endpoint(
                         ))
                     # Persist AI reply
                     ai_msg = Message(
-                        id=str(uuid.uuid4()),
                         conversation_id=conv_id,
                         sender_type=ParticipantType.ACCOUNT_USER,
                         body=agent_resp.reply,
@@ -606,9 +606,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
         if ext_conv_id:
             ext_conv = db.query(Conversation).filter_by(id=ext_conv_id).first()
             if ext_conv:
-                extra = dict(ext_conv.extra or {})
-                extra["ai_typing"] = True
-                ext_conv.extra = extra
+                ext_conv.extra = chat_service.set_conversation_ai_typing(ext_conv.extra, ai_typing=True)
                 flag_modified(ext_conv, "extra")
 
         # Build context + message history
@@ -714,7 +712,6 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
 
             # AI reply to AI conversation
             ai_msg = Message(
-                id=str(uuid.uuid4()),
                 conversation_id=conv_id,
                 sender_type=ParticipantType.ACCOUNT_USER,
                 body=resp.reply,
@@ -816,9 +813,7 @@ async def assess_task_endpoint(
     if ext_conv_id:
         ext_conv = db.query(Conversation).filter_by(id=ext_conv_id).first()
         if ext_conv:
-            extra = dict(ext_conv.extra or {})
-            extra["ai_typing"] = True
-            ext_conv.extra = extra
+            ext_conv.extra = chat_service.set_conversation_ai_typing(ext_conv.extra, ai_typing=True)
             flag_modified(ext_conv, "extra")
     # Gather progress steps and external conversation for the assess prompt
     steps_text = ""
@@ -899,7 +894,6 @@ async def assess_task_endpoint(
                     trace_lines = [l for l in running.progress_log if l != "Thinking\u2026"]
                     if trace_lines:
                         write_db.add(Message(
-                            id=str(uuid.uuid4()),
                             conversation_id=conv_id,
                             sender_type=ParticipantType.ACCOUNT_USER,
                             body="\n".join(trace_lines),
@@ -912,7 +906,6 @@ async def assess_task_endpoint(
                     # messages are sent through the message_person tool /
                     # suggestion flow, not directly from the assess endpoint.
                     ai_msg = Message(
-                        id=str(uuid.uuid4()),
                         conversation_id=conv_id,
                         sender_type=ParticipantType.ACCOUNT_USER,
                         body=agent_resp.reply,

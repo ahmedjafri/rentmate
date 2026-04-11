@@ -23,22 +23,49 @@ def multi_property_scenario(scenario_builder, db):
     import uuid
 
     from db.models import Property, Unit
-    p2 = Property(id=str(uuid.uuid4()), name="Cedar Heights", address_line1="567 Cedar St", city="Bothell", state="WA", postal_code="98012")
+    p2 = Property(
+        id=str(uuid.uuid4()),
+        org_id=1,
+        creator_id=1,
+        name="Cedar Heights",
+        address_line1="567 Cedar St",
+        city="Bothell",
+        state="WA",
+        postal_code="98012",
+    )
     db.add(p2)
     db.flush()
-    u2 = Unit(id=str(uuid.uuid4()), property_id=p2.id, label="Main")
+    u2 = Unit(id=str(uuid.uuid4()), org_id=1, creator_id=1, property_id=p2.id, label="Main")
     db.add(u2)
     db.flush()
 
-    p3 = Property(id=str(uuid.uuid4()), name="Pine Valley", address_line1="890 Pine Ave", city="Seattle", state="WA", postal_code="98101")
+    p3 = Property(
+        id=str(uuid.uuid4()),
+        org_id=1,
+        creator_id=1,
+        name="Pine Valley",
+        address_line1="890 Pine Ave",
+        city="Seattle",
+        state="WA",
+        postal_code="98101",
+    )
     db.add(p3)
     db.flush()
-    u3 = Unit(id=str(uuid.uuid4()), property_id=p3.id, label="Main")
+    u3 = Unit(id=str(uuid.uuid4()), org_id=1, creator_id=1, property_id=p3.id, label="Main")
     db.add(u3)
     db.flush()
 
     # One non-WA property (should NOT be included)
-    p4 = Property(id=str(uuid.uuid4()), name="Oregon Place", address_line1="100 Oak Rd", city="Portland", state="OR", postal_code="97201")
+    p4 = Property(
+        id=str(uuid.uuid4()),
+        org_id=1,
+        creator_id=1,
+        name="Oregon Place",
+        address_line1="100 Oak Rd",
+        city="Portland",
+        state="OR",
+        postal_code="97201",
+    )
     db.add(p4)
     db.flush()
 

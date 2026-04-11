@@ -83,12 +83,12 @@ def _get_contacts_with_phones() -> list[str]:
     """Return all phone numbers for tenants and vendors."""
     db = SessionLocal()
     try:
-        from db.models import ExternalContact, Tenant
+        from db.models import Tenant, User
         phones: list[str] = []
-        for t in db.query(Tenant).filter(Tenant.phone.isnot(None)).all():
-            if t.phone:
-                phones.append(t.phone)
-        for v in db.query(ExternalContact).filter(ExternalContact.phone.isnot(None)).all():
+        for t in db.query(Tenant).join(User, Tenant.user_id == User.id).filter(User.phone.isnot(None)).all():
+            if t.user and t.user.phone:
+                phones.append(t.user.phone)
+        for v in db.query(User).filter(User.user_type == "vendor", User.phone.isnot(None)).all():
             if v.phone:
                 phones.append(v.phone)
         return phones

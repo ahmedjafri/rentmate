@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 
 class AuthBackend(ABC):
     @abstractmethod
-    async def validate_token(self, token: str) -> dict:
+    async def validate_token(self, token: str, **kwargs) -> dict:
         """Returns {uid, email, username}"""
 
     @abstractmethod

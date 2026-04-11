@@ -11,6 +11,7 @@ from db.models import (
     ConversationParticipant,
     Message,
     Tenant,
+    User,
 )
 from db.utils import normalize_phone
 from gql.services.sms_service import send_sms_reply
@@ -35,12 +36,19 @@ class TestQuoWebhook(unittest.TestCase):
         self.from_number = "5550001234"   # tenant
         self.to_number = "5559876543"     # admin
 
-        self.tenant = Tenant(
+        tenant_user = User(
+            org_id=1,
+            creator_id=1,
+            user_type="tenant",
             first_name="Test",
             last_name="Tenant",
             email=None,
             phone=normalize_phone(self.from_number),
+            active=True,
         )
+        self.db.add(tenant_user)
+        self.db.flush()
+        self.tenant = Tenant(org_id=1, creator_id=1, user_id=tenant_user.id)
         self.db.add(self.tenant)
         self.db.flush()
 
@@ -88,7 +96,7 @@ class TestQuoWebhook(unittest.TestCase):
         conv = (
             self.db.query(Conversation)
             .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
-            .filter(ConversationParticipant.tenant_id == self.tenant.id)
+            .filter(ConversationParticipant.user_id == self.tenant.user_id)
             .one()
         )
         self.assertFalse(conv.is_archived)
@@ -97,7 +105,7 @@ class TestQuoWebhook(unittest.TestCase):
             self.db.query(Message)
             .filter(
                 Message.conversation_id == conv.id,
-                Message.sender_tenant_id == self.tenant.id,
+                Message.sender_id == conv.participants[0].id,
             )
             .one()
         )

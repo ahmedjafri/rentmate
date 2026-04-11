@@ -32,7 +32,6 @@ def _register_rentmate_tools():
 
     from llm.tools import (
         AnalyzeDocumentTool,
-        AttachEntityToTaskTool,
         CloseTaskTool,
         CreatePropertyTool,
         CreateScheduledTaskTool,
@@ -46,15 +45,12 @@ def _register_rentmate_tools():
         ReadDocumentTool,
         RecallMemoryTool,
         SaveMemoryTool,
-        SetModeTool,
         UpdateOnboardingTool,
-        UpdateStepsTool,
     )
 
     for tool_cls in (
-        ProposeTaskTool, CloseTaskTool, SetModeTool,
-        AttachEntityToTaskTool, MessageExternalPersonTool,
-        LookupVendorsTool, CreateVendorTool, UpdateStepsTool,
+        ProposeTaskTool, CloseTaskTool, MessageExternalPersonTool,
+        LookupVendorsTool, CreateVendorTool,
         SaveMemoryTool, RecallMemoryTool, EditMemoryTool,
         CreatePropertyTool, CreateTenantTool, CreateSuggestionTool,
         CreateScheduledTaskTool,
@@ -186,8 +182,9 @@ class AgentRegistry:
     @staticmethod
     def _db_read_file(db: Session, agent_id: str, filename: str) -> str | None:
         from db.models import AgentMemory
+        creator_id = int(agent_id) if str(agent_id).isdigit() else _lookup_account_id()
         row = db.query(AgentMemory).filter_by(
-            agent_id=agent_id, memory_type=f"file:{filename}"
+            creator_id=creator_id, memory_type=f"file:{filename}"
         ).first()
         return row.content if row else None
 
@@ -196,21 +193,18 @@ class AgentRegistry:
         import uuid as _uuid
 
         from db.models import AgentMemory
+        resolved_creator_id = creator_id or (int(agent_id) if str(agent_id).isdigit() else _lookup_account_id())
         row = db.query(AgentMemory).filter_by(
-            agent_id=agent_id, memory_type=f"file:{filename}"
+            creator_id=resolved_creator_id, memory_type=f"file:{filename}"
         ).first()
         now = datetime.now(UTC)
         if row:
             row.content = content
             row.updated_at = now
         else:
-            if creator_id is None:
-                from backends.local_auth import resolve_creator_id
-                creator_id = resolve_creator_id()
             db.add(AgentMemory(
                 id=str(_uuid.uuid4()),
-                creator_id=creator_id,
-                agent_id=agent_id,
+                creator_id=resolved_creator_id,
                 memory_type=f"file:{filename}",
                 content=content,
                 updated_at=now,
@@ -291,8 +285,7 @@ class AgentRegistry:
             "|-----------|-------------|\n"
             "| `propose_task` | Propose a new task — manager must approve before it is created |\n"
             "| `close_task` | Request to close/resolve a task — manager must confirm |\n"
-            "| `set_mode` | Request a task mode change — manager must confirm |\n"
-            "| `update_steps` | Set or update progress steps for a task (immediate) |\n\n"
+            "| `message_person` | Draft a tenant/vendor message for manager confirmation |\n\n"
             "### DO NOT\n\n"
             "- **Do not install packages** (apt-get, pip, brew, etc.) to access data.\n"
             "- **Do not connect to the database directly** — do not use sqlite3, sqlalchemy, "

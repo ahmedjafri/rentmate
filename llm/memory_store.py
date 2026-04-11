@@ -1,7 +1,7 @@
 """DB-backed memory store for the RentMate agent.
 
 Entity-scoped context is stored directly on entity tables (properties, units,
-tenants, external_contacts) via the `context` column. General notes use the
+tenants, vendors) via the `context` column. General notes use the
 agent_memory table.
 """
 import uuid
@@ -67,7 +67,7 @@ class DbMemoryStore:
             parts = []
 
             # Entity context from the actual tables
-            from db.models import ExternalContact, Property, Tenant, Unit
+            from db.models import Property, Tenant, Unit, User
             from db.queries import format_address
 
             props = db.query(Property).filter(Property.context.isnot(None)).all()
@@ -87,10 +87,10 @@ class DbMemoryStore:
             if tenants:
                 parts.append("### Tenants")
                 for t in tenants:
-                    name = f"{t.first_name} {t.last_name}".strip()
+                    name = t.user.name if t.user else "Tenant"
                     parts.append(f"**{name}**\n{t.context}")
 
-            vendors = db.query(ExternalContact).filter(ExternalContact.context.isnot(None)).all()
+            vendors = db.query(User).filter(User.user_type == "vendor", User.context.isnot(None)).all()
             if vendors:
                 parts.append("### Vendors")
                 for v in vendors:

@@ -6,7 +6,7 @@ message sending) for the suggestion approval workflow.
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.enums import AgentSource, SuggestionSource
+from db.enums import AgentSource, SuggestionSource, TaskMode, TaskPriority, TaskSource, TaskStatus
 from db.models import (
     Conversation,
     ConversationType,
@@ -16,7 +16,9 @@ from db.models import (
     Task,
 )
 from gql.services import chat_service, settings_service, suggestion_service
+from gql.services.task_service import dump_task_steps
 from gql.services.task_service import TaskService
+from gql.services.vendor_service import get_vendor_by_external_id, get_vendor_by_id
 from gql.types import CreateTaskInput
 
 
@@ -46,16 +48,8 @@ class SuggestionExecutor:
         action_type = payload.get("action")
         if action_type == "close_task":
             cls = CloseTaskSuggestionExecutor
-        elif action_type == "set_mode":
-            cls = SetModeSuggestionExecutor
-        elif action_type == "attach_vendor":
-            cls = AttachVendorSuggestionExecutor
-        elif action_type == "attach_entity":
-            cls = AttachEntitySuggestionExecutor
         elif action_type == "message_person":
             cls = MessagePersonSuggestionExecutor
-        elif action_type == "update_steps":
-            cls = UpdateStepsSuggestionExecutor
         elif suggestion.task_id:
             cls = ReplyInTaskSuggestionExecutor
         else:
@@ -94,12 +88,12 @@ class SuggestionExecutor:
         """Create a new Task and transfer the AI conversation from the suggestion."""
         task = TaskService.create_task(self.db, CreateTaskInput(
             title=suggestion.title or "",
-            source=suggestion.source or "automation",
-            task_status="active",
-            task_mode="manual",
+            source=TaskSource(suggestion.source or "automation"),
+            task_status=TaskStatus.ACTIVE,
+            task_mode=TaskMode.MANUAL,
             category=suggestion.category,
             urgency=suggestion.urgency,
-            priority="routine",
+            priority=TaskPriority.ROUTINE,
             property_id=suggestion.property_id,
             unit_id=suggestion.unit_id,
         ))
@@ -130,16 +124,19 @@ class SuggestionExecutor:
 
     def _wire_vendor_conversation(self, task: Task, suggestion: Suggestion, vendor_id: str) -> None:
         """Create or find the vendor conversation and link it to the task."""
+        vendor = get_vendor_by_external_id(self.db, str(vendor_id))
+        if not vendor:
+            raise ValueError(f"Vendor {vendor_id} not found")
         ext_convo = chat_service.get_or_create_external_conversation(
             self.db,
             conversation_type=ConversationType.VENDOR,
             subject=suggestion.title or "",
             property_id=suggestion.property_id,
             unit_id=suggestion.unit_id,
-            vendor_id=vendor_id,
+            vendor_id=vendor.id,
         )
         task.external_conversation_id = ext_convo.id
-        TaskService.assign_vendor_to_task(self.db, task_id=task.id, vendor_id=vendor_id)
+        TaskService.assign_vendor_to_task(self.db, task_id=task.id, vendor_id=vendor.id)
 
     def _send_draft_message(self, task: Task, draft: str) -> None:
         """Send a draft message to the task's external conversation."""
@@ -268,7 +265,7 @@ class CreateTaskSuggestionExecutor(SuggestionExecutor):
         suggestion = self._fetch_suggestion(suggestion_id)
         task = None
 
-        if action in ("accept_task", "approve_draft"):
+        if action in ("send_and_create_task", "edit_message"):
             payload = suggestion.action_payload or {}
 
             task = self._create_task_from_suggestion(suggestion)
@@ -276,7 +273,7 @@ class CreateTaskSuggestionExecutor(SuggestionExecutor):
             # Apply progress steps if the agent included them
             steps = payload.get("steps")
             if steps:
-                task.steps = steps
+                task.steps = dump_task_steps(steps)
                 from sqlalchemy.orm.attributes import flag_modified
                 flag_modified(task, "steps")
 
@@ -287,7 +284,7 @@ class CreateTaskSuggestionExecutor(SuggestionExecutor):
             suggestion.task_id = task.id
 
             draft = edited_body or payload.get("draft_message")
-            if action == "approve_draft" and draft:
+            if draft:
                 self._send_draft_message(task, draft)
 
         suggestion = self._resolve_suggestion(suggestion_id, action, task)
@@ -336,8 +333,10 @@ class ReplyInTaskSuggestionExecutor(SuggestionExecutor):
             if ai_convo:
                 vid = (ai_convo.extra or {}).get("assigned_vendor_id")
                 if vid:
-                    action_payload["vendor_id"] = vid
-                    action_payload["vendor_name"] = self.vendor_name
+                    vendor = get_vendor_by_id(self.db, vid)
+                    if vendor:
+                        action_payload["vendor_id"] = str(vendor.external_id)
+                        action_payload["vendor_name"] = self.vendor_name
 
         suggestion = suggestion_service.create_suggestion(
             self.db,
@@ -380,7 +379,7 @@ class ReplyInTaskSuggestionExecutor(SuggestionExecutor):
         suggestion = self._fetch_suggestion(suggestion_id)
         task = None
 
-        if action in ("accept_task", "approve_draft"):
+        if action in ("send_and_create_task", "edit_message"):
             payload = suggestion.action_payload or {}
 
             # This suggestion is linked to an existing task
@@ -391,7 +390,7 @@ class ReplyInTaskSuggestionExecutor(SuggestionExecutor):
 
             if task:
                 draft = edited_body or payload.get("draft_message")
-                if action == "approve_draft" and draft:
+                if draft:
                     self._send_draft_message(task, draft)
 
         suggestion = self._resolve_suggestion(suggestion_id, action, task)
@@ -421,157 +420,6 @@ class CloseTaskSuggestionExecutor(SuggestionExecutor):
         return suggestion, task
 
 
-class SetModeSuggestionExecutor(SuggestionExecutor):
-    """Execute a suggestion to change a task's operating mode."""
-
-    def execute(
-        self,
-        suggestion_id: str,
-        action: str,
-        edited_body: str | None = None,
-    ) -> tuple[Suggestion, Task | None]:
-        suggestion = self._fetch_suggestion(suggestion_id)
-        task = None
-
-        if action == "set_mode" and suggestion.task_id:
-            payload = suggestion.action_payload or {}
-            new_mode = payload.get("mode")
-            task = self.db.execute(
-                select(Task).where(Task.id == suggestion.task_id)
-            ).scalar_one_or_none()
-            if task and new_mode:
-                task.task_mode = new_mode
-
-        suggestion = self._resolve_suggestion(suggestion_id, action, task)
-        return suggestion, task
-
-
-class AttachVendorSuggestionExecutor(SuggestionExecutor):
-    """Execute a suggestion to attach a vendor conversation to a task.
-
-    Handles two accept actions:
-    - ``attach_vendor`` — wire the vendor conversation without sending a message
-    - ``attach_vendor_send`` — wire the conversation and send the draft message
-    """
-
-    def execute(
-        self,
-        suggestion_id: str,
-        action: str,
-        edited_body: str | None = None,
-    ) -> tuple[Suggestion, Task | None]:
-        suggestion = self._fetch_suggestion(suggestion_id)
-        task = None
-
-        if action in ("attach_vendor", "attach_vendor_send") and suggestion.task_id:
-            payload = suggestion.action_payload or {}
-            vendor_id = payload.get("vendor_id")
-
-            task = self.db.execute(
-                select(Task).where(Task.id == suggestion.task_id)
-            ).scalar_one_or_none()
-
-            if task and vendor_id:
-                self._wire_vendor_conversation(task, suggestion, vendor_id)
-
-                if action == "attach_vendor_send":
-                    draft = edited_body or payload.get("draft_message")
-                    if draft:
-                        self._send_draft_message(task, draft)
-
-        suggestion = self._resolve_suggestion(suggestion_id, action, task)
-        return suggestion, task
-
-
-class UpdateStepsSuggestionExecutor(SuggestionExecutor):
-    """Execute a suggestion to update a task's progress steps."""
-
-    def execute(
-        self,
-        suggestion_id: str,
-        action: str,
-        edited_body: str | None = None,
-    ) -> tuple[Suggestion, Task | None]:
-        suggestion = self._fetch_suggestion(suggestion_id)
-        task = None
-
-        if action == "update_steps" and suggestion.task_id:
-            payload = suggestion.action_payload or {}
-            steps = payload.get("steps")
-
-            task = self.db.execute(
-                select(Task).where(Task.id == suggestion.task_id)
-            ).scalar_one_or_none()
-
-            if task and steps is not None:
-                task.steps = steps
-                from sqlalchemy.orm.attributes import flag_modified
-                flag_modified(task, "steps")
-
-        suggestion = self._resolve_suggestion(suggestion_id, action, task)
-        return suggestion, task
-
-
-class AttachEntitySuggestionExecutor(SuggestionExecutor):
-    """Execute a suggestion to attach an entity (vendor, tenant, property, unit) to a task."""
-
-    def execute(
-        self,
-        suggestion_id: str,
-        action: str,
-        edited_body: str | None = None,
-    ) -> tuple[Suggestion, Task | None]:
-        suggestion = self._fetch_suggestion(suggestion_id)
-        task = None
-
-        if action == "attach_entity" and suggestion.task_id:
-            payload = suggestion.action_payload or {}
-            entity_id = payload.get("entity_id")
-            entity_type = payload.get("entity_type")
-
-            task = self.db.execute(
-                select(Task).where(Task.id == suggestion.task_id)
-            ).scalar_one_or_none()
-
-            if task and entity_id:
-                if entity_type == "vendor":
-                    self._wire_vendor_conversation(task, suggestion, entity_id)
-                elif entity_type == "tenant":
-                    self._wire_tenant_conversation(task, suggestion, entity_id)
-                elif entity_type == "property":
-                    task.property_id = entity_id
-                elif entity_type == "unit":
-                    from db.models import Unit
-                    unit = self.db.query(Unit).filter_by(id=entity_id).first()
-                    task.unit_id = entity_id
-                    if unit and unit.property_id:
-                        task.property_id = unit.property_id
-
-        suggestion = self._resolve_suggestion(suggestion_id, action, task)
-        return suggestion, task
-
-    def _wire_tenant_conversation(self, task: Task, suggestion: Suggestion, tenant_id: str) -> None:
-        """Create or find the tenant conversation and link it to the task."""
-        ext_convo = chat_service.get_or_create_external_conversation(
-            self.db,
-            conversation_type=ConversationType.TENANT,
-            subject=suggestion.title or "",
-            property_id=suggestion.property_id,
-            unit_id=suggestion.unit_id,
-            tenant_id=tenant_id,
-        )
-        if not task.parent_conversation_id:
-            task.parent_conversation_id = ext_convo.id
-        elif not task.external_conversation_id:
-            task.external_conversation_id = ext_convo.id
-        # Ensure tenant has a portal token for the portal link
-        from db.models import Tenant
-        from gql.services.tenant_service import TenantService
-        tenant = self.db.get(Tenant, tenant_id)
-        if tenant:
-            TenantService.ensure_portal_token(self.db, tenant)
-
-
 class MessagePersonSuggestionExecutor(SuggestionExecutor):
     """Execute a suggestion to send a message to an external person (tenant or vendor)."""
 
@@ -584,7 +432,7 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
         suggestion = self._fetch_suggestion(suggestion_id)
         task = None
 
-        if action == "message_person_send" and suggestion.task_id:
+        if action in ("message_person_send", "edit_message") and suggestion.task_id:
             payload = suggestion.action_payload or {}
             entity_id = payload.get("entity_id")
             entity_type = payload.get("entity_type")
@@ -601,6 +449,14 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
                     if not task.external_conversation_id:
                         self._wire_vendor_conversation(task, suggestion, entity_id)
                 elif entity_type == "tenant":
+                    from db.models import Tenant as TenantModel
+                    from gql.services.tenant_service import TenantService
+
+                    t_obj = self.db.execute(
+                        select(TenantModel).where(TenantModel.external_id == str(entity_id))
+                    ).scalar_one_or_none()
+                    if not t_obj:
+                        raise ValueError(f"Tenant {entity_id} not found")
                     has_tenant_conv = False
                     if task.parent_conversation_id:
                         from db.models import Conversation as Conv
@@ -614,16 +470,13 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
                             subject=suggestion.title or "",
                             property_id=suggestion.property_id,
                             unit_id=suggestion.unit_id,
-                            tenant_id=entity_id,
+                            tenant_id=t_obj.id if t_obj else None,
                         )
                         if not task.parent_conversation_id:
                             task.parent_conversation_id = ext_convo.id
                         elif not task.external_conversation_id:
                             task.external_conversation_id = ext_convo.id
                     # Ensure tenant has a portal token
-                    from db.models import Tenant as TenantModel
-                    from gql.services.tenant_service import TenantService
-                    t_obj = self.db.get(TenantModel, entity_id)
                     if t_obj:
                         TenantService.ensure_portal_token(self.db, t_obj)
 
@@ -661,7 +514,9 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
         try:
             from db.models import Tenant
             from gql.services.tenant_service import TenantService
-            tenant = self.db.get(Tenant, tenant_id)
+            tenant = self.db.execute(
+                select(Tenant).where(Tenant.external_id == str(tenant_id))
+            ).scalar_one_or_none()
             if tenant:
                 TenantService.ensure_portal_token(self.db, tenant)
                 self.db.flush()

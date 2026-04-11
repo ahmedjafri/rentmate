@@ -152,6 +152,7 @@ async def process_document(document_id: str) -> None:
     import json
 
     from backends.wire import storage_backend
+    from gql.services.document_service import dump_document_extraction_data, dump_document_extraction_meta
 
     SessionLocal = _get_session_factory()
     db: Session = SessionLocal()
@@ -194,14 +195,14 @@ async def process_document(document_id: str) -> None:
             pass
 
         doc.raw_text = raw_text
-        doc.extraction_meta = {
-            "text_extractor": "pypdf",
-            "llm_model": os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
-            "page_count": n_pages,
-            "raw_text_chars": len(raw_text),
-            "form_fields_found": _form_fields_found,
-            "form_fields_filled": _form_fields_filled,
-        }
+        doc.extraction_meta = dump_document_extraction_meta(
+            text_extractor="pypdf",
+            llm_model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
+            page_count=n_pages,
+            raw_text_chars=len(raw_text),
+            form_fields_found=_form_fields_found,
+            form_fields_filled=_form_fields_filled,
+        )
 
         # 3. LLM extraction pass
         extracted_data = None
@@ -209,7 +210,10 @@ async def process_document(document_id: str) -> None:
             _set_progress(db, doc, "Extracting lease details with AI…")
             truncated = raw_text[:12000]
             if doc.extraction_meta:
-                doc.extraction_meta = {**doc.extraction_meta, "input_chars_sent_to_llm": len(truncated)}
+                doc.extraction_meta = dump_document_extraction_meta(
+                    doc.extraction_meta,
+                    input_chars_sent_to_llm=len(truncated),
+                )
             user_content = EXTRACTION_PROMPT + truncated
             response = litellm.completion(
                 model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
@@ -228,8 +232,8 @@ async def process_document(document_id: str) -> None:
         leases = extracted_data.get("leases") if isinstance(extracted_data, dict) else []
         leases_found = len(leases) if isinstance(leases, list) else 0
         if doc.extraction_meta:
-            doc.extraction_meta = {**doc.extraction_meta, "leases_found": leases_found}
-        doc.extracted_data = extracted_data
+            doc.extraction_meta = dump_document_extraction_meta(doc.extraction_meta, leases_found=leases_found)
+        doc.extracted_data = dump_document_extraction_data(extracted_data)
 
         # Build document-level shared context from extracted lease context fields
         doc.context = _build_document_context(leases if isinstance(leases, list) else [])

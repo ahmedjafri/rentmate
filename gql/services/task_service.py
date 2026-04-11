@@ -1,41 +1,47 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import select, text
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from backends.local_auth import resolve_account_id
+from backends.local_auth import resolve_account_id, resolve_org_id
+from db.enums import TaskStatus
 from db.models import (
     Conversation,
     ConversationType,
-    ExternalContact,
     Suggestion,
     Task,
-    TaskNumberSequence,
+    User,
 )
 from gql.types import CreateTaskInput, UpdateTaskInput
 
 
-def _get_creator_id(sess: Session, property_id: str | None, unit_id: str | None) -> str:
-    try:
-        if property_id:
-            res = sess.execute(text("SELECT creator_id FROM properties WHERE id = :id"), {"id": property_id}).fetchone()
-            if res and res[0]:
-                return res[0]
-        if unit_id:
-            res = sess.execute(text("SELECT creator_id FROM units WHERE id = :id"), {"id": unit_id}).fetchone()
-            if res and res[0]:
-                return res[0]
-    except Exception:
-        pass
-    return 1
+class TaskProgressStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    label: str
+    status: str
+    note: str | None = None
+
+
+def parse_task_steps(steps: list[dict] | list[TaskProgressStep] | None) -> list[TaskProgressStep]:
+    return [step if isinstance(step, TaskProgressStep) else TaskProgressStep.model_validate(step) for step in (steps or [])]
+
+
+def dump_task_steps(steps: list[dict] | list[TaskProgressStep] | None) -> list[dict] | None:
+    parsed = parse_task_steps(steps)
+    return [step.model_dump(exclude_none=True) for step in parsed] if parsed else None
 
 
 class TaskService:
     @staticmethod
     def create_task(sess: Session, input: CreateTaskInput) -> Task:
-        creator_id = _get_creator_id(sess, input.property_id, input.unit_id)
+        creator_id = resolve_account_id()
+        org_id = resolve_org_id()
         task = Task(
+            org_id=org_id,
             creator_id=creator_id,
             title=input.title,
             task_status=input.task_status,
@@ -53,24 +59,11 @@ class TaskService:
         sess.add(task)
         sess.flush()
 
-        # Assign task_number from the per-account sequence (monotonically
-        # increasing, never reused even after task deletion).
-        seq = sess.execute(
-            select(TaskNumberSequence)
-            .where(TaskNumberSequence.creator_id == task.creator_id)
-        ).scalar_one_or_none()
-        if seq is None:
-            seq = TaskNumberSequence(creator_id=task.creator_id, last_number=0)
-            sess.add(seq)
-            sess.flush()
-        seq.last_number += 1
-        task.task_number = seq.last_number
-
-        # Create the primary internal conversation thread for this task
         ai_convo = Conversation(
+            org_id=org_id,
             subject=input.title,
             property_id=input.property_id,
-            creator_id=resolve_account_id(),
+            creator_id=creator_id,
             unit_id=input.unit_id,
             conversation_type=ConversationType.TASK_AI,
             is_group=False,
@@ -85,14 +78,18 @@ class TaskService:
         return task
 
     @staticmethod
-    def update_task_status(sess: Session, *, uid: str, status: str) -> Task:
+    def update_task_status(sess: Session, *, uid: int, status: TaskStatus) -> Task:
         task = sess.execute(
-            select(Task).where(Task.id == uid)
+            select(Task).where(
+                Task.id == uid,
+                Task.org_id == resolve_org_id(),
+                Task.creator_id == resolve_account_id(),
+            )
         ).scalar_one_or_none()
         if not task:
             raise ValueError(f"Task {uid} not found")
         task.task_status = status
-        if status == "resolved" and not task.resolved_at:
+        if status == TaskStatus.RESOLVED and not task.resolved_at:
             task.resolved_at = datetime.now(UTC)
         sess.flush()
         return task
@@ -100,7 +97,11 @@ class TaskService:
     @staticmethod
     def update_task(sess: Session, input: UpdateTaskInput) -> Task:
         task = sess.execute(
-            select(Task).where(Task.id == input.uid)
+            select(Task).where(
+                Task.id == input.uid,
+                Task.org_id == resolve_org_id(),
+                Task.creator_id == resolve_account_id(),
+            )
         ).scalar_one_or_none()
         if not task:
             raise ValueError(f"Task {input.uid} not found")
@@ -108,21 +109,30 @@ class TaskService:
             task.task_mode = input.task_mode
         if input.task_status is not None:
             task.task_status = input.task_status
-            if input.task_status == "resolved" and not task.resolved_at:
+            if input.task_status == TaskStatus.RESOLVED and not task.resolved_at:
                 task.resolved_at = datetime.now(UTC)
         sess.flush()
         return task
 
     @staticmethod
-    def delete_task(sess: Session, uid: str) -> bool:
+    def delete_task(sess: Session, uid: int) -> bool:
         task = sess.execute(
-            select(Task).where(Task.id == uid)
+            select(Task).where(
+                Task.id == uid,
+                Task.org_id == resolve_org_id(),
+                Task.creator_id == resolve_account_id(),
+            )
         ).scalar_one_or_none()
         if not task:
             raise ValueError(f"Task {uid} not found")
         ai_conv_id = task.ai_conversation_id
-        # Delete associated suggestions
-        for s in sess.execute(select(Suggestion).where(Suggestion.task_id == uid)).scalars().all():
+        for s in sess.execute(
+            select(Suggestion).where(
+                Suggestion.task_id == uid,
+                Suggestion.org_id == resolve_org_id(),
+                Suggestion.creator_id == resolve_account_id(),
+            )
+        ).scalars().all():
             sess.delete(s)
         sess.flush()
         sess.delete(task)
@@ -130,12 +140,12 @@ class TaskService:
         if ai_conv_id:
             convo = sess.get(Conversation, ai_conv_id)
             if convo:
-                sess.delete(convo)   # cascades messages/participants
+                sess.delete(convo)
         sess.flush()
         return True
 
     @staticmethod
-    def assign_vendor_to_task(sess: Session, *, task_id: str, vendor_id: str) -> Task:
+    def assign_vendor_to_task(sess: Session, *, task_id: int, vendor_id: int) -> Task:
         """Link a vendor to a task and record the assignment in the AI conversation.
 
         The caller (handler layer) is responsible for creating or finding the
@@ -143,23 +153,33 @@ class TaskService:
         calling this method.
         """
         task = sess.execute(
-            select(Task).where(Task.id == task_id)
+            select(Task).where(
+                Task.id == task_id,
+                Task.org_id == resolve_org_id(),
+                Task.creator_id == resolve_account_id(),
+            )
         ).scalar_one_or_none()
         if not task:
             raise ValueError(f"Task {task_id} not found")
         vendor = sess.execute(
-            select(ExternalContact).where(ExternalContact.id == vendor_id)
+            select(User).where(
+                User.id == vendor_id,
+                User.org_id == resolve_org_id(),
+                User.creator_id == resolve_account_id(),
+                User.user_type == "vendor",
+            )
         ).scalar_one_or_none()
         if not vendor:
             raise ValueError(f"Vendor {vendor_id} not found")
-        # Store vendor info in the AI conversation's extra field
         ai_convo = sess.get(Conversation, task.ai_conversation_id) if task.ai_conversation_id else None
         if ai_convo:
-            extra = dict(ai_convo.extra or {})
-            extra["assigned_vendor_id"] = vendor_id
-            extra["assigned_vendor_name"] = vendor.name
-            ai_convo.extra = extra
+            from gql.services.chat_service import assign_conversation_vendor
+
+            ai_convo.extra = assign_conversation_vendor(
+                ai_convo.extra,
+                vendor_id=vendor_id,
+                vendor_name=vendor.name,
+            )
             flag_modified(ai_convo, "extra")
         sess.flush()
         return task
-

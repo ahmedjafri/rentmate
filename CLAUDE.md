@@ -57,7 +57,6 @@ Key variables (set in `data/settings.json` or shell):
 - `RENTMATE_DATA_DIR` — Data directory (default: `./data`)
 - `RENTMATE_ENV` — `development` enables debug features and seeds automations
 - `QUO_API_KEY` — OpenPhone API key for SMS
-- `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `GMAIL_SENDER_ADDRESS` — Gmail OAuth (optional)
 - `PHONE_WHITELIST` — Comma-separated phone numbers allowed to trigger agent
 
 ## Architecture
@@ -78,7 +77,7 @@ Key rules:
 
 ### Backend detail
 
-**`main.py`** — FastAPI entry point. Mounts routers, middleware, and the SPA catch-all. On startup: creates DB tables, runs schema migrations, starts the agent gateway, and kicks off polling loops (Gmail, Quo SMS, automation audit/heartbeat). Also runnable directly (`python main.py --port 8002 --reload`).
+**`main.py`** — FastAPI entry point. Mounts routers, middleware, and the SPA catch-all. On startup: creates DB tables, runs schema migrations, starts the agent gateway, and kicks off polling loops (Quo SMS, automation audit/heartbeat). Also runnable directly (`python main.py --port 8002 --reload`).
 
 **`db/models/`** — SQLAlchemy ORM models:
 - Rental hierarchy: `Account` → `Property` → `Unit` → `Lease` → `Tenant`
@@ -112,7 +111,7 @@ Key rules:
 - `chat.py` — Agent chat execution, streaming responses, progress events
 - `automations.py` — Automation DSL execution, audit and heartbeat loops
 - `documents.py` — Document upload, extraction, embedding
-- `settings.py` — Integration configuration (Quo, Gmail, etc.)
+- `settings.py` — Integration configuration (Quo, etc.)
 - `quo_poller.py` — SMS polling from Quo/OpenPhone (5 min dev, 15 min prod)
 - `tenant_portal.py`, `vendor_portal.py` — Portal endpoints
 - `tenant_invite.py`, `vendor_invite.py` — Onboarding link handlers
@@ -123,7 +122,6 @@ Key rules:
 - `local_storage.py` — Local filesystem storage
 - `chroma_vector.py` — Chroma vector DB for document embeddings
 - `single_tenant_sms.py` — Dev SMS routing
-- `gmail.py` — Gmail OAuth client (polling + send)
 
 **`llm/`** — AI agent:
 - `client.py` — `chat_with_agent()` / `call_agent()` dispatch to local or hosted agent
@@ -150,7 +148,6 @@ React 18 SPA (Vite + TypeScript). shadcn/ui components, TanStack React Query, Ta
 ### Inbound channels
 
 - **SMS (Quo/OpenPhone)** — Primary channel. Webhook at `/quo-webhook` + backup poller in `handlers/quo_poller.py`. Phone normalization in `db/utils.py`.
-- **Email (Gmail)** — Optional. Polling loop in `main.py` every 60s. Routes to tasks via `route_inbound_to_task()`.
 
 ## Design Documentation (`docs/`)
 

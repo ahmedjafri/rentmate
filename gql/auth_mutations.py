@@ -26,7 +26,7 @@ class Mutation:
         return AuthPayload(
             token=token,
             user=UserType(
-                uid=str(user.id),
+                uid=str(user.external_id),
                 username=user.email or input.email or "",
             ),
         )

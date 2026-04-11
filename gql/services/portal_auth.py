@@ -8,6 +8,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 
 import jwt
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -16,6 +17,21 @@ from db.session import SessionLocal
 
 _JWT_SECRET = os.getenv("JWT_SECRET", "rentmate-local-secret")
 _JWT_ALGORITHM = "HS256"
+
+
+class PortalEntityExtra(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    portal_token: str | None = None
+    invite_token: str | None = None
+
+
+def parse_portal_entity_extra(extra: dict | None) -> PortalEntityExtra:
+    return PortalEntityExtra.model_validate(extra or {})
+
+
+def dump_portal_entity_extra(extra: PortalEntityExtra) -> dict:
+    return extra.model_dump(exclude_none=True)
 
 
 def generate_portal_token() -> str:
@@ -56,15 +72,15 @@ def ensure_portal_token(entity, db: "Session | None" = None) -> str:
     If a new token is generated and ``db`` is provided, persists via a
     separate session to avoid breaking the caller's transaction.
     """
-    extra = dict(entity.extra or {})
-    if not extra.get("portal_token"):
+    extra = parse_portal_entity_extra(entity.extra)
+    if not extra.portal_token:
         token = generate_portal_token()
-        extra["portal_token"] = token
-        entity.extra = extra
+        extra.portal_token = token
+        entity.extra = dump_portal_entity_extra(extra)
         flag_modified(entity, "extra")
         # Persist in a separate session so we don't break the caller's
         if db is None:
-            return extra["portal_token"]
+            return extra.portal_token or ""
         try:
             write_db = SessionLocal.session_factory()
             try:
@@ -72,21 +88,21 @@ def ensure_portal_token(entity, db: "Session | None" = None) -> str:
                 write_db.execute(
                     update(model_cls)
                     .where(model_cls.id == entity.id)
-                    .values(extra=extra)
+                    .values(extra=dump_portal_entity_extra(extra))
                 )
                 write_db.commit()
             finally:
                 write_db.close()
         except Exception:
             pass
-    return extra["portal_token"]
+    return extra.portal_token or ""
 
 
 def find_by_portal_token(db: Session, *, model_class, token: str):
     """Find an entity by portal_token (or legacy invite_token) in its extra JSON."""
     entities = db.execute(select(model_class)).scalars().all()
     for e in entities:
-        extra = e.extra or {}
-        if extra.get("portal_token") == token or extra.get("invite_token") == token:
+        extra = parse_portal_entity_extra(e.extra)
+        if extra.portal_token == token or extra.invite_token == token:
             return e
     return None

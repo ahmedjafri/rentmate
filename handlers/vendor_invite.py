@@ -21,7 +21,7 @@ def get_vendor_token(token: str, request: Request):
         raise HTTPException(status_code=404, detail="Invalid portal link")
     _, jwt_token = VendorService.authenticate_by_token(db, token)
     return {
-        "vendor_id": str(vendor.id),
+        "vendor_id": str(vendor.external_id),
         "name": vendor.name,
         "access_token": jwt_token,
     }

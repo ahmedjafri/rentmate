@@ -5,7 +5,6 @@ agent_action.py — Agent actions tool for RentMate.
 Usage:
     python agent_action.py propose_task --title X --category X [--urgency X] [--description X]
     python agent_action.py close_task --id X
-    python agent_action.py set_mode --id X --mode autonomous|manual|waiting_approval
 """
 
 import argparse
@@ -47,11 +46,6 @@ def main():
     p_close = sub.add_parser("close_task")
     p_close.add_argument("--id", required=True, help="Task ID to close")
 
-    p_mode = sub.add_parser("set_mode")
-    p_mode.add_argument("--id", required=True, help="Task ID")
-    p_mode.add_argument("--mode", required=True,
-                        choices=["autonomous", "manual", "waiting_approval"])
-
     args = parser.parse_args()
 
     try:
@@ -72,11 +66,6 @@ def main():
             # Queue for human confirmation — do NOT write to DB directly.
             _queue_action({"action": "close_task_proposed", "task_id": args.id})
             result = {"status": "ok", "message": "Close request queued for manager confirmation."}
-
-        elif args.operation == "set_mode":
-            # Queue for human confirmation — do NOT write to DB directly.
-            _queue_action({"action": "set_mode_proposed", "task_id": args.id, "mode": args.mode})
-            result = {"status": "ok", "message": f"Mode change to '{args.mode}' queued for manager confirmation."}
 
         else:
             result = {"error": f"Unknown operation: {args.operation!r}"}

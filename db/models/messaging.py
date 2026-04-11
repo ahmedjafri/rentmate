@@ -2,22 +2,10 @@ import uuid
 from datetime import UTC, datetime
 from enum import Enum
 
-from sqlalchemy import (
-    JSON,
-    Boolean,
-    Column,
-    DateTime,
-    Enum as SqlEnum,
-    ForeignKeyConstraint,
-    Index,
-    Integer,
-    String,
-    Text,
-    UniqueConstraint,
-)
+from sqlalchemy import Boolean, Column, DateTime, Enum as SqlEnum, ForeignKeyConstraint, Index, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
-from .base import Base, HasContext, HasCreatorId, OrgId, SmallPrimaryId
+from .base import Base, HasCreatorId, OrgId, SmallPrimaryId
 
 
 class ParticipantType(str, Enum):
@@ -49,31 +37,6 @@ class DraftApprovalStatus(int, Enum):
     APPROVED = 2
     REJECTED = 3
     EDITED   = 4
-
-
-class ExternalContact(Base, OrgId, SmallPrimaryId, HasCreatorId, HasContext):
-    """
-    Deprecated -- use shadow User accounts instead.
-    Kept for migration compatibility; no new code should reference this model.
-    """
-    __tablename__ = "external_contacts"
-
-    name = Column(String(255), nullable=False)
-    company = Column(String(255), nullable=True)
-    email = Column(String(255), nullable=True, index=True)
-    phone = Column(String(50), nullable=True)
-    role_label = Column(String(100), nullable=True)
-    notes = Column(Text, nullable=True)
-    extra = Column(JSON, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
-
-    __table_args__ = (
-        UniqueConstraint("org_id", "id", name="uq_external_contacts_server"),
-        ForeignKeyConstraint(
-            ["org_id", "creator_id"],
-            ["users.org_id", "users.id"],
-        ),
-    )
 
 
 class Conversation(Base, OrgId, SmallPrimaryId, HasCreatorId):

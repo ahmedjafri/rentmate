@@ -10,10 +10,26 @@ from db.enums import (  # noqa: F401 — re-exported
     SuggestionOption,
     SuggestionSource,
     TaskCategory,
+    TaskMode,
+    TaskPriority,
     TaskSource,
+    TaskStatus,
+    SuggestionSourceEnum,
+    SuggestionStatus,
     Urgency,
 )
-from db.models import MessageType
+from db.models import ConversationType, MessageType
+
+TaskCategoryEnum = strawberry.enum(TaskCategory, name="TaskCategory")
+TaskModeEnum = strawberry.enum(TaskMode, name="TaskMode")
+TaskPriorityEnum = strawberry.enum(TaskPriority, name="TaskPriority")
+TaskSourceEnum = strawberry.enum(TaskSource, name="TaskSource")
+TaskStatusEnum = strawberry.enum(TaskStatus, name="TaskStatus")
+UrgencyEnum = strawberry.enum(Urgency, name="Urgency")
+SuggestionSourceEnumType = strawberry.enum(SuggestionSourceEnum, name="SuggestionSource")
+SuggestionStatusEnum = strawberry.enum(SuggestionStatus, name="SuggestionStatus")
+ConversationTypeEnum = strawberry.enum(ConversationType, name="ConversationType")
+MessageTypeEnum = strawberry.enum(MessageType, name="MessageType")
 
 
 def _utc_iso(dt: _datetime | None) -> str:
@@ -71,12 +87,12 @@ class UpdatePropertyInput:
 @strawberry.input
 class CreateTaskInput:
     title: str
-    source: str
-    task_status: str = "active"
-    category: typing.Optional[str] = None
-    urgency: typing.Optional[str] = None
-    priority: typing.Optional[str] = None
-    task_mode: typing.Optional[str] = None
+    source: TaskSourceEnum
+    task_status: TaskStatusEnum = TaskStatus.ACTIVE
+    category: typing.Optional[TaskCategoryEnum] = None
+    urgency: typing.Optional[UrgencyEnum] = None
+    priority: typing.Optional[TaskPriorityEnum] = None
+    task_mode: typing.Optional[TaskModeEnum] = None
     property_id: typing.Optional[str] = None
     unit_id: typing.Optional[str] = None
     confidential: bool = False
@@ -85,11 +101,11 @@ class CreateTaskInput:
 class SpawnTaskInput:
     parent_conversation_id: str
     objective: str
-    category: typing.Optional[str] = None
-    urgency: typing.Optional[str] = None
-    priority: typing.Optional[str] = None
-    task_mode: str = "autonomous"
-    source: str = "manual"
+    category: typing.Optional[TaskCategoryEnum] = None
+    urgency: typing.Optional[UrgencyEnum] = None
+    priority: typing.Optional[TaskPriorityEnum] = None
+    task_mode: TaskModeEnum = TaskMode.AUTONOMOUS
+    source: TaskSourceEnum = TaskSource.MANUAL
 
 @strawberry.input
 class AddDocumentTagInput:
@@ -103,16 +119,15 @@ class AddDocumentTagInput:
 class SendMessageInput:
     conversation_id: str
     body: str
-    message_type: str = MessageType.MESSAGE
+    message_type: MessageTypeEnum = MessageType.MESSAGE
     sender_name: str = "You"
     is_ai: bool = False
-    draft_reply: typing.Optional[str] = None
 
 @strawberry.input
 class UpdateTaskInput:
-    uid: str
-    task_mode: typing.Optional[str] = None
-    task_status: typing.Optional[str] = None
+    uid: int
+    task_mode: typing.Optional[TaskModeEnum] = None
+    task_status: typing.Optional[TaskStatusEnum] = None
 
 @strawberry.input
 class CreateTenantWithLeaseInput:
@@ -207,9 +222,9 @@ class HouseType:
             t = l.tenant
             is_active = l.end_date >= today if l.end_date else False
             if t:
-                t_key = str(t.id)
+                t_key = str(t.external_id)
                 if t_key not in tenant_map:
-                    tenant_map[t_key] = TenantType(uid=str(t.id), name=tenant_display_name(t))
+                    tenant_map[t_key] = TenantType(uid=str(t.external_id), name=tenant_display_name(t))
                 if is_active and l.unit_id:
                     active_unit_ids.add(l.unit_id)
             if is_active:
@@ -255,9 +270,9 @@ class TenantType:
     @classmethod
     def from_new(cls, tenant: typing.Any, *, unit: typing.Any, lease: typing.Any) -> "TenantType":
         return cls(
-            uid=str(tenant.id),
-            name=f"{tenant.first_name} {tenant.last_name}",
-            email=tenant.email,
+            uid=str(tenant.external_id),
+            name=f"{tenant.user.first_name} {tenant.user.last_name}",
+            email=tenant.user.email,
             unit_label=unit.label,
             lease_end_date=str(lease.end_date),
             rent_amount=lease.rent_amount,
@@ -296,9 +311,9 @@ class TenantType:
         ]
         from gql.services.tenant_service import TenantService
         return cls(
-            uid=str(t.id),
+            uid=str(t.external_id),
             name=tenant_display_name(t),
-            email=t.email,
+            email=t.user.email if t.user else None,
             unit_label=active_lease.unit.label if active_lease and active_lease.unit else None,
             lease_end_date=str(active_lease.end_date) if active_lease else None,
             rent_amount=active_lease.rent_amount if active_lease else None,
@@ -329,7 +344,7 @@ class LeaseType:
             start_date=str(l.start_date),
             end_date=str(l.end_date),
             rent_amount=l.rent_amount,
-            tenant=TenantType(uid=str(l.tenant.id), name=tenant_display_name(l.tenant)) if l.tenant else None,
+            tenant=TenantType(uid=str(l.tenant.external_id), name=tenant_display_name(l.tenant)) if l.tenant else None,
             house=HouseType(
                 uid=str(l.property.id),
                 name=l.property.name or "",
@@ -342,7 +357,7 @@ class LeaseType:
 class ChatMessageType:
     uid: str
     body: typing.Optional[str] = None
-    message_type: typing.Optional[str] = None
+    message_type: typing.Optional[MessageTypeEnum] = None
     sender_name: typing.Optional[str] = None
     sender_type: typing.Optional[str] = None
     is_ai: bool = False
@@ -355,9 +370,11 @@ class ChatMessageType:
 
     @classmethod
     def from_sql(cls, msg: typing.Any) -> "ChatMessageType":
+        from gql.services.chat_service import parse_message_meta
+
         raw_st = getattr(msg, "sender_type", None)
         st_value = raw_st.value if hasattr(raw_st, "value") else str(raw_st) if raw_st else None
-        related = getattr(msg, "related_task_ids", None) or {}
+        meta = parse_message_meta(getattr(msg, "meta", None))
         return cls(
             uid=str(msg.id),
             body=msg.body,
@@ -366,15 +383,14 @@ class ChatMessageType:
             sender_type=st_value,
             is_ai=msg.is_ai,
             is_system=msg.is_system,
-            draft_reply=getattr(msg, "draft_reply", None),
+            draft_reply=meta.draft_reply,
             approval_status=getattr(msg, "approval_status", None),
-            related_task_ids=related if related else None,
-            suggestion_id=related.get("suggestion_id") if isinstance(related, dict) else None,
+            related_task_ids=meta.related_task_ids.model_dump(exclude_none=True) if meta.related_task_ids else None,
+            suggestion_id=None,
             sent_at=_utc_iso(msg.sent_at),
         )
 
 
-@strawberry.type
 @strawberry.type
 class ConversationParticipantType:
     """A participant in a conversation."""
@@ -388,38 +404,39 @@ class LinkedConversationType:
     """Summary of a conversation linked to a task."""
     uid: str
     label: str
-    conversation_type: str
+    conversation_type: ConversationTypeEnum
     last_message_at: typing.Optional[str] = None
     message_count: int = 0
     participants: typing.List[ConversationParticipantType] = strawberry.field(default_factory=list)
 
     @classmethod
     def from_sql(cls, conv: typing.Any, label: str) -> "LinkedConversationType":
+        from gql.services.chat_service import parse_conversation_extra
+
         msgs = getattr(conv, "messages", []) or []
         last_msg = max(msgs, key=lambda m: m.sent_at, default=None) if msgs else None
 
-        # Build participant list from conversation participants
         parts: list[ConversationParticipantType] = []
         for p in getattr(conv, "participants", []) or []:
             if not p.is_active:
                 continue
-            if p.tenant_id and p.tenant:
-                from gql.services.tenant_service import TenantService
-                name = f"{p.tenant.first_name} {p.tenant.last_name}".strip()
+            from db.models import ParticipantType as PT
+            if p.participant_type == PT.TENANT:
+                name = f"{p.user.first_name} {p.user.last_name}".strip()
                 parts.append(ConversationParticipantType(
-                    name=name, participant_type="tenant", entity_id=str(p.tenant_id),
-                    portal_url=TenantService.get_portal_url(p.tenant),
+                    name=name, participant_type="tenant", entity_id=str(p.user_id),
+                    portal_url="",
                 ))
-            elif p.external_contact_id and p.external_contact:
-                from gql.services.vendor_service import VendorService
+            elif p.participant_type == PT.EXTERNAL_CONTACT:
+                name = f"{p.user.first_name or ''} {p.user.last_name or ''}".strip() or "Vendor"
                 parts.append(ConversationParticipantType(
-                    name=p.external_contact.name, participant_type="vendor",
-                    entity_id=str(p.external_contact_id),
-                    portal_url=VendorService.get_portal_url(p.external_contact),
+                    name=name, participant_type="vendor",
+                    entity_id=str(p.user_id),
+                    portal_url="",
                 ))
 
         return cls(
-            uid=str(conv.id),
+            uid=str(conv.external_id),
             label=label,
             conversation_type=conv.conversation_type or "task_ai",
             last_message_at=_utc_iso(last_msg.sent_at) if last_msg else None,
@@ -430,15 +447,15 @@ class LinkedConversationType:
 
 @strawberry.type
 class TaskType:
-    uid: str
+    uid: int
     task_number: typing.Optional[int] = None
     title: typing.Optional[str] = None
-    task_status: typing.Optional[str] = None
-    task_mode: typing.Optional[str] = None
-    source: typing.Optional[str] = None
-    category: typing.Optional[str] = None
-    urgency: typing.Optional[str] = None
-    priority: typing.Optional[str] = None
+    task_status: typing.Optional[TaskStatusEnum] = None
+    task_mode: typing.Optional[TaskModeEnum] = None
+    source: typing.Optional[TaskSourceEnum] = None
+    category: typing.Optional[TaskCategoryEnum] = None
+    urgency: typing.Optional[UrgencyEnum] = None
+    priority: typing.Optional[TaskPriorityEnum] = None
     confidential: bool = False
     last_message_at: typing.Optional[str] = None
     property_id: typing.Optional[str] = None
@@ -463,6 +480,7 @@ class TaskType:
     @classmethod
     def from_sql(cls, t: typing.Any) -> "TaskType":
         from db.models import ParticipantType as PT
+        from gql.services.chat_service import parse_conversation_extra
         # Collect messages from the task's AI conversation
         ai_convo = getattr(t, "ai_conversation", None)
         all_msgs = list(getattr(ai_convo, "messages", [])) if ai_convo else []
@@ -473,7 +491,7 @@ class TaskType:
         tenant_name = None
         if getattr(t, "lease", None) and t.lease.tenant:
             ten = t.lease.tenant
-            tenant_name = f"{ten.first_name} {ten.last_name}".strip()
+            tenant_name = f"{ten.user.first_name} {ten.user.last_name}".strip()
 
         unit_label = None
         if getattr(t, "unit", None):
@@ -488,7 +506,7 @@ class TaskType:
         vendor_assigned = vendor_msgs[0].sender_name if vendor_msgs else None
 
         # Get extra from the AI conversation
-        extra = getattr(ai_convo, 'extra', None) or {} if ai_convo else {}
+        extra = parse_conversation_extra(getattr(ai_convo, "extra", None) if ai_convo else None)
 
         # Build linked conversations list
         linked: list[LinkedConversationType] = []
@@ -506,8 +524,8 @@ class TaskType:
             linked.append(LinkedConversationType.from_sql(ext_convo, elabel))
 
         return cls(
-            uid=str(t.id),
-            task_number=t.task_number,
+            uid=t.id,
+            task_number=t.id,
             title=t.title,
             task_status=t.task_status,
             task_mode=t.task_mode,
@@ -528,25 +546,25 @@ class TaskType:
             ai_conversation_id=str(t.ai_conversation_id) if t.ai_conversation_id else None,
             parent_conversation_id=str(t.parent_conversation_id) if t.parent_conversation_id else None,
             ancestor_ids=[],
-            require_vendor_type=extra.get('require_vendor_type'),
-            assigned_vendor_id=extra.get('assigned_vendor_id'),
-            assigned_vendor_name=extra.get('assigned_vendor_name'),
+            require_vendor_type=extra.require_vendor_type,
+            assigned_vendor_id=str(extra.assigned_vendor_id) if extra.assigned_vendor_id is not None else None,
+            assigned_vendor_name=extra.assigned_vendor_name,
             external_conversation_id=str(t.external_conversation_id) if t.external_conversation_id else None,
             steps=t.steps,
-            suggestion_options=extra.get('suggestion_options'),
+            suggestion_options=extra.suggestion_options,
             linked_conversations=linked,
         )
 
 
 @strawberry.type
 class SuggestionType:
-    uid: str
+    uid: int
     title: typing.Optional[str] = None
     body: typing.Optional[str] = None
-    category: typing.Optional[str] = None
-    urgency: typing.Optional[str] = None
-    status: str = "pending"
-    source: typing.Optional[str] = None
+    category: typing.Optional[TaskCategoryEnum] = None
+    urgency: typing.Optional[UrgencyEnum] = None
+    status: SuggestionStatusEnum = SuggestionStatus.PENDING
+    source: typing.Optional[SuggestionSourceEnumType] = None
     automation_key: typing.Optional[str] = None
     options: typing.Optional[strawberry.scalars.JSON] = None
     action_taken: typing.Optional[str] = None
@@ -574,7 +592,7 @@ class SuggestionType:
             prop_name = getattr(s.property, "name", None) or getattr(s.property, "address_line1", None)
 
         return cls(
-            uid=str(s.id),
+            uid=s.id,
             title=s.title,
             body=s.body,
             category=s.category,
@@ -718,7 +736,7 @@ class VendorType:
     def from_sql(cls, v) -> "VendorType":
         from gql.services.vendor_service import VendorService
         return cls(
-            uid=str(v.id),
+            uid=str(v.external_id),
             name=v.name,
             company=v.company,
             vendor_type=v.role_label,
@@ -755,7 +773,7 @@ class UpdateVendorInput:
 @strawberry.type
 class ConversationSummaryType:
     uid: str
-    conversation_type: str
+    conversation_type: ConversationTypeEnum
     title: typing.Optional[str] = None
     last_message_at: typing.Optional[str] = None
     updated_at: str = ""
@@ -767,14 +785,14 @@ class ConversationSummaryType:
 
     @classmethod
     def from_sql(cls, c: typing.Any) -> "ConversationSummaryType":
-        visible_msgs = [m for m in (c.messages or []) if m.message_type in ("message", "thread")]
+        visible_msgs = [m for m in (c.messages or []) if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)]
         last_msg = max(visible_msgs, key=lambda m: m.sent_at, default=None) if visible_msgs else None
         active_participants = [p for p in c.participants if p.is_active] if c.participants else []
         prop_name = None
         if c.property:
             prop_name = getattr(c.property, "name", None) or getattr(c.property, "address_line1", None)
         return cls(
-            uid=str(c.id),
+            uid=str(c.external_id),
             conversation_type=c.conversation_type or "tenant",
             title=c.subject,
             last_message_at=_utc_iso(last_msg.sent_at) if last_msg else None,

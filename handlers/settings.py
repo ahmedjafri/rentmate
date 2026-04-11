@@ -6,7 +6,6 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from gql.services.settings_service import (  # noqa: F401 — re-exported
-    _DEFAULT_AUTONOMY,
     get_agent_integrations,
     get_autonomy_settings,
     get_integrations,
@@ -88,7 +87,7 @@ async def get_settings(request: Request):
         "api_key": _SECRET_MASK if llm.get("api_key") else "",
         "model": llm.get("model", "openai/gpt-4o-mini"),
         "base_url": llm.get("base_url", ""),
-        "autonomy": stored.get("autonomy", _DEFAULT_AUTONOMY),
+        "autonomy": stored.get("autonomy", get_autonomy_settings()),
     }
 
 

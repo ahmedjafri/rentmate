@@ -141,15 +141,26 @@ def test_startup_with_existing_data_no_crash():
     # Populate some data
     from sqlalchemy.orm import sessionmaker
 
-    from db.models import Property, Tenant, Unit
+    from db.models import Property, Tenant, Unit, User
     Session = sessionmaker(bind=eng)
     db = Session()
 
     import uuid
     from datetime import UTC, datetime
-    acct_id = "test-account"
+    acct_id = 1
+    shadow_user = User(
+        id=2,
+        org_id=1,
+        email="tenant@example.com",
+        first_name="Test",
+        last_name="Tenant",
+        active=True,
+        created_at=datetime.now(UTC),
+    )
+    db.add(shadow_user)
     prop = Property(
         id=str(uuid.uuid4()),
+        org_id=1,
         creator_id=acct_id,
         address_line1="123 Test St",
         property_type="single_family",
@@ -158,16 +169,16 @@ def test_startup_with_existing_data_no_crash():
     db.add(prop)
     db.add(Unit(
         id=str(uuid.uuid4()),
+        org_id=1,
         creator_id=acct_id,
         property_id=prop.id,
         label="Main",
         created_at=datetime.now(UTC),
     ))
     db.add(Tenant(
-        id=str(uuid.uuid4()),
+        org_id=1,
         creator_id=acct_id,
-        first_name="Test",
-        last_name="Tenant",
+        user_id=shadow_user.id,
         created_at=datetime.now(UTC),
     ))
     db.commit()
@@ -199,8 +210,8 @@ def test_startup_agent_memory_writes_with_explicit_creator():
     from datetime import UTC, datetime
     mem = AgentMemory(
         id=str(uuid.uuid4()),
-        creator_id="test-account",
-        agent_id="test-agent",
+        org_id=1,
+        creator_id=1,
         memory_type="file:TEST.md",
         content="test content",
         updated_at=datetime.now(UTC),
@@ -227,7 +238,8 @@ def test_startup_scheduled_task_creation_with_explicit_creator():
     from datetime import UTC, datetime
     task = ScheduledTask(
         id=str(uuid.uuid4()),
-        creator_id="test-account",
+        org_id=1,
+        creator_id=1,
         name="Test task",
         prompt="Do something",
         schedule="0 9 * * *",

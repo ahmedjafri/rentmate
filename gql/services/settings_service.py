@@ -189,13 +189,13 @@ def save_integrations(data: dict) -> None:
 
 
 _DEFAULT_OPTIONS = [
-    SuggestionOption(key="accept", label="Accept", action="accept_task", variant="default"),
+    SuggestionOption(key="send", label="Create Task", action="send_and_create_task", variant="default"),
     SuggestionOption(key="reject", label="Reject", action="reject_task", variant="ghost"),
 ]
 
 _VENDOR_DRAFT_OPTIONS = [
-    SuggestionOption(key="send", label="Send Message", action="approve_draft", variant="default"),
-    SuggestionOption(key="edit", label="Edit Message", action="edit_draft", variant="outline"),
+    SuggestionOption(key="send", label="Send Message", action="send_and_create_task", variant="default"),
+    SuggestionOption(key="edit", label="Edit Message", action="edit_message", variant="outline"),
     SuggestionOption(key="skip", label="Do not send", action="reject_task", variant="ghost"),
 ]
 

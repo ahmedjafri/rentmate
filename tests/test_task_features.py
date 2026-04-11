@@ -1,7 +1,7 @@
 # tests/test_task_features.py
 """
 Comprehensive tests for the unified Task model, GraphQL queries/mutations,
-and DocumentTag/DocumentTask models.
+and DocumentTag/Suggestion document-link models.
 
 Covers:
 - tasks query (no filter, category filter, status filter, comma-separated status, source filter)
@@ -13,7 +13,7 @@ Covers:
 - sendMessage mutation
 - addDocumentTag mutation
 - confirmDocument mutation
-- DocumentTask model (create, unique constraint)
+- Suggestion document link model
 - DocumentTag model (create)
 """
 
@@ -27,14 +27,15 @@ from db.models import (
     Conversation,
     Document,
     DocumentTag,
-    DocumentTask,
     Lease,
     Message,
     ParticipantType,
     Property,
+    Suggestion,
     Task,
     Tenant,
     Unit,
+    User,
 )
 from gql.schema import schema
 
@@ -66,7 +67,10 @@ def _mk_unit(db, prop, label="101"):
 
 
 def _mk_tenant(db, first="Alice", last="Renter", email=None):
-    t = Tenant(first_name=first, last_name=last, email=email)
+    user = User(first_name=first, last_name=last, email=email, active=True)
+    db.add(user)
+    db.flush()
+    t = Tenant(user_id=user.id)
     db.add(t)
     db.flush()
     return t
@@ -1104,64 +1108,55 @@ class TestConfirmDocumentMutation:
 
 
 # ---------------------------------------------------------------------------
-# DocumentTask model
+# Suggestion document link model
 # ---------------------------------------------------------------------------
 
-class TestDocumentTaskModel:
+class TestDocumentSuggestionModel:
 
-    def test_create_document_task(self, db):
+    def test_create_document_linked_suggestion(self, db):
         doc = _mk_document(db)
         task = _mk_task(db, subject="Doc task")
 
-        dt = DocumentTask(document_id=doc.id, task_id=task.id)
-        db.add(dt)
+        suggestion = Suggestion(
+            org_id=1,
+            creator_id=1,
+            title="Review document",
+            document_id=doc.id,
+            task_id=task.id,
+        )
+        db.add(suggestion)
         db.flush()
 
-        assert dt.id is not None
-        assert dt.document_id == doc.id
-        assert dt.task_id == task.id
-        assert dt.created_at is not None
+        assert suggestion.id is not None
+        assert suggestion.document_id == doc.id
+        assert suggestion.task_id == task.id
+        assert suggestion.created_at is not None
 
-    def test_document_task_unique_constraint(self, db):
-        doc = _mk_document(db)
-        task = _mk_task(db, subject="Unique constraint task")
-
-        dt1 = DocumentTask(document_id=doc.id, task_id=task.id)
-        db.add(dt1)
-        db.flush()
-
-        dt2 = DocumentTask(document_id=doc.id, task_id=task.id)
-        db.add(dt2)
-        with pytest.raises(IntegrityError):
-            db.flush()
-
-    def test_document_task_multiple_tasks_per_document(self, db):
+    def test_multiple_suggestions_can_reference_same_document(self, db):
         doc = _mk_document(db)
         task1 = _mk_task(db, subject="Task 1")
         task2 = _mk_task(db, subject="Task 2")
 
-        db.add(DocumentTask(document_id=doc.id, task_id=task1.id))
-        db.add(DocumentTask(document_id=doc.id, task_id=task2.id))
+        db.add(Suggestion(org_id=1, creator_id=1, title="Suggestion 1", document_id=doc.id, task_id=task1.id))
+        db.add(Suggestion(org_id=1, creator_id=1, title="Suggestion 2", document_id=doc.id, task_id=task2.id))
         db.flush()
 
-        from sqlalchemy import select
         results = db.execute(
-            select(DocumentTask).where(DocumentTask.document_id == doc.id)
+            select(Suggestion).where(Suggestion.document_id == doc.id)
         ).scalars().all()
         assert len(results) == 2
 
-    def test_document_task_multiple_documents_per_task(self, db):
+    def test_task_can_have_multiple_document_linked_suggestions(self, db):
         doc1 = _mk_document(db, filename="doc1.pdf")
         doc2 = _mk_document(db, filename="doc2.pdf")
         task = _mk_task(db, subject="Multi-doc task")
 
-        db.add(DocumentTask(document_id=doc1.id, task_id=task.id))
-        db.add(DocumentTask(document_id=doc2.id, task_id=task.id))
+        db.add(Suggestion(org_id=1, creator_id=1, title="Doc 1", document_id=doc1.id, task_id=task.id))
+        db.add(Suggestion(org_id=1, creator_id=1, title="Doc 2", document_id=doc2.id, task_id=task.id))
         db.flush()
 
-        from sqlalchemy import select
         results = db.execute(
-            select(DocumentTask).where(DocumentTask.task_id == task.id)
+            select(Suggestion).where(Suggestion.task_id == task.id)
         ).scalars().all()
         assert len(results) == 2
 

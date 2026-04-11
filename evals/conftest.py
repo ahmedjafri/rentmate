@@ -15,6 +15,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from db.enums import TaskCategory, TaskMode, TaskSource, TaskStatus, Urgency
 from db.models import (
     Base,
     Conversation,
@@ -28,7 +29,9 @@ from db.models import (
     Task,
     Tenant,
     Unit,
+    User,
 )
+from db.models.account import create_shadow_user
 
 DEFAULT_ACCOUNT_ID = 1
 
@@ -64,6 +67,18 @@ def db(Session, engine):
         if transaction.nested and not transaction._parent.nested:
             sess.begin_nested()
 
+    session.add(User(
+        id=DEFAULT_ACCOUNT_ID,
+        external_id=str(uuid.uuid4()),
+        org_id=1,
+        email="eval-admin@example.com",
+        first_name="Eval",
+        last_name="Admin",
+        user_type="account",
+        active=True,
+    ))
+    session.flush()
+
     yield session
     session.close()
     trans.rollback()
@@ -95,10 +110,38 @@ class ScenarioBuilder:
         self.db = db
         self.entities = {}
 
+    @staticmethod
+    def _coerce_task_category(value):
+        if isinstance(value, TaskCategory):
+            return value
+        return TaskCategory(value)
+
+    @staticmethod
+    def _coerce_task_mode(value):
+        if isinstance(value, TaskMode):
+            return value
+        return TaskMode[value.upper()]
+
+    @staticmethod
+    def _coerce_task_status(value):
+        if isinstance(value, TaskStatus):
+            return value
+        return TaskStatus[value.upper()]
+
+    @staticmethod
+    def _coerce_urgency(value):
+        if isinstance(value, Urgency):
+            return value
+        return Urgency[value.upper()]
+
     def add_property(self, *, name="Test Property", address="123 Main St",
                      city="Seattle", state="WA", postal_code="98101"):
         prop = Property(
-            id=str(uuid.uuid4()), name=name, address_line1=address,
+            id=str(uuid.uuid4()),
+            org_id=1,
+            creator_id=DEFAULT_ACCOUNT_ID,
+            name=name,
+            address_line1=address,
             city=city, state=state, postal_code=postal_code,
         )
         self.db.add(prop)
@@ -108,7 +151,13 @@ class ScenarioBuilder:
 
     def add_unit(self, *, label="A", prop=None):
         prop = prop or self.entities.get("property")
-        unit = Unit(id=str(uuid.uuid4()), property_id=prop.id, label=label)
+        unit = Unit(
+            id=str(uuid.uuid4()),
+            org_id=1,
+            creator_id=DEFAULT_ACCOUNT_ID,
+            property_id=prop.id,
+            label=label,
+        )
         self.db.add(unit)
         self.db.flush()
         self.entities["unit"] = unit
@@ -116,9 +165,20 @@ class ScenarioBuilder:
 
     def add_tenant(self, *, first_name="Alice", last_name="Renter",
                    phone="206-555-0100", email="alice@example.com"):
+        shadow_user = create_shadow_user(
+            self.db,
+            org_id=1,
+            creator_id=DEFAULT_ACCOUNT_ID,
+            user_type="tenant",
+            first_name=first_name,
+            last_name=last_name,
+            phone=phone,
+            email=email,
+        )
         tenant = Tenant(
-            id=str(uuid.uuid4()), first_name=first_name, last_name=last_name,
-            phone=phone, email=email,
+            org_id=1,
+            creator_id=DEFAULT_ACCOUNT_ID,
+            user_id=shadow_user.id,
         )
         self.db.add(tenant)
         self.db.flush()
@@ -132,7 +192,11 @@ class ScenarioBuilder:
         unit = unit or self.entities.get("unit")
         prop = prop or self.entities.get("property")
         lease = Lease(
-            id=str(uuid.uuid4()), tenant_id=tenant.id, unit_id=unit.id,
+            id=str(uuid.uuid4()),
+            org_id=1,
+            creator_id=DEFAULT_ACCOUNT_ID,
+            tenant_id=tenant.id,
+            unit_id=unit.id,
             property_id=prop.id,
             start_date=date.today() + timedelta(days=start_offset_days),
             end_date=date.today() + timedelta(days=end_offset_days),
@@ -162,7 +226,9 @@ class ScenarioBuilder:
         lease = self.entities.get("lease")
 
         ai_conv = Conversation(
-            id=str(uuid.uuid4()), subject=title,
+            org_id=1,
+            creator_id=DEFAULT_ACCOUNT_ID,
+            subject=title,
             conversation_type=ConversationType.TASK_AI,
             is_group=False, is_archived=False,
             created_at=datetime.now(UTC), updated_at=datetime.now(UTC),
@@ -172,16 +238,22 @@ class ScenarioBuilder:
 
         if context_body:
             self.db.add(Message(
-                id=str(uuid.uuid4()), conversation_id=ai_conv.id,
+                org_id=1,
+                conversation_id=ai_conv.id,
                 sender_type=ParticipantType.ACCOUNT_USER,
                 body=context_body, message_type=MessageType.CONTEXT,
                 sender_name="System", is_ai=False, sent_at=datetime.now(UTC),
             ))
 
         task = Task(
-            id=str(uuid.uuid4()), creator_id=DEFAULT_ACCOUNT_ID,
-            title=title, task_status=task_status, task_mode=task_mode,
-            category=category, urgency=urgency, source="manual",
+            org_id=1,
+            creator_id=DEFAULT_ACCOUNT_ID,
+            title=title,
+            task_status=self._coerce_task_status(task_status),
+            task_mode=self._coerce_task_mode(task_mode),
+            category=self._coerce_task_category(category),
+            urgency=self._coerce_urgency(urgency),
+            source=TaskSource.MANUAL,
             property_id=prop.id if prop else None,
             unit_id=unit.id if unit else None,
             lease_id=lease.id if lease else None,
@@ -308,7 +380,8 @@ def run_turn_sync(db, task, user_message):
 def add_message(db, conv_id, sender_name, body, sender_type, is_ai=False):
     """Add a simulated message to a conversation."""
     msg = Message(
-        id=str(uuid.uuid4()), conversation_id=conv_id,
+        org_id=1,
+        conversation_id=conv_id,
         sender_type=sender_type, body=body,
         message_type=MessageType.MESSAGE, sender_name=sender_name,
         is_ai=is_ai, sent_at=datetime.now(UTC),

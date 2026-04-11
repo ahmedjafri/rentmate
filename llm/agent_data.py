@@ -59,6 +59,12 @@ def _make_session():
 # Serializers — convert ORM objects to agent-friendly dicts
 # ---------------------------------------------------------------------------
 
+def _public_id(entity) -> str:
+    external_id = getattr(entity, "external_id", None)
+    if isinstance(external_id, str) and external_id:
+        return external_id
+    return str(entity.id)
+
 def _serialize_properties(props) -> list:
     today = date.today()
     results = []
@@ -75,7 +81,7 @@ def _serialize_properties(props) -> list:
             leases.append({
                 "id": str(l.id),
                 "tenant": tenant_display_name(l.tenant) if l.tenant else None,
-                "tenant_id": str(l.tenant.id) if l.tenant else None,
+                "tenant_id": _public_id(l.tenant) if l.tenant else None,
                 "unit": l.unit.label if l.unit else None,
                 "start_date": str(l.start_date),
                 "end_date": str(l.end_date),
@@ -109,7 +115,7 @@ def _serialize_tenants(tenants) -> list:
         )
         is_active = bool(active_lease and active_lease.end_date and active_lease.end_date >= today)
         results.append({
-            "id": str(t.id),
+            "id": _public_id(t),
             "name": tenant_display_name(t),
             "email": t.email,
             "phone": t.phone,
@@ -129,7 +135,7 @@ def _serialize_leases(leases) -> list:
         {
             "id": str(l.id),
             "tenant": tenant_display_name(l.tenant) if l.tenant else None,
-            "tenant_id": str(l.tenant.id) if l.tenant else None,
+            "tenant_id": _public_id(l.tenant) if l.tenant else None,
             "property": l.property.name if l.property else None,
             "property_id": str(l.property_id) if l.property_id else None,
             "unit": l.unit.label if l.unit else None,

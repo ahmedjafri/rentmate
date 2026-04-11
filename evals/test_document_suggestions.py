@@ -1,8 +1,8 @@
 """Eval: agent creates suggestions from document data.
 
 Tests that when the agent is told about an uploaded document with extracted
-lease data, it uses create_suggestion (or create_property/create_tenant)
-rather than doing nothing.
+lease data, it uses the current suggestion flow (or create_property/create_tenant)
+rather than any legacy document-task path.
 """
 import os
 

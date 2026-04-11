@@ -16,9 +16,9 @@ def get_tenant_token(token: str, request: Request):
     if not tenant:
         raise HTTPException(status_code=404, detail="Invalid portal link")
     _, jwt_token = TenantService.authenticate_by_token(db, token)
-    name = f"{tenant.first_name} {tenant.last_name}".strip()
+    name = tenant.user.name if tenant.user else "Tenant"
     return {
-        "tenant_id": str(tenant.id),
+        "tenant_id": str(tenant.external_id),
         "name": name,
         "access_token": jwt_token,
     }

@@ -27,11 +27,12 @@ def load_account_context(db: Session) -> str:
             tenant = lease.tenant
             unit = lease.unit
             prop = lease.property
-            if not tenant or not unit:
+            tenant_user = tenant.user if tenant else None
+            if not tenant_user or not unit:
                 continue
-            name = f"{tenant.first_name} {tenant.last_name}".strip()
-            phone = tenant.phone or "no phone"
-            email = tenant.email or "no email"
+            name = tenant_user.name or "Tenant"
+            phone = tenant_user.phone or "no phone"
+            email = tenant_user.email or "no email"
             prop_label = prop.name if prop else "?"
             start = lease.start_date.strftime("%Y-%m-%d") if lease.start_date else "?"
             end = lease.end_date.strftime("%Y-%m-%d") if lease.end_date else "?"
@@ -48,12 +49,13 @@ def load_account_context(db: Session) -> str:
 def _append_lease_context(lines: list[str], lease: Lease) -> None:
     """Append tenant and lease details to context lines."""
     tenant = lease.tenant
-    if tenant:
-        name = f"{tenant.first_name} {tenant.last_name}".strip()
-        phone = tenant.phone or "no phone"
-        email = tenant.email or "no email"
+    tenant_user = tenant.user if tenant else None
+    if tenant_user:
+        name = tenant_user.name or "Tenant"
+        phone = tenant_user.phone or "no phone"
+        email = tenant_user.email or "no email"
         lines.append(f"Current Tenant: {name} | {phone} | {email}")
-        lines.append(f"Tenant ID: {tenant.id}")
+        lines.append(f"Tenant ID: {tenant.external_id}")
     start = lease.start_date.strftime("%Y-%m-%d") if lease.start_date else "?"
     end = lease.end_date.strftime("%Y-%m-%d") if lease.end_date else "?"
     rent = f"${lease.rent_amount:,.0f}/mo" if lease.rent_amount else "?"
@@ -142,11 +144,11 @@ def build_task_context(db: Session, task_id: str) -> str:
         vendor_id = extra.get("assigned_vendor_id")
         vendor_name = extra.get("assigned_vendor_name")
         if vendor_id:
-            from db.models import ExternalContact
-            vendor_obj = db.query(ExternalContact).filter_by(id=vendor_id).first()
+            from db.models import User
+            vendor_obj = db.query(User).filter_by(id=vendor_id, user_type="vendor").first()
             if vendor_obj:
                 lines.append(f"Assigned Vendor: {vendor_obj.name} | {vendor_obj.phone or 'no phone'} | {vendor_obj.email or 'no email'}")
-                lines.append(f"Vendor ID: {vendor_obj.id}")
+                lines.append(f"Vendor ID: {vendor_obj.external_id}")
             elif vendor_name:
                 lines.append(f"Assigned Vendor: {vendor_name}")
                 lines.append(f"Vendor ID: {vendor_id}")
@@ -161,8 +163,9 @@ def build_task_context(db: Session, task_id: str) -> str:
         if entity and entity.context:
             notes.append(f"[shared] {label} notes: {entity.context}")
         if entity:
+            note_entity_id = str(getattr(entity, "external_id", entity.id))
             private = db.query(EntityNote).filter_by(
-                creator_id=creator_id, entity_type=entity_type, entity_id=str(entity.id),
+                creator_id=creator_id, entity_type=entity_type, entity_id=note_entity_id,
             ).first()
             if private and private.content:
                 notes.append(f"[private] {label} notes: {private.content}")

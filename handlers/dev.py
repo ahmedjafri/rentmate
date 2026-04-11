@@ -76,17 +76,16 @@ async def simulate_inbound(
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     sender_meta = {"source": DEV_SIM_SOURCE, "simulated": True}
+    tenant_name = tenant.user.name if tenant.user else "Tenant"
 
     if body.force_new:
         now = datetime.now(UTC)
         task = Task(
-            id=str(uuid.uuid4()),
             creator_id=tenant.creator_id,
-            title=f"Message from {tenant.first_name} {tenant.last_name}",
+            title=f"Message from {tenant_name}",
             task_status="active",
             task_mode="autonomous",
             source=DEV_SIM_SOURCE,
-            channel_type=body.channel_type,
             created_at=now,
             updated_at=now,
         )
@@ -94,10 +93,8 @@ async def simulate_inbound(
         db.flush()
 
         conv = Conversation(
-            id=str(uuid.uuid4()),
             creator_id=tenant.creator_id,
-            task_id=task.id,
-            subject=f"Message from {tenant.first_name} {tenant.last_name}",
+            subject=f"Message from {tenant_name}",
             is_group=False,
             is_archived=False,
             created_at=now,
@@ -107,12 +104,12 @@ async def simulate_inbound(
         db.flush()
 
         db.add(ConversationParticipant(
-            id=str(uuid.uuid4()),
+            org_id=tenant.org_id,
+            creator_id=tenant.creator_id,
             conversation_id=conv.id,
+            user_id=tenant.user_id,
             participant_type=ParticipantType.TENANT,
-            tenant_id=tenant.id,
             is_active=True,
-            joined_at=now,
         ))
         db.flush()
         db.refresh(conv)
@@ -136,7 +133,7 @@ async def simulate_inbound(
             .filter(
                 Task.source == DEV_SIM_SOURCE,
                 Task.task_status == "active",
-                ConversationParticipant.tenant_id == tenant.id,
+                ConversationParticipant.user_id == tenant.user_id,
                 ConversationParticipant.is_active.is_(True),
             )
             .count()
@@ -164,7 +161,7 @@ async def simulate_inbound(
             .filter(
                 Task.source == DEV_SIM_SOURCE,
                 Task.task_status == "active",
-                ConversationParticipant.tenant_id == tenant.id,
+                ConversationParticipant.user_id == tenant.user_id,
                 ConversationParticipant.is_active.is_(True),
             )
             .count()
@@ -198,7 +195,7 @@ async def simulate_inbound(
 
     now = datetime.now(UTC)
     db.add(Message(
-        id=str(uuid.uuid4()),
+        org_id=tenant.org_id,
         conversation_id=conv.id,
         sender_type=ParticipantType.ACCOUNT_USER,
         body=reply,
@@ -222,6 +219,9 @@ async def get_dev_history(
     db: Session = Depends(get_db),
 ):
     await require_user(request)
+    tenant = db.query(Tenant).filter_by(id=tenant_id).first()
+    if not tenant:
+        return DevHistoryResponse(task_id=None, messages=[])
 
     # Most recent active dev_sim task for this tenant
     conv = (
@@ -231,7 +231,7 @@ async def get_dev_history(
         .filter(
             Task.source == DEV_SIM_SOURCE,
             Task.task_status == "active",
-            ConversationParticipant.tenant_id == tenant_id,
+            ConversationParticipant.user_id == tenant.user_id,
             ConversationParticipant.is_active.is_(True),
         )
         .order_by(Conversation.updated_at.desc())
