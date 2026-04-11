@@ -3,10 +3,10 @@ import uuid
 
 from sqlalchemy import Column, DateTime, String, Text
 
-from .base import Base
+from .base import Base, OrgId
 
 
-class AppSetting(Base):
+class AppSetting(Base, OrgId):
     """Key-value store for application settings.
 
     Replaces data/settings.json and data/integrations.json.

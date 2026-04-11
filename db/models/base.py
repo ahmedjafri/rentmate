@@ -1,55 +1,60 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, ForeignKeyConstraint, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
 
+DEFAULT_ORG_ID = 1
 
-def _resolve_creator_id():
-    """Column default: resolve creator_id from request context.
 
-    Raises RuntimeError if no context is set — catches code that creates
-    entities without going through authentication.
+class OrgId:
+    """Mixin that adds org_id for multi-server data partitioning.
+
+    Hardcoded to DEFAULT_ORG_ID for self-hosted; the hosted version
+    assigns a unique org_id per deployment.
     """
-    from backends.local_auth import resolve_account_id
-    return resolve_account_id()
+    org_id = Column(Integer, nullable=False, default=DEFAULT_ORG_ID, index=True)
+
+
+class PrimaryId:
+    """UUID primary key for models that need globally unique, non-guessable IDs."""
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+
+
+class NumberedPrimaryId:
+    """Auto-incrementing integer primary key for models with sequential numbering."""
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+
+class SmallPrimaryId:
+    """Auto-incrementing integer primary key with a UUID external_id for API exposure."""
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    external_id = Column(String(36), unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
 
 
 class HasCreatorId:
-    """Mixin that adds creator_id (integer) to any model.
+    """Mixin that adds creator_id (integer) referencing User.id.
 
-    References User.id. The default resolves from the request-scoped
-    context var. If no context is set (missing auth), entity creation
-    raises RuntimeError.
+    Each model using this mixin must include a composite FK in __table_args__::
+
+        ForeignKeyConstraint(
+            ["org_id", "creator_id"],
+            ["users.org_id", "users.id"],
+        ),
     """
-    creator_id = Column(Integer, nullable=False, default=_resolve_creator_id, index=True)
-
-
-HasAccountId = HasCreatorId  # backward compat alias
+    creator_id = Column(Integer, nullable=False)
 
 
 class HasContext:
-    """Mixin for entities that support shared/system context notes.
-
-    The ``context`` column stores shared context visible to all accounts
-    (e.g. lease terms from document extraction).  Per-account private notes
-    are stored in the ``EntityNote`` table instead.
-    """
+    """Shared context column (e.g. lease terms from document extraction)."""
     context = Column(Text, nullable=True)
 
 
-class EntityNote(Base):
-    """Per-account private notes on any entity.
-
-    Stores account-specific observations, assessments, and preferences that
-    should not be visible to other accounts.  Shared/system context remains
-    on the entity's own ``context`` column (via HasContext).
-    """
+class EntityNote(Base, OrgId, PrimaryId, HasCreatorId):
+    """Per-account private notes on any entity."""
     __tablename__ = "entity_notes"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    creator_id = Column(Integer, nullable=False, index=True)
     entity_type = Column(String(20), nullable=False)
     entity_id = Column(String(36), nullable=False, index=True)
     content = Column(Text, nullable=False, default="")
@@ -57,5 +62,10 @@ class EntityNote(Base):
     updated_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_entity_notes_org"),
         UniqueConstraint("creator_id", "entity_type", "entity_id", name="uq_entity_note_creator"),
+        ForeignKeyConstraint(
+            ["org_id", "creator_id"],
+            ["users.org_id", "users.id"],
+        ),
     )

@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 
 from sqlalchemy import (
@@ -8,15 +8,16 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum as SqlEnum,
-    ForeignKey,
+    ForeignKeyConstraint,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
-from .base import Base, HasAccountId, HasContext
+from .base import Base, HasContext, HasCreatorId, OrgId, SmallPrimaryId
 
 
 class ParticipantType(str, Enum):
@@ -33,22 +34,30 @@ class ConversationType(str, Enum):
     SUGGESTION_AI = "suggestion_ai"
 
 
-class MessageType(str, Enum):
-    MESSAGE    = "message"
-    INTERNAL   = "internal"
-    APPROVAL   = "approval"      # legacy — use SUGGESTION for new code
-    SUGGESTION = "suggestion"    # links to a Suggestion via related_task_ids.suggestion_id
-    CONTEXT    = "context"
-    THREAD     = "thread"    # deprecated — use MESSAGE
+class MessageType(int, Enum):
+    MESSAGE         = 1
+    INTERNAL        = 2
+    APPROVAL        = 3      # legacy -- use SUGGESTION for new code
+    SUGGESTION      = 4      # links to a Suggestion via related_task_ids.suggestion_id
+    CONTEXT         = 5
+    THREAD          = 6      # deprecated -- use MESSAGE
+    DRAFT_AI_REPLY  = 7      # AI-generated draft; content lives in body/body_html
 
 
-class ExternalContact(Base, HasAccountId, HasContext):
+class DraftApprovalStatus(int, Enum):
+    PENDING  = 1
+    APPROVED = 2
+    REJECTED = 3
+    EDITED   = 4
+
+
+class ExternalContact(Base, OrgId, SmallPrimaryId, HasCreatorId, HasContext):
     """
-    Non-auth contacts (e.g., maintenance vendors).
+    Deprecated -- use shadow User accounts instead.
+    Kept for migration compatibility; no new code should reference this model.
     """
     __tablename__ = "external_contacts"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False)
     company = Column(String(255), nullable=True)
     email = Column(String(255), nullable=True, index=True)
@@ -56,41 +65,51 @@ class ExternalContact(Base, HasAccountId, HasContext):
     role_label = Column(String(100), nullable=True)
     notes = Column(Text, nullable=True)
     extra = Column(JSON, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_external_contacts_server"),
+        ForeignKeyConstraint(
+            ["org_id", "creator_id"],
+            ["users.org_id", "users.id"],
+        ),
+    )
 
 
-class Conversation(Base, HasAccountId):
+class Conversation(Base, OrgId, SmallPrimaryId, HasCreatorId):
     """
     A message thread (1:1 or group).
     Optionally tied to a task and/or a property/unit/lease for context.
     """
     __tablename__ = "conversations"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    property_id = Column(String(36), ForeignKey("properties.id", ondelete="SET NULL"), nullable=True, index=True)
-    unit_id = Column(String(36), ForeignKey("units.id", ondelete="SET NULL"), nullable=True, index=True)
-    lease_id = Column(String(36), ForeignKey("leases.id", ondelete="SET NULL"), nullable=True, index=True)
+    property_id = Column(String(36), nullable=True, index=True)
+    unit_id = Column(String(36), nullable=True, index=True)
+    lease_id = Column(String(36), nullable=True, index=True)
 
     subject = Column(String(255), nullable=True)
     is_group = Column(Boolean, nullable=False, default=False)
     is_archived = Column(Boolean, nullable=False, default=False)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
     # Conversation type taxonomy
     conversation_type = Column(String(20), nullable=True, default="task_ai")
-    parent_conversation_id = Column(String(36), ForeignKey("conversations.id"), nullable=True)
+    parent_conversation_id = Column(Integer, nullable=True)
     ai_initiated = Column(Boolean, nullable=False, default=False)
 
     # Flexible metadata (vendor requirements, assignments, etc.)
     extra = Column(JSON, nullable=True)
 
-    property = relationship("Property")
-    unit = relationship("Unit")
-    lease = relationship("Lease")
-    parent = relationship("Conversation", remote_side="Conversation.id", foreign_keys="Conversation.parent_conversation_id")
+    property = relationship("Property", foreign_keys=[property_id])
+    unit = relationship("Unit", foreign_keys=[unit_id])
+    lease = relationship("Lease", foreign_keys=[lease_id])
+    parent = relationship(
+        "Conversation",
+        foreign_keys=[parent_conversation_id],
+        remote_side="Conversation.id",
+    )
 
     participants = relationship(
         "ConversationParticipant",
@@ -105,76 +124,83 @@ class Conversation(Base, HasAccountId):
     )
 
     __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_conversations_server"),
         Index("ix_conversations_updated", "updated_at"),
+        ForeignKeyConstraint(
+            ["org_id", "creator_id"],
+            ["users.org_id", "users.id"],
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "property_id"],
+            ["properties.org_id", "properties.id"],
+            ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "unit_id"],
+            ["units.org_id", "units.id"],
+            ondelete="SET NULL",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "lease_id"],
+            ["leases.org_id", "leases.id"],
+            ondelete="SET NULL",
+        ),
+        # Self-referential FK uses single-column (id is unique as PK)
+        ForeignKeyConstraint(
+            ["parent_conversation_id"],
+            ["conversations.id"],
+        ),
     )
 
 
-class ConversationParticipant(Base):
+class ConversationParticipant(Base, OrgId, SmallPrimaryId, HasCreatorId):
     """
-    Links a conversation to a participant (tenant or external_contact).
+    Links a conversation to a participant (tenant, account user, or vendor).
+    Every participant has a User identity (real or shadow).
     """
     __tablename__ = "conversation_participants"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    conversation_id = Column(
-        String(36),
-        ForeignKey("conversations.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-
+    conversation_id = Column(Integer, nullable=False, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
     participant_type = Column(SqlEnum(ParticipantType, name="participant_type"), nullable=False)
-    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
-    external_contact_id = Column(String(36), ForeignKey("external_contacts.id", ondelete="CASCADE"), nullable=True, index=True)
 
     delivery_prefs = Column(JSON, nullable=True)
 
     is_active = Column(Boolean, nullable=False, default=True)
-    joined_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    joined_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     left_at = Column(DateTime, nullable=True)
 
     conversation = relationship("Conversation", back_populates="participants")
-    tenant = relationship("Tenant")
-    external_contact = relationship("ExternalContact")
+    user = relationship("User", foreign_keys=[user_id])
 
     __table_args__ = (
-        UniqueConstraint(
-            "conversation_id",
-            "participant_type",
-            "tenant_id",
-            "external_contact_id",
-            name="uq_conversation_participant_unique_entity",
+        UniqueConstraint("org_id", "id", name="uq_conversation_participants_server"),
+        ForeignKeyConstraint(
+            ["org_id", "creator_id"],
+            ["users.org_id", "users.id"],
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "conversation_id"],
+            ["conversations.org_id", "conversations.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "user_id"],
+            ["users.org_id", "users.id"],
+            ondelete="CASCADE",
         ),
     )
 
-    @property
-    def display_name(self) -> str:
-        if self.tenant:
-            return f"{self.tenant.first_name} {self.tenant.last_name}"
-        if self.external_contact:
-            return self.external_contact.name
-        return "Unknown"
 
-
-class Message(Base):
-    """
-    A message within a conversation.
-    """
+class Message(Base, OrgId):
+    """A message within a conversation."""
     __tablename__ = "messages"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    conversation_id = Column(
-        String(36),
-        ForeignKey("conversations.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(Integer, nullable=False, index=True)
 
     sender_type = Column(SqlEnum(ParticipantType, name="message_sender_type"), nullable=False)
-    sender_tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="SET NULL"), nullable=True, index=True)
-    sender_external_contact_id = Column(String(36), ForeignKey("external_contacts.id", ondelete="SET NULL"), nullable=True, index=True)
+    sender_id = Column(Integer, nullable=True, index=True)
 
     body = Column(Text, nullable=True)
     body_html = Column(Text, nullable=True)
@@ -183,52 +209,43 @@ class Message(Base):
     is_system = Column(Boolean, nullable=False, default=False)
 
     # AI chat enhancement fields
-    message_type = Column(String(20), nullable=True)      # message/internal/approval/context
+    message_type = Column(SqlEnum(MessageType, name="message_type_enum"), nullable=True)
     sender_name = Column(String(255), nullable=True)
     is_ai = Column(Boolean, nullable=False, default=False)
-    draft_reply = Column(Text, nullable=True)
-    approval_status = Column(String(20), nullable=True)   # pending/approved/rejected/edited
-    related_task_ids = Column(JSON, nullable=True)        # [{taskId, label}]
-
-    sent_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    draft_approval_status = Column(SqlEnum(DraftApprovalStatus, name="draft_approval_status_enum"), nullable=True)
+    sent_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     edited_at = Column(DateTime, nullable=True)
     deleted_at = Column(DateTime, nullable=True)
 
     conversation = relationship("Conversation", back_populates="messages")
-    sender_tenant = relationship("Tenant")
-    sender_external_contact = relationship("ExternalContact")
+    sender = relationship("ConversationParticipant", foreign_keys=[sender_id])
 
     __table_args__ = (
+        UniqueConstraint("org_id", "conversation_id", "id", name="uq_messages_server"),
+        UniqueConstraint("id", name="uq_messages_id"),
         Index("ix_messages_conversation_sent", "conversation_id", "sent_at"),
+        ForeignKeyConstraint(
+            ["org_id", "conversation_id"],
+            ["conversations.org_id", "conversations.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "sender_id"],
+            ["conversation_participants.org_id", "conversation_participants.id"],
+            ondelete="SET NULL",
+        ),
     )
 
-    def validate_sender(self):
-        if self.sender_type == ParticipantType.TENANT and not self.sender_tenant_id:
-            raise ValueError("sender_tenant_id required for TENANT message")
-        if self.sender_type == ParticipantType.EXTERNAL_CONTACT and not self.sender_external_contact_id:
-            raise ValueError("sender_external_contact_id required for EXTERNAL_CONTACT message")
 
-
-class MessageReceipt(Base):
-    """
-    Per-participant read/delivery receipts for a message.
-    """
+class MessageReceipt(Base, OrgId):
+    """Per-participant read/delivery receipts for a message."""
     __tablename__ = "message_receipts"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
 
-    message_id = Column(
-        String(36),
-        ForeignKey("messages.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    conversation_participant_id = Column(
-        String(36),
-        ForeignKey("conversation_participants.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
+    conversation_id = Column(Integer, nullable=False)
+    message_id = Column(Integer, nullable=False, index=True)
+    conversation_participant_id = Column(Integer, nullable=False, index=True)
 
     delivered_at = Column(DateTime, nullable=True)
     read_at = Column(DateTime, nullable=True)
@@ -239,5 +256,15 @@ class MessageReceipt(Base):
             "message_id",
             "conversation_participant_id",
             name="uq_message_receipt_unique",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "conversation_id", "message_id"],
+            ["messages.org_id", "messages.conversation_id", "messages.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "conversation_participant_id"],
+            ["conversation_participants.org_id", "conversation_participants.id"],
+            ondelete="CASCADE",
         ),
     )

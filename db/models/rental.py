@@ -1,5 +1,4 @@
-import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
@@ -7,24 +6,20 @@ from sqlalchemy import (
     Date,
     DateTime,
     Float,
-    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
     String,
-    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
-from .base import Base, HasAccountId, HasContext
+from .base import Base, HasContext, HasCreatorId, OrgId, PrimaryId, SmallPrimaryId
 
 
-class Property(Base, HasAccountId, HasContext):
-    """
-    A property managed by the landlord.
-    """
+class Property(Base, OrgId, PrimaryId, HasCreatorId, HasContext):
+    """A property managed by the landlord."""
 
     __tablename__ = "properties"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
 
     name = Column(String(255), nullable=True)
     address_line1 = Column(String(255), nullable=False)
@@ -33,133 +28,130 @@ class Property(Base, HasAccountId, HasContext):
     state = Column(String(100), nullable=True)
     postal_code = Column(String(20), nullable=True)
     country = Column(String(100), nullable=True, default="USA")
-    # 'single_family' — one tenant, no distinct units (house/condo)
-    # 'multi_family'  — multiple units (apartment building, duplex, etc.)
-    property_type = Column(String(20), nullable=True, default='multi_family')
+    # 'single_family' -- one tenant, no distinct units (house/condo)
+    # 'multi_family'  -- multiple units (apartment building, duplex, etc.)
+    property_type = Column(String(20), nullable=True, default="multi_family")
     source = Column(String(20), nullable=True)  # 'manual' | 'document'
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
-    units = relationship(
-        "Unit",
-        back_populates="property",
-        cascade="all, delete-orphan",
-    )
-
-    leases = relationship(
-        "Lease",
-        back_populates="property",
-        cascade="all, delete-orphan",
-    )
-
-
-class Unit(Base, HasAccountId, HasContext):
-    """
-    A rentable unit within a property.
-    """
-
-    __tablename__ = "units"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    property_id = Column(
-        String(36),
-        ForeignKey("properties.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-
-    label = Column(String(100), nullable=False)
-
-    tenant_id = Column(
-        String(36),
-        ForeignKey("tenants.id", ondelete="SET NULL"),
-        nullable=True,
-    )
+    units = relationship("Unit", back_populates="property", cascade="all, delete-orphan")
+    leases = relationship("Lease", back_populates="property", cascade="all, delete-orphan")
 
     __table_args__ = (
-        UniqueConstraint(
-            "property_id",
-            "label",
-            name="uq_units_property_label",
+        UniqueConstraint("org_id", "id", name="uq_properties_server"),
+        ForeignKeyConstraint(
+            ["org_id", "creator_id"],
+            ["users.org_id", "users.id"],
         ),
     )
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+class Unit(Base, OrgId, PrimaryId, HasCreatorId, HasContext):
+    """A rentable unit within a property."""
+
+    __tablename__ = "units"
+
+    property_id = Column(String(36), nullable=False)
+    label = Column(String(100), nullable=False)
+    tenant_id = Column(Integer, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
     property = relationship("Property", back_populates="units")
     tenant = relationship("Tenant", foreign_keys=[tenant_id])
+    leases = relationship("Lease", back_populates="unit", cascade="all, delete-orphan")
 
-    leases = relationship(
-        "Lease",
-        back_populates="unit",
-        cascade="all, delete-orphan",
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_units_server"),
+        UniqueConstraint("property_id", "label", name="uq_units_property_label"),
+        ForeignKeyConstraint(
+            ["org_id", "creator_id"],
+            ["users.org_id", "users.id"],
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "property_id"],
+            ["properties.org_id", "properties.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "tenant_id"],
+            ["tenants.org_id", "tenants.id"],
+            ondelete="SET NULL",
+        ),
     )
 
 
-class Tenant(Base, HasAccountId, HasContext):
-    """
-    A tenant/contact.
-    """
+class Tenant(Base, OrgId, SmallPrimaryId, HasCreatorId, HasContext):
+    """A tenant/contact."""
 
     __tablename__ = "tenants"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    first_name = Column(String(100), nullable=False)
-    last_name = Column(String(100), nullable=False)
-    email = Column(String(255), nullable=True)
-    phone = Column(String(50), nullable=True)
-    notes = Column(Text, nullable=True)
-
+    user_id = Column(Integer, nullable=False, index=True)
     extra = Column(JSON, nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
-    leases = relationship(
-        "Lease",
-        back_populates="tenant",
-        cascade="all, delete-orphan",
-    )
+    user = relationship("User", foreign_keys=[user_id])
+    leases = relationship("Lease", back_populates="tenant", cascade="all, delete-orphan")
 
     @property
     def units(self):
         return [lease.unit for lease in self.leases if lease.unit is not None]
 
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_tenants_server"),
+        ForeignKeyConstraint(
+            ["org_id", "creator_id"],
+            ["users.org_id", "users.id"],
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "user_id"],
+            ["users.org_id", "users.id"],
+            ondelete="CASCADE",
+        ),
+    )
 
-class Lease(Base, HasAccountId):
-    """
-    A lease agreement between a tenant and a unit.
-    """
+
+class Lease(Base, OrgId, PrimaryId, HasCreatorId):
+    """A lease agreement between a tenant and a unit."""
 
     __tablename__ = "leases"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-
-    tenant_id = Column(
-        String(36),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-
-    unit_id = Column(
-        String(36),
-        ForeignKey("units.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-
-    property_id = Column(
-        String(36),
-        ForeignKey("properties.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    tenant_id = Column(Integer, nullable=False)
+    unit_id = Column(String(36), nullable=False)
+    property_id = Column(String(36), nullable=False)
 
     start_date = Column(Date, nullable=False)
     end_date = Column(Date, nullable=False)
     rent_amount = Column(Float, nullable=False)
-    payment_status = Column(String(20), nullable=True, default='current')  # current/late/overdue
+    payment_status = Column(String(20), nullable=True, default="current")  # current/late/overdue
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
-    tenant = relationship("Tenant", back_populates="leases")
-    unit = relationship("Unit", back_populates="leases")
-    property = relationship("Property", back_populates="leases")
+    tenant = relationship("Tenant", back_populates="leases", foreign_keys=[tenant_id])
+    unit = relationship("Unit", back_populates="leases", foreign_keys=[unit_id])
+    property = relationship("Property", back_populates="leases", foreign_keys=[property_id])
+
+    __table_args__ = (
+        UniqueConstraint("org_id", "id", name="uq_leases_server"),
+        ForeignKeyConstraint(
+            ["org_id", "creator_id"],
+            ["users.org_id", "users.id"],
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "tenant_id"],
+            ["tenants.org_id", "tenants.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "unit_id"],
+            ["units.org_id", "units.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "property_id"],
+            ["properties.org_id", "properties.id"],
+            ondelete="CASCADE",
+        ),
+    )

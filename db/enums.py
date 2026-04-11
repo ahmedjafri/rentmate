@@ -12,11 +12,35 @@ class TaskCategory(str, enum.Enum):
     OTHER = "other"
 
 
-class Urgency(str, enum.Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    CRITICAL = "critical"
+class Urgency(int, enum.Enum):
+    LOW = 1
+    MEDIUM = 2
+    HIGH = 3
+    CRITICAL = 4
+
+
+class TaskStatus(int, enum.Enum):
+    SUGGESTED = 1
+    ACTIVE = 2
+    PAUSED = 3
+    RESOLVED = 4
+    DISMISSED = 5
+
+
+class TaskMode(int, enum.Enum):
+    MANUAL = 1
+    WAITING_APPROVAL = 2
+    AUTONOMOUS = 3
+
+
+class TaskPriority(int, enum.Enum):
+    ROUTINE = 1
+    URGENT = 2
+
+
+class ChannelType(int, enum.Enum):
+    SMS = 1
+    EMAIL = 2
 
 
 class TaskSource(str, enum.Enum):
@@ -27,6 +51,18 @@ class TaskSource(str, enum.Enum):
     DOCUMENT = "document"
     TENANT_REPORT = "tenant_report"
     DEV_SIM = "dev_sim"
+
+
+class SuggestionSourceEnum(str, enum.Enum):
+    AUTOMATION = "automation"
+    AGENT = "agent"
+
+
+class SuggestionStatus(str, enum.Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    DISMISSED = "dismissed"
+    EXPIRED = "expired"
 
 
 # ─── Suggestion source (union) ───────────────────────────────────────────────
