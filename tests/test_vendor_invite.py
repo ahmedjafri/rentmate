@@ -12,10 +12,11 @@ Covers:
 - GraphQL createVendor mutation returns portalUrl
 """
 
+import bcrypt
 import pytest
 from fastapi import HTTPException
 
-from db.models import Conversation
+from db.models import Conversation, User
 from gql.schema import schema
 from gql.services.task_service import TaskService
 from gql.services.vendor_service import VendorService
@@ -144,6 +145,7 @@ class TestVendorTokenEndpoint:
 
         result = get_vendor_token(token, MockRequest(db))
         assert result["name"] == "Kelly"
+        assert result["login_required"] is False
         assert "access_token" in result
         info = VendorService.validate_vendor_token(result["access_token"])
         assert info["vendor_id"] == str(vendor.external_id)
@@ -152,6 +154,38 @@ class TestVendorTokenEndpoint:
         with pytest.raises(HTTPException) as exc_info:
             get_vendor_token("nonexistent-token", MockRequest(db))
         assert exc_info.value.status_code == 404
+
+    def test_returns_login_required_after_vendor_has_account(self, db):
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Kelly", phone="555-0050", vendor_type="Plumber"))
+        vendor.email = "kelly@example.com"
+        vendor.password_hash = bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode()
+        db.commit()
+
+        result = get_vendor_token(vendor.extra["portal_token"], MockRequest(db))
+        assert result["login_required"] is True
+        assert "access_token" not in result
+        assert result["email"] == "kelly@example.com"
+
+    def test_returns_login_required_for_linked_existing_account(self, db):
+        vendor = VendorService.create_vendor(db, CreateVendorInput(name="Kelly", phone="555-0050", vendor_type="Plumber"))
+        existing = User(
+            org_id=1,
+            creator_id=1,
+            email="linked@example.com",
+            password_hash=bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode(),
+            active=True,
+        )
+        db.add(existing)
+        db.commit()
+        extra = dict(vendor.extra or {})
+        extra["linked_user_id"] = existing.id
+        vendor.extra = extra
+        db.commit()
+
+        result = get_vendor_token(vendor.extra["portal_token"], MockRequest(db))
+        assert result["login_required"] is True
+        assert "access_token" not in result
+        assert result["email"] == "linked@example.com"
 
 
 # ---------------------------------------------------------------------------
