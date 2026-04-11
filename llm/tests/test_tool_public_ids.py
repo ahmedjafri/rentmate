@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from db.models import EntityNote, Suggestion, Task, Tenant, User
 from llm.tools import (
+    CreatePropertyTool,
     CreateTenantTool,
     CreateVendorTool,
     LookupVendorsTool,
@@ -11,6 +12,8 @@ from llm.tools import (
     ProposeTaskTool,
     RecallMemoryTool,
     SaveMemoryTool,
+    active_conversation_id,
+    pending_suggestion_messages,
 )
 
 
@@ -72,6 +75,59 @@ def test_create_tenant_returns_external_id(db):
     assert tenant.user.email == "tina@example.com"
 
 
+def test_create_property_queues_action_card_message(db):
+    conv_token = active_conversation_id.set("conv-123")
+    pending_token = pending_suggestion_messages.set([])
+    try:
+        with patch("db.session.SessionLocal.session_factory", return_value=db), \
+             patch.object(db, "close", lambda: None):
+            payload = json.loads(_run_tool(
+                CreatePropertyTool(),
+                address="123 Test St",
+                property_type="multi_family",
+                unit_labels=["1A", "1B"],
+            ))
+    finally:
+        queued = pending_suggestion_messages.get() or []
+        pending_suggestion_messages.reset(pending_token)
+        active_conversation_id.reset(conv_token)
+
+    assert payload["status"] == "ok"
+    assert queued[0]["message_type"].name == "ACTION"
+    assert queued[0]["meta"]["action_card"]["kind"] == "property"
+    assert queued[0]["meta"]["action_card"]["units"] == [
+        {"uid": payload["units"][0]["id"], "label": "1A", "property_id": payload["property_id"]},
+        {"uid": payload["units"][1]["id"], "label": "1B", "property_id": payload["property_id"]},
+    ]
+
+
+def test_create_tenant_queues_action_card_message(db):
+    conv_token = active_conversation_id.set("conv-456")
+    pending_token = pending_suggestion_messages.set([])
+    try:
+        with patch("db.session.SessionLocal.session_factory", return_value=db), \
+             patch.object(db, "close", lambda: None):
+            payload = json.loads(_run_tool(
+                CreateTenantTool(),
+                first_name="Tina",
+                last_name="Tenant",
+                email="tina@example.com",
+            ))
+    finally:
+        queued = pending_suggestion_messages.get() or []
+        pending_suggestion_messages.reset(pending_token)
+        active_conversation_id.reset(conv_token)
+
+    assert payload["status"] == "ok"
+    assert queued[0]["message_type"].name == "ACTION"
+    assert queued[0]["meta"]["action_card"]["kind"] == "tenant"
+    assert queued[0]["meta"]["action_card"]["links"][0] == {
+        "label": "Open tenant",
+        "entity_type": "tenant",
+        "entity_id": payload["tenant_id"],
+    }
+
+
 def test_message_person_tool_uses_external_tenant_id_in_payload(db):
     tenant_user = User(
         org_id=1,
@@ -91,17 +147,23 @@ def test_message_person_tool_uses_external_tenant_id_in_payload(db):
 
     with patch("db.session.SessionLocal.session_factory", return_value=db), \
          patch.object(db, "close", lambda: None), \
-         patch("gql.services.settings_service.get_autonomy_for_category", return_value="suggest"):
+         patch("llm.action_policy.get_action_policy_settings", return_value={
+             "entity_changes": "balanced",
+             "outbound_messages": "strict",
+             "suggestion_fallback": "balanced",
+         }):
         payload = json.loads(_run_tool(
             MessageExternalPersonTool(),
             task_id=str(task.id),
             entity_id=tenant.external_id,
             entity_type="tenant",
             draft_message="Checking in about the sink.",
+            risk_level="high",
         ))
 
     suggestion = db.query(Suggestion).filter_by(id=payload["suggestion_id"]).one()
     assert suggestion.action_payload["entity_id"] == tenant.external_id
+    assert "blocked by outbound policy" in payload["policy_reason"]
 
 
 def test_propose_task_tool_uses_external_vendor_id_in_payload(db):

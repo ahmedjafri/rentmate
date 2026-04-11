@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { AutonomySlider } from '@/components/suggestions/AutonomySlider';
-import { SuggestionCategory, AutonomyLevel } from '@/data/mockData';
+import { ActionPolicyLevel } from '@/data/mockData';
 import { Shield, Bot, Terminal, MessageSquare, Lock, Puzzle, Globe, Phone, Loader2, CheckCircle2, XCircle, HardDrive, Download, Upload } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Input } from '@/components/ui/input';
@@ -14,7 +14,23 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { authFetch, getToken } from '@/lib/auth';
 
-const categories: SuggestionCategory[] = ['rent', 'maintenance', 'leasing', 'compliance'];
+const actionPolicies = [
+  {
+    key: 'entity_changes',
+    label: 'Entity Changes',
+    help: 'How confident the agent must be before directly creating or updating properties, tenants, units, and leases.',
+  },
+  {
+    key: 'outbound_messages',
+    label: 'Outbound Messages',
+    help: 'How risky a tenant or vendor message can be before the agent must route it to review instead of sending directly.',
+  },
+  {
+    key: 'suggestion_fallback',
+    label: 'Suggestion Fallback',
+    help: 'How quickly the agent falls back to a PM suggestion when it is uncertain or blocked from acting directly.',
+  },
+] as const;
 
 interface LlmConfig {
   apiKey: string;
@@ -67,7 +83,7 @@ const AGENT_FILE_LABELS: Record<string, string> = {
 };
 
 const SettingsPage = () => {
-  const { autonomySettings, setAutonomySettings } = useApp();
+  const { actionPolicySettings, setActionPolicySettings } = useApp();
   const [llmConfig, setLlmConfig] = useState<LlmConfig>({ apiKey: '', model: '', baseUrl: '' });
   const [integrations, setIntegrations] = useState<IntegrationsState>({
     quo: { enabled: false, apiKey: '', fromNumber: '', phoneWhitelist: '' },
@@ -94,8 +110,8 @@ const SettingsPage = () => {
             model: data.model ?? '',
             baseUrl: data.base_url ?? '',
           });
-          if (data.autonomy) {
-            setAutonomySettings(data.autonomy);
+          if (data.action_policy) {
+            setActionPolicySettings(data.action_policy);
           }
         }
       })
@@ -171,11 +187,11 @@ const SettingsPage = () => {
       .catch(() => {});
   }, []);
 
-  const handleChange = (category: SuggestionCategory, level: AutonomyLevel) => {
-    setAutonomySettings({ ...autonomySettings, [category]: level });
+  const handleChange = (policyKey: keyof typeof actionPolicySettings, level: ActionPolicyLevel) => {
+    setActionPolicySettings({ ...actionPolicySettings, [policyKey]: level });
   };
 
-  const handleSaveAutonomy = async () => {
+  const handleSaveActionPolicy = async () => {
     try {
       const res = await fetch('/settings', {
         method: 'POST',
@@ -183,10 +199,10 @@ const SettingsPage = () => {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${getToken()}`,
         },
-        body: JSON.stringify({ autonomy: autonomySettings }),
+        body: JSON.stringify({ action_policy: actionPolicySettings }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      toast.success('Autonomy settings saved');
+      toast.success('Action policy settings saved');
     } catch (err) {
       toast.error(`Failed to save: ${(err as Error).message}`);
     }
@@ -387,25 +403,28 @@ const SettingsPage = () => {
       <Card className="p-6 rounded-xl">
         <div className="flex items-center gap-2 mb-1">
           <Shield className="h-5 w-5 text-primary" />
-          <h2 className="text-lg font-bold">Autonomy Levels</h2>
+          <h2 className="text-lg font-bold">Action Policy</h2>
         </div>
         <p className="text-sm text-muted-foreground mb-6">
-          Control how much independence your AI agent has for each category.
+          Control how aggressively the agent acts on internal records, outbound messages, and suggestion fallback.
         </p>
 
         <div className="space-y-6">
-          {categories.map((cat) =>
+          {actionPolicies.map((policy) =>
             <AutonomySlider
-              key={cat}
-              category={cat}
-              value={autonomySettings[cat]}
-              onChange={(level) => handleChange(cat, level)}
-              maxLevel={cat === 'compliance' ? 'suggest' : undefined}
-              maxLevelReason={cat === 'compliance' ? 'Compliance actions require human review for legal and safety reasons.' : undefined}
+              key={policy.key}
+              label={policy.label}
+              value={actionPolicySettings[policy.key]}
+              onChange={(level) => handleChange(policy.key, level)}
             />
           )}
+          <div className="grid gap-2 text-xs text-muted-foreground">
+            {actionPolicies.map((policy) => (
+              <p key={`${policy.key}-help`}><span className="font-medium text-foreground">{policy.label}:</span> {policy.help}</p>
+            ))}
+          </div>
         </div>
-        <Button onClick={handleSaveAutonomy} className="w-full mt-6">Save Autonomy Settings</Button>
+        <Button onClick={handleSaveActionPolicy} className="w-full mt-6">Save Action Policy</Button>
       </Card>
 
       {/* Chat Integrations */}

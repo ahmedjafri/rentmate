@@ -1,6 +1,7 @@
 """Service for reading and writing app-level settings from the database."""
 import json
 from datetime import UTC, datetime
+from typing import Literal
 
 from sqlalchemy.orm import Session
 
@@ -12,7 +13,13 @@ from db.session import SessionLocal, engine
 # Ensure app_settings table exists (may not if DB was created before this model)
 Base.metadata.create_all(engine, tables=[AppSetting.__table__], checkfirst=True)
 
-_DEFAULT_AUTONOMY = {c.value: "suggest" for c in TaskCategory}
+ActionPolicyLevel = Literal["strict", "balanced", "aggressive"]
+
+_DEFAULT_ACTION_POLICY: dict[str, ActionPolicyLevel] = {
+    "entity_changes": "balanced",
+    "outbound_messages": "balanced",
+    "suggestion_fallback": "balanced",
+}
 
 
 # ── generic get/set ──────────────────────────────────────────────────────────
@@ -69,32 +76,94 @@ def save_app_settings(data: dict) -> None:
         set_setting(key, value=value)
 
 
-# ── autonomy ─────────────────────────────────────────────────────────────────
+# ── action policy ────────────────────────────────────────────────────────────
 
 
-def get_autonomy_settings() -> dict:
-    """Return the autonomy settings dict (category → level)."""
-    return get_setting("autonomy") or dict(_DEFAULT_AUTONOMY)
+def get_action_policy_settings() -> dict[str, ActionPolicyLevel]:
+    """Return the action-policy settings dict."""
+    stored = get_setting("action_policy") or {}
+    return {
+        "entity_changes": stored.get("entity_changes", _DEFAULT_ACTION_POLICY["entity_changes"]),
+        "outbound_messages": stored.get("outbound_messages", _DEFAULT_ACTION_POLICY["outbound_messages"]),
+        "suggestion_fallback": stored.get("suggestion_fallback", _DEFAULT_ACTION_POLICY["suggestion_fallback"]),
+    }
 
 
-_AUTONOMY_MODES: dict[str, tuple[str, str]] = {
-    "manual":     ("manual",           "suggested"),
-    "suggest":    ("waiting_approval", "suggested"),
-    "autonomous": ("autonomous",       "active"),
+def save_action_policy_settings(data: dict[str, ActionPolicyLevel]) -> None:
+    """Persist action-policy settings."""
+    current = get_action_policy_settings()
+    current.update({k: v for k, v in data.items() if v is not None})
+    set_setting("action_policy", value=current)
+
+
+_ENTITY_CONFIDENCE_THRESHOLDS: dict[ActionPolicyLevel, float] = {
+    "strict": 0.9,
+    "balanced": 0.75,
+    "aggressive": 0.6,
 }
-_DEFAULT_MODE = _AUTONOMY_MODES["suggest"]
+
+_MESSAGE_RISK_ALLOWLIST: dict[ActionPolicyLevel, set[str]] = {
+    "strict": {"low"},
+    "balanced": {"low", "medium"},
+    "aggressive": {"low", "medium", "high"},
+}
+
+_SUGGESTION_FALLBACK_ALLOWANCE: dict[ActionPolicyLevel, str] = {
+    "strict": "prefer_suggestion_when_uncertain",
+    "balanced": "use_suggestion_when_blocked_or_ambiguous",
+    "aggressive": "use_suggestion_only_when_blocked",
+}
+
+
+def get_entity_change_policy_level() -> ActionPolicyLevel:
+    return get_action_policy_settings()["entity_changes"]
+
+
+def get_outbound_message_policy_level() -> ActionPolicyLevel:
+    return get_action_policy_settings()["outbound_messages"]
+
+
+def get_suggestion_fallback_policy_level() -> ActionPolicyLevel:
+    return get_action_policy_settings()["suggestion_fallback"]
+
+
+def entity_change_confidence_threshold(level: ActionPolicyLevel | None = None) -> float:
+    return _ENTITY_CONFIDENCE_THRESHOLDS[level or get_entity_change_policy_level()]
+
+
+def outbound_message_allows_risk(risk_level: str, level: ActionPolicyLevel | None = None) -> bool:
+    normalized = (risk_level or "medium").strip().lower()
+    if normalized == "critical":
+        return False
+    return normalized in _MESSAGE_RISK_ALLOWLIST[level or get_outbound_message_policy_level()]
+
+
+def should_prefer_suggestion_when_uncertain(level: ActionPolicyLevel | None = None) -> bool:
+    return (level or get_suggestion_fallback_policy_level()) == "strict"
+
+
+def get_action_policy_summary() -> dict[str, str | float]:
+    settings = get_action_policy_settings()
+    return {
+        "entity_changes": settings["entity_changes"],
+        "entity_confidence_threshold": entity_change_confidence_threshold(settings["entity_changes"]),
+        "outbound_messages": settings["outbound_messages"],
+        "suggestion_fallback": settings["suggestion_fallback"],
+        "suggestion_fallback_mode": _SUGGESTION_FALLBACK_ALLOWANCE[settings["suggestion_fallback"]],
+    }
+
+
+# Temporary compatibility helpers while the old category-autonomy model is removed.
+def get_autonomy_settings() -> dict:
+    return {c.value: "suggest" for c in TaskCategory}
 
 
 def get_autonomy_for_category(category: TaskCategory | str | None) -> str:
-    """Return the autonomy level ('manual', 'suggest', or 'autonomous') for a category."""
-    settings = get_autonomy_settings()
-    return settings.get(category or "", "suggest")
+    return "suggest"
 
 
 def get_task_mode_for_category(category: str | None) -> tuple[str, str]:
-    """Return (task_mode, task_status) for a category based on its autonomy level."""
-    level = get_autonomy_for_category(category)
-    return _AUTONOMY_MODES.get(level, _DEFAULT_MODE)
+    return ("waiting_approval", "suggested")
 
 
 # ── LLM config ──────────────────────────────────────────────────────────────

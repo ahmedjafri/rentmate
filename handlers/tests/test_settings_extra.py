@@ -122,19 +122,18 @@ class TestIntegrationsEndpoint(unittest.TestCase):
         # Token should be preserved
         assert saved.get("telegram", {}).get("token") == "existing-secret"
 
-    def test_post_settings_autonomy(self):
+    def test_post_settings_action_policy(self):
         with (
-            patch("handlers.settings.load_app_settings", return_value={}),
-            patch("handlers.settings.save_app_settings") as mock_save,
+            patch("handlers.settings.save_action_policy_settings") as mock_save,
         ):
             response = self.client.post(
                 "/settings",
-                json={"autonomy": {"rent": "autonomous", "maintenance": "suggest"}},
+                json={"action_policy": {"entity_changes": "aggressive", "outbound_messages": "strict"}},
                 headers=AUTH,
             )
         assert response.status_code == 200
         saved_arg = mock_save.call_args[0][0]
-        assert saved_arg["autonomy"]["rent"] == "autonomous"
+        assert saved_arg["entity_changes"] == "aggressive"
 
     def test_post_settings_base_url(self):
         with (

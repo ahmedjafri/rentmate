@@ -1,27 +1,27 @@
 import { Slider } from '@/components/ui/slider';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { AutonomyLevel, autonomyLabels, SuggestionCategory, categoryLabels } from '@/data/mockData';
+import { ActionPolicyLevel, actionPolicyLabels } from '@/data/mockData';
 import { Lock } from 'lucide-react';
 
-const allLevels: AutonomyLevel[] = ['manual', 'suggest', 'autonomous'];
+const allLevels: ActionPolicyLevel[] = ['strict', 'balanced', 'aggressive'];
 
 interface Props {
-  category: SuggestionCategory;
-  value: AutonomyLevel;
-  onChange: (level: AutonomyLevel) => void;
-  maxLevel?: AutonomyLevel;
+  label: string;
+  value: ActionPolicyLevel;
+  onChange: (level: ActionPolicyLevel) => void;
+  maxLevel?: ActionPolicyLevel;
   maxLevelReason?: string;
 }
 
-export function AutonomySlider({ category, value, onChange, maxLevel, maxLevelReason }: Props) {
+export function AutonomySlider({ label, value, onChange, maxLevel, maxLevelReason }: Props) {
   const maxIndex = maxLevel ? allLevels.indexOf(maxLevel) : allLevels.length - 1;
   const currentIndex = allLevels.indexOf(value);
 
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">{categoryLabels[category]}</span>
-        <span className="text-xs text-primary font-medium">{autonomyLabels[value]}</span>
+        <span className="text-sm font-medium">{label}</span>
+        <span className="text-xs text-primary font-medium">{actionPolicyLabels[value]}</span>
       </div>
       <Slider
         value={[currentIndex]}
@@ -39,7 +39,7 @@ export function AutonomySlider({ category, value, onChange, maxLevel, maxLevelRe
               key={l}
               className={`text-[10px] ${disabled ? 'text-muted-foreground/40' : 'text-muted-foreground'} ${disabled ? 'flex items-center gap-0.5' : ''}`}
             >
-              {autonomyLabels[l].split(' ')[0]}
+              {actionPolicyLabels[l]}
               {disabled && <Lock className="h-2.5 w-2.5 inline-block" />}
             </span>
           );

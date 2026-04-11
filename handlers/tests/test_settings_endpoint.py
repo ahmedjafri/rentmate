@@ -63,7 +63,7 @@ class TestSettingsEndpoint(unittest.TestCase):
         with (
             patch.dict(os.environ, {"LLM_API_KEY": "sk-test", "LLM_MODEL": "openai/gpt-4o-mini"}),
             patch("handlers.settings.load_app_settings", return_value={}),
-            patch("handlers.settings.get_autonomy_settings", return_value={}),
+            patch("handlers.settings.get_action_policy_settings", return_value={}),
             patch("handlers.settings.get_llm_settings", return_value={"api_key": "sk-test", "model": "openai/gpt-4o-mini", "base_url": ""}),
         ):
             response = self.client.get(
@@ -74,14 +74,14 @@ class TestSettingsEndpoint(unittest.TestCase):
         # API key is masked (bullets if set, empty if not)
         self.assertIn(data["api_key"], ("", "\u2022" * 8))
         self.assertEqual(data["model"], "openai/gpt-4o-mini")
-        self.assertIn("autonomy", data)
+        self.assertIn("action_policy", data)
 
     def test_get_settings_api_key_not_set(self):
         env = {k: v for k, v in os.environ.items() if k != "LLM_API_KEY"}
         with (
             patch.dict(os.environ, env, clear=True),
             patch("handlers.settings.load_app_settings", return_value={}),
-            patch("handlers.settings.get_autonomy_settings", return_value={}),
+            patch("handlers.settings.get_action_policy_settings", return_value={}),
             patch("handlers.settings.get_llm_settings", return_value={"api_key": "", "model": "openai/gpt-4o-mini", "base_url": ""}),
         ):
             response = self.client.get(

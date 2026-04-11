@@ -1,18 +1,18 @@
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from gql.services.settings_service import (  # noqa: F401 — re-exported
+    get_action_policy_settings,
     get_agent_integrations,
-    get_autonomy_settings,
     get_integrations,
     get_llm_settings,
     load_app_settings,
+    save_action_policy_settings,
     save_agent_integrations,
-    save_app_settings,
     save_integrations,
     save_llm_settings,
 )
@@ -75,7 +75,7 @@ class SettingsBody(BaseModel):
     api_key: Optional[str] = None
     model: Optional[str] = None
     base_url: Optional[str] = None
-    autonomy: Optional[Dict[str, str]] = None
+    action_policy: Optional[dict[str, str]] = None
 
 
 @router.get("/settings")
@@ -87,7 +87,7 @@ async def get_settings(request: Request):
         "api_key": _SECRET_MASK if llm.get("api_key") else "",
         "model": llm.get("model", "openai/gpt-4o-mini"),
         "base_url": llm.get("base_url", ""),
-        "autonomy": stored.get("autonomy", get_autonomy_settings()),
+        "action_policy": stored.get("action_policy", get_action_policy_settings()),
     }
 
 
@@ -127,11 +127,8 @@ async def update_settings(body: SettingsBody, request: Request):
             finally:
                 _db.close()
 
-    # Autonomy settings — persisted to DB
-    if body.autonomy is not None:
-        stored = load_app_settings()
-        stored["autonomy"] = body.autonomy
-        save_app_settings(stored)
+    if body.action_policy is not None:
+        save_action_policy_settings(body.action_policy)
 
     return {"ok": True}
 

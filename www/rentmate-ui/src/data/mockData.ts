@@ -2,6 +2,7 @@ export type SuggestionCategory = 'rent' | 'maintenance' | 'leasing' | 'complianc
 export type SuggestionUrgency = 'low' | 'medium' | 'high' | 'critical';
 export type SuggestionStatus = 'pending' | 'accepted' | 'dismissed' | 'expired';
 export type AutonomyLevel = 'manual' | 'suggest' | 'autonomous';
+export type ActionPolicyLevel = 'strict' | 'balanced' | 'aggressive';
 export type TicketPriority = 'low' | 'routine' | 'urgent' | 'emergency';
 export type TicketStatus = 'open' | 'in_progress' | 'resolved' | 'closed';
 
@@ -59,7 +60,7 @@ export interface ActionDeskTask {
   linkedConversations?: LinkedConversation[];
 }
 
-export type ChatMessageType = 'message' | 'internal' | 'approval' | 'context' | 'error';
+export type ChatMessageType = 'message' | 'internal' | 'approval' | 'context' | 'error' | 'action';
 export type ChatSenderType = 'manager' | 'ai' | 'tenant' | 'vendor';
 
 export interface ChatMessageRelatedTask {
@@ -70,6 +71,33 @@ export interface ChatMessageRelatedTask {
 export interface ChatMessageAttachment {
   documentId: string;
   filename: string;
+}
+
+export interface ChatActionCardField {
+  label: string;
+  value: string;
+}
+
+export interface ChatActionCardLink {
+  label: string;
+  entityType: 'suggestion' | 'property' | 'tenant' | 'unit';
+  entityId: string;
+  propertyId?: string | null;
+}
+
+export interface ChatActionCardUnit {
+  uid: string;
+  label: string;
+  propertyId: string;
+}
+
+export interface ChatActionCard {
+  kind: 'suggestion' | 'property' | 'tenant';
+  title: string;
+  summary?: string;
+  fields?: ChatActionCardField[];
+  links?: ChatActionCardLink[];
+  units?: ChatActionCardUnit[];
 }
 
 export interface ChatMessage {
@@ -85,6 +113,7 @@ export interface ChatMessage {
   approvalStatus?: 'pending' | 'approved' | 'rejected' | 'edited';
   relatedTasks?: ChatMessageRelatedTask[];
   attachments?: ChatMessageAttachment[];
+  actionCard?: ChatActionCard;
 }
 
 export interface SuggestionOption {
@@ -164,11 +193,10 @@ export interface MaintenanceTicket {
   vendorAssigned?: string;
 }
 
-export interface AutonomySettings {
-  rent: AutonomyLevel;
-  maintenance: AutonomyLevel;
-  leasing: AutonomyLevel;
-  compliance: AutonomyLevel;
+export interface ActionPolicySettings {
+  entity_changes: ActionPolicyLevel;
+  outbound_messages: ActionPolicyLevel;
+  suggestion_fallback: ActionPolicyLevel;
 }
 
 export type DocumentStatus = 'uploading' | 'analyzing' | 'ready' | 'error';
@@ -388,11 +416,10 @@ export const mockTickets: MaintenanceTicket[] = [
   { id: 'mt7', tenantId: 't1', tenantName: 'Sarah Chen', propertyId: 'p1', unit: '101', description: 'Dishwasher not draining after cycle completes', priority: 'routine', status: 'in_progress', createdAt: new Date('2026-03-06'), aiTriageSuggestion: 'Check drain hose and filter first — may not need vendor', vendorAssigned: 'AppliancePro' },
 ];
 
-export const defaultAutonomySettings: AutonomySettings = {
-  rent: 'suggest',
-  maintenance: 'suggest',
-  leasing: 'manual',
-  compliance: 'suggest',
+export const defaultActionPolicySettings: ActionPolicySettings = {
+  entity_changes: 'balanced',
+  outbound_messages: 'balanced',
+  suggestion_fallback: 'balanced',
 };
 
 export const categoryLabels: Record<SuggestionCategory, string> = {
@@ -420,6 +447,12 @@ export const autonomyLabels: Record<AutonomyLevel, string> = {
   manual: 'Manual',
   suggest: 'Suggest & Wait',
   autonomous: 'Fully Autonomous',
+};
+
+export const actionPolicyLabels: Record<ActionPolicyLevel, string> = {
+  strict: 'Strict',
+  balanced: 'Balanced',
+  aggressive: 'Aggressive',
 };
 
 export const taskModeLabels: Record<TaskMode, string> = {

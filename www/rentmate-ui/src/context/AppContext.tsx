@@ -2,8 +2,8 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
-  Suggestion, Property, Tenant, Vendor, MaintenanceTicket, AutonomySettings, ChatMessage, ActionDeskTask, ManagedDocument,
-  defaultAutonomySettings,
+  Suggestion, Property, Tenant, Vendor, MaintenanceTicket, ActionPolicySettings, ChatMessage, ActionDeskTask, ManagedDocument,
+  defaultActionPolicySettings,
   SuggestionStatus, ActionDeskTask as ADT,
 } from '@/data/mockData';
 import { useApiData } from '@/hooks/useApiData';
@@ -39,7 +39,7 @@ interface AppContextType {
   actionDeskTasks: ActionDeskTask[];
   isLoading: boolean;
   documents: ManagedDocument[];
-  autonomySettings: AutonomySettings;
+  actionPolicySettings: ActionPolicySettings;
   chatPanel: ChatPanelState;
   entityContext: Record<string, string>;
   getEntityContext: (entityId: string) => string;
@@ -68,7 +68,7 @@ interface AppContextType {
   openChat: (opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; conversationId?: string | null; lazy?: boolean }) => void;
   setChatConversationId: (id: string) => void;
   closeChat: () => void;
-  setAutonomySettings: (settings: AutonomySettings) => void;
+  setActionPolicySettings: (settings: ActionPolicySettings) => void;
   refreshData: () => void;
 }
 
@@ -149,7 +149,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [apiLoading, apiError, apiProperties, apiTenants, apiVendors, apiActionDeskTasks, apiTickets, apiSuggestions]);
 
   const [documents, setDocuments] = useState<ManagedDocument[]>([]);
-  const [autonomySettings, setAutonomySettings] = useState<AutonomySettings>(() => loadFromStorage('rm_autonomy', defaultAutonomySettings));
+  const [actionPolicySettings, setActionPolicySettings] = useState<ActionPolicySettings>(() => loadFromStorage('rm_action_policy', defaultActionPolicySettings));
   const [chatPanel, setChatPanel] = useState<ChatPanelState>({ isOpen: false, suggestionId: null, taskId: null, conversationId: null, pageContext: null });
 
   const [entityContext, setEntityContextState] = useState<Record<string, string>>(() => loadFromStorage('rm_entity_context', {}));
@@ -157,7 +157,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Persist non-API state to localStorage (settings, chat, documents, entity context).
   // API-backed state (properties/tenants/tasks/tickets/suggestions) is NOT persisted here —
   // the DB is the source of truth for those.
-  useEffect(() => { localStorage.setItem('rm_autonomy', JSON.stringify(autonomySettings)); }, [autonomySettings]);
+  useEffect(() => { localStorage.setItem('rm_action_policy', JSON.stringify(actionPolicySettings)); }, [actionPolicySettings]);
   useEffect(() => { localStorage.setItem('rm_entity_context', JSON.stringify(entityContext)); }, [entityContext]);
 
   const getEntityContext = useCallback((entityId: string) => entityContext[entityId] || '', [entityContext]);
@@ -340,11 +340,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   return (
     <AppContext.Provider value={{
-      properties, tenants, vendors, suggestions, tickets, actionDeskTasks, isLoading: apiLoading && actionDeskTasks.length === 0 && properties.length === 0, documents, autonomySettings,
+      properties, tenants, vendors, suggestions, tickets, actionDeskTasks, isLoading: apiLoading && actionDeskTasks.length === 0 && properties.length === 0, documents, actionPolicySettings,
       chatPanel, entityContext, getEntityContext, setEntityContext,
       updateSuggestionStatus, updateSuggestion, addChatMessage, updateTaskMessage, setTaskMessages, updateTask,
       addTask, removeTask,
-      addProperty, updateProperty, removeProperty, addTenant, updateTenant, removeTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, setChatConversationId, closeChat, setAutonomySettings, refreshData,
+      addProperty, updateProperty, removeProperty, addTenant, updateTenant, removeTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, setChatConversationId, closeChat, setActionPolicySettings, refreshData,
     }}>
       {children}
     </AppContext.Provider>

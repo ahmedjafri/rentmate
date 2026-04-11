@@ -23,13 +23,15 @@ def _seed_current_user():
     yield
 
 
-def test_settings_round_trip_and_autonomy_defaults(engine):
+def test_settings_round_trip_and_action_policy_defaults(engine):
     settings_service.set_setting("feature_flags", value={"x": True})
 
     assert settings_service.get_setting("feature_flags") == {"x": True}
     assert settings_service.load_app_settings()["feature_flags"] == {"x": True}
-    assert settings_service.get_autonomy_settings()["maintenance"] == "suggest"
-    assert settings_service.get_task_mode_for_category("maintenance") == ("waiting_approval", "suggested")
+    assert settings_service.get_action_policy_settings()["entity_changes"] == "balanced"
+    assert settings_service.entity_change_confidence_threshold() == 0.75
+    assert settings_service.outbound_message_allows_risk("medium") is True
+    assert settings_service.outbound_message_allows_risk("high", "strict") is False
 
 
 def test_llm_and_integration_settings_merge_with_env(monkeypatch):
