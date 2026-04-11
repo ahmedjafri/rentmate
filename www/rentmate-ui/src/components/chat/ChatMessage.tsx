@@ -161,6 +161,7 @@ function ActionCardBubble({ message }: { message: ChatMessageType }) {
 
   const cfg = kindConfig[card.kind];
   const Icon = cfg.icon;
+  const summary = card.summary?.trim();
 
   const openLink = (link: ChatActionCardLink) => {
     if (link.entityType === 'suggestion') {
@@ -181,71 +182,61 @@ function ActionCardBubble({ message }: { message: ChatMessageType }) {
   };
 
   return (
-    <div className="rounded-xl border border-primary/15 bg-card p-3 space-y-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-2">
-          <div className={cn('flex h-8 w-8 items-center justify-center rounded-lg bg-muted/60', cfg.className)}>
-            <Icon className="h-4 w-4" />
+    <div className="rounded-lg border border-primary/15 bg-card px-2.5 py-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex items-start gap-2">
+          <div className={cn('mt-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-muted/60', cfg.className)}>
+            <Icon className="h-3.5 w-3.5" />
           </div>
           <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <p className="text-sm font-semibold leading-tight">{card.title}</p>
-              <Badge variant="outline" className={cn('text-[10px] rounded-md', cfg.badge)}>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <p className="text-xs font-semibold leading-tight">{card.title}</p>
+              <Badge variant="outline" className={cn('h-5 rounded-md px-1.5 text-[9px]', cfg.badge)}>
                 {cfg.label}
               </Badge>
             </div>
-            {card.summary && (
-              <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{card.summary}</p>
+            {summary && (
+              <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">{summary}</p>
             )}
           </div>
         </div>
-        <span className="text-[10px] text-muted-foreground shrink-0">{formatMessageTime(message.timestamp)}</span>
+        <span className="pt-0.5 text-[10px] text-muted-foreground shrink-0">{formatMessageTime(message.timestamp)}</span>
       </div>
 
-      {card.fields && card.fields.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {card.fields.map((field) => (
-            <div key={`${field.label}-${field.value}`} className="rounded-lg bg-muted/40 px-3 py-2">
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{field.label}</p>
-              <p className="text-sm font-medium">{field.value}</p>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {card.units && card.units.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Created units</p>
-          <div className="flex flex-wrap gap-2">
-            {card.units.map((unit) => (
-              <button
-                key={unit.uid}
-                onClick={() => openLink({ label: unit.label, entityType: 'unit', entityId: unit.uid, propertyId: unit.propertyId })}
-                className="inline-flex items-center gap-1.5 rounded-md bg-muted/60 px-2.5 py-1.5 text-xs font-medium hover:bg-muted"
-              >
-                <Building2 className="h-3 w-3" />
-                {unit.label}
-                <ArrowUpRight className="h-3 w-3 opacity-60" />
-              </button>
-            ))}
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {card.fields?.map((field) => (
+          <div
+            key={`${field.label}-${field.value}`}
+            className="inline-flex max-w-full items-center gap-1 rounded-md bg-muted/50 px-2 py-1 text-[11px] leading-none"
+          >
+            <span className="font-medium text-muted-foreground">{field.label}:</span>
+            <span className="truncate font-medium">{field.value}</span>
           </div>
-        </div>
-      )}
+        ))}
 
-      {card.links && card.links.length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {card.links.map((link) => (
-            <button
-              key={`${link.entityType}-${link.entityId}-${link.label}`}
-              onClick={() => openLink(link)}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:text-primary/80 bg-primary/10 hover:bg-primary/15 rounded-md px-2.5 py-1.5 transition-colors"
-            >
-              <ArrowUpRight className="h-3.5 w-3.5" />
-              {link.label}
-            </button>
-          ))}
-        </div>
-      )}
+        {card.units?.map((unit) => (
+          <button
+            key={unit.uid}
+            onClick={() => openLink({ label: unit.label, entityType: 'unit', entityId: unit.uid, propertyId: unit.propertyId })}
+            className="inline-flex items-center gap-1 rounded-md bg-muted/60 px-2 py-1 text-[11px] font-medium hover:bg-muted"
+          >
+            <Building2 className="h-3 w-3" />
+            {unit.label}
+            <ArrowUpRight className="h-3 w-3 opacity-60" />
+          </button>
+        ))}
+
+        {card.links?.map((link) => (
+          <button
+            key={`${link.entityType}-${link.entityId}-${link.label}`}
+            onClick={() => openLink(link)}
+            className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15 hover:text-primary/80"
+          >
+            <ArrowUpRight className="h-3 w-3" />
+            {link.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

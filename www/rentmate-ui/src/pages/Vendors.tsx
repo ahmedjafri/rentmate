@@ -11,6 +11,7 @@ import { PageLoader } from '@/components/ui/page-loader';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -355,6 +356,11 @@ const Vendors = () => {
         <DialogContent className="max-w-md flex flex-col max-h-[90vh]">
           <DialogHeader>
             <DialogTitle>{editingId ? 'Edit Vendor' : 'Add Vendor'}</DialogTitle>
+            <DialogDescription>
+              {editingId
+                ? 'Update the vendor record, contact details, and portal information.'
+                : 'Add a vendor with their contact details and trade information.'}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2 overflow-y-auto pr-1">
             <div className="space-y-1.5">
@@ -435,6 +441,9 @@ const Vendors = () => {
               <Phone className="h-4 w-4" />
               Send SMS to {smsVendor?.name}
             </DialogTitle>
+            <DialogDescription>
+              Send a text message to the vendor using their saved phone number.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">{smsVendor?.phone}</p>

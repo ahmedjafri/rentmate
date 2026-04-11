@@ -79,7 +79,11 @@ const makeVendor = (overrides: Partial<Vendor> = {}): Vendor => ({
   ...overrides,
 });
 
-const renderPage = () => render(<Vendors />);
+const renderPage = async () => {
+  const view = render(<Vendors />);
+  await waitFor(() => expect(mockGetVendorTypes).toHaveBeenCalledTimes(1));
+  return view;
+};
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -106,82 +110,82 @@ describe('Vendors page', () => {
 
   // --- Render without crash ---
 
-  it('renders without crashing (catches missing VENDOR_TYPES constant regression)', () => {
+  it('renders without crashing (catches missing VENDOR_TYPES constant regression)', async () => {
     // This test would have caught the ReferenceError: VENDOR_TYPES is not defined
     // that occurred when the hardcoded constant was removed but JSX still referenced it.
-    expect(() => renderPage()).not.toThrow();
+    await expect(renderPage()).resolves.toBeDefined();
   });
 
   // --- Empty state ---
 
-  it('shows empty state when there are no vendors', () => {
-    renderPage();
+  it('shows empty state when there are no vendors', async () => {
+    await renderPage();
     expect(screen.getByText(/no vendors yet/i)).toBeInTheDocument();
   });
 
-  it('shows the correct vendor count in the subtitle', () => {
+  it('shows the correct vendor count in the subtitle', async () => {
     mockVendors = [makeVendor()];
-    renderPage();
+    await renderPage();
     expect(screen.getByText('1 vendor')).toBeInTheDocument();
   });
 
-  it('pluralises vendor count correctly', () => {
+  it('pluralises vendor count correctly', async () => {
     mockVendors = [makeVendor({ id: 'v1' }), makeVendor({ id: 'v2', name: 'Bob' })];
-    renderPage();
+    await renderPage();
     expect(screen.getByText('2 vendors')).toBeInTheDocument();
   });
 
   // --- Vendor card rendering ---
 
-  it('renders vendor name and company', () => {
+  it('renders vendor name and company', async () => {
     mockVendors = [makeVendor()];
-    renderPage();
+    await renderPage();
     expect(screen.getByText('Jane Smith')).toBeInTheDocument();
     expect(screen.getByText('Smith Plumbing')).toBeInTheDocument();
   });
 
-  it('renders vendorType badge', () => {
+  it('renders vendorType badge', async () => {
     mockVendors = [makeVendor()];
-    renderPage();
+    await renderPage();
     expect(screen.getByText('Plumber')).toBeInTheDocument();
   });
 
-  it('renders phone and email', () => {
+  it('renders phone and email', async () => {
     mockVendors = [makeVendor()];
-    renderPage();
+    await renderPage();
     expect(screen.getByText('555-1234')).toBeInTheDocument();
     expect(screen.getByText('jane@example.com')).toBeInTheDocument();
   });
 
   // --- Search filter ---
 
-  it('filters vendors by name search', () => {
+  it('filters vendors by name search', async () => {
     mockVendors = [
       makeVendor({ id: 'v1', name: 'Jane Smith' }),
       makeVendor({ id: 'v2', name: 'Bob Jones', company: 'Jones HVAC', vendorType: 'HVAC' }),
     ];
-    renderPage();
+    await renderPage();
     const input = screen.getByPlaceholderText(/search vendors/i);
     fireEvent.change(input, { target: { value: 'bob' } });
     expect(screen.queryByText('Jane Smith')).not.toBeInTheDocument();
     expect(screen.getByText('Bob Jones')).toBeInTheDocument();
   });
 
-  it('filters vendors by company search', () => {
+  it('filters vendors by company search', async () => {
     mockVendors = [
       makeVendor({ id: 'v1', name: 'Jane Smith', company: 'Smith Plumbing' }),
       makeVendor({ id: 'v2', name: 'Bob Jones', company: 'Jones HVAC', vendorType: 'HVAC' }),
     ];
-    renderPage();
+    await renderPage();
     const input = screen.getByPlaceholderText(/search vendors/i);
     fireEvent.change(input, { target: { value: 'jones hvac' } });
     expect(screen.queryByText('Jane Smith')).not.toBeInTheDocument();
     expect(screen.getByText('Bob Jones')).toBeInTheDocument();
   });
 
-  it('shows no-match message when search yields nothing', () => {
+  it('shows no-match message when search yields nothing', async () => {
     mockVendors = [makeVendor()];
-    renderPage();
+    await renderPage();
     const input = screen.getByPlaceholderText(/search vendors/i);
     fireEvent.change(input, { target: { value: 'zzznomatch' } });
     expect(screen.getByText(/no vendors match/i)).toBeInTheDocument();
@@ -189,8 +193,8 @@ describe('Vendors page', () => {
 
   // --- Add dialog ---
 
-  it('opens the add dialog when "+ Add Vendor" is clicked', () => {
-    renderPage();
+  it('opens the add dialog when "+ Add Vendor" is clicked', async () => {
+    await renderPage();
     fireEvent.click(screen.getByRole('button', { name: /add vendor/i }));
     const dialog = screen.getByRole('dialog');
     expect(dialog).toBeInTheDocument();
@@ -203,7 +207,7 @@ describe('Vendors page', () => {
       createVendor: { uid: 'new-id', name: 'New Guy', company: null, vendorType: null, phone: null, email: null, notes: null },
     });
 
-    renderPage();
+    await renderPage();
     fireEvent.click(screen.getByRole('button', { name: /add vendor/i }));
 
     const nameInput = screen.getByLabelText(/name/i);
@@ -220,7 +224,7 @@ describe('Vendors page', () => {
   });
 
   it('shows validation error when name is empty on submit', async () => {
-    renderPage();
+    await renderPage();
     fireEvent.click(screen.getByRole('button', { name: /add vendor/i }));
     const dialog = screen.getByRole('dialog');
     const submitButton = within(dialog).getByRole('button', { name: /add vendor/i });
@@ -232,9 +236,9 @@ describe('Vendors page', () => {
 
   // --- Edit dialog ---
 
-  it('pre-fills the edit dialog with existing vendor data', () => {
+  it('pre-fills the edit dialog with existing vendor data', async () => {
     mockVendors = [makeVendor()];
-    renderPage();
+    await renderPage();
     // Click the pencil edit button (first button in the absolute button group on the card)
     const card = screen.getByText('Jane Smith').closest('[class*="p-4"]')!;
     const buttons = card.querySelectorAll('button');
@@ -250,7 +254,7 @@ describe('Vendors page', () => {
       updateVendor: { uid: 'v1', name: 'Jane Updated', company: 'Smith Plumbing', vendorType: 'Plumber', phone: '555-1234', email: 'jane@example.com', notes: 'Reliable' },
     });
 
-    renderPage();
+    await renderPage();
     const card = screen.getByText('Jane Smith').closest('[class*="p-4"]')!;
     const buttons = card.querySelectorAll('button');
     fireEvent.click(buttons[0]); // first is edit (pencil)
@@ -268,9 +272,9 @@ describe('Vendors page', () => {
 
   // --- Delete flow ---
 
-  it('shows confirm button after clicking trash', () => {
+  it('shows confirm button after clicking trash', async () => {
     mockVendors = [makeVendor()];
-    renderPage();
+    await renderPage();
     const card = screen.getByText('Jane Smith').closest('[class*="p-4"]')!;
     const buttons = card.querySelectorAll('button');
     fireEvent.click(buttons[1]); // second button is trash
@@ -281,7 +285,7 @@ describe('Vendors page', () => {
     mockVendors = [makeVendor()];
     mockDeleteVendorMutation.mockResolvedValue({ deleteVendor: true });
 
-    renderPage();
+    await renderPage();
     const card = screen.getByText('Jane Smith').closest('[class*="p-4"]')!;
     const buttons = card.querySelectorAll('button');
     fireEvent.click(buttons[1]); // trash
@@ -295,9 +299,9 @@ describe('Vendors page', () => {
 
   // --- Loading state ---
 
-  it('renders PageLoader while loading', () => {
+  it('renders PageLoader while loading', async () => {
     mockIsLoading = true;
-    renderPage();
+    await renderPage();
     // PageLoader renders a spinner; check it's rendered and cards are not
     expect(screen.queryByText(/no vendors yet/i)).not.toBeInTheDocument();
     expect(screen.queryByText('Jane Smith')).not.toBeInTheDocument();

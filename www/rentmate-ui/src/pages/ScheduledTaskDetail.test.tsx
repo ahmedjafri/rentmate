@@ -40,7 +40,10 @@ const task = {
 
 function renderPage() {
   return render(
-    <MemoryRouter initialEntries={['/scheduled-tasks/task-1']}>
+    <MemoryRouter
+      initialEntries={['/scheduled-tasks/task-1']}
+      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+    >
       <Routes>
         <Route path="/scheduled-tasks/:id" element={<ScheduledTaskDetail />} />
       </Routes>

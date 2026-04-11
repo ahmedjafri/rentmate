@@ -27,6 +27,23 @@ import {
   updateTaskStatus,
 } from '@/graphql/client';
 
+export function getDefaultTaskTab(task: ActionDeskTask | null | undefined): string {
+  if (!task) return 'ai';
+
+  const linkedChats = (task.linkedConversations ?? []).filter(
+    lc => lc.conversationType !== 'task_ai' && lc.conversationType !== 'suggestion_ai',
+  );
+  if (linkedChats.length === 0) return 'ai';
+
+  const preferredConversationId = task.externalConversationId || task.parentConversationId;
+  if (preferredConversationId) {
+    const preferred = linkedChats.find(lc => lc.uid === preferredConversationId);
+    if (preferred) return preferred.uid;
+  }
+
+  return linkedChats[0].uid;
+}
+
 function authHeaders() {
   const t = getToken();
   return { 'Content-Type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) };
@@ -152,7 +169,6 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
   useEffect(() => {
     setDismissConfirm(false);
     setDeleteConfirm(false);
-    setActiveTaskTab('ai');
     setParticipantMessages([]);
   }, [chatPanel.taskId]);
 
@@ -361,6 +377,10 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const linkedChats: LinkedConversation[] = (activeTask?.linkedConversations ?? []).filter(
     lc => lc.conversationType !== 'task_ai' && lc.conversationType !== 'suggestion_ai'
   );
+
+  useEffect(() => {
+    setActiveTaskTab(getDefaultTaskTab(activeTask));
+  }, [activeTask]);
 
   // Load participant messages when a linked conversation tab is active
   useEffect(() => {

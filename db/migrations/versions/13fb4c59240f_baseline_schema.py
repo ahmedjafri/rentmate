@@ -1,18 +1,16 @@
 """baseline schema
 
-Revision ID: 857fe4c65246
-Revises: 
-Create Date: 2026-04-11 06:45:50.582543
-
+Revision ID: 13fb4c59240f
+Revises:
+Create Date: 2026-04-11 22:49:36.706825
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '857fe4c65246'
+revision: str = '13fb4c59240f'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -42,11 +40,19 @@ def upgrade() -> None:
     sa.Column('first_name', sa.String(length=100), nullable=True),
     sa.Column('last_name', sa.String(length=100), nullable=True),
     sa.Column('phone', sa.String(length=50), nullable=True),
+    sa.Column('creator_id', sa.Integer(), nullable=True),
+    sa.Column('user_type', sa.String(length=20), nullable=True),
+    sa.Column('company', sa.String(length=255), nullable=True),
+    sa.Column('role_label', sa.String(length=100), nullable=True),
+    sa.Column('notes', sa.Text(), nullable=True),
+    sa.Column('extra', sa.JSON(), nullable=True),
+    sa.Column('context', sa.Text(), nullable=True),
     sa.Column('active', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(), nullable=False),
     sa.Column('org_id', sa.Integer(), nullable=False),
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('external_id', sa.String(length=36), nullable=False),
+    sa.ForeignKeyConstraint(['org_id', 'creator_id'], ['users.org_id', 'users.id'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('email'),
     sa.UniqueConstraint('external_id'),
@@ -66,29 +72,6 @@ def upgrade() -> None:
     )
     op.create_index('ix_agent_memory_agent_type', 'agent_memory', ['creator_id', 'memory_type'], unique=False)
     op.create_index(op.f('ix_agent_memory_org_id'), 'agent_memory', ['org_id'], unique=False)
-    op.create_table('memory_items',
-    sa.Column('source_type', sa.String(length=50), nullable=False),
-    sa.Column('source_id', sa.String(length=64), nullable=False),
-    sa.Column('entity_type', sa.String(length=30), nullable=False),
-    sa.Column('entity_id', sa.String(length=64), nullable=False),
-    sa.Column('visibility', sa.String(length=20), nullable=False),
-    sa.Column('title', sa.String(length=255), nullable=True),
-    sa.Column('content', sa.Text(), nullable=False),
-    sa.Column('content_hash', sa.String(length=64), nullable=False),
-    sa.Column('metadata_json', sa.JSON(), nullable=True),
-    sa.Column('updated_at', sa.DateTime(), nullable=False),
-    sa.Column('org_id', sa.Integer(), nullable=False),
-    sa.Column('id', sa.String(length=36), nullable=False),
-    sa.Column('creator_id', sa.Integer(), nullable=False),
-    sa.ForeignKeyConstraint(['org_id', 'creator_id'], ['users.org_id', 'users.id'], ),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('org_id', 'creator_id', 'source_type', 'source_id', name='uq_memory_item_source'),
-    sa.UniqueConstraint('org_id', 'id', name='uq_memory_items_org')
-    )
-    op.create_index('ix_memory_items_lookup', 'memory_items', ['org_id', 'creator_id', 'entity_type', 'entity_id'], unique=False)
-    op.create_index(op.f('ix_memory_items_org_id'), 'memory_items', ['org_id'], unique=False)
-    op.create_index(op.f('ix_memory_items_updated_at'), 'memory_items', ['updated_at'], unique=False)
-    op.create_index('ix_memory_items_visibility', 'memory_items', ['org_id', 'creator_id', 'visibility'], unique=False)
     op.create_table('agent_traces',
     sa.Column('timestamp', sa.DateTime(), nullable=False),
     sa.Column('trace_type', sa.String(length=30), nullable=False),
@@ -151,27 +134,29 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_entity_notes_entity_id'), 'entity_notes', ['entity_id'], unique=False)
     op.create_index(op.f('ix_entity_notes_org_id'), 'entity_notes', ['org_id'], unique=False)
-    op.create_table('external_contacts',
-    sa.Column('name', sa.String(length=255), nullable=False),
-    sa.Column('company', sa.String(length=255), nullable=True),
-    sa.Column('email', sa.String(length=255), nullable=True),
-    sa.Column('phone', sa.String(length=50), nullable=True),
-    sa.Column('role_label', sa.String(length=100), nullable=True),
-    sa.Column('notes', sa.Text(), nullable=True),
-    sa.Column('extra', sa.JSON(), nullable=True),
-    sa.Column('created_at', sa.DateTime(), nullable=False),
+    op.create_table('memory_items',
+    sa.Column('source_type', sa.String(length=50), nullable=False),
+    sa.Column('source_id', sa.String(length=64), nullable=False),
+    sa.Column('entity_type', sa.String(length=30), nullable=False),
+    sa.Column('entity_id', sa.String(length=64), nullable=False),
+    sa.Column('visibility', sa.String(length=20), nullable=False),
+    sa.Column('title', sa.String(length=255), nullable=True),
+    sa.Column('content', sa.Text(), nullable=False),
+    sa.Column('content_hash', sa.String(length=64), nullable=False),
+    sa.Column('metadata_json', sa.JSON(), nullable=True),
+    sa.Column('updated_at', sa.DateTime(), nullable=False),
     sa.Column('org_id', sa.Integer(), nullable=False),
-    sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
-    sa.Column('external_id', sa.String(length=36), nullable=False),
+    sa.Column('id', sa.String(length=36), nullable=False),
     sa.Column('creator_id', sa.Integer(), nullable=False),
-    sa.Column('context', sa.Text(), nullable=True),
     sa.ForeignKeyConstraint(['org_id', 'creator_id'], ['users.org_id', 'users.id'], ),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('external_id'),
-    sa.UniqueConstraint('org_id', 'id', name='uq_external_contacts_server')
+    sa.UniqueConstraint('org_id', 'creator_id', 'source_type', 'source_id', name='uq_memory_item_source'),
+    sa.UniqueConstraint('org_id', 'id', name='uq_memory_items_org')
     )
-    op.create_index(op.f('ix_external_contacts_email'), 'external_contacts', ['email'], unique=False)
-    op.create_index(op.f('ix_external_contacts_org_id'), 'external_contacts', ['org_id'], unique=False)
+    op.create_index('ix_memory_items_lookup', 'memory_items', ['org_id', 'creator_id', 'entity_type', 'entity_id'], unique=False)
+    op.create_index(op.f('ix_memory_items_org_id'), 'memory_items', ['org_id'], unique=False)
+    op.create_index(op.f('ix_memory_items_updated_at'), 'memory_items', ['updated_at'], unique=False)
+    op.create_index('ix_memory_items_visibility', 'memory_items', ['org_id', 'creator_id', 'visibility'], unique=False)
     op.create_table('properties',
     sa.Column('name', sa.String(length=255), nullable=True),
     sa.Column('address_line1', sa.String(length=255), nullable=False),
@@ -504,9 +489,11 @@ def downgrade() -> None:
     op.drop_table('scheduled_tasks')
     op.drop_index(op.f('ix_properties_org_id'), table_name='properties')
     op.drop_table('properties')
-    op.drop_index(op.f('ix_external_contacts_org_id'), table_name='external_contacts')
-    op.drop_index(op.f('ix_external_contacts_email'), table_name='external_contacts')
-    op.drop_table('external_contacts')
+    op.drop_index('ix_memory_items_visibility', table_name='memory_items')
+    op.drop_index(op.f('ix_memory_items_updated_at'), table_name='memory_items')
+    op.drop_index(op.f('ix_memory_items_org_id'), table_name='memory_items')
+    op.drop_index('ix_memory_items_lookup', table_name='memory_items')
+    op.drop_table('memory_items')
     op.drop_index(op.f('ix_entity_notes_org_id'), table_name='entity_notes')
     op.drop_index(op.f('ix_entity_notes_entity_id'), table_name='entity_notes')
     op.drop_table('entity_notes')
@@ -519,11 +506,6 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_agent_traces_org_id'), table_name='agent_traces')
     op.drop_table('agent_traces')
     op.drop_index(op.f('ix_agent_memory_org_id'), table_name='agent_memory')
-    op.drop_index('ix_memory_items_visibility', table_name='memory_items')
-    op.drop_index(op.f('ix_memory_items_updated_at'), table_name='memory_items')
-    op.drop_index(op.f('ix_memory_items_org_id'), table_name='memory_items')
-    op.drop_index('ix_memory_items_lookup', table_name='memory_items')
-    op.drop_table('memory_items')
     op.drop_index('ix_agent_memory_agent_type', table_name='agent_memory')
     op.drop_table('agent_memory')
     op.drop_index(op.f('ix_users_org_id'), table_name='users')

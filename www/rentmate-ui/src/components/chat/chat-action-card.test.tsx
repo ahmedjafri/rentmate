@@ -16,7 +16,10 @@ vi.mock('react-router-dom', async () => {
 
 function renderBubble(message: Parameters<typeof ChatMessageBubble>[0]['message']) {
   return render(
-    <MemoryRouter initialEntries={['/']}>
+    <MemoryRouter
+      initialEntries={['/']}
+      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+    >
       <Routes>
         <Route path="/" element={<ChatMessageBubble message={message} />} />
       </Routes>
@@ -45,7 +48,8 @@ test('renders property action cards with nested unit links', async () => {
 
   expect(screen.getByText('Property created')).toBeInTheDocument();
   expect(screen.getByText('123 Main St')).toBeInTheDocument();
-  expect(screen.getByText('Created units')).toBeInTheDocument();
+  expect(screen.getByText('Type:')).toBeInTheDocument();
+  expect(screen.getByText('Multi-family')).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole('button', { name: /open property/i }));
   expect(navigateSpy).toHaveBeenCalledWith('/properties/prop-1');

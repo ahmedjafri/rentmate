@@ -1,16 +1,13 @@
 # Frontend Dockerfile
 FROM node:20-slim
 
-# System dependencies
-RUN apt-get update && apt-get install -y curl git && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app/www/rentmate-ui
 
 # Copy frontend package files
 COPY www/rentmate-ui/package*.json ./
 
 # Install frontend dependencies
-RUN npm install
+RUN npm ci --no-audit --no-fund
 
 # Copy the rest of the frontend code
 COPY www/rentmate-ui/ ./

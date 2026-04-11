@@ -23,10 +23,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 # ── paths ──────────────────────────────────────────────────────────────────────
 
 CASES_DIR = Path(__file__).parent / "cases"
 AUTOMATIONS_DIR = Path(__file__).parent.parent / "automations"
+REPO_ROOT = Path(__file__).parent.parent
+
+load_dotenv(REPO_ROOT / ".env", override=False)
 
 # ── data model ────────────────────────────────────────────────────────────────
 
@@ -284,16 +289,17 @@ def print_summary(results: list[EvalResult]) -> None:
     print(f"\n{'═'*60}")
     print(_c(_BOLD, f"RESULTS: {passed}/{total} passed  |  avg score {avg_score:.0%}"))
     if errored:
-        print(_c(_RED, f"  {errored} case(s) errored — check LLM_API_KEY / LLM_MODEL"))
+        print(_c(_RED, f"  {errored} case(s) errored — check LLM_API_KEY / LLM_MODEL / .env"))
 
-    by_automation: dict[str, list[EvalResult]] = {}
+    by_automation: dict[str | None, list[EvalResult]] = {}
     for r in results:
         by_automation.setdefault(r.automation, []).append(r)
 
-    for auto, auto_results in sorted(by_automation.items()):
+    for auto, auto_results in sorted(by_automation.items(), key=lambda item: item[0] or ""):
         n_pass = sum(1 for r in auto_results if r.passed)
         color = _GREEN if n_pass == len(auto_results) else (_YELLOW if n_pass > 0 else _RED)
-        print(f"  {_c(color, auto):40s}  {n_pass}/{len(auto_results)}")
+        label = auto or "unassigned"
+        print(f"  {_c(color, label):40s}  {n_pass}/{len(auto_results)}")
 
 
 def results_to_dict(results: list[EvalResult]) -> list[dict[str, Any]]:
@@ -342,10 +348,27 @@ def main() -> None:
 
     results: list[EvalResult] = []
     for case in cases:
-        meta = load_automation_meta(case.automation)
         sys.stdout.write(f"  {case.id} … ")
         sys.stdout.flush()
-        result = judge_case(case, meta)
+        if case.automation == "vendor_outreach":
+            from evals.vendor_outreach_runner import generate_for_case, judge_vendor_outreach
+
+            generated = generate_for_case(case)
+            if not generated:
+                result = EvalResult(
+                    case_id=case.id,
+                    automation=case.automation,
+                    description=case.description,
+                    passed=False,
+                    resolution_match=True,
+                    expected_resolution="active",
+                    error="generate_vendor_outreach returned None (check LLM_API_KEY / .env)",
+                )
+            else:
+                result = judge_vendor_outreach(case, generated)
+        else:
+            meta = load_automation_meta(case.automation)
+            result = judge_case(case, meta)
         status = "PASS" if result.passed else ("ERROR" if result.error else "FAIL")
         sys.stdout.write(f"{status}\n")
         results.append(result)
