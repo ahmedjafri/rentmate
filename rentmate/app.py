@@ -138,10 +138,20 @@ def _repair_enum_rows() -> None:
             if table_name not in existing_tables:
                 continue
             for bad_value, good_value in normalized.items():
-                conn.execute(
-                    text(f"UPDATE {table_name} SET {column_name} = :good WHERE {column_name} = :bad"),
-                    {"good": good_value, "bad": bad_value},
-                )
+                if engine.dialect.name == "postgresql":
+                    conn.execute(
+                        text(
+                            f"UPDATE {table_name} "
+                            f"SET {column_name} = CAST(:good AS urgency_enum) "
+                            f"WHERE CAST({column_name} AS TEXT) = :bad"
+                        ),
+                        {"good": good_value, "bad": bad_value},
+                    )
+                else:
+                    conn.execute(
+                        text(f"UPDATE {table_name} SET {column_name} = :good WHERE {column_name} = :bad"),
+                        {"good": good_value, "bad": bad_value},
+                    )
 
 
 async def get_context(request: Request):
