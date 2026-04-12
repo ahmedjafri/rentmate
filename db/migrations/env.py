@@ -1,8 +1,8 @@
 import os
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
 from alembic import context
+from sqlalchemy import engine_from_config, pool
 
 from db.models import Base  # <-- your SQLAlchemy models Base
 
@@ -14,13 +14,13 @@ from db.models import Base  # <-- your SQLAlchemy models Base
 config = context.config
 
 # Override sqlalchemy.url from environment if set
-db_uri = os.getenv("DATABASE_URL")
+db_uri = os.getenv("DATABASE_URL") or os.getenv("RENTMATE_DB_URI")
 if db_uri:
     config.set_main_option("sqlalchemy.url", db_uri)
 else:
-    # Fallback: use the SQLite path from db/session.py
-    from db.session import DB_PATH
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{DB_PATH}")
+    from db.session import engine
+
+    config.set_main_option("sqlalchemy.url", str(engine.url))
 
 # Logging
 if config.config_file_name is not None:

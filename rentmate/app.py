@@ -36,7 +36,8 @@ from memory_watchdog import set_memory_backstop, start_memory_monitor
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 _DIST = _PACKAGE_ROOT / "www" / "rentmate-ui" / "dist"
-_SCHEMA_MIGRATE_COMMAND = ["poetry", "run", "alembic", "upgrade", "head"]
+_DEFAULT_SCHEMA_MIGRATE_COMMAND = ["poetry", "run", "alembic", "upgrade", "head"]
+_SCHEMA_MIGRATE_COMMANDS = [_DEFAULT_SCHEMA_MIGRATE_COMMAND]
 _SCHEMA_MIGRATE_CWD = _PACKAGE_ROOT
 
 logging.basicConfig(
@@ -81,7 +82,11 @@ def _ensure_schema():
         print("\n⚠  Schema drift detected — database doesn't match models.")
         print("   Options:")
         print("     [w] Wipe database and recreate (data will be lost)")
-        print(f"     [m] Run alembic migrations ({shlex.join(_SCHEMA_MIGRATE_COMMAND)})")
+        if len(_SCHEMA_MIGRATE_COMMANDS) == 1:
+            migration_label = shlex.join(_SCHEMA_MIGRATE_COMMANDS[0])
+        else:
+            migration_label = " then ".join(shlex.join(command) for command in _SCHEMA_MIGRATE_COMMANDS)
+        print(f"     [m] Run alembic migrations ({migration_label})")
         print("     [q] Quit\n")
         try:
             choice = input("   Choice [w/m/q]: ").strip().lower()
@@ -94,10 +99,11 @@ def _ensure_schema():
         elif choice == "m":
             import subprocess
 
-            result = subprocess.run(_SCHEMA_MIGRATE_COMMAND, cwd=str(_SCHEMA_MIGRATE_CWD))
-            if result.returncode != 0:
-                print("   Migration failed. Please fix and retry.")
-                raise SystemExit(1)
+            for command in _SCHEMA_MIGRATE_COMMANDS:
+                result = subprocess.run(command, cwd=str(_SCHEMA_MIGRATE_CWD))
+                if result.returncode != 0:
+                    print("   Migration failed. Please fix and retry.")
+                    raise SystemExit(1)
             print("   Migrations applied successfully.")
         else:
             print("   Aborting.")
@@ -108,7 +114,8 @@ def _ensure_schema():
         Base.metadata.create_all(engine)
     else:
         print("ERROR: Database schema is out of date.")
-        print(f"Run: {shlex.join(_SCHEMA_MIGRATE_COMMAND)}")
+        for command in _SCHEMA_MIGRATE_COMMANDS:
+            print(f"Run: {shlex.join(command)}")
         raise SystemExit(1)
 
 
@@ -166,11 +173,16 @@ def create_app(
     allow_origin_regex: str | None = None,
     dist_root: Path | None = None,
     schema_migrate_command: list[str] | None = None,
+    schema_migrate_commands: list[list[str]] | None = None,
     schema_migrate_cwd: Path | None = None,
 ) -> FastAPI:
-    global _SCHEMA_MIGRATE_COMMAND, _SCHEMA_MIGRATE_CWD
-    if schema_migrate_command is not None:
-        _SCHEMA_MIGRATE_COMMAND = schema_migrate_command
+    global _SCHEMA_MIGRATE_COMMANDS, _SCHEMA_MIGRATE_CWD
+    if schema_migrate_commands is not None:
+        _SCHEMA_MIGRATE_COMMANDS = schema_migrate_commands
+    elif schema_migrate_command is not None:
+        _SCHEMA_MIGRATE_COMMANDS = [schema_migrate_command]
+    else:
+        _SCHEMA_MIGRATE_COMMANDS = [_DEFAULT_SCHEMA_MIGRATE_COMMAND]
     if schema_migrate_cwd is not None:
         _SCHEMA_MIGRATE_CWD = schema_migrate_cwd
 
