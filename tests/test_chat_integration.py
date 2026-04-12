@@ -75,6 +75,7 @@ async def _test_app(session_factory):
         patch("rentmate.app.SessionLocal", session_factory),
         patch("handlers.deps.SessionLocal", session_factory),
         patch("handlers.chat.SessionLocal", session_factory),
+        patch("gql.services.settings_service.is_llm_configured", return_value=True),
         patch(
             "handlers.chat.require_user",
             AsyncMock(side_effect=_mock_require_user),
