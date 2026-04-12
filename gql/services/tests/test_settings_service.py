@@ -9,8 +9,8 @@ from gql.services import settings_service
 
 @pytest.fixture(autouse=True)
 def _settings_session_factory(monkeypatch, engine):
-    settings_service.Base.metadata.drop_all(engine, tables=[AppSetting.__table__], checkfirst=True)
-    settings_service.Base.metadata.create_all(engine, tables=[AppSetting.__table__], checkfirst=True)
+    AppSetting.__table__.drop(engine, checkfirst=True)
+    AppSetting.__table__.create(engine, checkfirst=True)
     monkeypatch.setattr(
         settings_service.SessionLocal,
         "session_factory",

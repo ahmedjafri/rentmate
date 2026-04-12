@@ -2,7 +2,7 @@ import pytest
 
 from backends.local_auth import reset_request_context, set_request_context
 from db.enums import AgentSource, AutomationSource, SuggestionOption, Urgency
-from db.models import Message, Suggestion, User
+from db.models import Message, Suggestion, Task, User
 from gql.services import suggestion_service
 from gql.services.suggestion_service import coerce_action_payload
 from gql.services.task_suggestions import SuggestionExecutor
@@ -55,10 +55,18 @@ def test_act_on_suggestion_tracks_action_and_rejects_repeat_or_unknown_action(db
         ai_context="Needs plumber",
         source=AgentSource(),
     )
+    task = Task(org_id=1, creator_id=1, title="Follow up task")
+    db.add(task)
+    db.flush()
 
-    accepted = suggestion_service.act_on_suggestion(db, suggestion.id, "send_and_create_task", task_id="42")
+    accepted = suggestion_service.act_on_suggestion(
+        db,
+        suggestion.id,
+        "send_and_create_task",
+        task_id=str(task.id),
+    )
     assert accepted.status == "accepted"
-    assert accepted.task_id == 42
+    assert accepted.task_id == task.id
     assert accepted.action_taken == "send_and_create_task"
 
     with pytest.raises(ValueError, match="already accepted"):

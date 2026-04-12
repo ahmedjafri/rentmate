@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import Integer, cast, or_, select
 
 from db.models import (
     Conversation,
@@ -44,6 +44,11 @@ def _load_vendor(db, vendor_external_id: str) -> User:
     return vendor
 
 
+def _is_assigned_vendor(extra: dict | None, vendor_id: int) -> bool:
+    assigned_vendor_id = (extra or {}).get("assigned_vendor_id")
+    return str(assigned_vendor_id) == str(vendor_id)
+
+
 @router.get("/me")
 def vendor_me(request: Request):
     info = _require_vendor(request)
@@ -66,13 +71,16 @@ def vendor_tasks(request: Request):
     db = get_db(request)
     vendor = _load_vendor(db, info["vendor_id"])
     vendor_id = vendor.id
-    # Find conversations where this vendor is assigned, then get their tasks
-    from sqlalchemy import text
     convo_ids = [
-        row[0] for row in db.execute(
-            text("SELECT id FROM conversations WHERE json_extract(extra, '$.assigned_vendor_id') = :vid"),
-            {"vid": vendor_id},
-        ).fetchall()
+        convo_id
+        for convo_id in db.execute(
+            select(Conversation.id).where(
+                or_(
+                    Conversation.extra["assigned_vendor_id"].as_string() == str(vendor_id),
+                    cast(Conversation.extra["assigned_vendor_id"].as_string(), Integer) == vendor_id,
+                )
+            )
+        ).scalars().all()
     ]
     if not convo_ids:
         return []
@@ -124,8 +132,7 @@ def _verify_vendor_task(db, task_id: str, vendor_id: int) -> Task:
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     ai_convo = db.get(Conversation, task.ai_conversation_id) if task.ai_conversation_id else None
-    ai_extra = (ai_convo.extra or {}) if ai_convo else {}
-    if ai_extra.get("assigned_vendor_id") != vendor_id:
+    if not _is_assigned_vendor(ai_convo.extra if ai_convo else None, vendor_id):
         raise HTTPException(status_code=404, detail="Task not found")
     return task
 

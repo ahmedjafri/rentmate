@@ -71,6 +71,7 @@ async def _test_app(session_factory):
 
     with (
         patch("main.SessionLocal", session_factory),
+        patch("rentmate.app.SessionLocal", session_factory),
         patch("handlers.deps.SessionLocal", session_factory),
         patch("handlers.chat.SessionLocal", session_factory),
         patch(
@@ -328,18 +329,24 @@ class TestTaskChatSSE:
 
         asyncio.run(_run())
 
-        db.expire_all()
-        task = db.query(Task).filter_by(id=task_id).first()
-        conv_id = task.ai_conversation.id
-        ai_msgs = (
-            db.query(Message)
-            .filter_by(
-                conversation_id=conv_id,
-                is_ai=True,
-                message_type=MessageType.MESSAGE,
+        ai_msgs = []
+        for _ in range(10):
+            db.expire_all()
+            task = db.query(Task).filter_by(id=task_id).first()
+            conv_id = task.ai_conversation.id
+            ai_msgs = (
+                db.query(Message)
+                .filter_by(
+                    conversation_id=conv_id,
+                    is_ai=True,
+                    message_type=MessageType.MESSAGE,
+                )
+                .all()
             )
-            .all()
-        )
+            if ai_msgs:
+                break
+            asyncio.run(asyncio.sleep(0.1))
+
         assert len(ai_msgs) == 1
         assert ai_msgs[0].body == reply_text
         assert ai_msgs[0].sender_name == "RentMate"

@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -123,6 +123,20 @@ def _seed_current_user(db):
     elif user.external_id != "test-user-1":
         user.external_id = "test-user-1"
         db.flush()
+
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        db.execute(
+            text(
+                """
+                SELECT setval(
+                    pg_get_serial_sequence('users', 'id'),
+                    GREATEST((SELECT COALESCE(MAX(id), 1) FROM users), 1),
+                    true
+                )
+                """
+            )
+        )
+        db.flush()
     return user
 
 
@@ -152,6 +166,7 @@ def _isolate_app_sessionlocal(request, monkeypatch):
         "handlers.heartbeat.SessionLocal",
         "handlers.scheduler.SessionLocal",
         "main.SessionLocal",
+        "rentmate.app.SessionLocal",
     ):
         try:
             monkeypatch.setattr(target, mock_sl)

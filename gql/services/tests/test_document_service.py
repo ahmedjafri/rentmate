@@ -1,6 +1,6 @@
 import pytest
 
-from db.models import Document, DocumentTag
+from db.models import Document, DocumentTag, Property
 from gql.services.document_service import (
     DocumentService,
     dump_document_extraction_data,
@@ -10,6 +10,12 @@ from gql.types import AddDocumentTagInput
 
 
 def test_add_document_tag_and_confirm_document(db):
+    prop = Property(
+        id="prop-1",
+        org_id=1,
+        creator_id=1,
+        address_line1="123 Main St",
+    )
     doc = Document(
         id="doc-1",
         org_id=1,
@@ -18,7 +24,7 @@ def test_add_document_tag_and_confirm_document(db):
         document_type="lease",
         status="processed",
     )
-    db.add(doc)
+    db.add_all([prop, doc])
     db.commit()
 
     tag = DocumentService.add_document_tag(
