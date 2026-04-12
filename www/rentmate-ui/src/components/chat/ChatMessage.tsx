@@ -42,6 +42,27 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { useApp } from '@/context/AppContext';
 
+function normalizeAssistantMarkdown(content: string): string {
+  if (!content.includes('<') || content.includes('```')) return content;
+
+  const startMatch = content.match(/<!DOCTYPE html>|<html[\s>]|<head[\s>]|<body[\s>]|<style[\s>]/i);
+  if (!startMatch || startMatch.index === undefined) return content;
+
+  const start = startMatch.index;
+  const prefix = content.slice(0, start).trimEnd();
+  const htmlBlock = content.slice(start);
+  const closingHtmlIndex = htmlBlock.toLowerCase().lastIndexOf('</html>');
+
+  if (closingHtmlIndex >= 0) {
+    const code = htmlBlock.slice(0, closingHtmlIndex + '</html>'.length).trim();
+    const suffix = htmlBlock.slice(closingHtmlIndex + '</html>'.length).trimStart();
+    return [prefix, `\`\`\`html\n${code}\n\`\`\``, suffix].filter(Boolean).join('\n\n');
+  }
+
+  const code = htmlBlock.trim();
+  return [prefix, `\`\`\`html\n${code}\n\`\`\``].filter(Boolean).join('\n\n');
+}
+
 export function formatMessageTime(date: Date): string {
   const now = new Date();
   const isToday = date.toDateString() === now.toDateString();
@@ -268,6 +289,7 @@ export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onAppr
   const isManager = senderType === 'manager';
   const isAI = senderType === 'ai';
   const isOther = senderType === 'tenant' || senderType === 'vendor';
+  const renderedContent = isAI ? normalizeAssistantMarkdown(message.content) : message.content;
 
   // Context message — opening summary with optional cross-references
   if (msgType === 'context') {
@@ -370,8 +392,8 @@ export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onAppr
   };
 
   return (
-    <div className={cn('flex flex-col gap-0.5', isRightAligned ? 'items-end' : 'items-start')}>
-      <div className={cn('flex gap-2.5 min-w-0 w-full', isRightAligned ? 'flex-row-reverse' : 'flex-row')}>
+    <div className={cn('flex w-full min-w-0 max-w-full flex-col gap-0.5', isRightAligned ? 'items-end' : 'items-start')}>
+      <div className={cn('flex w-full min-w-0 max-w-full gap-2.5', isRightAligned ? 'flex-row-reverse' : 'flex-row')}>
         <div className={cn(
           'flex h-7 w-7 shrink-0 items-center justify-center rounded-full',
           isManager && 'bg-primary text-primary-foreground',
@@ -398,8 +420,36 @@ export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onAppr
             </p>
           )}
           {isAI ? (
-            <div className="prose prose-sm max-w-none break-words dark:prose-invert [&>p]:mb-1.5 [&>p:last-child]:mb-0">
-              <ReactMarkdown>{message.content}</ReactMarkdown>
+            <div className="prose prose-sm w-full min-w-0 max-w-full break-words overflow-hidden dark:prose-invert [&>p]:mb-1.5 [&>p:last-child]:mb-0">
+              <ReactMarkdown
+                components={{
+                  pre: ({ children }) => (
+                    <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden">
+                      <pre className="m-0 min-w-max rounded-lg border bg-background/80 p-3 text-[11px] leading-relaxed whitespace-pre font-mono">
+                        {children}
+                      </pre>
+                    </div>
+                  ),
+                  code: ({ inline, children, className, ...props }) =>
+                    inline ? (
+                      <code
+                        {...props}
+                        className={cn(
+                          'rounded bg-background/80 px-1 py-0.5 text-[0.9em] font-mono break-words',
+                          className,
+                        )}
+                      >
+                        {children}
+                      </code>
+                    ) : (
+                      <code {...props} className={cn('font-mono', className)}>
+                        {children}
+                      </code>
+                    ),
+                }}
+              >
+                {renderedContent}
+              </ReactMarkdown>
             </div>
           ) : (
             <p className="break-words overflow-hidden">{message.content}</p>

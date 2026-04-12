@@ -772,7 +772,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
 
   return (
     <div className={cn(
-      "flex flex-col overflow-hidden bg-card",
+      "flex min-w-0 max-w-full flex-col overflow-hidden bg-card",
       embedded
         ? "h-full w-full"
         : "fixed inset-0 z-50 md:static md:inset-auto md:z-auto md:w-[320px] lg:w-[380px] md:border-l md:shrink-0 md:h-full"
@@ -1023,8 +1023,8 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
                 RentMate AI
               </Badge>
             </div>
-            <ScrollArea className="flex-1 overflow-x-hidden" ref={scrollRef}>
-              <div className="p-4 space-y-4 w-full overflow-x-hidden">
+            <ScrollArea className="flex-1 min-w-0 overflow-x-hidden" ref={scrollRef}>
+              <div className="w-full min-w-0 max-w-full space-y-4 overflow-x-hidden p-4">
                 {aiRenderedItems.length === 0 && !isTyping && (
                   <div className="text-center py-8 text-muted-foreground">
                     <Bot className="h-8 w-8 mx-auto mb-2 opacity-40" />
@@ -1232,8 +1232,8 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
             <OnboardingProgress steps={onboarding.state.steps} onDismiss={onboarding.dismiss} />
           )}
           {/* Messages (non-task) */}
-          <ScrollArea className="flex-1 overflow-x-hidden" ref={scrollRef}>
-            <div className="p-4 space-y-4 w-full overflow-x-hidden">
+          <ScrollArea className="flex-1 min-w-0 overflow-x-hidden" ref={scrollRef}>
+            <div className="w-full min-w-0 max-w-full space-y-4 overflow-x-hidden p-4">
               {messages.length === 0 && !isTyping && !onboarding.isActive && (
                 <div className="text-center py-8 text-muted-foreground">
                   <Bot className="h-8 w-8 mx-auto mb-2 opacity-40" />

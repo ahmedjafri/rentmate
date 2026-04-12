@@ -68,10 +68,61 @@ describe('ChatMessageBubble overflow containment', () => {
     expect(getAiBubble('A'.repeat(200)).className).toContain('min-w-0');
   });
 
+  it('message bubble is width-clamped to the chat column', () => {
+    render(<RouterShell><ChatMessageBubble message={makeMessage()} /></RouterShell>);
+    expect(getAiBubble('A'.repeat(200)).className).toContain('max-w-[85%]');
+    expect(getAiBubble('A'.repeat(200)).className).not.toContain('w-fit');
+  });
+
   it('message bubble has break-words', () => {
     render(<RouterShell><ChatMessageBubble message={makeMessage()} /></RouterShell>);
     // break-words is on the bubble itself
     expect(getAiBubble('A'.repeat(200)).className).toContain('break-words');
+  });
+
+  it('code blocks are horizontally scrollable within the bubble', () => {
+    render(
+      <RouterShell>
+        <ChatMessageBubble
+          message={makeMessage({
+            content: "```js\nconst value = '" + 'A'.repeat(300) + "';\n```",
+          })}
+        />
+      </RouterShell>,
+    );
+    const scrollWrapper = document.querySelector('pre')?.parentElement;
+    const codeBlock = document.querySelector('pre');
+    expect(scrollWrapper).toBeTruthy();
+    expect(scrollWrapper?.className).toContain('w-full');
+    expect(scrollWrapper?.className).toContain('max-w-full');
+    expect(scrollWrapper?.className).toContain('min-w-0');
+    expect(scrollWrapper?.className).toContain('overflow-x-auto');
+    expect(codeBlock).toBeTruthy();
+    expect(codeBlock?.className).toContain('min-w-max');
+    expect(codeBlock?.className).not.toContain('whitespace-pre-wrap');
+  });
+
+  it('wraps raw html snippets into a bounded code block while keeping prose visible', () => {
+    render(
+      <RouterShell>
+        <ChatMessageBubble
+          message={makeMessage({
+            content:
+              "Here is the HTML:\n\n<!DOCTYPE html>\n<html>\n<head>\n<style>\nbody { margin: 40px; }\n</style>\n</head>\n<body>\n<div>Notice</div>\n</body>\n</html>\n\nYou can save this as a file.",
+          })}
+        />
+      </RouterShell>,
+    );
+    expect(screen.getByText('Here is the HTML:')).toBeTruthy();
+    expect(screen.getByText('You can save this as a file.')).toBeTruthy();
+    const scrollWrapper = document.querySelector('pre')?.parentElement;
+    const codeBlock = document.querySelector('pre');
+    expect(scrollWrapper).toBeTruthy();
+    expect(scrollWrapper?.className).toContain('w-full');
+    expect(scrollWrapper?.className).toContain('max-w-full');
+    expect(scrollWrapper?.className).toContain('overflow-x-auto');
+    expect(codeBlock?.textContent).toContain('<!DOCTYPE html>');
+    expect(codeBlock?.className).toContain('min-w-max');
   });
 
   it('manager message bubble has overflow-hidden', () => {
