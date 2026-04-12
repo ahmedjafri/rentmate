@@ -38,7 +38,8 @@ def _split_text(text: str, *, chunk_size: int = 800, overlap: int = 100) -> list
 
 def _get_session_factory():
     """Import lazily to avoid circular imports at module load time."""
-    from main import SessionLocal
+    from rentmate.app import SessionLocal
+
     return SessionLocal
 
 

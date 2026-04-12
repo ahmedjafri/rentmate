@@ -5,11 +5,18 @@ description = "Fair source property management assistant"
 authors = ["RentMate Contributors"]
 readme = "README.md"
 packages = [
+  { include = "rentmate" },
   { include = "db" },
   { include = "gql" },
   { include = "handlers" },
   { include = "backends" },
   { include = "llm" },
+]
+include = [
+  { path = "main.py", format = ["sdist", "wheel"] },
+  { path = "memory_watchdog.py", format = ["sdist", "wheel"] },
+  { path = "agents/**", format = ["sdist", "wheel"] },
+  { path = "www/rentmate-ui/dist/**", format = ["sdist", "wheel"] },
 ]
 
 [tool.poetry.dependencies]

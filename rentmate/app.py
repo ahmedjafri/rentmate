@@ -1,0 +1,364 @@
+import asyncio
+import json
+import logging
+import os
+import re
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy import inspect as sa_inspect, text
+from strawberry.fastapi import GraphQLRouter
+
+from db.models import Base
+from gql.schema import schema
+from handlers import (
+    chat,
+    data_portability,
+    dev,
+    documents,
+    settings,
+    tenant_invite,
+    tenant_portal,
+    vendor_invite,
+    vendor_portal,
+)
+from handlers.deps import SessionLocal, engine
+from handlers.scheduler import router as scheduler_router
+from handlers.settings import load_integrations
+from llm.registry import agent_registry
+from memory_watchdog import set_memory_backstop, start_memory_monitor
+
+_PACKAGE_ROOT = Path(__file__).resolve().parent.parent
+_DIST = _PACKAGE_ROOT / "www" / "rentmate-ui" / "dist"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+    force=True,
+)
+_gql_logger = logging.getLogger("rentmate.gql")
+
+
+def _ensure_schema():
+    """Manage DB schema based on environment."""
+    is_dev = os.getenv("RENTMATE_ENV") == "development"
+    inspector = sa_inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    model_tables = set(Base.metadata.tables.keys())
+
+    if not existing_tables or existing_tables == {"alembic_version"}:
+        Base.metadata.create_all(engine)
+        return
+
+    needs_update = False
+    for table_name in model_tables:
+        if table_name not in existing_tables:
+            needs_update = True
+            break
+        existing_cols = {c["name"] for c in inspector.get_columns(table_name)}
+        model_cols = {c.name for c in Base.metadata.tables[table_name].columns}
+        if not model_cols.issubset(existing_cols):
+            needs_update = True
+            break
+
+    if not needs_update:
+        return
+
+    import sys
+
+    is_tty = sys.stdin.isatty()
+
+    if is_dev and is_tty:
+        print("\n⚠  Schema drift detected — database doesn't match models.")
+        print("   Options:")
+        print("     [w] Wipe database and recreate (data will be lost)")
+        print("     [m] Run alembic migrations (poetry run alembic upgrade head)")
+        print("     [q] Quit\n")
+        try:
+            choice = input("   Choice [w/m/q]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            choice = "q"
+        if choice == "w":
+            print("   Wiping and recreating database...")
+            Base.metadata.drop_all(engine)
+            Base.metadata.create_all(engine)
+        elif choice == "m":
+            import subprocess
+
+            result = subprocess.run(
+                ["poetry", "run", "alembic", "upgrade", "head"],
+                cwd=os.path.dirname(__file__) or ".",
+            )
+            if result.returncode != 0:
+                print("   Migration failed. Please fix and retry.")
+                raise SystemExit(1)
+            print("   Migrations applied successfully.")
+        else:
+            print("   Aborting.")
+            raise SystemExit(0)
+    elif is_dev:
+        print("   Schema drift detected — auto-recreating database (dev mode)...")
+        Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)
+    else:
+        print("ERROR: Database schema is out of date.")
+        print("Run: poetry run alembic upgrade head")
+        raise SystemExit(1)
+
+
+def _repair_enum_rows() -> None:
+    """Repair known bad lowercase enum rows written by older code paths."""
+    updates = {
+        "tasks": "urgency",
+        "suggestions": "urgency",
+    }
+    normalized = {
+        "low": "LOW",
+        "medium": "MEDIUM",
+        "high": "HIGH",
+        "critical": "CRITICAL",
+    }
+
+    with engine.begin() as conn:
+        existing_tables = set(sa_inspect(engine).get_table_names())
+        for table_name, column_name in updates.items():
+            if table_name not in existing_tables:
+                continue
+            for bad_value, good_value in normalized.items():
+                conn.execute(
+                    text(f"UPDATE {table_name} SET {column_name} = :good WHERE {column_name} = :bad"),
+                    {"good": good_value, "bad": bad_value},
+                )
+
+
+async def get_context(request: Request):
+    from backends.local_auth import set_request_context
+    from backends.wire import auth_backend
+
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer ", "").strip()
+    if not token:
+        return {"user": None, "db_session": request.state.db_session}
+    try:
+        user = await auth_backend.validate_token(token, db=request.state.db_session)
+        account_id = user.get("account_id")
+        if account_id is not None:
+            set_request_context(account_id=account_id, org_id=user.get("org_id"))
+        return {"user": user, "db_session": request.state.db_session}
+    except Exception as exc:
+        print(f"Invalid token, error: {exc}")
+        return {"user": None, "db_session": request.state.db_session}
+
+
+graphql_app = GraphQLRouter(schema, context_getter=get_context)
+
+
+def create_app(
+    *,
+    pre_request_hook=None,
+    allow_origins: list[str] | None = None,
+    allow_origin_regex: str | None = None,
+    dist_root: Path | None = None,
+) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        async def _init_db():
+            await asyncio.to_thread(_ensure_schema)
+            print("Database schema ready")
+
+        try:
+            await asyncio.gather(
+                _init_db(),
+                asyncio.to_thread(agent_registry.start_gateway),
+            )
+        except (SystemExit, KeyboardInterrupt):
+            raise
+        except (asyncio.CancelledError, Exception) as exc:
+            print(f"Startup failed: {exc}" if not isinstance(exc, asyncio.CancelledError) else "Startup cancelled")
+            import sys
+
+            sys.exit(1)
+
+        _repair_enum_rows()
+
+        from gql.services.settings_service import load_agent_integrations_into_env, load_llm_into_env
+
+        load_llm_into_env()
+        load_agent_integrations_into_env()
+
+        db = SessionLocal()
+        try:
+            from backends.local_auth import set_request_context
+            from db.models import Document as DocModel, User
+
+            acct = db.query(User).first()
+            if acct:
+                set_request_context(account_id=acct.id, org_id=acct.org_id)
+                agent_registry.populate_all_agents(db)
+            stuck = db.query(DocModel).filter(DocModel.status.in_(["pending", "processing"])).all()
+            for doc in stuck:
+                doc.status = "pending"
+                doc.progress = None
+            if stuck:
+                db.commit()
+                print(f"Re-queuing {len(stuck)} stuck document(s)…")
+                from llm.document_processor import process_document
+
+                for doc in stuck:
+                    asyncio.create_task(process_document(doc.id))
+        finally:
+            db.close()
+
+        await agent_registry.restart_channels_async(load_integrations())
+
+        from handlers.scheduler import scheduler_loop, seed_default_tasks
+
+        seed_default_tasks()
+        asyncio.create_task(scheduler_loop())
+
+        from handlers.heartbeat import heartbeat_loop
+        from handlers.quo_poller import quo_poll_loop
+
+        asyncio.create_task(heartbeat_loop())
+        asyncio.create_task(quo_poll_loop())
+
+        data_dir = os.getenv("RENTMATE_DATA_DIR", "./data")
+        set_memory_backstop()
+        start_memory_monitor(data_dir)
+
+        yield
+
+        agent_registry.stop_gateway()
+
+    app = FastAPI(lifespan=lifespan)
+    app.include_router(graphql_app, prefix="/graphql")
+    app.include_router(settings.router)
+    app.include_router(documents.router, prefix="/api")
+    app.include_router(chat.router)
+    app.include_router(scheduler_router, prefix="/api")
+    app.include_router(data_portability.router, prefix="/api")
+    app.include_router(dev.router, prefix="/dev")
+    app.include_router(vendor_invite.router)
+    app.include_router(vendor_portal.router)
+    app.include_router(tenant_invite.router)
+    app.include_router(tenant_portal.router)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allow_origins
+        or [
+            "https://app.tenantcloud.com",
+            "https://rentmate.io",
+            "http://localhost:5173",
+            "http://localhost:8080",
+        ],
+        allow_origin_regex=allow_origin_regex,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+    @app.middleware("http")
+    async def cache_control_middleware(request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/assets/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+    @app.middleware("http")
+    async def db_session_middleware(request: Request, call_next):
+        from backends.local_auth import _current_account_id, _current_org_id
+
+        _current_account_id.set(None)
+        _current_org_id.set(None)
+
+        request.state.db_session = SessionLocal()
+        try:
+            if pre_request_hook:
+                pre_request_hook(request, request.state.db_session)
+            response = await call_next(request)
+        finally:
+            request.state.db_session.close()
+        return response
+
+    @app.middleware("http")
+    async def graphql_logging_middleware(request: Request, call_next):
+        if request.url.path != "/graphql" or request.method != "POST":
+            return await call_next(request)
+        body_bytes = await request.body()
+        try:
+            op = _gql_op_name(json.loads(body_bytes))
+        except Exception:
+            op = "?"
+        response = await call_next(request)
+        _gql_logger.info("%-45s → %s", op, response.status_code)
+        return response
+
+    @app.get("/health")
+    async def health_check():
+        db_status = "connected"
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        except Exception as exc:
+            db_status = str(exc)
+
+        gateway_healthy = agent_registry.is_healthy()
+        overall = "healthy" if db_status == "connected" and gateway_healthy else "degraded"
+        return {
+            "status": overall,
+            "database": db_status,
+            "nanobot_agent": "healthy" if gateway_healthy else "unavailable",
+        }
+
+    resolved_dist = dist_root or _DIST
+    if (resolved_dist / "assets").exists():
+        app.mount("/assets", StaticFiles(directory=str(resolved_dist / "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        index = resolved_dist / "index.html"
+        if not index.exists():
+            return {"status": "frontend not built"}
+        return FileResponse(str(index), headers={"Cache-Control": "no-cache"})
+
+    return app
+
+
+def _gql_op_name(payload: dict) -> str:
+    name = payload.get("operationName")
+    if name:
+        return name
+    query = payload.get("query", "")
+    match = re.match(r"\s*(query|mutation|subscription)\s+(\w+)", query)
+    if match:
+        return f"{match.group(2)} ({match.group(1)})"
+    fallback = re.search(r"\{\s*(\w+)", query)
+    return fallback.group(1) if fallback else "anonymous"
+
+
+app = create_app()
+lifespan = app.router.lifespan_context
+
+__all__ = [
+    "SessionLocal",
+    "_ensure_schema",
+    "_repair_enum_rows",
+    "agent_registry",
+    "app",
+    "asyncio",
+    "create_app",
+    "engine",
+    "get_context",
+    "lifespan",
+    "set_memory_backstop",
+    "start_memory_monitor",
+]
