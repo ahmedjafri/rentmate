@@ -13,9 +13,13 @@ packages = [
   { include = "llm" },
 ]
 include = [
+  { path = "alembic.ini", format = ["sdist", "wheel"] },
   { path = "main.py", format = ["sdist", "wheel"] },
   { path = "memory_watchdog.py", format = ["sdist", "wheel"] },
   { path = "agents/**", format = ["sdist", "wheel"] },
+  { path = "db/migrations/**", format = ["sdist", "wheel"] },
+  { path = "www/rentmate-ui/src/**", format = ["sdist", "wheel"] },
+  { path = "www/rentmate-ui/public/**", format = ["sdist", "wheel"] },
   { path = "www/rentmate-ui/dist/**", format = ["sdist", "wheel"] },
 ]
 
