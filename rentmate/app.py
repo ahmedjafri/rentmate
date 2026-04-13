@@ -52,6 +52,10 @@ _gql_logger = logging.getLogger("rentmate.gql")
 def _ensure_schema():
     """Manage DB schema based on environment."""
     is_dev = os.getenv("RENTMATE_ENV") == "development"
+    startup_check = os.getenv("STARTUP_CHECK", "").strip().lower()
+    if startup_check in {"skip", "0", "false", "off"}:
+        print("Skipping schema startup check.")
+        return
     inspector = sa_inspect(engine)
     existing_tables = set(inspector.get_table_names())
     model_tables = set(Base.metadata.tables.keys())

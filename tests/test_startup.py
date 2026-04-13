@@ -158,6 +158,22 @@ def test_sqlite_prod_fails_on_drift():
             _main._ensure_schema()
 
 
+def test_sqlite_prod_can_skip_startup_check_on_drift():
+    """Production mode can explicitly skip schema drift failure via STARTUP_CHECK."""
+    eng = _sqlite_engine()
+    with eng.connect() as conn:
+        conn.execute(text("CREATE TABLE properties (id TEXT PRIMARY KEY)"))
+        conn.commit()
+
+    import main as _main
+    with patch.object(_main, "engine", eng), patch.dict(
+        os.environ,
+        {"RENTMATE_ENV": "", "STARTUP_CHECK": "skip"},
+        clear=False,
+    ):
+        _main._ensure_schema()
+
+
 # ---------------------------------------------------------------------------
 # Full startup simulation (mimics npm run dev)
 # ---------------------------------------------------------------------------
@@ -267,6 +283,10 @@ def test_app_lifespan_startup_no_crash():
         patch.object(deps, "SessionLocal", test_session_local),
         patch.object(db_session, "engine", eng),
         patch.object(db_session, "SessionLocal", test_session_local),
+        patch.dict(os.environ, {"RENTMATE_ENV": "development", "STARTUP_CHECK": ""}, clear=False),
+        patch("gql.services.settings_service.load_llm_into_env"),
+        patch("gql.services.settings_service.load_agent_integrations_into_env"),
+        patch.object(_main._app, "load_integrations", return_value={}),
         patch.object(_main, "set_memory_backstop"),
         patch.object(_main, "start_memory_monitor"),
         patch.object(_main.agent_registry, "start_gateway"),
