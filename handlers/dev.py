@@ -11,6 +11,7 @@ GET  /dev/history/{tenant_id} — returns the most recent dev_sim task messages
 """
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from typing import Any, List
 
@@ -31,7 +32,7 @@ from db.models import (
     Tenant,
 )
 from handlers.deps import get_db, require_user
-from llm.context import build_task_context
+from llm.context import build_task_context_data
 from llm.registry import agent_registry
 from llm.retrieval import (
     ChromaMemoryIndex,
@@ -40,6 +41,7 @@ from llm.retrieval import (
     retrieve_context,
     sync_memory_index,
 )
+from llm.tracing import make_trace_envelope
 
 router = APIRouter()
 
@@ -93,6 +95,15 @@ class RetrievalDebugRequest(BaseModel):
     tenant_id: str | None = None
     vendor_id: str | None = None
     limit: int = 12
+
+
+def _parse_trace_detail(detail: str | None) -> Any:
+    if not detail:
+        return None
+    try:
+        return json.loads(detail)
+    except Exception:
+        return detail
 
 
 @router.post("/simulate-inbound", response_model=SimulateInboundResponse)
@@ -203,7 +214,8 @@ async def simulate_inbound(
     db.commit()
 
     # Run agent — use the conversation id for context building
-    context = build_task_context(db, conv.id)
+    context_data = build_task_context_data(db, conv.id)
+    context = context_data["text"]
     full_conv = get_conversation_with_messages(db=db, conversation_id=conv.id)
     sorted_msgs = sorted(full_conv.messages, key=lambda m: m.sent_at)
     history_msgs = sorted_msgs[:-1][-20:]
@@ -217,7 +229,23 @@ async def simulate_inbound(
     agent_id = agent_registry.ensure_agent(str(resolve_account_id()), db)
 
     try:
-        agent_resp = await call_agent(agent_id, session_key=f"sim:{conv.id}", messages=messages)
+        agent_resp = await call_agent(
+            agent_id,
+            session_key=f"sim:{conv.id}",
+            messages=messages,
+            trace_context=make_trace_envelope(
+                "llm_request",
+                flow="dev_sim",
+                session_key=f"sim:{conv.id}",
+                messages_payload=messages,
+                context=context_data,
+                retrieval=context_data.get("retrieval"),
+                reasoning={
+                    "available": False,
+                    "note": "No provider reasoning trace available for this response.",
+                },
+            ),
+        )
         reply = agent_resp.reply
     except Exception as e:
         print(f"[dev/simulate-inbound] Agent failed: {e}")
@@ -448,6 +476,7 @@ async def list_traces(
     request: Request,
     db: Session = Depends(get_db),
     task_id: str | None = None,
+    conversation_id: str | None = None,
     source: str | None = None,
     trace_type: str | None = None,
     limit: int = 100,
@@ -461,6 +490,8 @@ async def list_traces(
     q = select(AgentTrace).order_by(AgentTrace.timestamp.desc())
     if task_id:
         q = q.where(AgentTrace.task_id == task_id)
+    if conversation_id:
+        q = q.where(AgentTrace.conversation_id == conversation_id)
     if source:
         q = q.where(AgentTrace.source == source)
     if trace_type:
@@ -483,6 +514,99 @@ async def list_traces(
         }
         for t in traces
     ]
+
+
+@router.get("/trace-filters/tasks")
+async def list_trace_tasks(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = 200,
+):
+    await require_user(request)
+    rows = (
+        db.query(Task)
+        .filter(
+            (Task.ai_conversation_id.isnot(None))
+            | (Task.external_conversation_id.isnot(None))
+            | (Task.parent_conversation_id.isnot(None))
+            | (Task.source == DEV_SIM_SOURCE)
+        )
+        .order_by(Task.updated_at.desc())
+        .limit(min(limit, 500))
+        .all()
+    )
+    return [
+        {
+            "id": str(task.id),
+            "title": task.title,
+            "status": task.task_status,
+            "mode": task.task_mode,
+            "source": task.source,
+            "updated_at": task.updated_at.isoformat() + "Z" if task.updated_at else None,
+        }
+        for task in rows
+    ]
+
+
+@router.get("/trace-filters/chats")
+async def list_trace_chats(
+    request: Request,
+    db: Session = Depends(get_db),
+    limit: int = 200,
+):
+    await require_user(request)
+    rows = db.query(Conversation).order_by(Conversation.updated_at.desc()).limit(min(limit * 3, 600)).all()
+    rows = [
+        conv for conv in rows
+        if any((msg.is_ai or msg.sender_name == "RentMate") for msg in (conv.messages or []))
+    ][: min(limit, 500)]
+    payload = []
+    for conv in rows:
+        linked_task_id = (
+            db.query(Task.id)
+            .filter(
+                (Task.ai_conversation_id == conv.id)
+                | (Task.external_conversation_id == conv.id)
+                | (Task.parent_conversation_id == conv.id)
+            )
+            .order_by(Task.id.asc())
+            .scalar()
+        )
+        payload.append({
+            "id": str(conv.id),
+            "subject": conv.subject or "Untitled chat",
+            "updated_at": conv.updated_at.isoformat() + "Z" if conv.updated_at else None,
+            "task_id": str(linked_task_id) if linked_task_id else None,
+        })
+    return payload
+
+
+@router.get("/traces/{trace_id}")
+async def get_trace_detail(
+    trace_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    await require_user(request)
+    from db.models import AgentTrace
+
+    trace = db.query(AgentTrace).filter_by(id=trace_id).first()
+    if not trace:
+        raise HTTPException(status_code=404, detail="Trace not found")
+    parsed_detail = _parse_trace_detail(trace.detail)
+    return {
+        "id": trace.id,
+        "timestamp": trace.timestamp.isoformat() + "Z",
+        "trace_type": trace.trace_type,
+        "source": trace.source,
+        "task_id": trace.task_id,
+        "conversation_id": trace.conversation_id,
+        "tool_name": trace.tool_name,
+        "summary": trace.summary,
+        "detail": parsed_detail,
+        "raw_detail": trace.detail,
+        "suggestion_id": trace.suggestion_id,
+    }
 
 
 @router.delete("/traces")

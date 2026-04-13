@@ -89,6 +89,16 @@ const Index = () => {
   ];
 
   const handleSuggestionAction = async (suggestionId: string, action: string, editedBody?: string) => {
+    const suggestion = suggestions.find(item => item.id === suggestionId);
+    if (action === 'request_file_upload') {
+      if (suggestion?.taskId) {
+        openChat({ taskId: suggestion.taskId });
+        toast.info('Open the task chat and upload the requested file there.');
+      } else {
+        toast.info('Open the linked suggestion and upload the requested file from the task chat.');
+      }
+      return;
+    }
     try {
       const result = await actOnSuggestion(suggestionId, action, editedBody ?? null);
       const { status, taskId } = result.actOnSuggestion;

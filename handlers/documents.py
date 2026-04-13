@@ -3,6 +3,7 @@ import uuid as _uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from backends.local_auth import resolve_account_id, resolve_org_id
@@ -122,9 +123,37 @@ async def get_document(
         "context": doc.context,
         "raw_text": doc.raw_text,
         "error_message": doc.error_message,
+        "generated_by_rentmate": bool((doc.extraction_meta or {}).get("source") == "agent_generated"),
         "created_at": doc.created_at.isoformat() if doc.created_at else None,
         "processed_at": doc.processed_at.isoformat() if doc.processed_at else None,
     }
+
+
+@router.get("/document/{document_id}/download")
+async def download_document(
+    document_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    await require_user(request)
+    doc = db.query(Document).filter(
+        Document.id == document_id,
+        Document.org_id == resolve_org_id(),
+        Document.creator_id == resolve_account_id(),
+    ).one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not doc.storage_path:
+        raise HTTPException(status_code=400, detail="Document file is not available")
+
+    file_bytes = await storage_backend.download(doc.storage_path)
+    filename = doc.filename or f"{document_id}.pdf"
+    content_type = doc.content_type or "application/octet-stream"
+    return Response(
+        content=file_bytes,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.delete("/document/{document_id}")
@@ -309,6 +338,8 @@ async def list_documents(
             "filename": d.filename,
             "document_type": d.document_type,
             "status": d.status,
+            "generated_by_rentmate": bool((d.extraction_meta or {}).get("source") == "agent_generated"),
+            "generation_source": (d.extraction_meta or {}).get("source"),
             "created_at": d.created_at.isoformat() if d.created_at else None,
             "processed_at": d.processed_at.isoformat() if d.processed_at else None,
         }

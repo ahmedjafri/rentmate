@@ -82,6 +82,55 @@ def test_get_or_create_conversation_reuses_external_uid_and_builds_history(db):
     ]
 
 
+def test_build_agent_message_history_omits_transient_tool_failure_replies(db):
+    convo = _conversation(db)
+    now = datetime.now(UTC)
+    db.add_all([
+        Message(
+            org_id=1,
+            conversation_id=convo.id,
+            sender_type=ParticipantType.ACCOUNT_USER,
+            body="Create a brand new 14-day notice document",
+            is_ai=False,
+            sent_at=now - timedelta(minutes=3),
+        ),
+        Message(
+            org_id=1,
+            conversation_id=convo.id,
+            sender_type=ParticipantType.ACCOUNT_USER,
+            body=(
+                "I'm experiencing a persistent technical issue with the PDF rendering system. "
+                "The browser engine that creates PDF documents is currently unavailable due to a system error."
+            ),
+            is_ai=True,
+            sent_at=now - timedelta(minutes=2),
+        ),
+        Message(
+            org_id=1,
+            conversation_id=convo.id,
+            sender_type=ParticipantType.ACCOUNT_USER,
+            body="Try again and use the create_document tool normally.",
+            is_ai=False,
+            sent_at=now - timedelta(minutes=1),
+        ),
+    ])
+    db.commit()
+
+    history = chat_service.build_agent_message_history(
+        db,
+        conv_id=convo.id,
+        user_message="Create the notice again",
+        context="system context",
+    )
+
+    assert history == [
+        {"role": "system", "content": "system context"},
+        {"role": "user", "content": "Create a brand new 14-day notice document"},
+        {"role": "user", "content": "Try again and use the create_document tool normally."},
+        {"role": "user", "content": "Create the notice again"},
+    ]
+
+
 def test_persist_and_send_message_helpers_update_conversation_state(db):
     convo = _conversation(db, extra={"ai_typing": True})
     task = Task(org_id=1, creator_id=1, title="Task", ai_conversation_id=convo.id)

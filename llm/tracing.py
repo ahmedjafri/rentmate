@@ -6,8 +6,19 @@ suggestion creation/execution, and errors into the agent_traces table.
 import json
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from backends.local_auth import resolve_account_id
+
+TRACE_ENVELOPE_VERSION = 1
+
+
+def make_trace_envelope(kind: str, **payload: Any) -> dict[str, Any]:
+    return {
+        "version": TRACE_ENVELOPE_VERSION,
+        "kind": kind,
+        **payload,
+    }
 
 
 def log_trace(

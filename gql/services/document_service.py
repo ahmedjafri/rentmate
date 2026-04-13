@@ -35,6 +35,11 @@ class DocumentExtractionMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_id: str | None = None
+    source: str | None = None
+    generated_by_tool: str | None = None
+    generated_html_storage_path: str | None = None
+    generated_html_content_type: str | None = None
+    generated_pdf_renderer: str | None = None
     text_extractor: str | None = None
     llm_model: str | None = None
     page_count: int | None = None

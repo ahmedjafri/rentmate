@@ -26,11 +26,11 @@ from db.enums import (
 from .account import User
 from .agent_memory import AgentMemory
 from .agent_trace import AgentTrace
-from .memory_item import MemoryItem
 
 # AutomationRevision removed — replaced by ScheduledTask
 from .base import Base, EntityNote, HasCreatorId
 from .documents import Document, DocumentTag
+from .memory_item import MemoryItem
 from .messaging import (
     Conversation,
     ConversationParticipant,

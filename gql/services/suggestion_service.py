@@ -57,8 +57,19 @@ class MessagePersonPayload(SuggestionActionPayloadBase):
     draft_message: str
 
 
+class RequestFileUploadPayload(SuggestionActionPayloadBase):
+    action: Literal["request_file_upload"]
+    requested_file_kind: str
+    requested_file_label: str
+    instructions: str
+    target_task_id: str | int
+    target_tenant_id: str | int | None = None
+    property_id: str | None = None
+    unit_id: str | None = None
+
+
 SuggestionActionPayload = Annotated[
-    SendMsgAndCreateTaskPayload | MessagePersonPayload,
+    SendMsgAndCreateTaskPayload | MessagePersonPayload | RequestFileUploadPayload,
     Field(discriminator="action"),
 ]
 _ACTION_PAYLOAD_ADAPTER = TypeAdapter(SuggestionActionPayload)

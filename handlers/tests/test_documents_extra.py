@@ -100,6 +100,16 @@ class TestListDocuments(unittest.TestCase):
         assert docs[0]["filename"] == "test.pdf"
         assert docs[0]["status"] == "done"
 
+    def test_returns_generated_document_flag(self):
+        doc = _make_doc(self.db, doc_id="doc-generated-001")
+        doc.extraction_meta = {"source": "agent_generated"}
+        self.db.commit()
+
+        response = self.client.get("/api/documents", headers=AUTH)
+        assert response.status_code == 200
+        docs = response.json()
+        assert docs[0]["generated_by_rentmate"] is True
+
     def test_excludes_documents_from_other_org(self):
         _make_doc(self.db, doc_id="doc-001")
         other_org_user = User(id=2, org_id=2, email="org2-docs@example.com", active=True)
@@ -158,6 +168,47 @@ class TestGetDocument(unittest.TestCase):
         assert data["id"] == "doc-get-1"
         assert data["filename"] == "test.pdf"
         assert data["status"] == "done"
+
+    def test_returns_generated_flag(self):
+        doc = _make_doc(self.db, doc_id="doc-get-generated")
+        doc.extraction_meta = {"source": "agent_generated"}
+        self.db.commit()
+
+        response = self.client.get("/api/document/doc-get-generated", headers=AUTH)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["generated_by_rentmate"] is True
+
+
+# ---------------------------------------------------------------------------
+# GET /document/{document_id}/download
+# ---------------------------------------------------------------------------
+
+@pytest.mark.usefixtures("db")
+class TestDownloadDocument(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app)
+        app.dependency_overrides[get_db] = lambda: self.db
+        self.require_user_patcher = patch("handlers.documents.require_user", side_effect=_fake_require_user)
+        self.require_user_patcher.start()
+
+    def tearDown(self):
+        self.require_user_patcher.stop()
+        app.dependency_overrides = {}
+
+    def test_not_found(self):
+        response = self.client.get("/api/document/nonexistent/download", headers=AUTH)
+        assert response.status_code == 404
+
+    def test_returns_file_bytes(self):
+        _make_doc(self.db, doc_id="doc-download-1")
+        with patch("backends.wire.storage_backend.download", new_callable=AsyncMock, return_value=b"%PDF-1.4 test") as download_mock:
+            response = self.client.get("/api/document/doc-download-1/download", headers=AUTH)
+        assert response.status_code == 200
+        assert response.content == b"%PDF-1.4 test"
+        assert response.headers["content-type"] == "application/pdf"
+        assert 'attachment; filename="test.pdf"' == response.headers["content-disposition"]
+        download_mock.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

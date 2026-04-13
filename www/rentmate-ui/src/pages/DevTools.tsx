@@ -12,9 +12,16 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Bot, User, ExternalLink, Terminal, Trash2, Activity, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Bot, User, ExternalLink, Terminal, Trash2, Activity, ChevronDown, RefreshCw, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { getToken, authFetch } from '@/lib/auth';
+import { authFetch } from '@/lib/auth';
 import { toast } from 'sonner';
 import { Link } from 'react-router-dom';
 
@@ -31,10 +38,25 @@ interface TraceEntry {
   trace_type: string;
   source: string;
   task_id: string | null;
+  conversation_id: string | null;
   tool_name: string | null;
   summary: string;
   detail: string | null;
   suggestion_id: string | null;
+}
+
+interface TraceFilterOption {
+  id: string;
+  title?: string;
+  subject?: string;
+  updated_at?: string | null;
+  task_id?: string | null;
+}
+
+interface TraceDetailEntry extends TraceEntry {
+  conversation_id: string | null;
+  raw_detail: string | null;
+  detail: unknown;
 }
 
 interface MemoryItemEntry {
@@ -79,24 +101,48 @@ const TRACE_COLORS: Record<string, string> = {
 function TracesPanel() {
   const [traces, setTraces] = useState<TraceEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<string>('');
+  const [filter, setFilter] = useState<string>('all');
+  const [sourceFilter, setSourceFilter] = useState<string>('all');
+  const [taskFilter, setTaskFilter] = useState<string>('all');
+  const [conversationFilter, setConversationFilter] = useState<string>('all');
+  const [taskOptions, setTaskOptions] = useState<TraceFilterOption[]>([]);
+  const [chatOptions, setChatOptions] = useState<TraceFilterOption[]>([]);
+  const [selectedTrace, setSelectedTrace] = useState<TraceDetailEntry | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailSection, setDetailSection] = useState<'overview' | 'context' | 'retrieval' | 'io' | 'reasoning' | 'raw'>('overview');
 
   const loadTraces = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ limit: '200' });
-      if (filter) params.set('trace_type', filter);
-      const res = await fetch(`/dev/traces?${params}`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
+      if (filter !== 'all') params.set('trace_type', filter);
+      if (sourceFilter !== 'all') params.set('source', sourceFilter);
+      if (taskFilter !== 'all') params.set('task_id', taskFilter);
+      if (conversationFilter !== 'all') params.set('conversation_id', conversationFilter);
+      const res = await authFetch(`/dev/traces?${params}`);
       if (res.ok) setTraces(await res.json());
     } catch { /* ignore */ } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, [conversationFilter, filter, sourceFilter, taskFilter]);
 
   useEffect(() => { loadTraces(); }, [loadTraces]);
+
+  useEffect(() => {
+    const loadFilters = async () => {
+      try {
+        const [tasksRes, chatsRes] = await Promise.all([
+          authFetch('/dev/trace-filters/tasks'),
+          authFetch('/dev/trace-filters/chats'),
+        ]);
+        if (tasksRes.ok) setTaskOptions(await tasksRes.json());
+        if (chatsRes.ok) setChatOptions(await chatsRes.json());
+      } catch {
+        // ignore
+      }
+    };
+    void loadFilters();
+  }, []);
 
   // Auto-refresh every 5s
   useEffect(() => {
@@ -130,6 +176,11 @@ function TracesPanel() {
     copyText(text, `Copied ${traces.length} traces`);
   };
 
+  const copyTrace = (trace: TraceEntry) => {
+    const text = `[${trace.timestamp}] ${trace.trace_type} (${trace.source}) ${trace.summary}${trace.detail ? '\n' + parseDetail(trace.detail) : ''}`;
+    copyText(text, 'Copied trace');
+  };
+
   const formatTime = (ts: string) => {
     const d = new Date(ts);
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -144,6 +195,59 @@ function TracesPanel() {
     }
   };
 
+  const openTrace = async (traceId: string) => {
+    setSelectedTrace(null);
+    setDetailLoading(true);
+    setDetailSection('overview');
+    try {
+      const res = await authFetch(`/dev/traces/${traceId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setSelectedTrace(await res.json());
+    } catch (err) {
+      toast.error(`Failed to load trace: ${(err as Error).message}`);
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const sourceOptions = Array.from(new Set(traces.map(t => t.source).filter(Boolean))) as string[];
+  const detailEnvelope = (selectedTrace?.detail && typeof selectedTrace.detail === 'object')
+    ? selectedTrace.detail as Record<string, unknown>
+    : null;
+  const traceContext = (detailEnvelope?.trace_context && typeof detailEnvelope.trace_context === 'object')
+    ? detailEnvelope.trace_context as Record<string, unknown>
+    : detailEnvelope;
+  const contextBlock = (detailEnvelope?.context && typeof detailEnvelope.context === 'object')
+    ? detailEnvelope.context as Record<string, unknown>
+    : ((traceContext?.context && typeof traceContext.context === 'object') ? traceContext.context as Record<string, unknown> : null);
+  const retrievalBlock = (detailEnvelope?.retrieval && typeof detailEnvelope.retrieval === 'object')
+    ? detailEnvelope.retrieval as Record<string, unknown>
+    : ((contextBlock?.retrieval && typeof contextBlock.retrieval === 'object') ? contextBlock.retrieval as Record<string, unknown> : null);
+  const normalizedRetrievalBlock = retrievalBlock
+    ?? ((detailEnvelope && 'request' in detailEnvelope) ? {
+      request: (detailEnvelope as Record<string, unknown>).request,
+      items: (detailEnvelope as Record<string, unknown>).items || (detailEnvelope as Record<string, unknown>).top_items,
+      ordered_indices: (detailEnvelope as Record<string, unknown>).ordered_indices,
+      reason: (detailEnvelope as Record<string, unknown>).reason,
+    } as Record<string, unknown> : null);
+  const reasoningBlock = (detailEnvelope?.reasoning && typeof detailEnvelope.reasoning === 'object')
+    ? detailEnvelope.reasoning as Record<string, unknown>
+    : ((traceContext?.reasoning && typeof traceContext.reasoning === 'object') ? traceContext.reasoning as Record<string, unknown> : null);
+  const messagesPayload = Array.isArray(detailEnvelope?.messages_payload)
+    ? detailEnvelope?.messages_payload as Array<Record<string, unknown>>
+    : (Array.isArray(traceContext?.messages_payload) ? traceContext?.messages_payload as Array<Record<string, unknown>> : []);
+  const messageBreakdown = (detailEnvelope?.messages_breakdown && typeof detailEnvelope.messages_breakdown === 'object')
+    ? detailEnvelope.messages_breakdown as Record<string, unknown>
+    : ((traceContext?.messages_breakdown && typeof traceContext.messages_breakdown === 'object') ? traceContext.messages_breakdown as Record<string, unknown> : null);
+  const sectionButtons: Array<{ key: typeof detailSection; label: string }> = [
+    { key: 'overview', label: 'Overview' },
+    { key: 'context', label: 'Context' },
+    { key: 'retrieval', label: 'Retrieval' },
+    { key: 'io', label: 'Tool / Model I/O' },
+    { key: 'reasoning', label: 'Reasoning' },
+    { key: 'raw', label: 'Raw JSON' },
+  ];
+
   return (
     <Card className="p-4 rounded-xl">
       <div className="flex items-center justify-between mb-3">
@@ -152,21 +256,37 @@ function TracesPanel() {
           <h2 className="font-semibold text-sm">Agent Traces</h2>
           <Badge variant="outline" className="text-[10px]">{traces.length}</Badge>
         </div>
-        <div className="flex items-center gap-2">
-          <select
-            className="text-xs border rounded px-2 py-1 bg-background"
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
-          >
-            <option value="">All types</option>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <select className="text-xs border rounded px-2 py-1 bg-background" value={filter} onChange={e => setFilter(e.target.value)}>
+            <option value="all">All types</option>
             <option value="tool_call">Tool calls</option>
             <option value="tool_result">Tool results</option>
+            <option value="llm_request">LLM requests</option>
             <option value="llm_reply">LLM replies</option>
             <option value="suggestion_created">Suggestions created</option>
             <option value="suggestion_executed">Suggestions executed</option>
             <option value="memory_sync">Memory sync</option>
             <option value="memory_rank">Memory rank</option>
+            <option value="memory_rerank">Memory rerank</option>
             <option value="error">Errors</option>
+          </select>
+          <select className="text-xs border rounded px-2 py-1 bg-background max-w-[180px]" value={taskFilter} onChange={e => setTaskFilter(e.target.value)}>
+            <option value="all">All tasks</option>
+            {taskOptions.map(task => (
+              <option key={task.id} value={task.id}>{task.title || task.id}</option>
+            ))}
+          </select>
+          <select className="text-xs border rounded px-2 py-1 bg-background max-w-[180px]" value={conversationFilter} onChange={e => setConversationFilter(e.target.value)}>
+            <option value="all">All chats</option>
+            {chatOptions.map(chat => (
+              <option key={chat.id} value={chat.id}>{chat.subject || chat.id}</option>
+            ))}
+          </select>
+          <select className="text-xs border rounded px-2 py-1 bg-background" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}>
+            <option value="all">All sources</option>
+            {sourceOptions.map(source => (
+              <option key={source} value={source}>{source}</option>
+            ))}
           </select>
           <Button variant="ghost" size="sm" onClick={loadTraces} disabled={loading} className="h-7 w-7 p-0">
             <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
@@ -185,42 +305,225 @@ function TracesPanel() {
         )}
         {traces.map(t => (
           <div key={t.id} className="border rounded-lg">
-            <button
-              className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-muted/50 transition-colors"
-              onClick={() => setExpandedId(expandedId === t.id ? null : t.id)}
-            >
-              <span className="text-[10px] text-muted-foreground font-mono w-16 shrink-0">
-                {formatTime(t.timestamp)}
-              </span>
-              <Badge className={cn("text-[9px] h-4 px-1.5 shrink-0", TRACE_COLORS[t.trace_type] ?? 'bg-gray-100 text-gray-700')}>
-                {t.trace_type}
-              </Badge>
-              {t.source && (
-                <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">{t.source}</Badge>
-              )}
-              <span className="text-xs truncate flex-1">{t.summary}</span>
-              {t.detail && (
-                expandedId === t.id
-                  ? <ChevronUp className="h-3 w-3 text-muted-foreground shrink-0" />
-                  : <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
-              )}
-            </button>
-            {expandedId === t.id && t.detail && (
-              <div className="px-3 pb-2">
-                <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono max-h-48 overflow-y-auto">
-                  {parseDetail(t.detail)}
-                </pre>
+            <div className="flex items-center gap-1 px-1 py-1">
+              <button
+                className="min-w-0 flex-1 text-left px-2 py-1 flex items-center gap-2 hover:bg-muted/50 transition-colors rounded-md"
+                onClick={() => void openTrace(t.id)}
+              >
+                <span className="text-[10px] text-muted-foreground font-mono w-16 shrink-0">
+                  {formatTime(t.timestamp)}
+                </span>
+                <Badge className={cn("text-[9px] h-4 px-1.5 shrink-0", TRACE_COLORS[t.trace_type] ?? 'bg-gray-100 text-gray-700')}>
+                  {t.trace_type}
+                </Badge>
+                {t.source && (
+                  <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">{t.source}</Badge>
+                )}
                 {t.task_id && (
-                  <p className="text-[10px] text-muted-foreground mt-1">Task: {t.task_id}</p>
+                  <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">task</Badge>
                 )}
-                {t.suggestion_id && (
-                  <p className="text-[10px] text-muted-foreground">Suggestion: {t.suggestion_id}</p>
+                {t.conversation_id && (
+                  <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">chat</Badge>
                 )}
-              </div>
-            )}
+                <span className="text-xs truncate flex-1">{t.summary}</span>
+                <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+              </button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 shrink-0 p-0"
+                aria-label={`Copy trace ${t.id}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  copyTrace(t);
+                }}
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           </div>
         ))}
       </div>
+
+      <Dialog open={!!selectedTrace || detailLoading} onOpenChange={open => { if (!open) { setSelectedTrace(null); setDetailLoading(false); } }}>
+        <DialogContent className="max-w-5xl h-[88vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Trace detail</DialogTitle>
+            <DialogDescription>
+              Inspect the exact trace envelope, model-visible context, retrieval inputs, ranked memory, and tool/model I/O for this step.
+            </DialogDescription>
+          </DialogHeader>
+          {detailLoading && <p className="text-sm text-muted-foreground">Loading trace…</p>}
+          {!detailLoading && selectedTrace && (
+            <div className="flex-1 min-h-0 flex flex-col gap-3">
+              <div className="flex flex-wrap gap-2">
+                {sectionButtons.map(section => (
+                  <Button
+                    key={section.key}
+                    size="sm"
+                    variant={detailSection === section.key ? 'default' : 'outline'}
+                    onClick={() => setDetailSection(section.key)}
+                  >
+                    {section.label}
+                  </Button>
+                ))}
+              </div>
+
+              <div className="flex-1 min-h-0 overflow-y-auto space-y-3">
+                {detailSection === 'overview' && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                      <div className="border rounded p-2"><div className="text-muted-foreground">Type</div><div>{selectedTrace.trace_type}</div></div>
+                      <div className="border rounded p-2"><div className="text-muted-foreground">Source</div><div>{selectedTrace.source || 'n/a'}</div></div>
+                      <div className="border rounded p-2"><div className="text-muted-foreground">Task</div><div className="break-all">{selectedTrace.task_id || 'n/a'}</div></div>
+                      <div className="border rounded p-2"><div className="text-muted-foreground">Chat</div><div className="break-all">{selectedTrace.conversation_id || 'n/a'}</div></div>
+                    </div>
+                    <div className="border rounded p-3">
+                      <div className="text-xs text-muted-foreground mb-1">Summary</div>
+                      <div className="text-sm">{selectedTrace.summary}</div>
+                    </div>
+                    {messageBreakdown && (
+                      <div className="border rounded p-3 space-y-2">
+                        <div className="text-xs text-muted-foreground">Message breakdown</div>
+                        <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono">
+                          {JSON.stringify(messageBreakdown, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {detailSection === 'context' && (
+                  <div className="space-y-3">
+                    {contextBlock && typeof contextBlock.text === 'string' && (
+                      <div className="border rounded p-3">
+                        <div className="text-xs text-muted-foreground mb-1">Full context window</div>
+                        <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono">
+                          {contextBlock.text}
+                        </pre>
+                      </div>
+                    )}
+                    {Array.isArray(contextBlock?.sections) && contextBlock.sections.map((section, idx) => (
+                      <div key={idx} className="border rounded p-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="text-[10px]">{String((section as Record<string, unknown>).section_type || 'section')}</Badge>
+                          <div className="text-sm font-medium">{String((section as Record<string, unknown>).title || `Section ${idx + 1}`)}</div>
+                        </div>
+                        <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono">
+                          {String((section as Record<string, unknown>).content || '')}
+                        </pre>
+                        <pre className="text-[10px] bg-muted/30 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono">
+                          {JSON.stringify((section as Record<string, unknown>).origin || {}, null, 2)}
+                        </pre>
+                      </div>
+                    ))}
+                    {!contextBlock && <p className="text-sm text-muted-foreground">No structured context captured for this trace.</p>}
+                  </div>
+                )}
+
+                {detailSection === 'retrieval' && (
+                  <div className="space-y-3">
+                    {normalizedRetrievalBlock ? (
+                      <>
+                        <div className="border rounded p-3">
+                          <div className="text-xs text-muted-foreground mb-1">Retriever input</div>
+                          <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono">
+                            {JSON.stringify((normalizedRetrievalBlock as Record<string, unknown>).request || normalizedRetrievalBlock, null, 2)}
+                          </pre>
+                        </div>
+                        {Array.isArray((normalizedRetrievalBlock as Record<string, unknown>).items) && (
+                          <div className="space-y-2">
+                            {((normalizedRetrievalBlock as Record<string, unknown>).items as Array<Record<string, unknown>>).map((item, idx) => (
+                              <div key={idx} className="border rounded p-3 space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <Badge className="bg-slate-900 text-white text-[10px]">#{idx + 1}</Badge>
+                                  <Badge variant="outline" className="text-[10px]">{String(item.source_type || 'item')}</Badge>
+                                  <span className="text-sm font-medium">{String(item.title || item.memory_item_id || 'untitled')}</span>
+                                </div>
+                                <div className="grid grid-cols-3 gap-2 text-[10px] text-muted-foreground">
+                                  <span>Final: {Number(item.final_score || 0).toFixed(2)}</span>
+                                  <span>Vector: {Number(item.vector_score || 0).toFixed(2)}</span>
+                                  <span>Heuristic: {Number(item.heuristic_score || 0).toFixed(2)}</span>
+                                </div>
+                                <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono">
+                                  {String(item.content || '')}
+                                </pre>
+                                <pre className="text-[10px] bg-muted/30 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono">
+                                  {JSON.stringify(item.reasons || [], null, 2)}
+                                </pre>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No retrieval metadata captured for this trace.</p>
+                    )}
+                  </div>
+                )}
+
+                {detailSection === 'io' && (
+                  <div className="space-y-3">
+                    {messagesPayload.length > 0 && (
+                      <div className="border rounded p-3">
+                        <div className="text-xs text-muted-foreground mb-1">Messages payload sent to model</div>
+                        <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono">
+                          {JSON.stringify(messagesPayload, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                    {'args' in (detailEnvelope || {}) && (
+                      <div className="border rounded p-3">
+                        <div className="text-xs text-muted-foreground mb-1">Tool args</div>
+                        <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono">
+                          {JSON.stringify((detailEnvelope as Record<string, unknown>).args || {}, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                    {'result' in (detailEnvelope || {}) && (
+                      <div className="border rounded p-3">
+                        <div className="text-xs text-muted-foreground mb-1">Tool result</div>
+                        <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono">
+                          {JSON.stringify((detailEnvelope as Record<string, unknown>).result, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                    {'reply' in (detailEnvelope || {}) && (
+                      <div className="border rounded p-3">
+                        <div className="text-xs text-muted-foreground mb-1">LLM reply</div>
+                        <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap font-mono">
+                          {String((detailEnvelope as Record<string, unknown>).reply || '')}
+                        </pre>
+                      </div>
+                    )}
+                    {messagesPayload.length === 0 && !('args' in (detailEnvelope || {})) && !('result' in (detailEnvelope || {})) && !('reply' in (detailEnvelope || {})) && (
+                      <p className="text-sm text-muted-foreground">No model/tool I/O envelope captured for this trace.</p>
+                    )}
+                  </div>
+                )}
+
+                {detailSection === 'reasoning' && (
+                  <div className="space-y-3">
+                    {reasoningBlock ? (
+                      <pre className="text-[10px] bg-muted/50 rounded p-3 overflow-x-auto whitespace-pre-wrap font-mono">
+                        {JSON.stringify(reasoningBlock, null, 2)}
+                      </pre>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No provider reasoning trace available for this response.</p>
+                    )}
+                  </div>
+                )}
+
+                {detailSection === 'raw' && (
+                  <pre className="text-[10px] bg-muted/50 rounded p-3 overflow-x-auto whitespace-pre-wrap font-mono">
+                    {selectedTrace.raw_detail ? parseDetail(selectedTrace.raw_detail) : JSON.stringify(selectedTrace.detail, null, 2)}
+                  </pre>
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
@@ -242,9 +545,7 @@ function MemoryIndexPanel() {
       if (sourceType) params.set('source_type', sourceType);
       if (entityType) params.set('entity_type', entityType);
       if (visibility) params.set('visibility', visibility);
-      const res = await fetch(`/dev/memory-items?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      });
+      const res = await authFetch(`/dev/memory-items?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setItems(await res.json());
     } catch (err) {
@@ -482,9 +783,7 @@ function RetrievalDebugger() {
 }
 
 async function fetchDevHistory(tenantId: string): Promise<{ taskId: string | null; messages: ChatEntry[] }> {
-  const res = await fetch(`/dev/history/${tenantId}`, {
-    headers: { Authorization: `Bearer ${getToken()}` },
-  });
+  const res = await authFetch(`/dev/history/${tenantId}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data: { task_id: string | null; messages: { role: string; text: string; task_id: string }[] } = await res.json();
   return {
@@ -542,12 +841,9 @@ const DevTools = () => {
     setLoading(true);
 
     try {
-      const res = await fetch('/dev/simulate-inbound', {
+      const res = await authFetch('/dev/simulate-inbound', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${getToken()}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tenant_id: tenantId,
           channel_type: channelType,

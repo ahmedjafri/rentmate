@@ -156,3 +156,28 @@ def test_action_payload_is_coerced_to_typed_shape(db):
         "vendor_name": "Bob",
         "draft_message": "hello",
     }
+
+
+def test_upload_request_payload_is_coerced_to_typed_shape(db):
+    suggestion = suggestion_service.create_suggestion(
+        db,
+        title="Upload notice",
+        ai_context="Need a notice uploaded",
+        source=AgentSource(),
+        action_payload={
+            "action": "request_file_upload",
+            "requested_file_kind": "notice",
+            "requested_file_label": "14-Day Pay or Vacate Notice",
+            "instructions": "Upload the completed 14-day notice.",
+            "target_task_id": "123",
+        },
+    )
+
+    payload = coerce_action_payload(suggestion.action_payload)
+    assert payload == {
+        "action": "request_file_upload",
+        "requested_file_kind": "notice",
+        "requested_file_label": "14-Day Pay or Vacate Notice",
+        "instructions": "Upload the completed 14-day notice.",
+        "target_task_id": "123",
+    }

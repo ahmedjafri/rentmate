@@ -66,7 +66,7 @@ const Documents = () => {
   useEffect(() => {
     authFetch('/api/documents')
       .then(r => r.ok ? r.json() : [])
-      .then((items: Array<{ id: string; filename: string; document_type: string; status: string; created_at: string }>) => {
+      .then((items: Array<{ id: string; filename: string; document_type: string; status: string; created_at: string; generated_by_rentmate?: boolean; generation_source?: string | null }>) => {
         items.forEach(item => {
           addDocument({
             id: item.id,
@@ -77,6 +77,8 @@ const Documents = () => {
             status: backendStatusToFrontend(item.status),
             uploadedAt: new Date(item.created_at),
             tags: [],
+            generatedByRentMate: !!item.generated_by_rentmate,
+            generationSource: item.generation_source ?? undefined,
           });
         });
       })
@@ -265,6 +267,11 @@ const Documents = () => {
                       <Badge variant="secondary" className="text-[10px] rounded-lg">
                         {documentTypeLabels[doc.documentType]}
                       </Badge>
+                      {doc.generatedByRentMate && (
+                        <Badge variant="secondary" className="text-[10px] rounded-lg bg-amber-100 text-amber-800">
+                          RentMate-generated
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
                       <span>{formatFileSize(doc.fileSize)}</span>

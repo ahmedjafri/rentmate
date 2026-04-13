@@ -20,8 +20,20 @@ from db.models import (
     User,
 )
 from db.queries import fetch_conversations
+from llm.history_filters import is_transient_tool_failure_text
 
 logger = logging.getLogger("rentmate.chat_service")
+
+
+def model_history_messages(db_msgs: list[Message]) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    for m in db_msgs:
+        body = m.body or ""
+        if m.is_ai and is_transient_tool_failure_text(body):
+            continue
+        role = "assistant" if m.is_ai else "user"
+        messages.append({"role": role, "content": body})
+    return messages
 
 
 class ConversationExtra(BaseModel):
@@ -52,7 +64,7 @@ class MessageActionCardLink(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     label: str
-    entity_type: Literal["suggestion", "property", "tenant", "unit"]
+    entity_type: Literal["suggestion", "property", "tenant", "unit", "document"]
     entity_id: str
     property_id: str | None = None
 
@@ -68,7 +80,7 @@ class MessageActionCardUnit(BaseModel):
 class MessageActionCard(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["suggestion", "property", "tenant"]
+    kind: Literal["suggestion", "property", "tenant", "document"]
     title: str
     summary: str | None = None
     fields: list[MessageActionCardField] | None = None
@@ -201,9 +213,7 @@ def build_agent_message_history(
         db_msgs = db_msgs[:-1]
     db_msgs = db_msgs[-20:]
     messages = [{"role": "system", "content": context}]
-    for m in db_msgs:
-        role = "assistant" if m.is_ai else "user"
-        messages.append({"role": role, "content": m.body or ""})
+    messages.extend(model_history_messages(db_msgs))
     messages.append({"role": "user", "content": user_message})
     return messages
 

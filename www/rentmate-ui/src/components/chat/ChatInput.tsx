@@ -15,6 +15,7 @@ interface Props {
   onSend: (message: string, attachments?: PendingAttachment[], insertedFromMessageId?: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  lastSentMessage?: string;
   onInsertCleared?: (messageId: string) => void;
   /** Controlled attachment list — managed by parent to survive re-renders. */
   attachments?: PendingAttachment[];
@@ -35,7 +36,7 @@ function isAcceptedFile(file: File): boolean {
   return ACCEPTED_EXTENSIONS.some(ext => name.endsWith(ext));
 }
 
-export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, placeholder = 'Type a message...', onInsertCleared, attachments = [], setAttachments, uploadFile }, ref) => {
+export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled, placeholder = 'Type a message...', lastSentMessage, onInsertCleared, attachments = [], setAttachments, uploadFile }, ref) => {
   const [input, setInput] = useState('');
   const [insertedMessageId, setInsertedMessageId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -128,6 +129,27 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled,
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (
+      e.key === 'ArrowUp' &&
+      !e.shiftKey &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !input &&
+      lastSentMessage
+    ) {
+      e.preventDefault();
+      setInput(lastSentMessage);
+      setInsertedMessageId(null);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        const end = lastSentMessage.length;
+        el.focus();
+        el.setSelectionRange(end, end);
+      });
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();

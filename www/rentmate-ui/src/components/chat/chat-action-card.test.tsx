@@ -57,3 +57,28 @@ test('renders property action cards with nested unit links', async () => {
   fireEvent.click(screen.getByRole('button', { name: /1A/i }));
   expect(navigateSpy).toHaveBeenCalledWith('/properties/prop-1?unit=unit-1#unit-unit-1');
 });
+
+test('renders document action cards with open action', async () => {
+  renderBubble({
+    id: 'msg-doc-1',
+    role: 'assistant',
+    content: 'Created document',
+    timestamp: new Date('2026-04-11T12:00:00Z'),
+    senderName: 'RentMate',
+    senderType: 'ai',
+    messageType: 'action',
+    actionCard: {
+      kind: 'document',
+      title: 'notice.pdf',
+      summary: 'Generated notice PDF.',
+      fields: [{ label: 'Type', value: 'notice' }],
+      links: [{ label: 'Open document', entityType: 'document', entityId: 'doc-1' }],
+    },
+  });
+
+  expect(screen.getByText('Document created')).toBeInTheDocument();
+  expect(screen.getByText('notice.pdf')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: /open document/i }));
+  expect(navigateSpy).toHaveBeenCalledWith('/documents/doc-1');
+});

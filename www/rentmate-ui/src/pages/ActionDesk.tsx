@@ -169,7 +169,7 @@ export function SuggestionCard({ suggestion, onAction, isActive, compact }: {
 // ─── ActionDesk (Suggestions) ────────────────────────────────────────────────
 
 const ActionDesk = () => {
-  const { suggestions, updateSuggestionStatus, isLoading, chatPanel } = useApp();
+  const { suggestions, updateSuggestionStatus, isLoading, chatPanel, openChat } = useApp();
   const [categoryFilter, setCategoryFilter] = useState<SuggestionCategory | null>(null);
 
   const pending = suggestions
@@ -181,6 +181,16 @@ const ActionDesk = () => {
     .slice(0, 5);
 
   const handleAction = async (suggestionId: string, action: string, editedBody?: string) => {
+    const suggestion = suggestions.find(item => item.id === suggestionId);
+    if (action === 'request_file_upload') {
+      if (suggestion?.taskId) {
+        openChat({ taskId: suggestion.taskId });
+        toast.info('Open the task chat and upload the requested file there.');
+      } else {
+        toast.info('Open the linked suggestion and upload the requested file from the task chat.');
+      }
+      return;
+    }
     try {
       const result = await actOnSuggestion(suggestionId, action, editedBody ?? null);
       const { status, taskId } = result.actOnSuggestion;

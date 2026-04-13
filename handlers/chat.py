@@ -45,13 +45,66 @@ from gql.services.sms_service import (  # noqa: F401 — re-exported for backwar
     send_via_channel,
 )
 from handlers.deps import get_db, require_user
-from llm.context import build_task_context, load_account_context
+from llm.context import (
+    build_task_context,
+    build_task_context_data,
+    load_account_context_data,
+)
 from llm.registry import agent_registry
 from llm.side_effects import process_side_effects
 from llm.tools import active_conversation_id, pending_suggestion_messages
-from llm.tracing import log_trace
+from llm.tracing import log_trace, make_trace_envelope
 
 router = APIRouter()
+
+
+def _split_messages_for_trace(messages_payload: list[dict]) -> dict:
+    if not messages_payload:
+        return {"system": None, "history": [], "latest_user": None}
+    system = messages_payload[0] if messages_payload and messages_payload[0].get("role") == "system" else None
+    latest_user = None
+    for message in reversed(messages_payload):
+        if message.get("role") == "user":
+            latest_user = message
+            break
+    history = messages_payload[1:] if system else messages_payload[:]
+    return {
+        "system": system,
+        "history": history[:-1] if latest_user and history and history[-1] is latest_user else history,
+        "latest_user": latest_user,
+    }
+
+
+def _build_llm_trace_detail(
+    *,
+    flow: str,
+    session_key: str,
+    messages_payload: list[dict],
+    context_data: dict | None,
+    task_id: str | None,
+    conversation_id: str | None,
+    reply: str | None = None,
+    side_effects: list[dict] | None = None,
+) -> dict:
+    parts = _split_messages_for_trace(messages_payload)
+    reasoning = {
+        "available": False,
+        "note": "No provider reasoning trace available for this response.",
+    }
+    return make_trace_envelope(
+        "llm_exchange" if reply is not None else "llm_request",
+        flow=flow,
+        session_key=session_key,
+        task_id=task_id,
+        conversation_id=conversation_id,
+        messages_payload=messages_payload,
+        messages_breakdown=parts,
+        context=context_data,
+        retrieval=(context_data or {}).get("retrieval"),
+        reply=reply,
+        side_effects=side_effects or [],
+        reasoning=reasoning,
+    )
 
 
 def _describe_agent_error(exc: Exception) -> str:
@@ -289,9 +342,9 @@ async def chat_endpoint(
         conv = task_obj.ai_conversation
         if not conv:
             raise HTTPException(status_code=404, detail="Task has no AI conversation")
-        context = build_task_context(db, body.task_id, query=body.message)
+        context_data = build_task_context_data(db, body.task_id, query=body.message)
     else:
-        context = load_account_context(db, query=body.message)
+        context_data = load_account_context_data(db, query=body.message)
         # ── Onboarding start detection (must happen before conversation
         #    lookup so we can tag the conversation with the right subject) ──
         _is_onboarding_start = body.message.strip() == "[onboarding:start]"
@@ -321,6 +374,7 @@ async def chat_endpoint(
                 "The user just opened the app for the first time. "
                 "Send a warm welcome and present the onboarding options."
             )
+    context = context_data["text"]
 
     conv_id = conv.id
     public_conv_id = str(getattr(conv, "external_id", None) or conv_id)
@@ -354,10 +408,7 @@ async def chat_endpoint(
         ]
         msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
         messages_payload = [{"role": "system", "content": context}]
-        messages_payload += [
-            {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
-            for m in msg_rows
-        ]
+        messages_payload += chat_service.model_history_messages(msg_rows)
         messages_payload.append({"role": "user", "content": body.message})
     else:
         messages_payload = chat_service.build_agent_message_history(db, conv_id=conv_id, user_message=body.message, context=context)
@@ -424,7 +475,35 @@ async def chat_endpoint(
                         pre_db.close()
 
                 await on_progress("Thinking\u2026")
-                agent_resp = await call_agent(agent_id, session_key=session_key, messages=messages_payload, on_progress=on_progress)
+                log_trace(
+                    "llm_request",
+                    "chat",
+                    f"Prepared {len(messages_payload)} messages for model call",
+                    task_id=body.task_id,
+                    conversation_id=conv_id,
+                    detail=_build_llm_trace_detail(
+                        flow="chat",
+                        session_key=session_key,
+                        messages_payload=messages_payload,
+                        context_data=context_data,
+                        task_id=body.task_id,
+                        conversation_id=conv_id,
+                    ),
+                )
+                agent_resp = await call_agent(
+                    agent_id,
+                    session_key=session_key,
+                    messages=messages_payload,
+                    on_progress=on_progress,
+                    trace_context=_build_llm_trace_detail(
+                        flow="chat",
+                        session_key=session_key,
+                        messages_payload=messages_payload,
+                        context_data=context_data,
+                        task_id=body.task_id,
+                        conversation_id=conv_id,
+                    ),
+                )
 
                 write_db = _SL()
                 try:
@@ -463,8 +542,23 @@ async def chat_endpoint(
                         db_conv.updated_at = now
                     write_db.commit()
                     print(f"[chat] Persisted AI reply ({len(agent_resp.reply)} chars) to {conv_id}")
-                    log_trace("llm_reply", "chat", agent_resp.reply[:200],
-                        task_id=body.task_id, conversation_id=conv_id)
+                    log_trace(
+                        "llm_reply",
+                        "chat",
+                        agent_resp.reply[:200],
+                        task_id=body.task_id,
+                        conversation_id=conv_id,
+                        detail=_build_llm_trace_detail(
+                            flow="chat",
+                            session_key=session_key,
+                            messages_payload=messages_payload,
+                            context_data=context_data,
+                            task_id=body.task_id,
+                            conversation_id=conv_id,
+                            reply=agent_resp.reply,
+                            side_effects=agent_resp.side_effects,
+                        ),
+                    )
                     return agent_resp.reply, ai_msg.id, flushed_effect_messages
                 except Exception as e:
                     write_db.rollback()
@@ -662,10 +756,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
         ]
         msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
         messages_payload = [{"role": "system", "content": context}]
-        messages_payload += [
-            {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
-            for m in msg_rows
-        ]
+        messages_payload += chat_service.model_history_messages(msg_rows)
 
         # The hint (or default) is the "user" message that triggers the agent
         default_hint = "Check this task for anything that needs attention."
@@ -814,7 +905,8 @@ async def assess_task_endpoint(
     if not conv:
         raise HTTPException(status_code=404, detail="Task has no AI conversation")
 
-    context = build_task_context(db, body.task_id, query=body.message)
+    context_data = build_task_context_data(db, body.task_id, query=body.message)
+    context = context_data["text"]
     conv_id = conv.id
     ext_conv_id = task_obj.external_conversation_id
 
@@ -857,10 +949,7 @@ async def assess_task_endpoint(
     ]
     msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
     messages_payload = [{"role": "system", "content": context}]
-    messages_payload += [
-        {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
-        for m in msg_rows
-    ]
+    messages_payload += chat_service.model_history_messages(msg_rows)
 
     db.commit()
     messages_payload.append({
@@ -891,7 +980,35 @@ async def assess_task_endpoint(
                 # NOTE: We do NOT persist a user message — the assess prompt is
                 # an internal trigger, not a real user message.
                 await on_progress("Thinking\u2026")
-                agent_resp = await call_agent(agent_id, session_key=session_key, messages=messages_payload, on_progress=on_progress)
+                log_trace(
+                    "llm_request",
+                    "assess",
+                    f"Prepared {len(messages_payload)} messages for model call",
+                    task_id=body.task_id,
+                    conversation_id=conv_id,
+                    detail=_build_llm_trace_detail(
+                        flow="assess",
+                        session_key=session_key,
+                        messages_payload=messages_payload,
+                        context_data=context_data,
+                        task_id=body.task_id,
+                        conversation_id=conv_id,
+                    ),
+                )
+                agent_resp = await call_agent(
+                    agent_id,
+                    session_key=session_key,
+                    messages=messages_payload,
+                    on_progress=on_progress,
+                    trace_context=_build_llm_trace_detail(
+                        flow="assess",
+                        session_key=session_key,
+                        messages_payload=messages_payload,
+                        context_data=context_data,
+                        task_id=body.task_id,
+                        conversation_id=conv_id,
+                    ),
+                )
 
                 # If agent says no response needed, skip persistence entirely
                 if agent_resp.reply.strip().startswith(NO_RESPONSE_SENTINEL):
@@ -933,8 +1050,23 @@ async def assess_task_endpoint(
                         db_conv.updated_at = now
                     write_db.commit()
                     print(f"[assess] Persisted AI reply ({len(agent_resp.reply)} chars) to AI conv {conv_id}")
-                    log_trace("llm_reply", "assess", agent_resp.reply[:200],
-                         task_id=body.task_id, conversation_id=conv_id)
+                    log_trace(
+                        "llm_reply",
+                        "assess",
+                        agent_resp.reply[:200],
+                        task_id=body.task_id,
+                        conversation_id=conv_id,
+                        detail=_build_llm_trace_detail(
+                            flow="assess",
+                            session_key=session_key,
+                            messages_payload=messages_payload,
+                            context_data=context_data,
+                            task_id=body.task_id,
+                            conversation_id=conv_id,
+                            reply=agent_resp.reply,
+                            side_effects=agent_resp.side_effects,
+                        ),
+                    )
                     return agent_resp.reply, ai_msg.id, flushed_effect_messages
                 except Exception as e:
                     write_db.rollback()

@@ -80,7 +80,7 @@ export interface ChatActionCardField {
 
 export interface ChatActionCardLink {
   label: string;
-  entityType: 'suggestion' | 'property' | 'tenant' | 'unit';
+  entityType: 'suggestion' | 'property' | 'tenant' | 'unit' | 'document';
   entityId: string;
   propertyId?: string | null;
 }
@@ -92,7 +92,7 @@ export interface ChatActionCardUnit {
 }
 
 export interface ChatActionCard {
-  kind: 'suggestion' | 'property' | 'tenant';
+  kind: 'suggestion' | 'property' | 'tenant' | 'document';
   title: string;
   summary?: string;
   fields?: ChatActionCardField[];
@@ -236,6 +236,8 @@ export interface ManagedDocument {
   confirmed?: boolean;
   confirmedAt?: Date;
   errorMessage?: string;
+  generatedByRentMate?: boolean;
+  generationSource?: string;
 }
 
 // --- Mock Data ---
