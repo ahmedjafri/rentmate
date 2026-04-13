@@ -21,6 +21,20 @@ from db.models import (
 from llm.retrieval import RankedContextItem, RetrievalRequest, _llm_rerank, retrieve_context
 
 
+def _add_property(db, property_id: str = "prop-acme") -> Property:
+    property_row = Property(
+        id=property_id,
+        org_id=1,
+        creator_id=1,
+        address_line1="1234 Acme Lane",
+        property_type="single_family",
+        source="manual",
+    )
+    db.add(property_row)
+    db.flush()
+    return property_row
+
+
 def test_person_query_ranks_tenant_above_task_shell(db):
     tenant_user = User(
         id=2,
@@ -148,6 +162,7 @@ def test_llm_rerank_reorders_shortlist():
 
 
 def test_conversation_memory_uses_notes_not_raw_chat(db):
+    _add_property(db)
     conv = Conversation(
         org_id=1,
         creator_id=1,
@@ -206,6 +221,7 @@ def test_conversation_memory_uses_notes_not_raw_chat(db):
 
 
 def test_explicit_anti_suggestion_query_downranks_suggestion_and_task_notes(db):
+    _add_property(db)
     suggestion_conv = Conversation(
         org_id=1,
         creator_id=1,
@@ -264,6 +280,7 @@ def test_explicit_anti_suggestion_query_downranks_suggestion_and_task_notes(db):
 
 
 def test_retrieval_skips_transient_tool_failure_action_card_notes(db):
+    _add_property(db)
     user_conv = Conversation(
         org_id=1,
         creator_id=1,

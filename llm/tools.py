@@ -628,7 +628,7 @@ def _resolve_task_id_from_active_conversation() -> str | None:
     try:
         conv_lookup = int(conv_id)
     except (TypeError, ValueError):
-        conv_lookup = conv_id
+        return None
 
     from db.models import Task
     from db.session import SessionLocal

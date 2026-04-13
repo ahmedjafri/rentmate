@@ -11,6 +11,7 @@ from typing import Any
 from backends.local_auth import resolve_account_id
 
 TRACE_ENVELOPE_VERSION = 1
+TRACE_TYPE_MAX_LENGTH = 30
 
 
 def make_trace_envelope(kind: str, **payload: Any) -> dict[str, Any]:
@@ -45,7 +46,7 @@ def log_trace(
             db.add(AgentTrace(
                 id=str(uuid.uuid4()),
                 timestamp=datetime.now(UTC),
-                trace_type=trace_type,
+                trace_type=trace_type[:TRACE_TYPE_MAX_LENGTH],
                 source=source,
                 task_id=task_id,
                 conversation_id=conversation_id,
