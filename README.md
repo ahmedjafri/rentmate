@@ -35,6 +35,8 @@ The difference matters in practice. When AI is a layer on top, every new capabil
 
 Requires **Node >= 18** and **Python >= 3.12** with [Poetry](https://python-poetry.org/docs/#installation).
 
+Agent-generated PDF documents now render through a backend-owned **WeasyPrint** runtime. If you want the `create_document` tool to work locally, install the Python dependencies and the required system libraries for WeasyPrint.
+
 **One-line install** (macOS / Linux):
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ahmedjafri/rentmate/main/install.sh | bash
@@ -43,7 +45,8 @@ curl -fsSL https://raw.githubusercontent.com/ahmedjafri/rentmate/main/install.sh
 Or manually:
 ```bash
 git clone https://github.com/ahmedjafri/rentmate.git && cd rentmate
-npm install              # installs Python deps (poetry) + frontend
+poetry install
+npm install              # installs frontend deps for the React UI
 
 cp .env.example .env     # optional — LLM can be configured in the UI
 
@@ -53,11 +56,16 @@ npm start                # starts API (port 8000)
 
 For development:
 ```bash
-npm run dev              # starts API (port 8002) + Vite dev server
-                         # auto-recreates DB when schema changes
+npm run dev              # starts the containerized dev stack
+                         # API on :8002 and Vite on :8080 with source mounts
 ```
 
-Open [http://localhost:8002](http://localhost:8002) (dev) or [http://localhost:8000](http://localhost:8000) (prod).
+Stop it with:
+```bash
+npm run dev:down
+```
+
+Open [http://localhost:8080](http://localhost:8080) (dev) or [http://localhost:8000](http://localhost:8000) (prod).
 
 On first visit, click **Sign up** to create your account with an email and password. After signing in, the onboarding flow will guide you through connecting an AI model.
 
@@ -70,8 +78,32 @@ On first visit, click **Sign up** to create your account with an email and passw
 | `LLM_BASE_URL` | No | — | Custom base URL (e.g. `http://localhost:11434` for Ollama) |
 | `JWT_SECRET` | No | `rentmate-local-secret` | JWT signing secret — change in production |
 | `RENTMATE_DATA_DIR` | No | `./data` | Data directory (DB, documents, agent workspace) |
+| `RENTMATE_DEPLOYMENT_MODE` | No | `single-machine` | Deployment topology: `single-machine` or `distributed` |
+| `RENTMATE_DOC_GEN_BACKEND` | No | derived from deployment mode | Override doc-gen transport: `local` or `grpc` |
+| `RENTMATE_DOC_GEN_GRPC_TARGET` | No | `127.0.0.1:50061` | gRPC target the main API uses when doc-gen is distributed |
+| `RENTMATE_DOC_GEN_GRPC_BIND` | No | `0.0.0.0:50061` | Bind address for the standalone doc-gen gRPC service |
+| `RENTMATE_DOC_GEN_GRPC_INSECURE` | No | `true` | Use insecure gRPC transport for internal doc-gen traffic |
+| `RENTMATE_DOC_GEN_RENDER_TIMEOUT_MS` | No | `30000` | Render timeout for local and gRPC doc-gen requests |
 | `QUO_API_KEY` | No | — | Quo/OpenPhone API key for SMS |
 | `PHONE_WHITELIST` | No | — | Comma-separated phone numbers for auto-reply |
+
+## Document Rendering
+
+- The `create_document` agent tool renders HTML/CSS to PDF using WeasyPrint.
+- Local development requires the backend Poetry environment plus the native libraries WeasyPrint depends on.
+- In `single-machine` mode, the API renders documents locally in the main backend process.
+- In `distributed` mode, the API calls a dedicated doc-gen service over gRPC. Start that worker with `poetry run python scripts/run_doc_gen_service.py`.
+- If the WeasyPrint native libraries are missing, agent-created documents will fail at render time even if the rest of the app is working.
+- Generated documents store both the final PDF and the rendered HTML source in the document storage area.
+
+## Containers
+
+- Backend container builds install Poetry-managed Python dependencies and the native libraries WeasyPrint needs during image build.
+- If you build your own OCI image outside the included Dockerfiles, make sure the image includes the Cairo/Pango/GDK PixBuf runtime dependencies WeasyPrint requires.
+- `npm run dev` now uses [infra/docker-compose.dev.yml](infra/docker-compose.dev.yml) to run a bind-mounted dev stack:
+  - `api` runs `python main.py --reload --port 8002`
+  - `web` runs Vite on port `8080`
+  - source changes on the host are reflected live inside both containers
 
 ## Architecture
 
@@ -80,7 +112,7 @@ FastAPI backend (main.py)
   ├── /graphql            — Strawberry GraphQL API
   ├── /chat/send          — AI chat (SSE streaming)
   ├── /upload-document    — Document upload + extraction
-  ├── /settings           — LLM and integration config
+  ├── /api/settings       — LLM and integration config
   ├── /onboarding/state   — First-run onboarding
   ├── /quo-webhook        — Inbound SMS from Quo
   └── /*                  — React SPA (www/rentmate-ui/dist/)
@@ -101,6 +133,7 @@ gql/
 
 llm/
   ├── client.py           — Agent execution + tool progress bridging
+  ├── doc_gen_runtime.py  — Local vs gRPC document-generation abstraction
   ├── registry.py         — Agent registry, tool registration, system prompt
   ├── tools.py            — Agent tools (tasks, memory, documents, etc.)
   └── document_processor.py — PDF extraction + LLM parsing

@@ -1,0 +1,39 @@
+name: rentmate-dev
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: infra/backend.Dockerfile
+    command: ["python", "main.py", "--host", "0.0.0.0", "--port", "8002", "--reload", "--log-level", "debug"]
+    ports:
+      - "8002:8002"
+    working_dir: /app
+    volumes:
+      - ../:/app
+      - ../data:/app/data
+    environment:
+      RENTMATE_ENV: development
+      RENTMATE_DB_PATH: /app/data/rentmate.db
+      RENTMATE_DEPLOYMENT_MODE: single-machine
+    env_file:
+      - ../.env
+
+  web:
+    build:
+      context: ..
+      dockerfile: infra/frontend.Dockerfile
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+    ports:
+      - "8080:8080"
+    working_dir: /app/www/rentmate-ui
+    volumes:
+      - ../www/rentmate-ui:/app/www/rentmate-ui
+      - rentmate_web_node_modules:/app/www/rentmate-ui/node_modules
+    environment:
+      VITE_BACKEND_URL: http://api:8002
+    depends_on:
+      - api
+
+volumes:
+  rentmate_web_node_modules:

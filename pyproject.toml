@@ -47,6 +47,8 @@ memray = "^1.19.2"
 croniter = "^6.2.2"
 bcrypt = "^5.0.0"
 chromadb = "^1.5.7"
+weasyprint = "^66.0"
+grpcio = "^1.76.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.0"

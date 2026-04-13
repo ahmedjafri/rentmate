@@ -3,7 +3,7 @@
 FROM python:3.12-slim
 
 # System dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends curl build-essential && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl build-essential git && rm -rf /var/lib/apt/lists/*
 
 # Install Poetry
 ENV POETRY_VERSION=1.8.2
@@ -21,6 +21,17 @@ COPY pyproject.toml poetry.lock* ./
 
 # Install dependencies
 RUN poetry install --no-root --only main
+
+# Install shared libraries for WeasyPrint HTML->PDF rendering
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcairo2 \
+    libgdk-pixbuf-2.0-0 \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
+    shared-mime-info \
+    fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY alembic.ini ./
 COPY main.py ./

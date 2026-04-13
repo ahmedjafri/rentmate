@@ -6,6 +6,7 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     build-essential \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Poetry
@@ -21,8 +22,19 @@ WORKDIR /app
 # Copy dependency files
 COPY pyproject.toml poetry.lock* ./
 
-# Install Python dependencies
-RUN poetry install --no-root --only main
+# Install Python dependencies, including dev tools for containerized local testing
+RUN poetry install --no-root
+
+# Install shared libraries for WeasyPrint HTML->PDF rendering
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcairo2 \
+    libgdk-pixbuf-2.0-0 \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
+    shared-mime-info \
+    fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy only runtime backend files to preserve build cache and avoid frontend/test churn
 COPY alembic.ini ./
@@ -37,6 +49,7 @@ COPY llm ./llm
 # Environment variable for dev
 ENV RENTMATE_ENV=development
 ENV RENTMATE_DB_PATH=/app/data/rentmate.db
+ENV RENTMATE_DEPLOYMENT_MODE=single-machine
 
 # Expose backend port
 EXPOSE 8002

@@ -4,8 +4,10 @@
   "private": true,
   "scripts": {
     "postinstall": "poetry install && npm install --prefix www/rentmate-ui",
-    "dev": "./run.sh dev & npm run dev --prefix www/rentmate-ui",
-    "dev:dummy-data": "rm -f /tmp/rentmate_dummy.db && RENTMATE_DB_PATH=/tmp/rentmate_dummy.db poetry run python scripts/seed_dummy_data.py && RENTMATE_DB_PATH=/tmp/rentmate_dummy.db npm run dev --prefix www/rentmate-ui",
+    "dev": "bash scripts/dev-compose.sh",
+    "dev:down": "docker compose -f infra/docker-compose.dev.yml down",
+    "dev:dummy-data": "rm -f /tmp/rentmate_dummy.db && RENTMATE_DB_PATH=/tmp/rentmate_dummy.db poetry run python scripts/seed_dummy_data.py && docker compose -f infra/docker-compose.dev.yml up --build",
+    "test:doc-gen:container": "bash scripts/test_doc_gen_container.sh",
     "build": "npm run build --prefix www/rentmate-ui",
     "start": "npm run build && poetry run uvicorn main:app --host 0.0.0.0 --port 8000",
     "lint": "poetry run ruff check . && poetry run python scripts/lint_kwargs.py",
