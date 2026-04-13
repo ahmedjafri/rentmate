@@ -24,7 +24,17 @@ def _codegen_command(tmp_config: Path) -> list[str]:
         raise FileNotFoundError(
             "Could not find graphql-codegen locally and `npm` is not available for fallback resolution.",
         )
-    return [npm, "exec", "--yes", "--", "graphql-codegen", "--config", str(tmp_config)]
+    return [
+        npm,
+        "exec",
+        "--yes",
+        "--package",
+        "@graphql-codegen/cli",
+        "--",
+        "graphql-codegen",
+        "--config",
+        str(tmp_config),
+    ]
 
 
 def main() -> int:

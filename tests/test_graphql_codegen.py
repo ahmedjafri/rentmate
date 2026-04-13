@@ -22,6 +22,8 @@ def test_codegen_command_falls_back_to_npm_exec(monkeypatch, tmp_path):
         "/usr/bin/npm",
         "exec",
         "--yes",
+        "--package",
+        "@graphql-codegen/cli",
         "--",
         "graphql-codegen",
         "--config",
