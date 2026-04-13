@@ -16,19 +16,13 @@ def test_graphql_codegen_artifacts_are_current():
 
 def test_codegen_command_falls_back_to_npm_exec(monkeypatch, tmp_path):
     monkeypatch.setattr("scripts.check_graphql_codegen.FRONTEND_DIR", tmp_path)
-    monkeypatch.setattr("scripts.check_graphql_codegen.shutil.which", lambda name: "/usr/bin/npx" if name == "npx" else None)
+    monkeypatch.setattr("scripts.check_graphql_codegen.shutil.which", lambda name: "/usr/bin/npm" if name == "npm" else None)
 
     assert _codegen_command(Path("/tmp/codegen.ts")) == [
-        "/usr/bin/npx",
+        "/usr/bin/npm",
+        "exec",
         "--yes",
-        "-p",
-        "@graphql-codegen/cli",
-        "-p",
-        "@graphql-codegen/typescript",
-        "-p",
-        "@graphql-codegen/typescript-operations",
-        "-p",
-        "@graphql-codegen/typed-document-node",
+        "--",
         "graphql-codegen",
         "--config",
         "/tmp/codegen.ts",
