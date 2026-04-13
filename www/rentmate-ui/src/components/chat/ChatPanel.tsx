@@ -12,6 +12,8 @@ import { authFetch } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SuggestionOptions } from './SuggestionOptions';
+import { MessageSuggestionCard } from './MessageSuggestionCard';
+import { getMessageSuggestionSendAction, isMessageSuggestion } from './messageSuggestion';
 import { ProgressSteps } from './ProgressSteps';
 import { OnboardingChips, OnboardingChoice } from './OnboardingChips';
 import { OnboardingProgress } from './OnboardingProgress';
@@ -203,6 +205,14 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const activeSuggestion = useMemo(() =>
     chatPanel.suggestionId ? suggestions.find(s => s.id === chatPanel.suggestionId) : null,
     [chatPanel.suggestionId, suggestions]
+  );
+  const activeMessageSuggestion = useMemo(
+    () => (isMessageSuggestion(activeSuggestion) ? activeSuggestion : null),
+    [activeSuggestion],
+  );
+  const activeMessageSuggestionSendAction = useMemo(
+    () => getMessageSuggestionSendAction(activeMessageSuggestion),
+    [activeMessageSuggestion],
   );
 
   const activeTask = useMemo(() =>
@@ -1274,20 +1284,52 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
             </div>
           </ScrollArea>
           {activeSuggestion && activeSuggestion.status === 'pending' ? (
-            <SuggestionOptions
-              options={activeSuggestion.options}
-              onAction={async (action) => {
-                if (action === 'request_file_upload') {
-                  chatInputRef.current?.triggerFileUpload();
-                  toast.info('Upload the requested file in this task chat.');
-                  return;
-                }
-                const result = await actOnSuggestion(activeSuggestion.id, action);
-                const { status } = result.actOnSuggestion;
-                updateSuggestionStatus(activeSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
-                closeChat();
-              }}
-            />
+            <>
+              {activeMessageSuggestion && activeMessageSuggestionSendAction ? (
+                <MessageSuggestionCard
+                  suggestion={activeMessageSuggestion}
+                  sendActionLabel={
+                    activeMessageSuggestion.options?.find((item) => item.action === activeMessageSuggestionSendAction)?.label ??
+                    'Send'
+                  }
+                  disabled={isTyping}
+                  onAccept={async (action) => {
+                    const result = await actOnSuggestion(activeMessageSuggestion.id, action);
+                    const { status } = result.actOnSuggestion;
+                    updateSuggestionStatus(activeMessageSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                    refreshData();
+                  }}
+                  onSendEdited={async (body) => {
+                    const result = await actOnSuggestion(activeMessageSuggestion.id, 'edit_message', body);
+                    const { status } = result.actOnSuggestion;
+                    updateSuggestionStatus(activeMessageSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                    refreshData();
+                  }}
+                  onDismiss={async () => {
+                    const result = await actOnSuggestion(activeMessageSuggestion.id, 'reject_task');
+                    const { status } = result.actOnSuggestion;
+                    updateSuggestionStatus(activeMessageSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                    refreshData();
+                  }}
+                />
+              ) : (
+                <SuggestionOptions
+                  options={activeSuggestion.options}
+                  onAction={async (action) => {
+                    if (action === 'request_file_upload') {
+                      chatInputRef.current?.triggerFileUpload();
+                      toast.info('Upload the requested file in this task chat.');
+                      return;
+                    }
+                    const result = await actOnSuggestion(activeSuggestion.id, action);
+                    const { status } = result.actOnSuggestion;
+                    updateSuggestionStatus(activeSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                    closeChat();
+                  }}
+                />
+              )}
+              <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} lastSentMessage={lastSentMessage} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
+            </>
           ) : (
             <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} lastSentMessage={lastSentMessage} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
           )}
