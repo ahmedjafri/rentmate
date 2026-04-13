@@ -11,6 +11,7 @@ import contextvars
 import json
 import os
 import queue
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -22,10 +23,25 @@ from backends.local_auth import (
     resolve_org_id,
     set_fallback_request_context,
 )
+from llm.model_config import resolve_model_config
 from llm.registry import agent_registry
-from llm.tracing import log_trace
+from llm.tools import current_user_message
+from llm.tracing import log_trace, make_trace_envelope
 
 AGENT_URL = os.getenv("RENTMATE_AGENT_URL")  # e.g. https://agent.rentmate.com
+
+current_trace_context: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "current_trace_context",
+    default=None,
+)
+current_failed_tools: contextvars.ContextVar[list[dict[str, Any]]] = contextvars.ContextVar(
+    "current_failed_tools",
+    default=[],
+)
+current_completed_tools: contextvars.ContextVar[list[str]] = contextvars.ContextVar(
+    "current_completed_tools",
+    default=[],
+)
 
 
 @dataclass
@@ -49,10 +65,106 @@ _TOOL_LABELS = {
     "create_tenant": "Creating tenant",
     "create_suggestion": "Creating suggestion",
     "create_scheduled_task": "Scheduling task",
+    "create_document": "Creating document",
     "read_document": "Reading document",
     "analyze_document": "Analyzing document",
     "update_onboarding": "Updating setup progress",
 }
+
+
+_DOCUMENT_CLAIM_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bcreated document\b",
+        r"\bi(?:'ve| have) created .*document\b",
+        r"\bavailable in your documents area\b",
+        r"\bdownload (?:it|the pdf)\b",
+    ]
+]
+
+_MUTATING_TOOLS = {
+    "propose_task",
+    "close_task",
+    "message_person",
+    "create_vendor",
+    "create_property",
+    "create_tenant",
+    "create_suggestion",
+    "create_scheduled_task",
+    "create_document",
+}
+
+
+def _collect_pending_side_effects(*, pending_items: list[dict] | None) -> list[dict]:
+    side_effects: list[dict] = []
+    for pending in (pending_items or []):
+        side_effects.append({
+            "type": pending.get("type", "suggestion_message"),
+            **pending,
+        })
+    return side_effects
+
+
+def _reply_claims_document_created(reply: str) -> bool:
+    return any(pattern.search(reply or "") for pattern in _DOCUMENT_CLAIM_PATTERNS)
+
+
+def _has_document_side_effect(side_effects: list[dict]) -> bool:
+    for effect in side_effects:
+        action_card = ((effect.get("meta") or {}).get("action_card") or {}) if isinstance(effect, dict) else {}
+        if action_card.get("kind") == "document":
+            return True
+    return False
+
+
+def _failed_mutating_tool_switched(
+    *,
+    failed_tools: list[dict[str, Any]],
+    completed_tools: list[str],
+) -> tuple[str, str] | None:
+    failed_mutating = [
+        tool.get("tool_name")
+        for tool in failed_tools
+        if tool.get("tool_name") in _MUTATING_TOOLS
+    ]
+    completed_mutating = [tool for tool in completed_tools if tool in _MUTATING_TOOLS]
+    for failed_tool in failed_mutating:
+        for completed_tool in completed_mutating:
+            if completed_tool != failed_tool:
+                return failed_tool, completed_tool
+    return None
+
+
+def _synthesize_failed_tool_reply(failed_tools: list[dict[str, Any]]) -> str | None:
+    if not failed_tools:
+        return None
+    failed_tool = failed_tools[-1]
+    tool_name = str(failed_tool.get("tool_name") or "tool")
+    label = _TOOL_LABELS.get(tool_name, tool_name.replace("_", " "))
+    raw_error = str(failed_tool.get("error") or "").strip()
+    if raw_error:
+        if len(raw_error) > 500:
+            raw_error = raw_error[:500] + "…"
+        return f"{label} failed: {raw_error}"
+    return f"{label} failed."
+
+
+def _reply_is_only_tool_progress(reply: str) -> bool:
+    lines = [line.strip() for line in (reply or "").splitlines() if line.strip()]
+    if not lines:
+        return True
+    for line in lines:
+        if line == "Thinking…":
+            continue
+        if line.startswith("Thinking ("):
+            continue
+        if any(
+            line == label or line.startswith(f"{label}:")
+            for label in _TOOL_LABELS.values()
+        ):
+            continue
+        return False
+    return True
 
 
 # ─── Local agent execution ───────────────────────────────────────────────────
@@ -63,6 +175,7 @@ async def chat_with_agent(
     session_key: str,
     messages: list[dict],
     on_progress: Optional[Callable] = None,
+    trace_context: dict[str, Any] | None = None,
 ) -> str:
     """Run the AI agent with the given messages and return its text reply."""
     from run_agent import AIAgent  # noqa: F401 — optional dep
@@ -70,19 +183,10 @@ async def chat_with_agent(
     model = os.getenv("LLM_MODEL", "anthropic/claude-haiku-4-5-20251001")
     api_key = os.getenv("LLM_API_KEY", "")
     api_base = os.getenv("LLM_BASE_URL") or None
-
-    # Map LiteLLM-style provider/model names to direct API endpoints
-    provider = None
-    actual_model = model
-    if "/" in model and not api_base:
-        provider_prefix, _, model_name = model.partition("/")
-        _PROVIDER_BASES = {
-            "deepseek": ("https://api.deepseek.com", None),
-            "anthropic": ("https://api.anthropic.com/v1", "anthropic"),
-        }
-        if provider_prefix in _PROVIDER_BASES:
-            api_base, provider = _PROVIDER_BASES[provider_prefix]
-            actual_model = model_name
+    resolved_model = resolve_model_config(model=model, api_base=api_base)
+    actual_model = resolved_model.model
+    api_base = resolved_model.api_base
+    provider = resolved_model.provider
 
     # Extract system message and conversation history
     system_message = agent_registry.build_system_prompt(agent_id)
@@ -101,6 +205,7 @@ async def chat_with_agent(
     user_message = ""
     if conversation_history and conversation_history[-1]["role"] == "user":
         user_message = conversation_history.pop()["content"]
+    user_message_token = current_user_message.set(user_message)
 
     # Queue for bridging progress from the sync agent thread to async SSE
     progress_queue: queue.Queue[str] = queue.Queue()
@@ -109,9 +214,14 @@ async def chat_with_agent(
     # Extract task_id from session_key for tracing (e.g. "task:abc-123")
     _trace_task_id = session_key.split(":", 1)[1] if session_key.startswith("task:") else None
     _trace_source = "assess" if session_key.startswith("eval:") else ("chat" if not _trace_task_id else "chat")
+    _trace_conversation_id = str((trace_context or {}).get("conversation_id") or "") or None
 
     def _tool_progress(event_type: str, tool_name: str, preview: str | None, args: dict | None, **kwargs):
         label = _TOOL_LABELS.get(tool_name, tool_name)
+        trace_detail = current_trace_context.get() or trace_context or {}
+        trace_conversation_id = (
+            str(trace_detail.get("conversation_id") or "") if isinstance(trace_detail, dict) else ""
+        ) or _trace_conversation_id
         if event_type == "tool.started":
             hint = ""
             if args:
@@ -167,11 +277,31 @@ async def chat_with_agent(
             msg = f"{label}{hint}"
             progress_events.append(msg)
             progress_queue.put(msg)
-            log_trace("tool_call", _trace_source, msg, task_id=_trace_task_id,
-                      tool_name=tool_name, detail=args)
+            log_trace(
+                "tool_call",
+                _trace_source,
+                msg,
+                task_id=_trace_task_id,
+                conversation_id=trace_conversation_id,
+                tool_name=tool_name,
+                detail=make_trace_envelope(
+                    "tool_call",
+                    tool_name=tool_name,
+                    args=args or {},
+                    preview=preview,
+                    trace_context=trace_detail,
+                ),
+            )
         elif event_type == "tool.completed":
             is_error = kwargs.get("is_error", False)
             if is_error:
+                failed = list(current_failed_tools.get())
+                failed.append({
+                    "tool_name": tool_name,
+                    "args": args or {},
+                    "error": kwargs.get("error") or kwargs.get("result") or "",
+                })
+                current_failed_tools.set(failed)
                 raw_error_detail = kwargs.get("error", "") or kwargs.get("result", "")
                 display_error = raw_error_detail
                 if isinstance(display_error, str) and len(display_error) > 220:
@@ -179,18 +309,42 @@ async def chat_with_agent(
                 msg = f"{label}: error" + (f" — {display_error}" if display_error else "")
                 progress_events.append(msg)
                 progress_queue.put(msg)
-                log_trace("error", _trace_source, msg, task_id=_trace_task_id,
-                          tool_name=tool_name, detail={
-                              "error": str(raw_error_detail),
-                              "result": kwargs.get("result"),
-                              "tool_name": tool_name,
-                          })
+                log_trace(
+                    "error",
+                    _trace_source,
+                    msg,
+                    task_id=_trace_task_id,
+                    conversation_id=trace_conversation_id,
+                    tool_name=tool_name,
+                    detail=make_trace_envelope(
+                        "tool_error",
+                        tool_name=tool_name,
+                        error=str(raw_error_detail),
+                        result=kwargs.get("result"),
+                        trace_context=trace_detail,
+                    ),
+                )
             else:
+                completed = list(current_completed_tools.get())
+                completed.append(tool_name)
+                current_completed_tools.set(completed)
                 result = kwargs.get("result", "")
                 if isinstance(result, str) and len(result) > 500:
                     result = result[:500] + "…"
-                log_trace("tool_result", _trace_source, f"{label} completed",
-                          task_id=_trace_task_id, tool_name=tool_name, detail={"result": result})
+                log_trace(
+                    "tool_result",
+                    _trace_source,
+                    f"{label} completed",
+                    task_id=_trace_task_id,
+                    conversation_id=trace_conversation_id,
+                    tool_name=tool_name,
+                    detail=make_trace_envelope(
+                        "tool_result",
+                        tool_name=tool_name,
+                        result=result,
+                        trace_context=trace_detail,
+                    ),
+                )
 
     def _step_callback(iteration: int, prev_tools: list | None, **kwargs):
         pass  # progress is emitted via _tool_progress
@@ -251,7 +405,10 @@ async def chat_with_agent(
                 await on_progress(msg)
         return task.result()
 
-    result = await _run_with_progress()
+    try:
+        result = await _run_with_progress()
+    finally:
+        current_user_message.reset(user_message_token)
 
     if isinstance(result, dict):
         print(f"[agent] api_calls={result.get('api_calls', '?')} "
@@ -297,6 +454,7 @@ async def call_agent(
     messages: list[dict],
     on_progress: Optional[Callable] = None,
     account_context: dict[str, Any] | None = None,
+    trace_context: dict[str, Any] | None = None,
 ) -> AgentResponse:
     """Call the agent and return its response.
 
@@ -304,7 +462,7 @@ async def call_agent(
     hosted service.  Otherwise, falls back to the local agent.
     """
     if not AGENT_URL:
-        return await _local_fallback(agent_id, session_key, messages, on_progress)
+        return await _local_fallback(agent_id, session_key, messages, on_progress, trace_context)
 
     stream = on_progress is not None
     payload = {
@@ -366,11 +524,17 @@ async def _local_fallback(
     session_key: str,
     messages: list[dict],
     on_progress: Optional[Callable] = None,
+    trace_context: dict[str, Any] | None = None,
 ) -> AgentResponse:
     """Run the agent locally (dev mode)."""
-    from llm.tools import pending_suggestion_messages
+    from llm.tools import current_user_message, pending_suggestion_messages
 
     token = pending_suggestion_messages.set([])
+    failed_tools_token = current_failed_tools.set([])
+    completed_tools_token = current_completed_tools.set([])
+    latest_user = next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")
+    user_token = current_user_message.set(latest_user)
+    trace_token = current_trace_context.set(trace_context)
     fallback_token = None
     try:
         fallback_token = set_fallback_request_context(
@@ -380,15 +544,112 @@ async def _local_fallback(
     except RuntimeError:
         fallback_token = None
     try:
-        reply = await chat_with_agent(agent_id, session_key, messages, on_progress)
-        side_effects = []
-        for pending in (pending_suggestion_messages.get() or []):
-            side_effects.append({
-                "type": pending.get("type", "suggestion_message"),
-                **pending,
-            })
+        reply = await chat_with_agent(agent_id, session_key, messages, on_progress, trace_context=trace_context)
+        side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
+        failed_tools = list(current_failed_tools.get())
+        completed_tools = list(current_completed_tools.get())
+        if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
+            log_trace(
+                "error",
+                "chat",
+                "Assistant claimed document creation without create_document tool call",
+                conversation_id=str((trace_context or {}).get("conversation_id") or "") or None,
+                detail=make_trace_envelope(
+                    "tool_enforcement",
+                    expected_tool="create_document",
+                    reply=reply,
+                    trace_context=trace_context,
+                ),
+            )
+            pending_suggestion_messages.set([])
+            corrective_messages = [
+                *messages,
+                {"role": "assistant", "content": reply},
+                {
+                    "role": "user",
+                    "content": (
+                        "System correction: you claimed a document was created, but no create_document tool was called. "
+                        "If the user asked for a document, call create_document now. "
+                        "Do not claim a document exists unless the tool succeeds."
+                    ),
+                },
+            ]
+            reply = await chat_with_agent(
+                agent_id,
+                session_key,
+                corrective_messages,
+                on_progress,
+                trace_context=trace_context,
+            )
+            side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
+            if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
+                reply = (
+                    "I did not create the document. The document tool was not executed successfully, "
+                    "so there is no new file in Documents."
+                )
+        switched_mutating_tool = _failed_mutating_tool_switched(
+            failed_tools=failed_tools,
+            completed_tools=completed_tools,
+        )
+        if switched_mutating_tool:
+            failed_tool, replacement_tool = switched_mutating_tool
+            log_trace(
+                "error",
+                "chat",
+                "Assistant switched to a different mutating tool after tool failure",
+                conversation_id=str((trace_context or {}).get("conversation_id") or "") or None,
+                detail=make_trace_envelope(
+                    "tool_enforcement",
+                    failed_tool=failed_tool,
+                    replacement_tool=replacement_tool,
+                    reply=reply,
+                    trace_context=trace_context,
+                ),
+            )
+            pending_suggestion_messages.set([])
+            current_failed_tools.set([])
+            current_completed_tools.set([])
+            corrective_messages = [
+                *messages,
+                {"role": "assistant", "content": reply},
+                {
+                    "role": "user",
+                    "content": (
+                        "System correction: your last mutating tool failed. "
+                        f"Do not switch from {failed_tool} to a different mutating tool such as {replacement_tool} in the same turn. "
+                        "Either retry the same tool if appropriate, ask the user for missing input, or explain the failure without creating other side effects."
+                    ),
+                },
+            ]
+            reply = await chat_with_agent(
+                agent_id,
+                session_key,
+                corrective_messages,
+                on_progress,
+                trace_context=trace_context,
+            )
+            side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
+            failed_tools = list(current_failed_tools.get())
+            completed_tools = list(current_completed_tools.get())
+            if _failed_mutating_tool_switched(
+                failed_tools=failed_tools,
+                completed_tools=completed_tools,
+            ):
+                pending_suggestion_messages.set([])
+                side_effects = []
+                reply = (
+                    f"The requested action failed when attempting {failed_tool}. "
+                    "I did not perform a different side effect in its place."
+                )
+        synthesized_failure_reply = _synthesize_failed_tool_reply(failed_tools)
+        if synthesized_failure_reply and not side_effects and _reply_is_only_tool_progress(reply):
+            reply = synthesized_failure_reply
         return AgentResponse(reply=reply, side_effects=side_effects)
     finally:
         if fallback_token is not None:
             reset_fallback_request_context(fallback_token)
+        current_user_message.reset(user_token)
+        current_trace_context.reset(trace_token)
+        current_failed_tools.reset(failed_tools_token)
+        current_completed_tools.reset(completed_tools_token)
         pending_suggestion_messages.reset(token)

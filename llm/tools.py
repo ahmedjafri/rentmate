@@ -10,13 +10,17 @@ conversation timeline.  The conversation_id is communicated via the
 the agent runs.
 """
 import contextvars
+import hashlib
 import json
 import logging
+import re
 import traceback
+import uuid
 from abc import ABC, abstractmethod
+from datetime import UTC, datetime
 from typing import Any
 
-from backends.local_auth import resolve_account_id
+from backends.local_auth import resolve_account_id, resolve_org_id
 from db.enums import AgentSource, SuggestionOption, TaskCategory, Urgency
 from db.models import MessageType
 from gql.services.task_service import dump_task_steps
@@ -55,11 +59,41 @@ pending_suggestion_messages: contextvars.ContextVar[list[dict]] = contextvars.Co
     "pending_suggestion_messages", default=None,
 )
 
+current_user_message: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_user_message", default=None,
+)
+
 # When set, suggestion-producing tools run in dry-run mode and append the
 # suggestion payloads here instead of writing Suggestion rows to the DB.
 simulation_suggestions: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
     "simulation_suggestions", default=None,
 )
+
+
+_DIRECT_DRAFT_NEGATIVE_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bdon't create (a )?suggestion\b",
+        r"\bdont create (a )?suggestion\b",
+        r"\bdo not create (a )?suggestion\b",
+        r"\bdon't create (a )?task\b",
+        r"\bdont create (a )?task\b",
+        r"\bdo not create (a )?task\b",
+        r"\bnot a suggestion\b",
+        r"\bnot a task\b",
+    ]
+]
+
+_DIRECT_DRAFT_REQUEST_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bcreate (the )?draft\b",
+        r"\bdraft (the )?(notice|letter|document)\b",
+        r"\bdraft it directly\b",
+        r"\bcreate it directly\b",
+        r"\bdirectly\b.*\bdraft\b",
+    ]
+]
 
 
 def _trace_tool_error(tool_name: str, summary: str, *, detail: dict[str, Any] | None = None) -> None:
@@ -180,6 +214,260 @@ def _enum_label(value: Any) -> str | None:
         return str(value)
 
 
+def _sanitize_filename_component(text: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", (text or "").strip()).strip("-.")
+    return cleaned or "document"
+
+
+def _ensure_pdf_filename(title: str, filename: str | None = None) -> str:
+    candidate = _sanitize_filename_component(filename or title)
+    if not candidate.lower().endswith(".pdf"):
+        candidate += ".pdf"
+    return candidate
+
+
+def _ensure_unique_document_filename(db: Any, filename: str) -> str:
+    from db.models import Document
+
+    existing_names = {
+        row[0]
+        for row in db.query(Document.filename).filter(
+            Document.org_id == resolve_org_id(),
+            Document.creator_id == resolve_account_id(),
+            Document.filename.isnot(None),
+        ).all()
+        if row[0]
+    }
+    if filename not in existing_names:
+        return filename
+
+    if "." in filename:
+        stem, ext = filename.rsplit(".", 1)
+        ext = "." + ext
+    else:
+        stem, ext = filename, ""
+
+    index = 1
+    while True:
+        candidate = f"{stem}-{index}{ext}"
+        if candidate not in existing_names:
+            return candidate
+        index += 1
+
+
+_UNRESOLVED_PLACEHOLDER_RE = re.compile(r"\[[^\]\n]{2,100}\]")
+
+
+def _extract_legal_field_names(items: list[Any] | None) -> list[str]:
+    names: list[str] = []
+    for item in items or []:
+        if isinstance(item, str):
+            text = item.strip()
+        elif isinstance(item, dict):
+            text = str(item.get("field") or item.get("name") or item.get("label") or "").strip()
+        else:
+            text = str(item).strip()
+        if text:
+            names.append(text)
+    return names
+
+
+def _format_field_list(field_names: list[str]) -> str:
+    cleaned = [name.strip() for name in field_names if name and name.strip()]
+    if not cleaned:
+        return "the required notice fields"
+    if len(cleaned) == 1:
+        return cleaned[0]
+    if len(cleaned) == 2:
+        return f"{cleaned[0]} and {cleaned[1]}"
+    return f"{', '.join(cleaned[:-1])}, and {cleaned[-1]}"
+
+
+def _find_unresolved_placeholders(*content_blocks: str | None) -> list[str]:
+    placeholders: list[str] = []
+    for block in content_blocks:
+        if not block:
+            continue
+        placeholders.extend(match.group(0) for match in _UNRESOLVED_PLACEHOLDER_RE.finditer(block))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in placeholders:
+        if item in seen:
+            continue
+        deduped.append(item)
+        seen.add(item)
+    return deduped
+
+
+def _is_legal_or_compliance_document(kwargs: dict[str, Any]) -> bool:
+    document_type = str(kwargs.get("document_type") or "").strip().lower()
+    document_category = str(kwargs.get("document_category") or "").strip().lower()
+    summary = str(kwargs.get("summary") or "")
+    title = str(kwargs.get("title") or "")
+    html = str(kwargs.get("html") or "")
+    content = str(kwargs.get("content") or "")
+    risk_score = kwargs.get("risk_score")
+
+    if document_type == "notice":
+        return True
+    if document_category in {"legal", "compliance"}:
+        return True
+    try:
+        if risk_score is not None and float(risk_score) >= 7:
+            return True
+    except (TypeError, ValueError):
+        pass
+
+    combined = " ".join([title, summary, html, content]).lower()
+    return any(
+        token in combined
+        for token in [
+            "pay or vacate",
+            "eviction",
+            "unlawful detainer",
+            "compliance",
+            "legal notice",
+            "statutory",
+            "cure or quit",
+        ]
+    )
+
+
+def _legal_notice_block_message(
+    *,
+    missing_fields: list[str] | None = None,
+    citation: str | None = None,
+    jurisdiction: str | None = None,
+    reason: str | None = None,
+) -> str:
+    parts: list[str] = []
+    field_text = _format_field_list(missing_fields or [])
+    jurisdiction_text = f" for {jurisdiction.strip()}" if isinstance(jurisdiction, str) and jurisdiction.strip() else ""
+    parts.append(
+        f"I need {field_text} before I can create this legal notice{jurisdiction_text}. "
+        "I can't infer legally required notice details."
+    )
+    if citation:
+        parts.append(f"The governing law I relied on is {citation.strip()}.")
+    if reason:
+        parts.append(reason.strip())
+    parts.append("Please provide that information and I can generate the document.")
+    return " ".join(parts)
+
+
+def _create_document_tags(
+    db: Any,
+    *,
+    document_id: str,
+    property_id: str | None = None,
+    unit_id: str | None = None,
+    tenant_id: str | None = None,
+) -> None:
+    from db.models import DocumentTag
+
+    if property_id:
+        property_row = _load_entity_by_public_id(db, "property", property_id)
+        if property_row:
+            db.add(DocumentTag(
+                id=str(uuid.uuid4()),
+                org_id=resolve_org_id(),
+                document_id=document_id,
+                tag_type="property",
+                property_id=str(property_row.id),
+            ))
+    if unit_id:
+        unit_row = _load_entity_by_public_id(db, "unit", unit_id)
+        if unit_row:
+            db.add(DocumentTag(
+                id=str(uuid.uuid4()),
+                org_id=resolve_org_id(),
+                document_id=document_id,
+                tag_type="unit",
+                property_id=str(unit_row.property_id) if getattr(unit_row, "property_id", None) else None,
+                unit_id=str(unit_row.id),
+            ))
+    if tenant_id:
+        tenant_row = _load_tenant_by_public_id(db, tenant_id)
+        if tenant_row:
+            db.add(DocumentTag(
+                id=str(uuid.uuid4()),
+                org_id=resolve_org_id(),
+                document_id=document_id,
+                tag_type="tenant",
+                tenant_id=tenant_row.id,
+            ))
+
+
+async def _create_generated_document(
+    *,
+    title: str,
+    html_content: str | None = None,
+    text_content: str | None = None,
+    filename: str | None = None,
+    document_type: str = "other",
+    summary: str | None = None,
+    property_id: str | None = None,
+    unit_id: str | None = None,
+    tenant_id: str | None = None,
+    task_id: str | None = None,
+) -> tuple[str, str]:
+    from backends.wire import storage_backend
+    from db.models import Document
+    from db.session import SessionLocal
+    from gql.services.document_service import dump_document_extraction_meta
+    from llm.generated_documents import render_document_async
+
+    db = SessionLocal.session_factory()
+    try:
+        now = datetime.now(UTC)
+        resolved_filename = _ensure_unique_document_filename(db, _ensure_pdf_filename(title, filename))
+        rendered = await render_document_async(title=title, html_content=html_content, text_content=text_content)
+        doc_id = str(uuid.uuid4())
+        storage_path = f"generated-documents/{doc_id}/{resolved_filename}"
+        html_storage_path = f"generated-documents/{doc_id}/source.html"
+        checksum = hashlib.sha256(rendered.pdf_bytes).hexdigest()
+
+        await storage_backend.upload(storage_path, data=rendered.pdf_bytes, content_type="application/pdf")
+        await storage_backend.upload(html_storage_path, data=rendered.html.encode("utf-8"), content_type="text/html")
+
+        doc = Document(
+            id=doc_id,
+            org_id=resolve_org_id(),
+            creator_id=resolve_account_id(),
+            filename=resolved_filename,
+            content_type="application/pdf",
+            storage_path=storage_path,
+            document_type=document_type,
+            status="done",
+            progress="generated",
+            raw_text=text_content or html_content,
+            context=summary or title,
+            sha256_checksum=checksum,
+            created_at=now,
+            processed_at=now,
+            extraction_meta=dump_document_extraction_meta(
+                task_id=task_id,
+                source="agent_generated",
+                generated_by_tool="create_document",
+                generated_html_storage_path=html_storage_path,
+                generated_html_content_type="text/html",
+                generated_pdf_renderer=rendered.renderer,
+            ),
+        )
+        db.add(doc)
+        _create_document_tags(
+            db,
+            document_id=doc_id,
+            property_id=property_id,
+            unit_id=unit_id,
+            tenant_id=tenant_id,
+        )
+        db.commit()
+        return doc_id, resolved_filename
+    finally:
+        db.close()
+
+
 def _create_suggestion(
     *,
     title: str,
@@ -190,6 +478,8 @@ def _create_suggestion(
     options: list[SuggestionOption],
     task_id: str | None = None,
     property_id: str | None = None,
+    unit_id: str | None = None,
+    document_id: str | None = None,
     risk_score: int | None = None,
     suggestion_type: str | None = None,
 ) -> str:
@@ -206,6 +496,8 @@ def _create_suggestion(
         "action_payload": action_payload,
         "task_id": task_id,
         "property_id": property_id,
+        "unit_id": unit_id,
+        "document_id": document_id,
         "risk_score": risk_score,
         "suggestion_type": suggestion_type,
     })
@@ -218,7 +510,7 @@ def _create_suggestion(
 
     db = SessionLocal.session_factory()
     try:
-        # Deduplicate: skip if a pending suggestion with the same action already exists for this task
+        # Deduplicate: skip if an equivalent pending suggestion already exists for this task
         if task_id and action_payload and action_payload.get("action"):
             from sqlalchemy import select
             existing = db.execute(
@@ -228,7 +520,17 @@ def _create_suggestion(
                 )
             ).scalars().all()
             for s in existing:
-                if (s.action_payload or {}).get("action") == action_payload["action"]:
+                existing_payload = s.action_payload or {}
+                if existing_payload.get("action") != action_payload["action"]:
+                    continue
+                if action_payload["action"] == "request_file_upload":
+                    if (
+                        existing_payload.get("requested_file_kind") == action_payload.get("requested_file_kind")
+                        and str(existing_payload.get("target_task_id") or "") == str(action_payload.get("target_task_id") or task_id)
+                        and str(existing_payload.get("target_tenant_id") or "") == str(action_payload.get("target_tenant_id") or "")
+                    ):
+                        return s.id
+                else:
                     return s.id  # reuse existing suggestion
 
         suggestion = suggestion_service.create_suggestion(
@@ -241,9 +543,12 @@ def _create_suggestion(
             options=options,
             action_payload=action_payload,
             property_id=property_id,
+            unit_id=unit_id,
         )
         if task_id:
             suggestion.task_id = task_id
+        if document_id:
+            suggestion.document_id = document_id
         if risk_score is not None:
             suggestion.risk_score = risk_score
         if suggestion_type:
@@ -257,6 +562,7 @@ def _create_suggestion(
                 _action_card_field("Urgency", _enum_label(urgency)),
                 _action_card_field("Vendor", action_payload.get("vendor_name") if action_payload else None),
                 _action_card_field("Entity", action_payload.get("entity_name") if action_payload else None),
+                _action_card_field("Requested File", action_payload.get("requested_file_label") if action_payload else None),
             ]
             if field
         ]
@@ -315,6 +621,210 @@ def _get_task_title(task_id: str) -> str:
         db.close()
 
 
+def _resolve_task_id_from_active_conversation() -> str | None:
+    conv_id = active_conversation_id.get()
+    if not conv_id:
+        return None
+    try:
+        conv_lookup = int(conv_id)
+    except (TypeError, ValueError):
+        conv_lookup = conv_id
+
+    from db.models import Task
+    from db.session import SessionLocal
+
+    db = SessionLocal.session_factory()
+    try:
+        task = db.query(Task).filter_by(ai_conversation_id=conv_lookup).first()
+        return str(task.id) if task else None
+    finally:
+        db.close()
+
+
+def _recent_user_messages(task_id: str, *, limit: int = 6) -> list[str]:
+    from db.models import Message, Task
+    from db.session import SessionLocal
+
+    db = SessionLocal.session_factory()
+    try:
+        task = db.query(Task).filter_by(id=task_id).first()
+        if not task or not task.ai_conversation_id:
+            return []
+        rows = (
+            db.query(Message)
+            .filter_by(conversation_id=task.ai_conversation_id)
+            .order_by(Message.sent_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [str(m.body or "") for m in rows if not getattr(m, "is_ai", False)]
+    finally:
+        db.close()
+
+
+_SUGGESTION_CONFIRM_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bcreate (a )?suggestion\b",
+        r"\bgo ahead\b",
+        r"\byes\b",
+        r"\bdo that\b",
+        r"\badd it\b",
+        r"\baction desk\b",
+        r"\bupload\b",
+        r"\bnotice\b",
+    ]
+]
+
+
+def _has_user_confirmed_upload_request(task_id: str) -> bool:
+    current_message = current_user_message.get()
+    if current_message and any(pattern.search(current_message) for pattern in _SUGGESTION_CONFIRM_PATTERNS):
+        return True
+    for message in _recent_user_messages(task_id):
+        if any(pattern.search(message) for pattern in _SUGGESTION_CONFIRM_PATTERNS):
+            return True
+    return False
+
+
+def _normalize_current_task_suggestion_payload(
+    *,
+    task_id: str,
+    title: str,
+    body: str,
+    action_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    payload = dict(action_payload or {})
+    if payload.get("action"):
+        return payload
+
+    combined = f"{title}\n{body}".lower()
+    if not any(keyword in combined for keyword in ["upload", "notice", "signed document", "draft 14-day", "pay or vacate"]):
+        return payload
+
+    requested_file_label = title.strip()
+    for prefix in ("Draft ", "Upload "):
+        if requested_file_label.startswith(prefix):
+            requested_file_label = requested_file_label[len(prefix):].strip()
+
+    requested_file_kind = "notice" if "notice" in combined else "document"
+    instructions = (
+        f"Upload the completed {requested_file_label} so the current task can continue."
+    )
+    if requested_file_kind == "notice" and "14-day" in combined:
+        instructions = (
+            f"Upload the completed {requested_file_label} for service on the tenant so the current task can continue."
+        )
+
+    payload.update({
+        "action": "request_file_upload",
+        "requested_file_kind": requested_file_kind,
+        "requested_file_label": requested_file_label,
+        "instructions": instructions,
+        "target_task_id": task_id,
+    })
+    return payload
+
+
+def _mark_task_waiting_on_upload_request(
+    *,
+    task_id: str,
+    requested_file_label: str,
+    instructions: str,
+) -> None:
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from db.enums import TaskMode
+    from db.models import Task
+    from db.session import SessionLocal
+
+    db = SessionLocal.session_factory()
+    try:
+        task = db.query(Task).filter_by(id=task_id).first()
+        if not task:
+            return
+
+        steps = list(task.steps or [])
+        blocked_note = f"Blocked until {requested_file_label} is uploaded."
+        updated = False
+        for step in steps:
+            key = str(step.get("key") or "")
+            label = str(step.get("label") or "")
+            if key == "upload_requested_file" or requested_file_label.lower() in label.lower():
+                step["status"] = "pending"
+                step["note"] = blocked_note
+                updated = True
+                break
+        if not updated:
+            steps.append({
+                "key": "upload_requested_file",
+                "label": f"Upload {requested_file_label}",
+                "status": "pending",
+                "note": blocked_note,
+            })
+
+        task.steps = dump_task_steps(steps)
+        flag_modified(task, "steps")
+        task.task_mode = TaskMode.WAITING_APPROVAL
+
+        context_parts = [part for part in [task.context, f"Blocked on user deliverable: {instructions}"] if part]
+        task.context = "\n\n".join(dict.fromkeys(context_parts))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _current_task_notice_service_reported(task_id: str) -> bool:
+    current_message = (current_user_message.get() or "").lower()
+    if not current_message:
+        return False
+    mentions_notice = any(term in current_message for term in ["14-day", "pay or vacate", "notice"])
+    mentions_completion = any(term in current_message for term in ["uploaded", "served", "mailed", "posted", "certified mail"])
+    if not (mentions_notice and mentions_completion):
+        return False
+
+    from db.models import Suggestion
+    from db.session import SessionLocal
+
+    db = SessionLocal.session_factory()
+    try:
+        pending = (
+            db.query(Suggestion)
+            .filter(
+                Suggestion.task_id == task_id,
+                Suggestion.status == "pending",
+            )
+            .all()
+        )
+        return any((s.action_payload or {}).get("action") == "request_file_upload" for s in pending)
+    finally:
+        db.close()
+
+
+def _same_task_handoff_block_message() -> str:
+    return (
+        "Do not create a new suggestion or task for this. Stay in the current task, "
+        "acknowledge that the notice was uploaded and served, tell the manager to document "
+        "the service date and method, and explain that the next step is to wait out the 14-day notice period."
+    )
+
+
+def _current_message_requests_direct_draft() -> bool:
+    current_message = (current_user_message.get() or "").strip()
+    if not current_message:
+        return False
+    has_negative = any(pattern.search(current_message) for pattern in _DIRECT_DRAFT_NEGATIVE_PATTERNS)
+    wants_draft = any(pattern.search(current_message) for pattern in _DIRECT_DRAFT_REQUEST_PATTERNS)
+    return has_negative and wants_draft
+
+
+def _direct_draft_block_message() -> str:
+    return (
+        "Do not create a suggestion or task for this. The user asked for the draft itself. "
+        "Draft the requested notice or document directly in the chat response."
+    )
+
+
 class ProposeTaskTool(Tool):
     """Create a task proposal for manager review."""
 
@@ -327,6 +837,7 @@ class ProposeTaskTool(Tool):
         return (
             "Propose a new task for a genuinely separate issue. "
             "Only use propose_task for a genuinely separate issue that needs its own task. "
+            "Never use propose_task when the user asked you to draft a notice, letter, or document directly in chat. "
             "You MUST provide a vendor_id external UUID — use lookup_vendors first. "
             "Include a draft_message and steps (3-6 steps)."
         )
@@ -379,6 +890,12 @@ class ProposeTaskTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        task_id = str(kwargs.get("task_id") or _resolve_task_id_from_active_conversation() or "")
+        if _current_message_requests_direct_draft():
+            return json.dumps({"status": "error", "message": _direct_draft_block_message()})
+        if task_id and _current_task_notice_service_reported(task_id):
+            return json.dumps({"status": "error", "message": _same_task_handoff_block_message()})
+
         vendor_id = str(kwargs["vendor_id"])
 
         from db.session import SessionLocal
@@ -424,7 +941,7 @@ class ProposeTaskTool(Tool):
             urgency=kwargs.get("urgency", Urgency.MEDIUM.value),
             action_payload=action_payload,
             options=options,
-            task_id=kwargs.get("task_id"),
+            task_id=kwargs.get("task_id") or task_id or None,
             property_id=kwargs.get("property_id"),
             risk_score=risk,
             suggestion_type=kwargs["category"],
@@ -1476,6 +1993,261 @@ class CreateTenantTool(Tool):
             db.close()
 
 
+class CreateDocumentTool(Tool):
+    """Generate a PDF document and save it as an account-owned document."""
+
+    @property
+    def name(self) -> str:
+        return "create_document"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Create a PDF document directly for the user and store it in the Documents area. "
+            "Use this when the user asked for a draft notice, letter, or other document deliverable."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["title"],
+            "properties": {
+                "title": {"type": "string", "description": "Human-readable document title"},
+                "html": {"type": "string", "description": "Raw HTML fragment to render inside the document shell"},
+                "content": {"type": "string", "description": "Legacy plain-text body; used only as fallback when html is omitted"},
+                "summary": {"type": "string", "description": "Short summary shown on the chat card"},
+                "filename": {"type": "string", "description": "Optional output filename; .pdf will be added if missing"},
+                "document_type": {
+                    "type": "string",
+                    "enum": ["lease", "invoice", "notice", "inspection", "insurance", "other"],
+                    "description": "Document category for the Documents area",
+                },
+                "document_category": {
+                    "type": "string",
+                    "enum": ["general", "legal", "compliance"],
+                    "description": (
+                        "Broader drafting category. Use 'legal' or 'compliance' when the document "
+                        "depends on governing law or statutory requirements."
+                    ),
+                },
+                "risk_score": {
+                    "type": "number",
+                    "description": (
+                        "Risk score for the document request. Legal/compliance documents should "
+                        "usually be 7 or higher."
+                    ),
+                },
+                "property_id": {"type": "string", "description": "Property to tag on the generated document"},
+                "unit_id": {"type": "string", "description": "Unit to tag on the generated document"},
+                "tenant_id": {"type": "string", "description": "Tenant external UUID to tag on the generated document"},
+                "task_id": {"type": "string", "description": "Related task ID, if this document is part of task work"},
+                "legal_requirements": {
+                    "type": "object",
+                    "description": (
+                        "Required for legal/compliance documents. Summarize the governing law, "
+                        "required fields, and any stale or low-confidence fields before generating "
+                        "the document. Never infer missing landlord/manager or pay-to details."
+                    ),
+                    "properties": {
+                        "jurisdiction": {
+                            "type": "string",
+                            "description": "Jurisdiction governing the notice, for example 'Washington, USA'",
+                        },
+                        "citation": {
+                            "type": "string",
+                            "description": "Legal citation or statutory form reference used for this notice",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Short explanation of why the listed fields are legally required",
+                        },
+                        "required_fields": {
+                            "type": "array",
+                            "description": "Fields the governing law requires in the notice",
+                            "items": {
+                                "oneOf": [
+                                    {"type": "string"},
+                                    {
+                                        "type": "object",
+                                        "properties": {
+                                            "field": {"type": "string"},
+                                            "required": {"type": "boolean"},
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                        "missing_fields": {
+                            "type": "array",
+                            "description": "Required fields still missing from current context",
+                            "items": {
+                                "oneOf": [
+                                    {"type": "string"},
+                                    {
+                                        "type": "object",
+                                        "properties": {
+                                            "field": {"type": "string"},
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                        "low_confidence_fields": {
+                            "type": "array",
+                            "description": (
+                                "Required fields that are only supported by stale or low-confidence "
+                                "sources and must be confirmed with the property manager first"
+                            ),
+                            "items": {
+                                "oneOf": [
+                                    {"type": "string"},
+                                    {
+                                        "type": "object",
+                                        "properties": {
+                                            "field": {"type": "string"},
+                                            "source": {"type": "string"},
+                                            "confidence": {"type": "string"},
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                    },
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        legal_requirements = kwargs.get("legal_requirements") or {}
+        if _is_legal_or_compliance_document(kwargs):
+            citation = (
+                legal_requirements.get("citation")
+                if isinstance(legal_requirements, dict)
+                else None
+            )
+            jurisdiction = (
+                legal_requirements.get("jurisdiction")
+                if isinstance(legal_requirements, dict)
+                else None
+            )
+            reason = (
+                legal_requirements.get("reason")
+                if isinstance(legal_requirements, dict)
+                else None
+            )
+            missing_fields = _extract_legal_field_names(
+                legal_requirements.get("missing_fields") if isinstance(legal_requirements, dict) else None
+            )
+            low_confidence_fields = _extract_legal_field_names(
+                legal_requirements.get("low_confidence_fields") if isinstance(legal_requirements, dict) else None
+            )
+            required_fields = _extract_legal_field_names(
+                legal_requirements.get("required_fields") if isinstance(legal_requirements, dict) else None
+            )
+            unresolved_placeholders = _find_unresolved_placeholders(
+                kwargs.get("html"),
+                kwargs.get("content"),
+            )
+            if not isinstance(legal_requirements, dict) or not citation or not required_fields:
+                return json.dumps({
+                    "status": "error",
+                    "message": (
+                        "Before creating this legal or compliance document, I need to confirm the "
+                        "governing law and which fields it requires. Please research the applicable "
+                        "law first and ask the property manager for any required details that are still missing."
+                    ),
+                })
+            if missing_fields:
+                return json.dumps({
+                    "status": "error",
+                    "message": _legal_notice_block_message(
+                        missing_fields=missing_fields,
+                        citation=citation,
+                        jurisdiction=jurisdiction,
+                        reason=reason,
+                    ),
+                })
+            if low_confidence_fields:
+                return json.dumps({
+                    "status": "error",
+                    "message": _legal_notice_block_message(
+                        missing_fields=low_confidence_fields,
+                        citation=citation,
+                        jurisdiction=jurisdiction,
+                        reason=(
+                            "The available support for these fields is stale or low-confidence, so "
+                            "I need the property manager to confirm the current information first."
+                        ),
+                    ),
+                })
+            if unresolved_placeholders:
+                placeholder_fields = [item.strip("[]") for item in unresolved_placeholders]
+                return json.dumps({
+                    "status": "error",
+                    "message": _legal_notice_block_message(
+                        missing_fields=placeholder_fields,
+                        citation=citation,
+                        jurisdiction=jurisdiction,
+                        reason=(
+                            "The draft still contains unresolved placeholders, so the legally required "
+                            "details have not been provided yet."
+                        ),
+                    ),
+                })
+        summary = kwargs.get("summary") or f"Generated {kwargs.get('document_type', 'document')} PDF."
+        document_id, filename = await _create_generated_document(
+            title=kwargs["title"],
+            html_content=kwargs.get("html"),
+            text_content=kwargs.get("content"),
+            filename=kwargs.get("filename"),
+            document_type=kwargs.get("document_type", "other"),
+            summary=summary,
+            property_id=kwargs.get("property_id"),
+            unit_id=kwargs.get("unit_id"),
+            tenant_id=kwargs.get("tenant_id"),
+            task_id=kwargs.get("task_id"),
+        )
+
+        fields = [
+            field
+            for field in [
+                _action_card_field("Type", kwargs.get("document_type", "other")),
+                _action_card_field("Format", "PDF"),
+            ]
+            if field
+        ]
+        _queue_chat_message(
+            body=f"Created document: {filename}",
+            message_type=MessageType.ACTION,
+            action_card={
+                "kind": "document",
+                "title": filename,
+                "summary": summary,
+                "fields": fields,
+                "links": [
+                    {
+                        "label": "Download PDF",
+                        "entity_type": "document",
+                        "entity_id": document_id,
+                    },
+                    {
+                        "label": "Open document",
+                        "entity_type": "document",
+                        "entity_id": document_id,
+                    },
+                ],
+                "units": [],
+            },
+        )
+        return json.dumps({
+            "status": "ok",
+            "document_id": document_id,
+            "filename": filename,
+            "message": f"Document created: {filename}",
+        })
+
+
 class ReadDocumentTool(Tool):
     """Read uploaded document content, search document text, or list recent documents."""
 
@@ -1706,6 +2478,9 @@ class CreateSuggestionTool(Tool):
             "Create a suggestion for the property manager to review and approve. "
             "Use this for actions that benefit from human review — creating entities "
             "from documents, proposing lease changes, compliance actions, etc. "
+            "Never use create_suggestion when the user explicitly asked for the draft itself in chat instead of a suggestion or task. "
+            "When the blocker is a user deliverable inside the current task, ask the user first "
+            "whether they want a suggestion created. "
             "Set risk_score: 0 = safe to auto-approve, 10 = must have human review. "
             "Low-risk routine actions (creating a property from a clear document) can "
             "be 1-3. High-risk actions (legal notices, deposit deductions) should be 7-10."
@@ -1736,6 +2511,7 @@ class CreateSuggestionTool(Tool):
                 "property_id": {"type": "string", "description": "Link to a property"},
                 "unit_id": {"type": "string", "description": "Link to a unit"},
                 "document_id": {"type": "string", "description": "Link to a source document"},
+                "task_id": {"type": "string", "description": "Link to the current task when this suggestion belongs to an existing task"},
                 "action_payload": {
                     "type": "object",
                     "description": "Data needed to execute this suggestion when accepted",
@@ -1744,6 +2520,53 @@ class CreateSuggestionTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        task_id = str(kwargs.get("task_id") or _resolve_task_id_from_active_conversation() or "")
+        if _current_message_requests_direct_draft():
+            from llm.tracing import log_trace
+
+            message = _direct_draft_block_message()
+            log_trace(
+                "suggestion_blocked_direct_draft",
+                "policy",
+                message,
+                task_id=task_id or None,
+                detail={"title": kwargs["title"]},
+            )
+            return json.dumps({"status": "error", "message": message})
+        if task_id and _current_task_notice_service_reported(task_id):
+            from llm.tracing import log_trace
+
+            log_trace(
+                "suggestion_blocked_same_task",
+                "policy",
+                _same_task_handoff_block_message(),
+                task_id=task_id,
+                detail={"title": kwargs["title"]},
+            )
+            return json.dumps({"status": "error", "message": _same_task_handoff_block_message()})
+        action_payload = _normalize_current_task_suggestion_payload(
+            task_id=task_id,
+            title=kwargs["title"],
+            body=kwargs["body"],
+            action_payload=kwargs.get("action_payload"),
+        )
+        if action_payload.get("action") == "request_file_upload" and task_id:
+            if not _has_user_confirmed_upload_request(task_id):
+                message = (
+                    "Ask the user first whether they want a suggestion created for this upload request. "
+                    "Explain what file is needed and why the current task is blocked."
+                )
+                from llm.tracing import log_trace
+
+                log_trace(
+                    "suggestion_deferred_pending_user_confirmation",
+                    "policy",
+                    message,
+                    task_id=task_id,
+                    detail={"action_payload": action_payload},
+                )
+                return json.dumps({"status": "error", "message": message})
+
         simulated_id = _queue_simulation_suggestion({
             "title": kwargs["title"],
             "body": kwargs["body"],
@@ -1752,7 +2575,8 @@ class CreateSuggestionTool(Tool):
             "property_id": kwargs.get("property_id"),
             "unit_id": kwargs.get("unit_id"),
             "document_id": kwargs.get("document_id"),
-            "action_payload": kwargs.get("action_payload"),
+            "task_id": task_id or None,
+            "action_payload": action_payload or None,
             "risk_score": kwargs.get("risk_score", 5),
             "suggestion_type": kwargs["suggestion_type"],
         })
@@ -1763,40 +2587,42 @@ class CreateSuggestionTool(Tool):
                 "message": f"Suggestion simulated: {kwargs['title']}",
             })
 
-        from db.session import SessionLocal
-        from gql.services import suggestion_service
+        options: list[SuggestionOption] = []
+        if action_payload.get("action") == "request_file_upload":
+            options = [
+                SuggestionOption(key="upload", label=action_payload.get("requested_file_label", "Upload file"), action="request_file_upload", variant="default"),
+                SuggestionOption(key="dismiss", label="Dismiss", action="reject_task", variant="ghost"),
+            ]
 
-        db = SessionLocal.session_factory()
         try:
-            suggestion = suggestion_service.create_suggestion(
-                db,
+            suggestion_id = _create_suggestion(
                 title=kwargs["title"],
                 ai_context=kwargs["body"],
                 category=kwargs["suggestion_type"],
                 urgency=kwargs.get("urgency", "medium"),
-                source="agent",
+                action_payload=action_payload or None,
+                options=options,
+                task_id=task_id or None,
                 property_id=kwargs.get("property_id"),
                 unit_id=kwargs.get("unit_id"),
+                document_id=kwargs.get("document_id"),
+                risk_score=kwargs.get("risk_score", 5),
+                suggestion_type=kwargs["suggestion_type"],
             )
-            # Set the new fields
-            suggestion.suggestion_type = kwargs["suggestion_type"]
-            suggestion.risk_score = kwargs.get("risk_score", 5)
-            if kwargs.get("document_id"):
-                suggestion.document_id = kwargs["document_id"]
-            if kwargs.get("action_payload"):
-                suggestion.action_payload = kwargs["action_payload"]
-            db.commit()
+            if action_payload.get("action") == "request_file_upload" and task_id:
+                _mark_task_waiting_on_upload_request(
+                    task_id=task_id,
+                    requested_file_label=action_payload.get("requested_file_label", "requested file"),
+                    instructions=action_payload.get("instructions") or kwargs["body"],
+                )
 
             return json.dumps({
                 "status": "ok",
-                "suggestion_id": str(suggestion.id),
+                "suggestion_id": str(suggestion_id),
                 "message": f"Suggestion created: {kwargs['title']}",
             })
         except Exception as e:
-            db.rollback()
             return json.dumps({"status": "error", "message": str(e)})
-        finally:
-            db.close()
 
 
 class CreateScheduledTaskTool(Tool):

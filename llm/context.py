@@ -1,17 +1,73 @@
+from __future__ import annotations
+
+from typing import Any
+
 from sqlalchemy.orm import Session
 
-from db.models import Conversation, MessageType, Task
+from db.models import Conversation, MessageType, Property, Suggestion, Task, Unit
 from llm.retrieval import RetrievalRequest, compose_prompt_context, retrieve_context
 
 
-def load_account_context(db: Session, query: str | None = None) -> str:
+def _serialize_retrieval_bundle(bundle) -> dict[str, Any]:
+    return {
+        "request": {
+            "surface": bundle.request.surface,
+            "intent": bundle.request.intent,
+            "query": bundle.request.query,
+            "task_id": bundle.request.task_id,
+            "property_id": bundle.request.property_id,
+            "unit_id": bundle.request.unit_id,
+            "tenant_id": bundle.request.tenant_id,
+            "vendor_id": bundle.request.vendor_id,
+            "limit": bundle.request.limit,
+        },
+        "items": [
+            {
+                "memory_item_id": item.memory_item_id,
+                "source_type": item.source_type,
+                "source_id": item.source_id,
+                "entity_type": item.entity_type,
+                "entity_id": item.entity_id,
+                "title": item.title,
+                "content": item.content,
+                "metadata": item.metadata,
+                "heuristic_score": item.heuristic_score,
+                "vector_score": item.vector_score,
+                "final_score": item.final_score,
+                "reasons": item.reasons,
+            }
+            for item in bundle.items
+        ],
+    }
+
+
+def load_account_context_data(db: Session, query: str | None = None) -> dict[str, Any]:
     bundle = retrieve_context(db, RetrievalRequest(
         surface="chat",
         intent="account_overview",
         query=query or "account overview active leases properties tenants vendors important notes",
         limit=12,
     ))
-    return compose_prompt_context(bundle, title="Account overview")
+    rendered = compose_prompt_context(bundle, title="Account overview")
+    return {
+        "scope": "account",
+        "query": query,
+        "text": rendered,
+        "sections": [
+            {
+                "section_type": "retrieval",
+                "title": "Account overview",
+                "content": rendered,
+                "origin": {"kind": "retrieval"},
+                "retrieval": _serialize_retrieval_bundle(bundle),
+            }
+        ] if rendered else [],
+        "retrieval": _serialize_retrieval_bundle(bundle),
+    }
+
+
+def load_account_context(db: Session, query: str | None = None) -> str:
+    return load_account_context_data(db, query=query)["text"]
 
 
 def _resolve_task(db: Session, task_or_conversation_id: str) -> Task | None:
@@ -33,11 +89,11 @@ def _resolve_task(db: Session, task_or_conversation_id: str) -> Task | None:
     return None
 
 
-def build_task_context(db: Session, task_id: str, query: str | None = None) -> str:
-    """Build a retrieval-driven context string for a task or linked conversation."""
+def build_task_context_data(db: Session, task_id: str, query: str | None = None) -> dict[str, Any]:
+    """Build retrieval-driven task context with a structured provenance breakdown."""
     task = _resolve_task(db, task_id)
     if not task:
-        return load_account_context(db, query=query)
+        return load_account_context_data(db, query=query)
 
     bundle = retrieve_context(db, RetrievalRequest(
         surface="task",
@@ -49,6 +105,8 @@ def build_task_context(db: Session, task_id: str, query: str | None = None) -> s
         limit=14,
     ))
 
+    sections: list[dict[str, Any]] = []
+
     lines = [
         f"Task ID: {task.id}",
         f"Task: {task.title}",
@@ -56,20 +114,61 @@ def build_task_context(db: Session, task_id: str, query: str | None = None) -> s
         f"Urgency: {task.urgency or 'normal'}",
         f"Status: {task.task_status or 'active'}",
         f"Mode: {task.task_mode or 'manual'}",
+        "",
+        "Task execution rules:",
+        "- Stay inside this task unless you discover a genuinely separate issue.",
+        "- Do not create a new task for sub-steps or approvals related to this same issue.",
+        "- If you need the user to provide a file or approval, explain the blocker first and ask before creating a suggestion.",
+        "- If the user says a requested notice/file was uploaded or served, do not create a follow-up task or suggestion. Acknowledge it, tell them to document service date/method, and continue the same task.",
     ]
+    sections.append({
+        "section_type": "task_core",
+        "title": "Task core",
+        "content": "\n".join(lines),
+        "origin": {
+            "kind": "task",
+            "task_id": task.id,
+            "property_id": str(task.property_id) if task.property_id else None,
+            "unit_id": str(task.unit_id) if task.unit_id else None,
+            "source": task.source,
+        },
+        "metadata": {
+            "task_title": task.title,
+            "category": task.category,
+            "urgency": task.urgency,
+            "status": task.task_status,
+            "mode": task.task_mode,
+        },
+    })
 
     ai_convo = task.ai_conversation
     all_msgs = list(ai_convo.messages) if ai_convo else []
     context_msgs = [m for m in all_msgs if m.message_type == MessageType.CONTEXT]
     if context_msgs:
-        lines.append(f"Description: {context_msgs[0].body}")
+        description_line = f"Description: {context_msgs[0].body}"
+        lines.append(description_line)
+        sections.append({
+            "section_type": "task_description",
+            "title": "Task description",
+            "content": description_line,
+            "origin": {
+                "kind": "conversation_context",
+                "conversation_id": ai_convo.id if ai_convo else None,
+                "message_type": MessageType.CONTEXT.value if hasattr(MessageType.CONTEXT, "value") else str(MessageType.CONTEXT),
+            },
+        })
 
     if task.context:
         lines.append("")
         lines.append("Task notes:")
         lines.append(task.context)
+        sections.append({
+            "section_type": "task_notes",
+            "title": "Task notes",
+            "content": task.context,
+            "origin": {"kind": "task", "field": "context", "task_id": task.id},
+        })
 
-    from db.models import Suggestion
     pending_suggestions = db.query(Suggestion).filter(
         Suggestion.task_id == task.id,
         Suggestion.status == "pending",
@@ -79,18 +178,92 @@ def build_task_context(db: Session, task_id: str, query: str | None = None) -> s
         lines.append("Pending suggestions (already queued, do NOT duplicate):")
         for s in pending_suggestions:
             action = (s.action_payload or {}).get("action", "unknown")
+            if action == "request_file_upload":
+                requested = (s.action_payload or {}).get("requested_file_label", "requested file")
+                entry = f"  - [request_file_upload] {s.title or 'untitled'} — task is blocked until {requested} is uploaded"
+                lines.append(entry)
+                continue
             draft = (s.action_payload or {}).get("draft_message", "")
             entry = f"  - [{action}] {s.title or 'untitled'}"
             if draft:
                 entry += f" — draft: {draft[:80]}"
             lines.append(entry)
+        sections.append({
+            "section_type": "pending_suggestions",
+            "title": "Pending suggestions",
+            "content": "\n".join(lines[-(len(pending_suggestions) + 1):]),
+            "origin": {"kind": "suggestions", "task_id": task.id},
+            "metadata": {
+                "suggestions": [
+                    {
+                        "id": s.id,
+                        "title": s.title,
+                        "status": s.status,
+                        "action": (s.action_payload or {}).get("action"),
+                        "suggestion_type": s.suggestion_type,
+                    }
+                    for s in pending_suggestions
+                ]
+            },
+        })
 
     ranked_block = compose_prompt_context(bundle, title="Ranked context")
     if ranked_block:
         lines.append("")
         lines.append(ranked_block)
+        sections.append({
+            "section_type": "retrieval",
+            "title": "Ranked context",
+            "content": ranked_block,
+            "origin": {"kind": "retrieval", "task_id": task.id},
+            "retrieval": _serialize_retrieval_bundle(bundle),
+        })
 
-    return "\n".join(lines)
+    property_summary: dict[str, Any] | None = None
+    if task.property_id:
+        prop = db.query(Property).filter_by(id=task.property_id).first()
+        if prop:
+            property_summary = {
+                "id": str(prop.id),
+                "address": prop.address_line1,
+                "city": prop.city,
+                "state": prop.state,
+                "postal_code": prop.postal_code,
+                "type": prop.property_type,
+            }
+
+    unit_summary: dict[str, Any] | None = None
+    if task.unit_id:
+        unit = db.query(Unit).filter_by(id=task.unit_id).first()
+        if unit:
+            unit_summary = {
+                "id": str(unit.id),
+                "label": unit.label,
+            }
+
+    return {
+        "scope": "task",
+        "task_id": str(task.id),
+        "query": query,
+        "text": "\n".join(lines),
+        "sections": sections,
+        "retrieval": _serialize_retrieval_bundle(bundle),
+        "task": {
+            "id": str(task.id),
+            "title": task.title,
+            "category": task.category,
+            "urgency": task.urgency,
+            "status": task.task_status,
+            "mode": task.task_mode,
+            "source": task.source,
+            "property": property_summary,
+            "unit": unit_summary,
+        },
+    }
+
+
+def build_task_context(db: Session, task_id: str, query: str | None = None) -> str:
+    return build_task_context_data(db, task_id, query=query)["text"]
 
 
 def build_vendor_safe_context(db: Session, task_id: str) -> str:

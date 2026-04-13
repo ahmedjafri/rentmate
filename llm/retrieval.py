@@ -23,6 +23,7 @@ from db.models import (
     AgentMemory,
     Conversation,
     Document,
+    DocumentTag,
     EntityNote,
     Lease,
     MemoryItem,
@@ -34,6 +35,8 @@ from db.models import (
     User,
 )
 from db.queries import format_address, tenant_display_name
+from llm.history_filters import is_transient_tool_failure_text
+from llm.model_config import resolve_model_config
 from llm.tracing import log_trace
 
 
@@ -179,6 +182,65 @@ def _today_str() -> str:
     return date.today().isoformat()
 
 
+_COMPLIANCE_QUERY_HINTS = {
+    "compliance",
+    "legal",
+    "law",
+    "notice",
+    "evict",
+    "eviction",
+    "vacate",
+    "detainer",
+    "landlord",
+    "manager",
+    "owner",
+    "statutory",
+    "cure",
+    "quit",
+    "deduction",
+    "deposit",
+}
+
+_CURRENT_IDENTITY_HINTS = {
+    "landlord",
+    "manager",
+    "owner",
+    "contact",
+    "company",
+    "payee",
+    "pay-to",
+}
+
+
+def _is_compliance_sensitive_request(request: RetrievalRequest, query_tokens: set[str]) -> bool:
+    query_text = (request.query or "").lower()
+    if request.intent.lower() in {"draft_document", "legal_answer", "compliance_answer"}:
+        return True
+    return bool(_COMPLIANCE_QUERY_HINTS & query_tokens) or any(
+        phrase in query_text
+        for phrase in [
+            "pay or vacate",
+            "legal notice",
+            "security deposit",
+            "statutory form",
+            "unlawful detainer",
+        ]
+    )
+
+
+def _targets_current_identity_or_contact(query_tokens: set[str], query_text: str) -> bool:
+    return bool(_CURRENT_IDENTITY_HINTS & query_tokens) or any(
+        phrase in query_text
+        for phrase in [
+            "who should appear",
+            "who goes on",
+            "current landlord",
+            "current manager",
+            "manager contact",
+        ]
+    )
+
+
 def _property_records(db: Session) -> list[MemoryRecord]:
     records: list[MemoryRecord] = []
     for prop in db.query(Property).filter(Property.org_id == resolve_org_id()).all():
@@ -272,9 +334,12 @@ def _vendor_records(db: Session) -> list[MemoryRecord]:
 
 def _lease_records(db: Session) -> list[MemoryRecord]:
     records: list[MemoryRecord] = []
+    today = date.today()
     for lease in db.query(Lease).filter(Lease.org_id == resolve_org_id()).all():
         tenant_name = tenant_display_name(lease.tenant) if lease.tenant else "Tenant"
         title = f"Lease for {tenant_name}"
+        is_active = bool(lease.start_date and lease.end_date and lease.start_date <= today <= lease.end_date)
+        is_expired = bool(lease.end_date and lease.end_date < today)
         facts = [
             f"Lease starts: {lease.start_date}",
             f"Lease ends: {lease.end_date}",
@@ -293,8 +358,12 @@ def _lease_records(db: Session) -> list[MemoryRecord]:
                 "tenant_id": str(lease.tenant.external_id) if lease.tenant else "",
                 "property_id": str(lease.property_id),
                 "unit_id": str(lease.unit_id),
+                "lease_start": str(lease.start_date),
                 "lease_end": str(lease.end_date),
                 "payment_status": lease.payment_status or "",
+                "is_active": is_active,
+                "is_expired": is_expired,
+                "source_confidence": "active_lease" if is_active else "expired_lease" if is_expired else "historical_lease",
             },
         ))
     return records
@@ -359,35 +428,142 @@ def _general_note_records(db: Session, creator_id: int) -> list[MemoryRecord]:
     return records
 
 
+def _compact_text(text: str | None, *, max_len: int = 220) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    if len(cleaned) <= max_len:
+        return cleaned
+    return cleaned[: max_len - 1].rstrip() + "..."
+
+
+def _conversation_note_lines(conv: Conversation) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+
+    def add(prefix: str, text: str | None) -> None:
+        value = _compact_text(text)
+        if not value:
+            return
+        line = f"{prefix}{value}"
+        if line in seen:
+            return
+        seen.add(line)
+        lines.append(line)
+
+    if conv.conversation_type:
+        add("Conversation type: ", str(conv.conversation_type))
+    if conv.property_id:
+        add("Property ID: ", str(conv.property_id))
+    if conv.unit_id:
+        add("Unit ID: ", str(conv.unit_id))
+
+    msgs = [
+        m for m in sorted(conv.messages or [], key=lambda m: m.sent_at)
+        if (m.body or "").strip() and m.message_type in (
+            MessageType.MESSAGE,
+            MessageType.THREAD,
+            MessageType.CONTEXT,
+            MessageType.SUGGESTION,
+            MessageType.ACTION,
+            MessageType.DRAFT_AI_REPLY,
+        )
+    ]
+    if not msgs:
+        return lines
+
+    context_msgs = [m for m in msgs if m.message_type == MessageType.CONTEXT]
+    for m in context_msgs[-2:]:
+        add("Context note: ", m.body)
+
+    for m in reversed(msgs):
+        meta = m.meta if isinstance(m.meta, dict) else {}
+        action_card = meta.get("action_card") if isinstance(meta, dict) else None
+        if isinstance(action_card, dict):
+            title = _compact_text(action_card.get("title"))
+            summary = _compact_text(action_card.get("summary"))
+            candidate = ". ".join(part for part in (title, summary) if part)
+            if is_transient_tool_failure_text(candidate):
+                continue
+            if title and summary:
+                add("AI note: ", f"{title}. {summary}")
+            elif title:
+                add("AI note: ", title)
+            elif summary:
+                add("AI note: ", summary)
+        if len(lines) >= 5:
+            break
+
+    preference_markers = (
+        "do not",
+        "don't",
+        "dont",
+        "instead",
+        "prefer",
+        "use this one",
+        "same task",
+        "create a draft",
+        "no suggestion",
+    )
+    for m in reversed(msgs):
+        if m.is_ai:
+            continue
+        body = (m.body or "").strip()
+        lower = body.lower()
+        if any(marker in lower for marker in preference_markers):
+            add("User preference: ", body)
+            break
+
+    return lines
+
+
 def _conversation_records(db: Session) -> list[MemoryRecord]:
     records: list[MemoryRecord] = []
     conversations = db.query(Conversation).filter(Conversation.org_id == resolve_org_id()).all()
     for conv in conversations:
-        msgs = [
-            m for m in sorted(conv.messages or [], key=lambda m: m.sent_at)[-6:]
-            if (m.body or "").strip() and m.message_type in (MessageType.MESSAGE, MessageType.THREAD, MessageType.CONTEXT)
-        ]
-        if not msgs:
+        note_lines = _conversation_note_lines(conv)
+        if not note_lines:
             continue
-        text = "\n".join(f"{'AI' if m.is_ai else (m.sender_name or 'User')}: {m.body}" for m in msgs)
         records.append(MemoryRecord(
-            source=MemorySourceRef("conversation", str(conv.id), "conversation", str(conv.external_id or conv.id), "shared"),
+            source=MemorySourceRef("conversation_note", str(conv.id), "conversation", str(conv.external_id or conv.id), "shared"),
             title=conv.subject or f"Conversation {conv.id}",
-            content=text,
-            metadata={"conversation_id": str(conv.external_id or conv.id), "conversation_type": str(conv.conversation_type or "")},
+            content="\n".join(note_lines),
+            metadata={
+                "conversation_id": str(conv.external_id or conv.id),
+                "conversation_type": str(conv.conversation_type or ""),
+                "property_id": str(conv.property_id or ""),
+                "unit_id": str(conv.unit_id or ""),
+            },
         ))
     return records
 
 
 def _document_records(db: Session) -> list[MemoryRecord]:
     records: list[MemoryRecord] = []
+    tag_map: dict[str, dict[str, str]] = {}
+    for tag in db.query(DocumentTag).filter(DocumentTag.org_id == resolve_org_id()).all():
+        entry = tag_map.setdefault(str(tag.document_id), {})
+        if tag.property_id and not entry.get("property_id"):
+            entry["property_id"] = str(tag.property_id)
+        if tag.unit_id and not entry.get("unit_id"):
+            entry["unit_id"] = str(tag.unit_id)
+        if tag.tenant_id and not entry.get("tenant_id"):
+            entry["tenant_id"] = str(tag.tenant_id)
     docs = db.query(Document).filter(Document.org_id == resolve_org_id(), Document.context.isnot(None)).all()
     for doc in docs:
+        tag_meta = tag_map.get(str(doc.id), {})
         records.append(MemoryRecord(
             source=MemorySourceRef("document", str(doc.id), "document", str(doc.id), "shared"),
             title=doc.filename,
             content=doc.context or "",
-            metadata={"document_type": doc.document_type or "", "document_id": str(doc.id)},
+            metadata={
+                "document_type": doc.document_type or "",
+                "document_id": str(doc.id),
+                "property_id": tag_meta.get("property_id", ""),
+                "unit_id": tag_meta.get("unit_id", ""),
+                "tenant_id": tag_meta.get("tenant_id", ""),
+                "created_at": doc.created_at.isoformat() if doc.created_at else "",
+                "confirmed_at": doc.confirmed_at.isoformat() if doc.confirmed_at else "",
+                "source_confidence": "confirmed_document" if doc.confirmed_at else "unconfirmed_document",
+            },
         ))
     return records
 
@@ -488,6 +664,9 @@ def _heuristic_score(request: RetrievalRequest, item: MemoryItem, query_tokens: 
     score = 0.0
     reasons: list[str] = []
     metadata = item.metadata_json or {}
+    query_text = (request.query or "").lower()
+    compliance_sensitive = _is_compliance_sensitive_request(request, query_tokens)
+    targets_identity = _targets_current_identity_or_contact(query_tokens, query_text)
 
     def bump(value: float, reason: str) -> None:
         nonlocal score
@@ -506,10 +685,17 @@ def _heuristic_score(request: RetrievalRequest, item: MemoryItem, query_tokens: 
         bump(4.5, "same vendor")
 
     intent = request.intent.lower()
-    if intent in {"draft_message", "follow_up"} and item.source_type in {"tenant", "vendor", "conversation", "task"}:
+    if intent in {"draft_message", "follow_up"} and item.source_type in {"tenant", "vendor", "conversation_note", "task"}:
         bump(1.5, "messaging intent prior")
     if intent in {"triage", "answer_question"} and item.source_type in {"lease", "task", "property", "unit"}:
         bump(1.2, "triage intent prior")
+    if (
+        item.source_type == "conversation_note"
+        and any(marker in query_text for marker in ["don't create", "dont create", "do not create"])
+    ):
+        conversation_type = str(metadata.get("conversation_type") or "")
+        if conversation_type in {"suggestion_ai", "task_ai"}:
+            bump(-2.0, f"downranked prior {conversation_type} after explicit rejection")
     if "rent" in query_tokens or "payment" in query_tokens or "late" in query_tokens:
         if item.source_type == "lease":
             bump(2.5, "rent intent matched lease")
@@ -523,6 +709,19 @@ def _heuristic_score(request: RetrievalRequest, item: MemoryItem, query_tokens: 
     if {"vendor", "plumber", "electrician", "repair", "maintenance", "hvac"} & query_tokens:
         if item.source_type in {"vendor", "task", "property", "unit"}:
             bump(1.5, "maintenance/vendor intent")
+
+    if compliance_sensitive:
+        if item.source_type == "lease":
+            if metadata.get("is_expired"):
+                bump(-6.0, "expired lease blocked for compliance-sensitive facts")
+            elif metadata.get("is_active"):
+                bump(1.8, "active lease preferred for compliance-sensitive facts")
+        if item.source_type == "document" and metadata.get("document_type") == "lease":
+            bump(-3.5 if targets_identity else -2.0, "lease document treated as low-confidence for compliance-sensitive facts")
+            if metadata.get("confirmed_at"):
+                bump(0.75, "confirmed document")
+        if targets_identity and item.source_type in {"property", "unit", "task", "entity_note", "tenant", "vendor"}:
+            bump(1.5, "current operational source preferred for identity/contact facts")
 
     content_tokens = set(_tokenize(f"{item.title or ''} {item.content}"))
     overlap = query_tokens & content_tokens
@@ -545,22 +744,8 @@ def _resolve_rerank_client_config() -> tuple[str, str, str | None] | None:
     if not configured_model:
         return None
     configured_base = os.getenv("LLM_RERANK_BASE_URL") or os.getenv("LLM_BASE_URL") or None
-
-    actual_model = configured_model
-    api_base = configured_base
-    if "/" in configured_model and not api_base:
-        provider_prefix, _, model_name = configured_model.partition("/")
-        provider_bases = {
-            "deepseek": "https://api.deepseek.com",
-            "anthropic": "https://api.anthropic.com/v1",
-            "openai": "https://api.openai.com/v1",
-        }
-        if provider_prefix in provider_bases:
-            api_base = provider_bases[provider_prefix]
-            actual_model = model_name
-    if not api_base:
-        api_base = "https://api.openai.com/v1"
-    return actual_model, api_key, api_base
+    resolved = resolve_model_config(model=configured_model, api_base=configured_base)
+    return resolved.model, api_key, resolved.api_base
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
@@ -648,8 +833,28 @@ def _llm_rerank(request: RetrievalRequest, ranked: list[RankedContextItem]) -> l
             f"LLM reranked {len(shortlist)} items for {request.intent}",
             task_id=request.task_id,
             detail={
-                "query": request.query,
+                "request": {
+                    "surface": request.surface,
+                    "intent": request.intent,
+                    "query": request.query,
+                    "task_id": request.task_id,
+                    "property_id": request.property_id,
+                    "unit_id": request.unit_id,
+                    "tenant_id": request.tenant_id,
+                    "vendor_id": request.vendor_id,
+                    "limit": request.limit,
+                },
                 "model": actual_model,
+                "shortlist": [
+                    {
+                        "memory_item_id": item.memory_item_id,
+                        "title": item.title,
+                        "source_type": item.source_type,
+                        "final_score": item.final_score,
+                        "reasons": item.reasons,
+                    }
+                    for item in shortlist
+                ],
                 "ordered_indices": normalized,
                 "reason": parsed.get("reason") if isinstance(parsed, dict) else None,
             },
@@ -661,7 +866,20 @@ def _llm_rerank(request: RetrievalRequest, ranked: list[RankedContextItem]) -> l
             "memory_rerank",
             f"LLM rerank failed: {type(exc).__name__}",
             task_id=request.task_id,
-            detail={"query": request.query, "error": str(exc)},
+            detail={
+                "request": {
+                    "surface": request.surface,
+                    "intent": request.intent,
+                    "query": request.query,
+                    "task_id": request.task_id,
+                    "property_id": request.property_id,
+                    "unit_id": request.unit_id,
+                    "tenant_id": request.tenant_id,
+                    "vendor_id": request.vendor_id,
+                    "limit": request.limit,
+                },
+                "error": str(exc),
+            },
         )
         return ranked
 
@@ -714,8 +932,18 @@ def retrieve_context(db: Session, request: RetrievalRequest) -> RankedContextBun
         f"Retrieved {len(ranked)} items for {request.intent}",
         task_id=request.task_id,
         detail={
-            "query": request.query,
-            "intent": request.intent,
+            "request": {
+                "surface": request.surface,
+                "intent": request.intent,
+                "query": request.query,
+                "task_id": request.task_id,
+                "property_id": request.property_id,
+                "unit_id": request.unit_id,
+                "tenant_id": request.tenant_id,
+                "vendor_id": request.vendor_id,
+                "limit": request.limit,
+            },
+            "candidate_count": len(items),
             "top_items": [
                 {
                     "memory_item_id": item.memory_item_id,

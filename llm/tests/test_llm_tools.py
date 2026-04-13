@@ -86,6 +86,258 @@ def test_chat_with_agent_propagates_simulation_context_into_executor_thread():
         simulation_suggestions.reset(token)
 
 
+def test_chat_with_agent_logs_tool_traces_with_conversation_id():
+    from llm.client import chat_with_agent
+
+    logged: list[dict] = []
+
+    class FakeAIAgent:
+        def __init__(self, *args, **kwargs):
+            self.tools = []
+            self.tool_progress_callback = kwargs["tool_progress_callback"]
+
+        def _build_api_kwargs(self, messages):
+            return {}
+
+        def run_conversation(self, **kwargs):
+            self.tool_progress_callback(
+                "tool.started",
+                "create_suggestion",
+                None,
+                {"title": "Draft notice"},
+            )
+            self.tool_progress_callback(
+                "tool.completed",
+                "create_suggestion",
+                None,
+                {"title": "Draft notice"},
+                result='{"status":"ok"}',
+                is_error=False,
+            )
+            return {"final_response": "ok"}
+
+    fake_module = types.SimpleNamespace(AIAgent=FakeAIAgent)
+    try:
+        with patch.dict(sys.modules, {"run_agent": fake_module}), \
+             patch("llm.client.agent_registry.build_system_prompt", return_value="system"), \
+             patch("llm.client.log_trace", side_effect=lambda *args, **kwargs: logged.append({"args": args, "kwargs": kwargs})):
+            reply = asyncio.run(chat_with_agent(
+                "agent-1",
+                "chat:21",
+                [{"role": "user", "content": "hi"}],
+                trace_context={"conversation_id": "21"},
+            ))
+        assert reply == "ok"
+        assert len(logged) == 2
+        assert logged[0]["args"][0] == "tool_call"
+        assert logged[0]["kwargs"]["conversation_id"] == "21"
+        assert logged[1]["args"][0] == "tool_result"
+        assert logged[1]["kwargs"]["conversation_id"] == "21"
+    finally:
+        sys.modules.pop("run_agent", None)
+
+
+def test_local_fallback_retries_when_reply_claims_document_without_tool_call():
+    from llm.client import _local_fallback
+    from llm.tools import pending_suggestion_messages
+
+    calls: list[list[dict]] = []
+
+    async def fake_chat_with_agent(agent_id, session_key, messages, on_progress=None, trace_context=None):
+        calls.append(messages)
+        if len(calls) == 1:
+            return "I've created a new notice document. It is available in your Documents area."
+        pending_suggestion_messages.set([
+            {
+                "type": "chat_message",
+                "body": "Created document: Notice-1.pdf",
+                "meta": {
+                    "action_card": {
+                        "kind": "document",
+                        "title": "Notice-1.pdf",
+                    },
+                },
+            },
+        ])
+        return "Created document: Notice-1.pdf"
+
+    with patch("llm.client.chat_with_agent", side_effect=fake_chat_with_agent), \
+         patch("llm.client.set_fallback_request_context", return_value=object()), \
+         patch("llm.client.reset_fallback_request_context"), \
+         patch("llm.client.resolve_account_id", return_value=1), \
+         patch("llm.client.resolve_org_id", return_value=1):
+        result = asyncio.run(_local_fallback(
+            "agent-1",
+            "chat:21",
+            [{"role": "user", "content": "Create a brand new 14-day notice document"}],
+            trace_context={"conversation_id": "21"},
+        ))
+
+    assert len(calls) == 2
+    assert "System correction:" in calls[1][-1]["content"]
+    assert result.reply == "Created document: Notice-1.pdf"
+    assert result.side_effects[0]["meta"]["action_card"]["kind"] == "document"
+
+
+def test_local_fallback_blocks_switch_to_different_mutating_tool_after_failure():
+    from llm.client import _local_fallback, current_completed_tools, current_failed_tools
+    from llm.tools import pending_suggestion_messages
+
+    calls: list[list[dict]] = []
+
+    async def fake_chat_with_agent(agent_id, session_key, messages, on_progress=None, trace_context=None):
+        calls.append(messages)
+        if len(calls) == 1:
+            current_failed_tools.set([
+                {"tool_name": "create_document", "error": "renderer crashed", "args": {"title": "Notice"}},
+            ])
+            current_completed_tools.set(["create_suggestion"])
+            pending_suggestion_messages.set([
+                {
+                    "type": "chat_message",
+                    "body": "Create 14-Day Pay or Vacate Notice",
+                    "related_task_ids": {"suggestion_id": 11},
+                    "meta": {
+                        "action_card": {
+                            "kind": "suggestion",
+                            "title": "Create 14-Day Pay or Vacate Notice",
+                        },
+                    },
+                },
+            ])
+            return "I've created a suggestion for you to review."
+        current_failed_tools.set([
+            {"tool_name": "create_document", "error": "renderer crashed", "args": {"title": "Notice"}},
+        ])
+        current_completed_tools.set([])
+        pending_suggestion_messages.set([])
+        return "The document tool failed, so there is no new document."
+
+    with patch("llm.client.chat_with_agent", side_effect=fake_chat_with_agent), \
+         patch("llm.client.set_fallback_request_context", return_value=object()), \
+         patch("llm.client.reset_fallback_request_context"), \
+         patch("llm.client.resolve_account_id", return_value=1), \
+         patch("llm.client.resolve_org_id", return_value=1):
+        result = asyncio.run(_local_fallback(
+            "agent-1",
+            "chat:21",
+            [{"role": "user", "content": "Create a brand new 14-day notice document"}],
+            trace_context={"conversation_id": "21"},
+        ))
+
+    assert len(calls) == 2
+    assert "Do not switch from create_document to a different mutating tool such as create_suggestion" in calls[1][-1]["content"]
+    assert result.reply == "The document tool failed, so there is no new document."
+    assert result.side_effects == []
+
+
+def test_local_fallback_allows_retry_of_same_mutating_tool_after_failure():
+    from llm.client import _local_fallback, current_completed_tools, current_failed_tools
+    from llm.tools import pending_suggestion_messages
+
+    calls: list[list[dict]] = []
+
+    async def fake_chat_with_agent(agent_id, session_key, messages, on_progress=None, trace_context=None):
+        calls.append(messages)
+        current_failed_tools.set([
+            {"tool_name": "create_document", "error": "temporary renderer error", "args": {"title": "Notice"}},
+        ])
+        current_completed_tools.set(["create_document"])
+        pending_suggestion_messages.set([
+            {
+                "type": "chat_message",
+                "body": "Created document: Notice-2.pdf",
+                "meta": {
+                    "action_card": {
+                        "kind": "document",
+                        "title": "Notice-2.pdf",
+                    },
+                },
+            },
+        ])
+        return "Created document: Notice-2.pdf"
+
+    with patch("llm.client.chat_with_agent", side_effect=fake_chat_with_agent), \
+         patch("llm.client.set_fallback_request_context", return_value=object()), \
+         patch("llm.client.reset_fallback_request_context"), \
+         patch("llm.client.resolve_account_id", return_value=1), \
+         patch("llm.client.resolve_org_id", return_value=1):
+        result = asyncio.run(_local_fallback(
+            "agent-1",
+            "chat:21",
+            [{"role": "user", "content": "Create a brand new 14-day notice document"}],
+            trace_context={"conversation_id": "21"},
+        ))
+
+    assert len(calls) == 1
+    assert result.reply == "Created document: Notice-2.pdf"
+    assert result.side_effects[0]["meta"]["action_card"]["kind"] == "document"
+
+
+def test_local_fallback_synthesizes_reply_when_tool_fails_and_model_returns_no_message():
+    from llm.client import _local_fallback, current_completed_tools, current_failed_tools
+    from llm.tools import pending_suggestion_messages
+
+    async def fake_chat_with_agent(agent_id, session_key, messages, on_progress=None, trace_context=None):
+        current_failed_tools.set([
+            {
+                "tool_name": "create_document",
+                "error": "browserType.launch: chromium crashed with signal SIGTRAP",
+                "args": {"title": "Notice"},
+            },
+        ])
+        current_completed_tools.set([])
+        pending_suggestion_messages.set([])
+        return ""
+
+    with patch("llm.client.chat_with_agent", side_effect=fake_chat_with_agent), \
+         patch("llm.client.set_fallback_request_context", return_value=object()), \
+         patch("llm.client.reset_fallback_request_context"), \
+         patch("llm.client.resolve_account_id", return_value=1), \
+         patch("llm.client.resolve_org_id", return_value=1):
+        result = asyncio.run(_local_fallback(
+            "agent-1",
+            "chat:21",
+            [{"role": "user", "content": "Create a brand new 14-day notice document"}],
+            trace_context={"conversation_id": "21"},
+        ))
+
+    assert result.reply == "Creating document failed: browserType.launch: chromium crashed with signal SIGTRAP"
+    assert result.side_effects == []
+
+
+def test_local_fallback_synthesizes_reply_when_model_returns_only_tool_progress():
+    from llm.client import _local_fallback, current_completed_tools, current_failed_tools
+    from llm.tools import pending_suggestion_messages
+
+    async def fake_chat_with_agent(agent_id, session_key, messages, on_progress=None, trace_context=None):
+        current_failed_tools.set([
+            {
+                "tool_name": "create_document",
+                "error": "browserType.launch: chromium crashed with signal SIGTRAP",
+                "args": {"title": "Notice"},
+            },
+        ])
+        current_completed_tools.set([])
+        pending_suggestion_messages.set([])
+        return "Creating document\nCreating document: error"
+
+    with patch("llm.client.chat_with_agent", side_effect=fake_chat_with_agent), \
+         patch("llm.client.set_fallback_request_context", return_value=object()), \
+         patch("llm.client.reset_fallback_request_context"), \
+         patch("llm.client.resolve_account_id", return_value=1), \
+         patch("llm.client.resolve_org_id", return_value=1):
+        result = asyncio.run(_local_fallback(
+            "agent-1",
+            "chat:21",
+            [{"role": "user", "content": "Create a brand new 14-day notice document"}],
+            trace_context={"conversation_id": "21"},
+        ))
+
+    assert result.reply == "Creating document failed: browserType.launch: chromium crashed with signal SIGTRAP"
+    assert result.side_effects == []
+
+
 # ---------------------------------------------------------------------------
 # agent_action.py — _queue_action
 # ---------------------------------------------------------------------------

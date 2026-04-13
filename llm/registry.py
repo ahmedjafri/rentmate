@@ -33,6 +33,7 @@ def _register_rentmate_tools():
     from llm.tools import (
         AnalyzeDocumentTool,
         CloseTaskTool,
+        CreateDocumentTool,
         CreatePropertyTool,
         CreateScheduledTaskTool,
         CreateSuggestionTool,
@@ -54,6 +55,7 @@ def _register_rentmate_tools():
         SaveMemoryTool, RecallMemoryTool, EditMemoryTool,
         CreatePropertyTool, CreateTenantTool, CreateSuggestionTool,
         CreateScheduledTaskTool,
+        CreateDocumentTool,
         ReadDocumentTool, AnalyzeDocumentTool,
         UpdateOnboardingTool,
     ):
