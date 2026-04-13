@@ -8,7 +8,7 @@ import {
 } from '@/data/mockData';
 import { useApiData } from '@/hooks/useApiData';
 import { updateTask as updateTaskMutation } from '@/graphql/client';
-import { getToken } from '@/lib/auth';
+import { authFetch } from '@/lib/auth';
 import { toast } from 'sonner';
 
 /** UUID v4 that works in both secure and non-secure contexts (HTTP on LAN IPs). */
@@ -312,10 +312,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // Explicit new chat — create a DB conversation
-    const t = getToken();
-    fetch('/chat/new', {
+    authFetch('/chat/new', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) },
+      headers: { 'Content-Type': 'application/json' },
     })
       .then(r => r.json())
       .then(data => {

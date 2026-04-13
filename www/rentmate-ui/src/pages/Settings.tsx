@@ -12,7 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { toast } from 'sonner';
-import { authFetch, getToken } from '@/lib/auth';
+import { authFetch } from '@/lib/auth';
 
 const actionPolicies = [
   {
@@ -100,8 +100,7 @@ const SettingsPage = () => {
   const [llmTestResult, setLlmTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   useEffect(() => {
-    const headers = { Authorization: `Bearer ${getToken()}` };
-    fetch('/settings', { headers })
+    authFetch('/api/settings')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data) {
@@ -116,7 +115,7 @@ const SettingsPage = () => {
         }
       })
       .catch(() => {});
-    fetch('/settings/integrations', { headers })
+    authFetch('/api/settings/integrations')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data) {
@@ -147,7 +146,7 @@ const SettingsPage = () => {
         }
       })
       .catch(() => {});
-    fetch('/settings/agent/integrations', { headers })
+    authFetch('/api/settings/agent/integrations')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data) {
@@ -158,7 +157,7 @@ const SettingsPage = () => {
         }
       })
       .catch(() => {});
-    fetch('/settings/integrations/quo/webhook', { headers })
+    authFetch('/api/settings/integrations/quo/webhook')
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data) {
@@ -174,7 +173,7 @@ const SettingsPage = () => {
         }
       })
       .catch(() => {});
-    fetch('/settings/agent/files', { headers })
+    authFetch('/api/settings/agent/files')
       .then(r => r.ok ? r.json() : null)
       .then((files: AgentFile[] | null) => {
         if (files) {
@@ -193,12 +192,9 @@ const SettingsPage = () => {
 
   const handleSaveActionPolicy = async () => {
     try {
-      const res = await fetch('/settings', {
+      const res = await authFetch('/api/settings', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${getToken()}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action_policy: actionPolicySettings }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -220,9 +216,9 @@ const SettingsPage = () => {
 
   const handleSaveIntegrations = async () => {
     try {
-      const res = await fetch('/settings/integrations', {
+      const res = await authFetch('/api/settings/integrations', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           quo: {
             enabled: integrations.quo.enabled,
@@ -253,12 +249,9 @@ const SettingsPage = () => {
 
   const handleSaveLlmConfig = async () => {
     try {
-      const res = await fetch('/settings', {
+      const res = await authFetch('/api/settings', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${getToken()}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           api_key: secretOrNull(llmConfig.apiKey),
           model: llmConfig.model,
@@ -276,9 +269,9 @@ const SettingsPage = () => {
     setLlmTesting(true);
     setLlmTestResult(null);
     try {
-      const res = await fetch('/settings/llm/test', {
+      const res = await authFetch('/api/settings/llm/test', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+        headers: { 'Content-Type': 'application/json' },
       });
       const data = await res.json();
       if (data.ok) {
@@ -295,12 +288,9 @@ const SettingsPage = () => {
 
   const handleSaveAgentIntegrations = async () => {
     try {
-      const res = await fetch('/settings/agent/integrations', {
+      const res = await authFetch('/api/settings/agent/integrations', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${getToken()}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           brave_api_key: agentIntegrations.braveApiKey || null,
           web_search_enabled: agentIntegrations.webSearchEnabled,
@@ -316,9 +306,9 @@ const SettingsPage = () => {
   const handleSaveAgentFile = async (filename: string) => {
     setSavingFile(filename);
     try {
-      const res = await fetch(`/settings/agent/files/${filename}`, {
+      const res = await authFetch(`/api/settings/agent/files/${filename}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: agentFileContents[filename] ?? '' }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -468,9 +458,9 @@ const SettingsPage = () => {
                     className="h-7 text-xs gap-1.5"
                     onClick={async () => {
                       try {
-                        const res = await fetch('/settings/integrations/quo/test', {
+                        const res = await authFetch('/api/settings/integrations/quo/test', {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+                          headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ api_key: integrations.quo.apiKey || null }),
                         });
                         const data = await res.json();
@@ -530,9 +520,9 @@ const SettingsPage = () => {
                       className="h-7 text-xs gap-1.5"
                       onClick={async () => {
                         try {
-                          const res = await fetch('/settings/integrations/quo/webhook', {
+                          const res = await authFetch('/api/settings/integrations/quo/webhook', {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+                            headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({}),
                           });
                           const data = await res.json();

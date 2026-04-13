@@ -1,4 +1,4 @@
-"""Tests for the /settings GET and POST endpoints."""
+"""Tests for the /api/settings GET and POST endpoints."""
 
 import os
 import unittest
@@ -48,15 +48,15 @@ class TestSettingsEndpoint(unittest.TestCase):
     # ------------------------------------------------------------------
 
     def test_get_settings_requires_auth(self):
-        response = self.client.get("/settings")
+        response = self.client.get("/api/settings")
         self.assertEqual(response.status_code, 401)
 
     def test_post_settings_requires_auth(self):
-        response = self.client.post("/settings", json={"model": "openai/gpt-4o"})
+        response = self.client.post("/api/settings", json={"model": "openai/gpt-4o"})
         self.assertEqual(response.status_code, 401)
 
     # ------------------------------------------------------------------
-    # GET /settings
+    # GET /api/settings
     # ------------------------------------------------------------------
 
     def test_get_settings_returns_llm_status(self):
@@ -67,7 +67,7 @@ class TestSettingsEndpoint(unittest.TestCase):
             patch("handlers.settings.get_llm_settings", return_value={"api_key": "sk-test", "model": "openai/gpt-4o-mini", "base_url": ""}),
         ):
             response = self.client.get(
-                "/settings", headers={"Authorization": f"Bearer {make_token()}"}
+                "/api/settings", headers={"Authorization": f"Bearer {make_token()}"}
             )
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -85,13 +85,13 @@ class TestSettingsEndpoint(unittest.TestCase):
             patch("handlers.settings.get_llm_settings", return_value={"api_key": "", "model": "openai/gpt-4o-mini", "base_url": ""}),
         ):
             response = self.client.get(
-                "/settings", headers={"Authorization": f"Bearer {make_token()}"}
+                "/api/settings", headers={"Authorization": f"Bearer {make_token()}"}
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["api_key"], "")  # always empty
 
     # ------------------------------------------------------------------
-    # POST /settings
+    # POST /api/settings
     # ------------------------------------------------------------------
 
     @patch("llm.llm.reconfigure")
@@ -102,7 +102,7 @@ class TestSettingsEndpoint(unittest.TestCase):
             patch("gql.services.settings_service.is_llm_configured", return_value=True),
         ):
             response = self.client.post(
-                "/settings",
+                "/api/settings",
                 json={"api_key": "sk-new", "model": "openai/gpt-4o"},
                 headers={"Authorization": f"Bearer {make_token()}"},
             )
@@ -114,11 +114,40 @@ class TestSettingsEndpoint(unittest.TestCase):
 
     def test_post_settings_no_body_returns_ok(self):
         response = self.client.post(
-            "/settings",
+            "/api/settings",
             json={},
             headers={"Authorization": f"Bearer {make_token()}"},
         )
         self.assertEqual(response.status_code, 200)
+
+    def test_test_llm_strips_deepseek_prefix_even_with_explicit_base_url(self):
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "LLM_API_KEY": "sk-test",
+                    "LLM_MODEL": "deepseek/deepseek-chat",
+                    "LLM_BASE_URL": "https://api.deepseek.com/v1",
+                },
+                clear=False,
+            ),
+            patch("openai.OpenAI") as mock_openai,
+        ):
+            mock_client = mock_openai.return_value
+            mock_client.chat.completions.create.return_value.choices = [
+                type("Choice", (), {"message": type("Msg", (), {"content": "OK"})()})()
+            ]
+            response = self.client.post(
+                "/api/settings/llm/test",
+                headers={"Authorization": f"Bearer {make_token()}"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(
+            mock_client.chat.completions.create.call_args.kwargs["model"],
+            "deepseek-chat",
+        )
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import { Bot, User, Eye, Lightbulb, Check, X, Send, Pencil, ChevronDown, ChevronUp, CheckCircle2, XCircle, Zap, Building2, Wrench, BookOpen, ArrowUpRight, Loader2, Expand, FileText } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { getToken } from '@/lib/auth';
+import { authFetch } from '@/lib/auth';
 
 function ThinkingChain({ steps, isChain }: { steps: string[]; isChain: boolean }) {
   const [expanded, setExpanded] = useState(false);
@@ -99,10 +99,7 @@ function ContextBubble({ message, taskId }: { message: ChatMessageType; taskId?:
     if (fullContext) return; // already loaded
     setLoading(true);
     try {
-      const token = getToken();
-      const res = await fetch(`/chat/task-context/${taskId}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const res = await authFetch(`/chat/task-context/${taskId}`);
       if (res.ok) {
         const data = await res.json();
         setFullContext(data.context);
@@ -178,15 +175,38 @@ function ActionCardBubble({ message }: { message: ChatMessageType }) {
     suggestion: { icon: Lightbulb, label: 'Suggestion created', className: 'text-primary', badge: 'bg-primary/10 text-primary border-primary/20' },
     property: { icon: Building2, label: 'Property created', className: 'text-blue-700 dark:text-blue-400', badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-800' },
     tenant: { icon: User, label: 'Tenant created', className: 'text-emerald-700 dark:text-emerald-400', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800' },
+    document: { icon: FileText, label: 'Document created', className: 'text-amber-700 dark:text-amber-400', badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-amber-200 dark:border-amber-800' },
   } as const;
 
   const cfg = kindConfig[card.kind];
   const Icon = cfg.icon;
   const summary = card.summary?.trim();
 
+  const downloadDocument = async (documentId: string, fallbackName: string) => {
+    const res = await authFetch(`/api/document/${documentId}/download`);
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fallbackName || 'document.pdf';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const openLink = (link: ChatActionCardLink) => {
     if (link.entityType === 'suggestion') {
       navigate(`/action-desk?suggestion=${link.entityId}`);
+      return;
+    }
+    if (link.entityType === 'document') {
+      if (link.label.toLowerCase().includes('download')) {
+        void downloadDocument(link.entityId, card.title);
+        return;
+      }
+      navigate(`/documents/${link.entityId}`);
       return;
     }
     if (link.entityType === 'tenant') {

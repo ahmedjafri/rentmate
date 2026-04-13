@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev:fe": "vite",
-    "dev": "concurrently --names \"api,ui\" --prefix-colors \"cyan,green\" --kill-others \"cd ../.. && ./run.sh dev\" \"vite\"",
+    "dev": "vite",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "graphql:schema": "cd ../.. && poetry run python scripts/export_graphql_schema.py",

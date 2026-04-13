@@ -12,7 +12,6 @@ export default defineConfig(({ mode }) => {
     '/graphql':      { target: backendTarget, changeOrigin: true },
     '/auth':         { target: backendTarget, changeOrigin: true },
     '/api':          { target: backendTarget, changeOrigin: true },
-    '/settings':     { target: backendTarget, changeOrigin: true },
     '/chat/':        { target: backendTarget, changeOrigin: true },
     '/automations':  { target: backendTarget, changeOrigin: true },
     '/action-items': { target: backendTarget, changeOrigin: true },

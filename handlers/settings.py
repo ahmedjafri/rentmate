@@ -17,6 +17,7 @@ from gql.services.settings_service import (  # noqa: F401 — re-exported
     save_llm_settings,
 )
 from handlers.deps import require_user
+from llm.model_config import resolve_model_config
 
 router = APIRouter()
 
@@ -78,7 +79,7 @@ class SettingsBody(BaseModel):
     action_policy: Optional[dict[str, str]] = None
 
 
-@router.get("/settings")
+@router.get("/api/settings")
 async def get_settings(request: Request):
     await require_user(request)
     stored = load_app_settings()
@@ -91,7 +92,7 @@ async def get_settings(request: Request):
     }
 
 
-@router.post("/settings")
+@router.post("/api/settings")
 async def update_settings(body: SettingsBody, request: Request):
     await require_user(request)
 
@@ -133,7 +134,7 @@ async def update_settings(body: SettingsBody, request: Request):
     return {"ok": True}
 
 
-@router.post("/settings/llm/test")
+@router.post("/api/settings/llm/test")
 async def test_llm(request: Request):
     """Send a tiny completion request to verify the LLM config works.
 
@@ -152,23 +153,9 @@ async def test_llm(request: Request):
     if not api_key:
         return {"ok": False, "error": "No API key configured."}
 
-    # Mirror the provider mapping from llm/client.py so the test hits the
-    # same endpoint the agent will use.
-    actual_model = model
-    if "/" in model and not base_url:
-        provider_prefix, _, model_name = model.partition("/")
-        _PROVIDER_BASES = {
-            "deepseek": "https://api.deepseek.com",
-            "anthropic": "https://api.anthropic.com/v1",
-            "openai": "https://api.openai.com/v1",
-        }
-        if provider_prefix in _PROVIDER_BASES:
-            base_url = _PROVIDER_BASES[provider_prefix]
-            actual_model = model_name
-
-    # Default base_url for the OpenAI client
-    if not base_url:
-        base_url = "https://api.openai.com/v1"
+    resolved = resolve_model_config(model=model, api_base=base_url)
+    actual_model = resolved.model
+    base_url = resolved.api_base
 
     t0 = time.time()
     try:
@@ -196,14 +183,14 @@ async def test_llm(request: Request):
         }
 
 
-@router.get("/settings/integrations")
+@router.get("/api/settings/integrations")
 async def get_integrations_endpoint(request: Request):
     await require_user(request)
     stored = load_integrations()
     return _mask_integrations(stored)
 
 
-@router.post("/settings/integrations/quo/test")
+@router.post("/api/settings/integrations/quo/test")
 async def test_quo(request: Request):
     """Test a Quo API key by listing phone numbers."""
     await require_user(request)
@@ -236,7 +223,7 @@ def _can_register_webhook() -> bool:
     return bool(os.environ.get("RENTMATE_PUBLIC_URL"))
 
 
-@router.get("/settings/integrations/quo/webhook")
+@router.get("/api/settings/integrations/quo/webhook")
 async def get_quo_webhook_status(request: Request):
     """Return the current webhook status and whether registration is allowed."""
     await require_user(request)
@@ -250,7 +237,7 @@ async def get_quo_webhook_status(request: Request):
     }
 
 
-@router.post("/settings/integrations/quo/webhook")
+@router.post("/api/settings/integrations/quo/webhook")
 async def register_quo_webhook(request: Request):
     """Save the webhook URL for Quo. Quo webhooks are configured in workspace settings."""
     await require_user(request)
@@ -280,7 +267,7 @@ async def register_quo_webhook(request: Request):
     }
 
 
-@router.post("/settings/integrations")
+@router.post("/api/settings/integrations")
 async def update_integrations(body: IntegrationsBody, request: Request):
     await require_user(request)
     stored = load_integrations()
@@ -317,7 +304,7 @@ class AgentIntegrationsBody(BaseModel):
     web_search_enabled: bool = False
 
 
-@router.get("/settings/agent/integrations")
+@router.get("/api/settings/agent/integrations")
 async def get_agent_integrations_endpoint(request: Request):
     await require_user(request)
     agent_int = get_agent_integrations()
@@ -327,7 +314,7 @@ async def get_agent_integrations_endpoint(request: Request):
     }
 
 
-@router.post("/settings/agent/integrations")
+@router.post("/api/settings/agent/integrations")
 async def update_agent_integrations(body: AgentIntegrationsBody, request: Request):
     await require_user(request)
 
@@ -368,7 +355,7 @@ def _agent_workspace() -> Path:
     return DATA_DIR / str(_lookup_account_id())
 
 
-@router.get("/settings/agent/files")
+@router.get("/api/settings/agent/files")
 async def get_agent_files(request: Request):
     await require_user(request)
     workspace = _agent_workspace()
@@ -384,7 +371,7 @@ class AgentFileBody(BaseModel):
     content: str
 
 
-@router.put("/settings/agent/files/{filename:path}")
+@router.put("/api/settings/agent/files/{filename:path}")
 async def update_agent_file(filename: str, body: AgentFileBody, request: Request):
     await require_user(request)
     if filename not in _AGENT_FILENAMES:

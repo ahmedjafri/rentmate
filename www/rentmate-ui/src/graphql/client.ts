@@ -1,7 +1,7 @@
 import { print } from 'graphql';
 import type { TypedDocumentNode } from '@graphql-typed-document-node/core';
 
-import { getToken } from '@/lib/auth';
+import { authFetch, logout } from '@/lib/auth';
 import {
   ActOnSuggestionDocument,
   AddLeaseForTenantDocument,
@@ -134,29 +134,26 @@ export async function graphqlRequest<TResult, TVariables>(
   variables: TVariables,
   options: GraphqlRequestOptions = {},
 ): Promise<TResult> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  if (options.auth !== false) {
-    const token = getToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
-  }
-
-  const res = await fetch(GRAPHQL_URL, {
+  const requestInit: RequestInit = {
     method: 'POST',
-    headers,
+    headers: {
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({
       query: print(document),
       variables,
     }),
-  });
+  };
+  const res = options.auth === false
+    ? await fetch(GRAPHQL_URL, requestInit)
+    : await authFetch(GRAPHQL_URL, requestInit);
 
   const text = await res.text();
   if (!text) throw new Error(`Server error (HTTP ${res.status})`);
   const { data, errors } = JSON.parse(text);
   if (errors?.length) {
     if (errors.some((e: { message: string }) => e.message.includes('Not authenticated'))) {
-      localStorage.removeItem('jwtToken');
+      logout();
       window.dispatchEvent(new CustomEvent('auth:logout'));
       throw new Error('Session expired, please login.');
     }

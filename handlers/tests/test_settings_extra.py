@@ -1,4 +1,4 @@
-"""Extended tests for handlers/settings.py — env file helpers and integrations endpoint."""
+"""Extended tests for handlers/settings.py — env file helpers and integrations endpoints."""
 import os
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -72,18 +72,18 @@ class TestIntegrationsEndpoint(unittest.TestCase):
         app.dependency_overrides = {}
 
     def test_get_integrations_requires_auth(self):
-        response = self.client.get("/settings/integrations")
+        response = self.client.get("/api/settings/integrations")
         assert response.status_code == 401
 
     def test_get_integrations_returns_masked_secrets(self):
         stored = {"telegram": {"enabled": True, "token": "super-secret"}}
         with patch("handlers.settings.load_integrations", return_value=stored):
-            response = self.client.get("/settings/integrations", headers=AUTH)
+            response = self.client.get("/api/settings/integrations", headers=AUTH)
         assert response.status_code == 200
         assert response.json()["telegram"]["token"] == "\u2022" * 8
 
     def test_post_integrations_requires_auth(self):
-        response = self.client.post("/settings/integrations", json={})
+        response = self.client.post("/api/settings/integrations", json={})
         assert response.status_code == 401
 
     def test_post_integrations_saves_and_restarts_channels(self):
@@ -93,7 +93,7 @@ class TestIntegrationsEndpoint(unittest.TestCase):
             patch("llm.registry.agent_registry.restart_channels_async", new_callable=AsyncMock) as mock_restart,
         ):
             response = self.client.post(
-                "/settings/integrations",
+                "/api/settings/integrations",
                 json={"telegram": {"enabled": True, "token": "tok123"}},
                 headers=AUTH,
             )
@@ -115,7 +115,7 @@ class TestIntegrationsEndpoint(unittest.TestCase):
             patch("llm.registry.agent_registry.restart_channels_async", new_callable=AsyncMock),
         ):
             self.client.post(
-                "/settings/integrations",
+                "/api/settings/integrations",
                 json={"telegram": {"enabled": False, "token": ""}},  # blank token
                 headers=AUTH,
             )
@@ -127,7 +127,7 @@ class TestIntegrationsEndpoint(unittest.TestCase):
             patch("handlers.settings.save_action_policy_settings") as mock_save,
         ):
             response = self.client.post(
-                "/settings",
+                "/api/settings",
                 json={"action_policy": {"entity_changes": "aggressive", "outbound_messages": "strict"}},
                 headers=AUTH,
             )
@@ -141,7 +141,7 @@ class TestIntegrationsEndpoint(unittest.TestCase):
             patch("handlers.settings.save_llm_settings"),
         ):
             response = self.client.post(
-                "/settings",
+                "/api/settings",
                 json={"base_url": "http://localhost:11434", "model": "ollama/llama3"},
                 headers=AUTH,
             )

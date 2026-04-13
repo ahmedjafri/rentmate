@@ -1,8 +1,7 @@
-import { loginMutation } from '@/graphql/client';
-
 const TOKEN_KEY = 'jwtToken';
 
 export async function login(password: string, email?: string): Promise<void> {
+  const { loginMutation } = await import('@/graphql/client');
   const data = await loginMutation({ password, ...(email ? { email } : {}) });
   const token = data?.login?.token;
   if (!token) throw new Error('Login failed. Please check your credentials.');

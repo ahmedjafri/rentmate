@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { getToken } from "@/lib/auth";
+import { authFetch } from "@/lib/auth";
 import { Loader2, Play, Zap, ChevronLeft, ChevronDown, ChevronUp, Wand2, Save, PlusCircle, CheckCircle2, Trash2, XCircle, Star, Wrench } from "lucide-react";
 import { listVendors } from "@/graphql/client";
 
@@ -83,11 +83,6 @@ const CATEGORY_COLORS: Record<string, string> = {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-function authHeaders() {
-  const t = getToken();
-  return { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) };
-}
-
 function automationsToChecks(automations: Automation[]) {
   return Object.fromEntries(
     automations.map(a => [a.key, {
@@ -102,16 +97,16 @@ function automationsToChecks(automations: Automation[]) {
 }
 
 async function fetchAutomations(): Promise<Automation[]> {
-  const res = await fetch("/automations", { headers: authHeaders() });
+  const res = await authFetch("/automations", { headers: { "Content-Type": "application/json" } });
   if (!res.ok) throw new Error("Failed to load config");
   const data = await res.json();
   return data.automations as Automation[];
 }
 
 async function saveAutomations(automations: Automation[], message?: string, versioned = true): Promise<Automation[]> {
-  const res = await fetch("/automations", {
+  const res = await authFetch("/automations", {
     method: "POST",
-    headers: authHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ checks: automationsToChecks(automations), message, versioned }),
   });
   if (!res.ok) throw new Error("Failed to save config");
@@ -120,9 +115,9 @@ async function saveAutomations(automations: Automation[], message?: string, vers
 }
 
 async function runSimulate(check: string): Promise<SimulatedTask[]> {
-  const res = await fetch("/automations/simulate", {
+  const res = await authFetch("/automations/simulate", {
     method: "POST",
-    headers: authHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ check }),
   });
   if (!res.ok) throw new Error("Simulation failed");
@@ -135,9 +130,9 @@ async function streamGenerateScript(
   description: string,
   onThinking: (text: string) => void,
 ): Promise<string> {
-  const res = await fetch("/automations/generate-script", {
+  const res = await authFetch("/automations/generate-script", {
     method: "POST",
-    headers: authHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ label, description }),
   });
   if (!res.ok || !res.body) throw new Error("Failed to generate script");
@@ -165,9 +160,9 @@ async function streamGenerateScript(
 }
 
 async function validateScript(script: string): Promise<{ valid: boolean; errors: string[] }> {
-  const res = await fetch("/automations/validate", {
+  const res = await authFetch("/automations/validate", {
     method: "POST",
-    headers: authHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ script }),
   });
   if (!res.ok) throw new Error("Validation request failed");
@@ -175,9 +170,9 @@ async function validateScript(script: string): Promise<{ valid: boolean; errors:
 }
 
 async function deleteAutomation(key: string): Promise<void> {
-  const res = await fetch(`/automations/${key}`, {
+  const res = await authFetch(`/automations/${key}`, {
     method: "DELETE",
-    headers: authHeaders(),
+    headers: { "Content-Type": "application/json" },
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -186,9 +181,9 @@ async function deleteAutomation(key: string): Promise<void> {
 }
 
 async function saveScript(key: string, script: string): Promise<Automation[]> {
-  const res = await fetch("/automations/update-script", {
+  const res = await authFetch("/automations/update-script", {
     method: "POST",
-    headers: authHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ key, script }),
   });
   if (!res.ok) throw new Error("Failed to save script");
@@ -356,9 +351,9 @@ useEffect(() => {
     const key = taskKey(t);
     setCreatingTask(key);
     try {
-      const res = await fetch(endpoint, {
+      const res = await authFetch(endpoint, {
         method: "POST",
-        headers: authHeaders(),
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           subject: t.subject,
           category: t.category,

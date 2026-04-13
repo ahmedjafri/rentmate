@@ -7,7 +7,7 @@ import shlex
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
@@ -353,8 +353,24 @@ def create_app(
     if (resolved_dist / "assets").exists():
         app.mount("/assets", StaticFiles(directory=str(resolved_dist / "assets")), name="assets")
 
+    _BACKEND_ROUTE_PREFIXES = (
+        "api",
+        "auth",
+        "graphql",
+        "health",
+        "chat",
+        "automations",
+        "action-items",
+        "dev",
+        "onboarding",
+        "quo-webhook",
+        "settings",
+    )
+
     @app.get("/{full_path:path}")
     async def serve_react_app(full_path: str):
+        if full_path.split("/", 1)[0] in _BACKEND_ROUTE_PREFIXES:
+            raise HTTPException(status_code=404, detail="Not found")
         index = resolved_dist / "index.html"
         if not index.exists():
             return {"status": "frontend not built"}

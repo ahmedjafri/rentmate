@@ -15,7 +15,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { getToken } from "@/lib/auth";
+import { authFetch } from "@/lib/auth";
 import { Loader2, ChevronRight, ChevronDown, ChevronUp, Plus, Wand2, CheckCircle2, XCircle } from "lucide-react";
 
 // ─── types ───────────────────────────────────────────────────────────────────
@@ -53,11 +53,6 @@ interface Automation {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-function authHeaders() {
-  const t = getToken();
-  return { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) };
-}
-
 function automationsToChecks(automations: Automation[]) {
   return Object.fromEntries(
     automations.map(a => [a.key, {
@@ -72,16 +67,16 @@ function automationsToChecks(automations: Automation[]) {
 }
 
 async function fetchAutomations(): Promise<Automation[]> {
-  const res = await fetch("/automations", { headers: authHeaders() });
+  const res = await authFetch("/automations", { headers: { "Content-Type": "application/json" } });
   if (!res.ok) throw new Error("Failed to load automation config");
   const data = await res.json();
   return data.automations as Automation[];
 }
 
 async function saveAutomations(automations: Automation[], message?: string, versioned = true): Promise<Automation[]> {
-  const res = await fetch("/automations", {
+  const res = await authFetch("/automations", {
     method: "POST",
-    headers: authHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ checks: automationsToChecks(automations), message, versioned }),
   });
   if (!res.ok) throw new Error("Failed to save config");
@@ -90,14 +85,14 @@ async function saveAutomations(automations: Automation[], message?: string, vers
 }
 
 async function fetchHistory(): Promise<HistoryEntry[]> {
-  const res = await fetch("/automations/history", { headers: authHeaders() });
+  const res = await authFetch("/automations/history", { headers: { "Content-Type": "application/json" } });
   if (!res.ok) throw new Error("Failed to load history");
   const data = await res.json();
   return data.history as HistoryEntry[];
 }
 
 async function fetchRuns(): Promise<Record<string, RunEntry[]>> {
-  const res = await fetch("/automations/runs", { headers: authHeaders() });
+  const res = await authFetch("/automations/runs", { headers: { "Content-Type": "application/json" } });
   if (!res.ok) return {};
   const data = await res.json();
   return data.runs as Record<string, RunEntry[]>;
@@ -114,9 +109,9 @@ function relativeTime(iso: string): string {
 }
 
 async function revertConfig(sha: string): Promise<Automation[]> {
-  const res = await fetch("/automations/revert", {
+  const res = await authFetch("/automations/revert", {
     method: "POST",
-    headers: authHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sha }),
   });
   if (!res.ok) throw new Error("Revert failed");
@@ -125,9 +120,9 @@ async function revertConfig(sha: string): Promise<Automation[]> {
 }
 
 async function createAutomation(label: string, description: string, interval_hours: number, script?: string): Promise<Automation[]> {
-  const res = await fetch("/automations/new", {
+  const res = await authFetch("/automations/new", {
     method: "POST",
-    headers: authHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ label, description, interval_hours, ...(script ? { script } : {}) }),
   });
   if (!res.ok) throw new Error("Failed to create automation");
@@ -136,9 +131,9 @@ async function createAutomation(label: string, description: string, interval_hou
 }
 
 async function validateScript(script: string): Promise<{ valid: boolean; errors: string[] }> {
-  const res = await fetch("/automations/validate", {
+  const res = await authFetch("/automations/validate", {
     method: "POST",
-    headers: authHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ script }),
   });
   if (!res.ok) throw new Error("Validation request failed");
@@ -151,9 +146,9 @@ async function streamGenerateScript(
   description: string,
   onThinking: (text: string) => void,
 ): Promise<string> {
-  const res = await fetch("/automations/generate-script", {
+  const res = await authFetch("/automations/generate-script", {
     method: "POST",
-    headers: authHeaders(),
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ label, description }),
   });
   if (!res.ok || !res.body) throw new Error("Failed to generate script");

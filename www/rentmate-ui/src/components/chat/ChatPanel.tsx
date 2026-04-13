@@ -1,5 +1,5 @@
 import { useRef, useEffect, useMemo, useState } from 'react';
-import { X, Bot, Sparkles, Users, Zap, ShieldCheck, Hand, Lock, MessageSquare, RotateCcw, Loader2, Trash2, Link as LinkIcon } from 'lucide-react';
+import { X, Bot, Sparkles, Users, Lock, MessageSquare, RotateCcw, Loader2, Trash2, Link as LinkIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -7,8 +7,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ChatMessageBubble } from './ChatMessage';
 import { ChatInput, ChatInputHandle, PendingAttachment } from './ChatInput';
 import { useApp } from '@/context/AppContext';
-import { ActionDeskTask, ChatMessage, LinkedConversation, ManagedDocument, categoryLabels, TaskMode } from '@/data/mockData';
-import { getToken, authFetch } from '@/lib/auth';
+import { ActionDeskTask, ChatMessage, LinkedConversation, ManagedDocument, categoryLabels } from '@/data/mockData';
+import { authFetch } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SuggestionOptions } from './SuggestionOptions';
@@ -44,27 +44,47 @@ export function getDefaultTaskTab(task: ActionDeskTask | null | undefined): stri
   return linkedChats[0].uid;
 }
 
-function authHeaders() {
-  const t = getToken();
-  return { 'Content-Type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) };
+function backendStatusToFrontend(status: string): ManagedDocument['status'] {
+  if (status === 'done') return 'ready';
+  if (status === 'error') return 'error';
+  if (status === 'pending' || status === 'processing') return 'analyzing';
+  return 'analyzing';
+}
+
+export function normalizeActionCard(card: any): ChatMessage['actionCard'] | undefined {
+  if (!card) return undefined;
+  return {
+    kind: card.kind as NonNullable<ChatMessage['actionCard']>['kind'],
+    title: card.title,
+    summary: card.summary ?? undefined,
+    fields: card.fields?.map((field: any) => ({ label: field.label, value: field.value })) ?? undefined,
+    links: card.links?.map((link: any) => ({
+      label: link.label,
+      entityType: (link.entityType ?? link.entity_type) as 'suggestion' | 'property' | 'tenant' | 'unit' | 'document',
+      entityId: link.entityId ?? link.entity_id,
+      propertyId: link.propertyId ?? link.property_id ?? undefined,
+    })) ?? undefined,
+    units: card.units?.map((unit: any) => ({
+      uid: unit.uid,
+      label: unit.label,
+      propertyId: unit.propertyId ?? unit.property_id,
+    })) ?? undefined,
+  };
+}
+
+function getLastSentMessage(messages: ChatMessage[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== 'user') continue;
+    if ((message.senderType ?? 'manager') !== 'manager') continue;
+    const content = message.content?.trim();
+    if (content) return content;
+  }
+  return undefined;
 }
 
 function autonomousBlockReason(_task: ActionDeskTask): string | null {
   return null;
-}
-
-const modeConfig: Record<TaskMode, { label: string; icon: React.ElementType; className: string }> = {
-  autonomous: { label: 'Autonomous', icon: Zap, className: 'bg-accent/15 text-accent' },
-  waiting_approval: { label: 'Needs Approval', icon: ShieldCheck, className: 'bg-warning/15 text-warning-foreground' },
-  manual: { label: 'Manual', icon: Hand, className: 'bg-muted text-muted-foreground' },
-};
-
-function getModeBadge(task: { mode: TaskMode; participants: { type: string }[] }) {
-  if (task.mode === 'manual') {
-    const hasExternal = task.participants.some(p => p.type === 'tenant' || p.type === 'vendor');
-    if (!hasExternal) return { label: 'Agent', icon: Bot, className: 'bg-primary/10 text-primary' };
-  }
-  return modeConfig[task.mode];
 }
 
 export async function performTaskDismiss(args: {
@@ -215,7 +235,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
           fields: m.actionCard.fields?.map((field) => ({ label: field.label, value: field.value })) ?? undefined,
           links: m.actionCard.links?.map((link) => ({
             label: link.label,
-            entityType: link.entityType as 'suggestion' | 'property' | 'tenant' | 'unit',
+            entityType: link.entityType as 'suggestion' | 'property' | 'tenant' | 'unit' | 'document',
             entityId: link.entityId,
             propertyId: link.propertyId ?? undefined,
           })) ?? undefined,
@@ -357,7 +377,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
             fields: m.actionCard.fields?.map((field) => ({ label: field.label, value: field.value })) ?? undefined,
             links: m.actionCard.links?.map((link) => ({
               label: link.label,
-              entityType: link.entityType as 'suggestion' | 'property' | 'tenant' | 'unit',
+              entityType: link.entityType as 'suggestion' | 'property' | 'tenant' | 'unit' | 'document',
               entityId: link.entityId,
               propertyId: link.propertyId ?? undefined,
             })) ?? undefined,
@@ -378,9 +398,20 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
     lc => lc.conversationType !== 'task_ai' && lc.conversationType !== 'suggestion_ai'
   );
 
+  const lastTaskIdRef = useRef<string | null>(null);
   useEffect(() => {
-    setActiveTaskTab(getDefaultTaskTab(activeTask));
-  }, [activeTask]);
+    const currentTaskId = activeTask?.id ?? null;
+    const taskChanged = lastTaskIdRef.current !== currentTaskId;
+    lastTaskIdRef.current = currentTaskId;
+
+    setActiveTaskTab(prev => {
+      if (!activeTask) return 'ai';
+      if (taskChanged) return getDefaultTaskTab(activeTask);
+      if (prev === 'ai') return prev;
+      const stillExists = linkedChats.some(chat => chat.uid === prev);
+      return stillExists ? prev : getDefaultTaskTab(activeTask);
+    });
+  }, [activeTask?.id, linkedChats, activeTask]);
 
   // Load participant messages when a linked conversation tab is active
   useEffect(() => {
@@ -403,8 +434,8 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
 
     (async () => {
       try {
-        const res = await fetch(`/chat/stream/${streamId}`, {
-          headers: authHeaders(),
+        const res = await authFetch(`/chat/stream/${streamId}`, {
+          headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
         });
         if (!res.ok || !res.body) return;
@@ -497,7 +528,12 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
     context: { taskId?: string | null; suggestionId?: string | null },
   ) => {
     if (!effectMessages) return;
+    const documentIds = new Set<string>();
     for (const msg of effectMessages) {
+      const normalizedCard = normalizeActionCard(msg.action_card);
+      for (const link of normalizedCard?.links ?? []) {
+        if (link.entityType === 'document' && link.entityId) documentIds.add(link.entityId);
+      }
       const effectMessage: ChatMessage = {
         id: msg.id,
         role: 'assistant',
@@ -507,13 +543,38 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
         senderType: 'ai',
         messageType: (msg.message_type as ChatMessage['messageType']) ?? 'message',
         suggestionId: msg.suggestion_id ?? undefined,
-        actionCard: msg.action_card ?? undefined,
+        actionCard: normalizedCard,
       };
       if (!context.taskId && !context.suggestionId) {
         setConvMessages(prev => [...prev, effectMessage]);
       } else {
         addChatMessage(context, effectMessage);
       }
+    }
+    if (documentIds.size > 0) {
+      void Promise.all(
+        Array.from(documentIds).map(async (documentId) => {
+          const res = await authFetch(`/api/document/${documentId}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          addDocument({
+            id: data.id,
+            fileName: data.filename,
+            fileType: data.content_type || 'application/pdf',
+            fileSize: 0,
+            documentType: data.document_type || 'other',
+            status: backendStatusToFrontend(data.status),
+            uploadedAt: new Date(data.created_at),
+            analyzedAt: data.processed_at ? new Date(data.processed_at) : undefined,
+            tags: [],
+            aiSummary: data.context || undefined,
+            errorMessage: data.error_message || undefined,
+            generatedByRentMate: !!data.generated_by_rentmate,
+            generationSource: data.extraction_meta?.source ?? undefined,
+            ...(context.taskId ? { actionDeskTaskId: context.taskId } : {}),
+          });
+        }),
+      );
     }
   };
 
@@ -535,9 +596,9 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
       if (taskId) payload.task_id = taskId;
       else if (activeConversationId) payload.conversation_id = activeConversationId;
 
-      const res = await fetch('/chat/send', {
+      const res = await authFetch('/chat/send', {
         method: 'POST',
-        headers: authHeaders(),
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
@@ -769,6 +830,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
     : activeSuggestion
       ? 'Discuss this suggestion...'
       : 'Ask RentMate anything...';
+  const lastSentMessage = getLastSentMessage(messages);
 
   return (
     <div className={cn(
@@ -867,119 +929,12 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
               </p>
             </div>
           )}
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 flex-wrap">
-              {(() => {
-                const mode = getModeBadge(activeTask);
-                const ModeIcon = mode.icon;
-                return (
-                  <Badge variant="secondary" className={cn('text-[10px] rounded-lg gap-1', mode.className)}>
-                    <ModeIcon className="h-3 w-3" />
-                    {mode.label}
-                  </Badge>
-                );
-              })()}
-            </div>
-            {activeTask.mode === 'autonomous' && chatPanel.taskId && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-6 rounded-lg text-[10px] px-2 gap-1 hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30"
-                onClick={() => {
-                  updateTask(chatPanel.taskId!, { mode: 'manual' });
-                  addChatMessage(
-                    { taskId: chatPanel.taskId },
-                    { id: `msg-${Date.now()}`, role: 'assistant', content: 'RentMate turned off for this task. You\'re now in full manual control.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' }
-                  );
-                }}
-              >
-                <Zap className="h-3 w-3" />
-                Turn off RentMate
-              </Button>
-            )}
-            {activeTask.mode === 'manual' && chatPanel.taskId && (() => {
-              const blockReason = autonomousBlockReason(activeTask);
-              return blockReason ? (
-                <span className="text-[10px] text-muted-foreground italic">{blockReason}</span>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-6 rounded-lg text-[10px] px-2 gap-1 hover:bg-accent/10 hover:text-accent hover:border-accent/30"
-                  onClick={async () => {
-                    const taskId = chatPanel.taskId!;
-                    updateTask(taskId, { mode: 'autonomous' });
-                    // Assess the conversation — the agent will respond only if warranted
-                    setIsTyping(true);
-                    setProgressLog([]);
-                    try {
-                      const res = await fetch('/chat/assess', {
-                        method: 'POST',
-                        headers: authHeaders(),
-                        body: JSON.stringify({ task_id: taskId }),
-                      });
-                      if (!res.ok) { setIsTyping(false); return; }
-                      const reader = res.body!.getReader();
-                      const decoder = new TextDecoder();
-                      let buf = '';
-                      const progressLines: string[] = [];
-                      while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-                        buf += decoder.decode(value, { stream: true });
-                        const lines = buf.split('\n');
-                        buf = lines.pop() ?? '';
-                        for (const line of lines) {
-                          if (!line.startsWith('data: ')) continue;
-	                          let event: {
-	                            type: string;
-	                            text?: string;
-	                            reply?: string | null;
-	                            message_id?: string | null;
-	                            conversation_id?: string;
-	                            effect_messages?: Array<{ id: string; body?: string | null; message_type?: string | null; suggestion_id?: string | null; action_card?: ChatMessage['actionCard'] }>;
-	                          };
-                          try { event = JSON.parse(line.slice(6)); } catch { continue; }
-                          if (event.type === 'progress') {
-                            progressLines.push(event.text as string);
-                            setProgressLog(prev => [...prev, event.text as string]);
-                          } else if (event.type === 'done') {
-                            // Reasoning traces go to AI thread (internal)
-                            const traceLines = progressLines.filter(l => l !== 'Thinking\u2026');
-                            if (traceLines.length > 0) {
-                              addChatMessage({ taskId }, {
-                                id: `thinking-${Date.now()}`, role: 'assistant',
-                                content: traceLines.join('\n'), timestamp: new Date(),
-                                senderName: 'RentMate', senderType: 'ai', messageType: 'internal',
-                              });
-                            }
-                            // Reply goes to AI thread — external messages
-                            // are sent via the message_person suggestion flow
-                            if (event.reply) {
-                              addChatMessage({ taskId }, {
-                                id: event.message_id || `msg-${Date.now()}`, role: 'assistant',
-                                content: event.reply, timestamp: new Date(),
-                                senderName: 'RentMate', senderType: 'ai', messageType: 'message',
-                              });
-                            }
-	                            appendEffectMessages(event.effect_messages, { taskId });
-	                            refreshData();
-                          }
-                        }
-                      }
-                    } catch (err) {
-                      console.warn('[assess] failed:', err);
-                    } finally {
-                      setIsTyping(false);
-                    }
-                  }}
-                >
-                  <Zap className="h-3 w-3" />
-                  Turn on RentMate
-                </Button>
-              );
-            })()}
-          </div>
+          {activeTask.mode === 'manual' && (() => {
+            const blockReason = autonomousBlockReason(activeTask);
+            return blockReason ? (
+              <div className="text-[10px] text-muted-foreground italic">{blockReason}</div>
+            ) : null;
+          })()}
         </div>
       )}
 
@@ -1106,7 +1061,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
               </div>
             ) : (
               <div className="border-t shrink-0">
-                <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
+                <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} lastSentMessage={lastSentMessage} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
               </div>
             )}
           </TabsContent>
@@ -1183,19 +1138,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
               </ScrollArea>
               {isAutonomous ? (
                 <div className="flex items-center gap-2 px-4 py-3 border-t bg-muted/30 shrink-0">
-                  <Zap className="h-4 w-4 text-accent shrink-0" />
                   <p className="flex-1 text-xs text-muted-foreground">RentMate is chatting on your behalf.</p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 rounded-lg text-[11px] px-2.5 shrink-0"
-                    onClick={() => {
-                      updateTask(chatPanel.taskId!, { mode: 'manual' });
-                      addChatMessage({ taskId: chatPanel.taskId }, { id: `msg-${Date.now()}`, role: 'assistant', content: 'Switched to manual — you\'re in control now.', timestamp: new Date(), senderName: 'RentMate', messageType: 'internal' });
-                    }}
-                  >
-                    Take control
-                  </Button>
                 </div>
               ) : (
                 <div className="border-t shrink-0">
@@ -1219,6 +1162,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
                       }
                     }}
                     placeholder={`Reply in ${lc.label} chat...`}
+                    lastSentMessage={getLastSentMessage(participantMessages)}
                   />
                 </div>
               )}
@@ -1333,6 +1277,11 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
             <SuggestionOptions
               options={activeSuggestion.options}
               onAction={async (action) => {
+                if (action === 'request_file_upload') {
+                  chatInputRef.current?.triggerFileUpload();
+                  toast.info('Upload the requested file in this task chat.');
+                  return;
+                }
                 const result = await actOnSuggestion(activeSuggestion.id, action);
                 const { status } = result.actOnSuggestion;
                 updateSuggestionStatus(activeSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
@@ -1340,7 +1289,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
               }}
             />
           ) : (
-            <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
+            <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} lastSentMessage={lastSentMessage} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
           )}
         </>
       )}
