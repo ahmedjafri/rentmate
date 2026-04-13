@@ -36,6 +36,14 @@ jobs:
       - name: Install dependencies
         run: poetry install --no-interaction
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix www/rentmate-ui --no-audit --no-fund
+
       - name: Check migrations up to date
         run: npm run test:migrations
 

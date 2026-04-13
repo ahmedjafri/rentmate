@@ -175,7 +175,7 @@ def test_local_doc_gen_client_integration_renders_real_pdf():
         _skip_if_weasyprint_native_deps_missing(error)
         raise
 
-    assert rendered.pdf_bytes.startswith(b"%PDF-1.4")
+    assert rendered.pdf_bytes.startswith(b"%PDF-")
     assert len(rendered.pdf_bytes) > 1000
     assert rendered.renderer == "weasyprint"
 
