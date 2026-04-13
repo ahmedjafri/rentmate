@@ -9,7 +9,11 @@ from .base import Base, HasCreatorId, OrgId, PrimaryId
 class AgentMemory(Base, OrgId, PrimaryId, HasCreatorId):
     __tablename__ = "agent_memory"
 
-    agent_id = Column(String(255), nullable=False)
+    agent_id = Column(
+        String(255),
+        nullable=False,
+        default=lambda ctx: str(ctx.get_current_parameters().get("creator_id") or ""),
+    )
     memory_type = Column(String(20), nullable=False)  # 'long_term' | 'history'
     content = Column(Text, nullable=False, default="")
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
