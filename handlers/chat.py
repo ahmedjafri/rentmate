@@ -59,12 +59,6 @@ router = APIRouter()
 
 
 def _hosted_mode() -> bool:
-    try:
-        from hosted.config import HOSTED_MODE as hosted_mode
-
-        return bool(hosted_mode)
-    except Exception:
-        pass
     return os.getenv("HOSTED_MODE", "").lower() in {"1", "true", "yes"}
 
 
