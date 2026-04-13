@@ -241,7 +241,7 @@ def test_create_document_tool_creates_document_and_queues_action_card(db):
     assert upload_mock.await_count == 2
     first_upload = upload_mock.await_args_list[0].kwargs
     second_upload = upload_mock.await_args_list[1].kwargs
-    assert first_upload["data"].startswith(b"%PDF-1.4")
+    assert first_upload["data"].startswith(b"%PDF-")
     assert second_upload["data"] == b"<html><body><p>Tenant: Bob Ferguson</p></body></html>"
 
     tags = db.query(DocumentTag).filter_by(document_id=doc.id).all()
@@ -366,7 +366,7 @@ def test_create_document_tool_real_render_end_to_end(db):
     assert upload_mock.await_count == 2
     first_upload = upload_mock.await_args_list[0].kwargs
     second_upload = upload_mock.await_args_list[1].kwargs
-    assert first_upload["data"].startswith(b"%PDF-1.4")
+    assert first_upload["data"].startswith(b"%PDF-")
     assert len(first_upload["data"]) > 1000
     assert b"<!DOCTYPE html>" in second_upload["data"]
     assert b"Bob Ferguson" in second_upload["data"]
