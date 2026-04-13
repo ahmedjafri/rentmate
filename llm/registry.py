@@ -186,7 +186,7 @@ class AgentRegistry:
         from db.models import AgentMemory
         creator_id = int(agent_id) if str(agent_id).isdigit() else _lookup_account_id()
         row = db.query(AgentMemory).filter_by(
-            creator_id=creator_id, memory_type=f"file:{filename}"
+            creator_id=creator_id, agent_id=str(agent_id), memory_type=f"file:{filename}"
         ).first()
         return row.content if row else None
 
@@ -197,7 +197,7 @@ class AgentRegistry:
         from db.models import AgentMemory
         resolved_creator_id = creator_id or (int(agent_id) if str(agent_id).isdigit() else _lookup_account_id())
         row = db.query(AgentMemory).filter_by(
-            creator_id=resolved_creator_id, memory_type=f"file:{filename}"
+            creator_id=resolved_creator_id, agent_id=str(agent_id), memory_type=f"file:{filename}"
         ).first()
         now = datetime.now(UTC)
         if row:
@@ -206,6 +206,7 @@ class AgentRegistry:
         else:
             db.add(AgentMemory(
                 id=str(_uuid.uuid4()),
+                agent_id=str(agent_id),
                 creator_id=resolved_creator_id,
                 memory_type=f"file:{filename}",
                 content=content,

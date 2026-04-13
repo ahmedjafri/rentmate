@@ -60,6 +60,7 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_users_org_id'), 'users', ['org_id'], unique=False)
     op.create_table('agent_memory',
+    sa.Column('agent_id', sa.String(length=255), nullable=False),
     sa.Column('memory_type', sa.String(length=20), nullable=False),
     sa.Column('content', sa.Text(), nullable=False),
     sa.Column('updated_at', sa.DateTime(), nullable=False),

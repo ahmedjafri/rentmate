@@ -318,6 +318,7 @@ def test_startup_agent_memory_writes_with_explicit_creator():
     from datetime import UTC, datetime
     mem = AgentMemory(
         id=str(uuid.uuid4()),
+        agent_id="1",
         org_id=1,
         creator_id=1,
         memory_type="file:TEST.md",

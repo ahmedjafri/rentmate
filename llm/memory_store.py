@@ -29,6 +29,7 @@ class DbMemoryStore:
             note_id = str(uuid.uuid4())
             db.add(AgentMemory(
                 id=note_id,
+                agent_id=self.agent_id,
                 org_id=self.org_id,
                 creator_id=self.creator_id,
                 memory_type="note:general",
@@ -50,6 +51,7 @@ class DbMemoryStore:
                 db.query(AgentMemory)
                 .filter(
                     AgentMemory.org_id == self.org_id,
+                    AgentMemory.agent_id == self.agent_id,
                     AgentMemory.creator_id == self.creator_id,
                     AgentMemory.memory_type == "note:general",
                 )
@@ -90,7 +92,7 @@ class DbMemoryStore:
         try:
             row = (
                 db.query(AgentMemory)
-                .filter_by(org_id=self.org_id, creator_id=self.creator_id, memory_type="long_term")
+                .filter_by(org_id=self.org_id, agent_id=self.agent_id, creator_id=self.creator_id, memory_type="long_term")
                 .first()
             )
             return row.content if row else ""
@@ -103,7 +105,7 @@ class DbMemoryStore:
         try:
             row = (
                 db.query(AgentMemory)
-                .filter_by(org_id=self.org_id, creator_id=self.creator_id, memory_type="long_term")
+                .filter_by(org_id=self.org_id, agent_id=self.agent_id, creator_id=self.creator_id, memory_type="long_term")
                 .first()
             )
             now = datetime.now(UTC)
@@ -113,6 +115,7 @@ class DbMemoryStore:
             else:
                 db.add(AgentMemory(
                     id=str(uuid.uuid4()),
+                    agent_id=self.agent_id,
                     org_id=self.org_id,
                     creator_id=self.creator_id,
                     memory_type="long_term",
