@@ -19,24 +19,22 @@ def _codegen_command(tmp_config: Path) -> list[str]:
     local_bin = FRONTEND_DIR / "node_modules" / ".bin" / "graphql-codegen"
     if local_bin.exists():
         return [str(local_bin), "--config", str(tmp_config)]
-    npm = shutil.which("npm")
-    if not npm:
+    npx = shutil.which("npx")
+    if not npx:
         raise FileNotFoundError(
-            "Could not find graphql-codegen locally and `npm` is not available for fallback resolution.",
+            "Could not find graphql-codegen locally and `npx` is not available for fallback resolution.",
         )
     return [
-        npm,
-        "exec",
+        npx,
         "--yes",
-        "--package",
+        "-p",
         "@graphql-codegen/cli",
-        "--package",
+        "-p",
         "@graphql-codegen/typescript",
-        "--package",
+        "-p",
         "@graphql-codegen/typescript-operations",
-        "--package",
+        "-p",
         "@graphql-codegen/typed-document-node",
-        "--",
         "graphql-codegen",
         "--config",
         str(tmp_config),
