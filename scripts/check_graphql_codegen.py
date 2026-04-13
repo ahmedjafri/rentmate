@@ -15,6 +15,18 @@ def _read(path: Path) -> str:
     return path.read_text().replace("\r\n", "\n")
 
 
+def _codegen_command(tmp_config: Path) -> list[str]:
+    local_bin = FRONTEND_DIR / "node_modules" / ".bin" / "graphql-codegen"
+    if local_bin.exists():
+        return [str(local_bin), "--config", str(tmp_config)]
+    npm = shutil.which("npm")
+    if not npm:
+        raise FileNotFoundError(
+            "Could not find graphql-codegen locally and `npm` is not available for fallback resolution.",
+        )
+    return [npm, "exec", "--yes", "--", "graphql-codegen", "--config", str(tmp_config)]
+
+
 def main() -> int:
     checked_in_schema = GRAPHQL_DIR / "schema.graphql"
     checked_in_queries = GRAPHQL_DIR / "queries.graphql"
@@ -54,12 +66,7 @@ export default config;
 """,
         )
 
-        result = subprocess.run(
-            [str(FRONTEND_DIR / "node_modules" / ".bin" / "graphql-codegen"), "--config", str(tmp_config)],
-            cwd=FRONTEND_DIR,
-            capture_output=True,
-            text=True,
-        )
+        result = subprocess.run(_codegen_command(tmp_config), cwd=FRONTEND_DIR, capture_output=True, text=True)
         if result.returncode != 0:
             sys.stderr.write(result.stdout)
             sys.stderr.write(result.stderr)
