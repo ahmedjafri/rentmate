@@ -25,6 +25,16 @@ router = APIRouter()
 _SECRET_FIELDS = {"token", "bridge_token", "api_key"}
 
 
+def _hosted_mode() -> bool:
+    try:
+        from hosted.config import HOSTED_MODE as hosted_mode
+
+        return bool(hosted_mode)
+    except Exception:
+        pass
+    return os.getenv("HOSTED_MODE", "").lower() in {"1", "true", "yes"}
+
+
 def load_integrations() -> dict:
     """Read integrations from DB. Re-exported from settings_service."""
     return get_integrations()
@@ -83,6 +93,10 @@ class SettingsBody(BaseModel):
 async def get_settings(request: Request):
     await require_user(request)
     stored = load_app_settings()
+    if _hosted_mode():
+        return {
+            "action_policy": stored.get("action_policy", get_action_policy_settings()),
+        }
     llm = get_llm_settings()
     return {
         "api_key": _SECRET_MASK if llm.get("api_key") else "",
@@ -95,6 +109,11 @@ async def get_settings(request: Request):
 @router.post("/api/settings")
 async def update_settings(body: SettingsBody, request: Request):
     await require_user(request)
+
+    if _hosted_mode():
+        if body.action_policy is not None:
+            save_action_policy_settings(body.action_policy)
+        return {"ok": True}
 
     # LLM config — persisted to DB, cached in os.environ
     has_llm_update = False
@@ -142,6 +161,8 @@ async def test_llm(request: Request):
     accurately reflects whether chat will succeed.
     """
     await require_user(request)
+    if _hosted_mode():
+        raise HTTPException(status_code=403, detail="AI configuration is managed globally for hosted accounts.")
     import time
 
     from openai import OpenAI

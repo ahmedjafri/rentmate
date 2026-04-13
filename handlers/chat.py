@@ -58,6 +58,16 @@ from llm.tracing import log_trace, make_trace_envelope
 router = APIRouter()
 
 
+def _hosted_mode() -> bool:
+    try:
+        from hosted.config import HOSTED_MODE as hosted_mode
+
+        return bool(hosted_mode)
+    except Exception:
+        pass
+    return os.getenv("HOSTED_MODE", "").lower() in {"1", "true", "yes"}
+
+
 def _split_messages_for_trace(messages_payload: list[dict]) -> dict:
     if not messages_payload:
         return {"system": None, "history": [], "latest_user": None}
@@ -416,10 +426,16 @@ async def chat_endpoint(
     # ── Guard: LLM must be configured ───────────────────────────────────
     from gql.services.settings_service import is_llm_configured
     if not is_llm_configured():
-        no_llm_reply = (
-            "I'm not connected to an AI model yet, so I can't respond. "
-            "Head to **Settings → AI Model** to add your API key and choose a model."
-        )
+        if _hosted_mode():
+            no_llm_reply = (
+                "AI is currently unavailable for this hosted workspace. "
+                "Model configuration is managed globally, so there is nothing you need to set in Settings."
+            )
+        else:
+            no_llm_reply = (
+                "I'm not connected to an AI model yet, so I can't respond. "
+                "Head to **Settings → AI Model** to add your API key and choose a model."
+            )
 
         async def _no_llm():
             yield f"data: {json.dumps({'type': 'done', 'reply': no_llm_reply, 'conversation_id': public_conv_id})}\n\n"
@@ -1206,22 +1222,27 @@ async def get_onboarding_state_endpoint(request: Request, db: Session = Depends(
     from db.models import Document, Property, Tenant
     from gql.services.settings_service import get_onboarding_state, init_onboarding, is_llm_configured
 
+    llm_configured = True if _hosted_mode() else is_llm_configured()
     state = get_onboarding_state(db)
     if state is not None:
         # Backfill configure_llm step for existing onboarding states
         if "configure_llm" not in state.get("steps", {}):
-            state["steps"]["configure_llm"] = "done" if is_llm_configured() else "pending"
-        return {"onboarding": state, "llm_configured": is_llm_configured()}
+            state["steps"]["configure_llm"] = "done" if llm_configured else "pending"
+        elif _hosted_mode():
+            state["steps"]["configure_llm"] = "done"
+        return {"onboarding": state, "llm_configured": llm_configured}
     # No state yet — initialize only if the account is truly empty
     prop_count = db.query(Property).count()
     tenant_count = db.query(Tenant).count()
     doc_count = db.query(Document).count()
     if prop_count == 0 and tenant_count == 0 and doc_count == 0:
         state = init_onboarding(db)
+        if _hosted_mode():
+            state["steps"]["configure_llm"] = "done"
         db.commit()
         log_trace("onboarding", "chat", "Onboarding initialized")
-        return {"onboarding": state, "llm_configured": is_llm_configured()}
-    return {"onboarding": None, "llm_configured": is_llm_configured()}
+        return {"onboarding": state, "llm_configured": llm_configured}
+    return {"onboarding": None, "llm_configured": llm_configured}
 
 
 @router.post("/onboarding/dismiss")

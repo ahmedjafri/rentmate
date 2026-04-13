@@ -72,6 +72,10 @@ interface AgentFile {
   readonly: boolean;
 }
 
+interface SettingsPageProps {
+  hideLlmConfig?: boolean;
+}
+
 const AGENT_FILE_LABELS: Record<string, string> = {
   'SOUL.md': 'Soul',
   'AGENTS.md': 'Agents',
@@ -82,7 +86,7 @@ const AGENT_FILE_LABELS: Record<string, string> = {
   'TOOLS.md': 'Tools',
 };
 
-const SettingsPage = () => {
+export const SettingsPage = ({ hideLlmConfig = false }: SettingsPageProps) => {
   const { actionPolicySettings, setActionPolicySettings } = useApp();
   const [llmConfig, setLlmConfig] = useState<LlmConfig>({ apiKey: '', model: '', baseUrl: '' });
   const [integrations, setIntegrations] = useState<IntegrationsState>({
@@ -327,67 +331,68 @@ const SettingsPage = () => {
         <p className="text-sm text-muted-foreground">Configure RentMate</p>
       </div>
 
-      {/* LLM Backend Config */}
-      <Card className="p-6 rounded-xl">
-        <div className="flex items-center gap-2 mb-1">
-          <Bot className="h-5 w-5 text-primary" />
-          <h2 className="text-lg font-bold">AI Model</h2>
-        </div>
-        <p className="text-sm text-muted-foreground mb-6">
-          Configure the language model backend for your AI property manager.
-        </p>
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="llm-api-key">API Key</Label>
-            <Input
-              id="llm-api-key"
-              type="password"
-              placeholder="Leave blank to keep existing key"
-              value={llmConfig.apiKey}
-              onChange={(e) => setLlmConfig(prev => ({ ...prev, apiKey: e.target.value }))}
-            />
+      {!hideLlmConfig && (
+        <Card className="p-6 rounded-xl">
+          <div className="flex items-center gap-2 mb-1">
+            <Bot className="h-5 w-5 text-primary" />
+            <h2 className="text-lg font-bold">AI Model</h2>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="llm-model">Model</Label>
-            <Input
-              id="llm-model"
-              placeholder="e.g. anthropic/claude-haiku-4-5-20251001"
-              value={llmConfig.model}
-              onChange={(e) => setLlmConfig(prev => ({ ...prev, model: e.target.value }))}
-            />
-            <p className="text-xs text-muted-foreground">
-              Format: <code className="text-[11px]">provider/model-name</code>. For known providers
-              (openai, anthropic, deepseek) the API endpoint is resolved automatically.
-              For custom or local servers, set the Base URL below and use just the model name.
-            </p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="llm-base-url">Base URL <span className="text-muted-foreground font-normal">(optional — for self-hosted or custom endpoints)</span></Label>
-            <Input
-              id="llm-base-url"
-              placeholder="e.g. http://localhost:11434/v1"
-              value={llmConfig.baseUrl}
-              onChange={(e) => setLlmConfig(prev => ({ ...prev, baseUrl: e.target.value }))}
-            />
-            <p className="text-xs text-muted-foreground">
-              Leave blank for cloud providers. Set this for Ollama, vLLM, or any OpenAI-compatible server.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Button onClick={handleSaveLlmConfig} className="flex-1">Save</Button>
-            <Button variant="outline" onClick={handleTestLlm} disabled={llmTesting} className="gap-1.5">
-              {llmTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Test Model
-            </Button>
-          </div>
-          {llmTestResult && (
-            <div className={`flex items-start gap-2 p-3 rounded-lg text-sm ${llmTestResult.ok ? 'bg-accent/10 text-accent' : 'bg-destructive/10 text-destructive'}`}>
-              {llmTestResult.ok ? <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" /> : <XCircle className="h-4 w-4 mt-0.5 shrink-0" />}
-              <span className="break-all">{llmTestResult.message}</span>
+          <p className="text-sm text-muted-foreground mb-6">
+            Configure the language model backend for your AI property manager.
+          </p>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="llm-api-key">API Key</Label>
+              <Input
+                id="llm-api-key"
+                type="password"
+                placeholder="Leave blank to keep existing key"
+                value={llmConfig.apiKey}
+                onChange={(e) => setLlmConfig(prev => ({ ...prev, apiKey: e.target.value }))}
+              />
             </div>
-          )}
-        </div>
-      </Card>
+            <div className="space-y-2">
+              <Label htmlFor="llm-model">Model</Label>
+              <Input
+                id="llm-model"
+                placeholder="e.g. anthropic/claude-haiku-4-5-20251001"
+                value={llmConfig.model}
+                onChange={(e) => setLlmConfig(prev => ({ ...prev, model: e.target.value }))}
+              />
+              <p className="text-xs text-muted-foreground">
+                Format: <code className="text-[11px]">provider/model-name</code>. For known providers
+                (openai, anthropic, deepseek) the API endpoint is resolved automatically.
+                For custom or local servers, set the Base URL below and use just the model name.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="llm-base-url">Base URL <span className="text-muted-foreground font-normal">(optional — for self-hosted or custom endpoints)</span></Label>
+              <Input
+                id="llm-base-url"
+                placeholder="e.g. http://localhost:11434/v1"
+                value={llmConfig.baseUrl}
+                onChange={(e) => setLlmConfig(prev => ({ ...prev, baseUrl: e.target.value }))}
+              />
+              <p className="text-xs text-muted-foreground">
+                Leave blank for cloud providers. Set this for Ollama, vLLM, or any OpenAI-compatible server.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={handleSaveLlmConfig} className="flex-1">Save</Button>
+              <Button variant="outline" onClick={handleTestLlm} disabled={llmTesting} className="gap-1.5">
+                {llmTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Test Model
+              </Button>
+            </div>
+            {llmTestResult && (
+              <div className={`flex items-start gap-2 p-3 rounded-lg text-sm ${llmTestResult.ok ? 'bg-accent/10 text-accent' : 'bg-destructive/10 text-destructive'}`}>
+                {llmTestResult.ok ? <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" /> : <XCircle className="h-4 w-4 mt-0.5 shrink-0" />}
+                <span className="break-all">{llmTestResult.message}</span>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
 
       {/* Autonomy Controls */}
       <Card className="p-6 rounded-xl">
