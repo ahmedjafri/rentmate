@@ -17,4 +17,4 @@ def test_prefetch_returns_policy_text(tmp_path):
     provider.initialize(session_id="abc", hermes_home=str(tmp_path))
     text = provider.prefetch("Coordinate with the vendor and tenant about the appointment time.")
     assert "Coordination Policy" in text
-    assert "Confirm access with the tenant before confirming the schedule with the vendor." in text
+    assert "the next action is to contact the tenant for access confirmation" in text
