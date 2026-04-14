@@ -623,7 +623,22 @@ def _extract_latest_outbound_message(db, task_id, *, user_message: str = ""):
         .all()
     )
     latest_vendor = None
+    latest_tenant = None
     user_lower = (user_message or "").lower()
+    prefer_tenant = any(
+        phrase in user_lower
+        for phrase in (
+            "reply to the tenant",
+            "reply to tenant",
+            "message the tenant",
+            "message tenant",
+            "tell the tenant",
+            "send the tenant",
+            "tenant asks",
+            "tenant says",
+            "what should i tell the tenant",
+        )
+    )
     prefer_vendor = any(
         phrase in user_lower
         for phrase in (
@@ -656,7 +671,13 @@ def _extract_latest_outbound_message(db, task_id, *, user_message: str = ""):
         if not draft:
             continue
         if payload.get("entity_type") == "tenant":
-            return draft
+            if latest_tenant is None:
+                latest_tenant = draft
+            continue
         if latest_vendor is None:
             latest_vendor = draft
-    return latest_vendor if prefer_vendor else None
+    if prefer_tenant and latest_tenant:
+        return latest_tenant
+    if prefer_vendor and latest_vendor:
+        return latest_vendor
+    return None
