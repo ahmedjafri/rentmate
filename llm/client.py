@@ -548,6 +548,11 @@ async def chat_with_agent(
         kw = _orig_build(messages)
         if agent.tools and "tools" in kw and "tool_choice" not in kw:
             kw["tool_choice"] = "auto"
+        if str(session_key).startswith("eval:"):
+            try:
+                kw["temperature"] = float(os.getenv("EVAL_AGENT_TEMPERATURE", "0"))
+            except ValueError:
+                kw["temperature"] = 0.0
         return kw
     agent._build_api_kwargs = _patched_build_api_kwargs
 
