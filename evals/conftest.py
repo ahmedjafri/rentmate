@@ -210,9 +210,12 @@ class ScenarioBuilder:
         return lease
 
     def add_vendor(self, *, name="Handyman Rob", phone="206-555-0200",
-                   vendor_type="Handyman", email="rob@handyman.com"):
+                   vendor_type="Handyman", email=None):
         from gql.services.vendor_service import VendorService
         from gql.types import CreateVendorInput
+        if email is None:
+            normalized_phone = "".join(ch for ch in phone if ch.isdigit()) or uuid.uuid4().hex[:8]
+            email = f"vendor-{normalized_phone}@example.com"
         vendor = VendorService.create_vendor(
             self.db,
             CreateVendorInput(name=name, phone=phone, vendor_type=vendor_type, email=email),
