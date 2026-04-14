@@ -299,6 +299,9 @@ def _sanitize_filtered_subset_reply(reply: str) -> str:
 
 
 def _select_best_reply(result: dict[str, Any], reply: str) -> str:
+    def _finalize(text: str) -> str:
+        return _sanitize_filtered_subset_reply(text)
+
     messages = result.get("messages", []) if isinstance(result, dict) else []
     candidates: list[str] = []
     for message in reversed(messages):
@@ -311,25 +314,25 @@ def _select_best_reply(result: dict[str, Any], reply: str) -> str:
             continue
         candidates.append(content)
     if not candidates:
-        return reply
+        return _finalize(reply)
     best_candidate = candidates[0]
     if _reply_is_only_tool_progress(reply) or _reply_is_generic_summary(reply):
-        return best_candidate
+        return _finalize(best_candidate)
     if _reply_is_narrow_information_request(reply):
         for candidate in candidates:
             if _has_stage_setting(candidate) and not _has_stage_setting(reply):
-                return candidate
+                return _finalize(candidate)
     if _contains_excluded_subset_language(reply):
         for candidate in candidates:
             if not _contains_excluded_subset_language(candidate) and not _looks_like_planning_reply(candidate):
-                return candidate
+                return _finalize(candidate)
     if not _contains_empathy(reply):
         for candidate in candidates:
             if _contains_empathy(candidate):
-                return candidate
+                return _finalize(candidate)
     if len(best_candidate) > max(len(reply or ""), 1) * 1.4:
-        return best_candidate
-    return _sanitize_filtered_subset_reply(reply)
+        return _finalize(best_candidate)
+    return _finalize(reply)
 
 
 # ─── Local agent execution ───────────────────────────────────────────────────
