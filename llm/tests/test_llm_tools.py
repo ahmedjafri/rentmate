@@ -159,11 +159,11 @@ def test_chat_with_agent_passes_workspace_scoped_hermes_home(tmp_path):
         patch("llm.client.agent_registry.build_system_prompt", return_value="system"),
         patch("llm.client.ensure_agent_runtime_dirs") as mock_runtime_dirs,
     ):
-        hermes_home = tmp_path / "agent-1" / ".hermes"
+        hermes_home = tmp_path / "agent-1"
         mock_runtime_dirs.return_value = {
-            "workspace": tmp_path / "agent-1",
+            "workspace": hermes_home,
             "hermes_home": hermes_home,
-            "tmp_dir": tmp_path / "agent-1" / ".tmp",
+            "working_dir": tmp_path / "agent-1" / "home",
         }
         reply = asyncio.run(chat_with_agent("agent-1", "chat:21", [{"role": "user", "content": "hi"}]))
 

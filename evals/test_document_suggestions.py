@@ -21,6 +21,8 @@ def scenario_with_document(scenario_builder, db):
     # Create the document in DB (simulating a processed upload)
     doc = Document(
         id="eval-doc-001",
+        org_id=1,
+        creator_id=1,
         filename="test-lease.pdf",
         content_type="application/pdf",
         storage_path="documents/eval-doc-001/test-lease.pdf",

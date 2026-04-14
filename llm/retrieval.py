@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -38,6 +39,8 @@ from db.queries import format_address, tenant_display_name
 from llm.history_filters import is_transient_tool_failure_text
 from llm.model_config import resolve_model_config
 from llm.tracing import log_trace
+
+logger = logging.getLogger(__name__)
 
 
 def _data_dir() -> Path:
@@ -888,15 +891,37 @@ def retrieve_context(db: Session, request: RetrievalRequest) -> RankedContextBun
     creator = request.creator_id or resolve_account_id()
     request.creator_id = creator
     request.org_id = request.org_id or resolve_org_id()
+    disable_vector_index = os.getenv("RENTMATE_DISABLE_VECTOR_INDEX", "").lower() in {"1", "true", "yes"}
 
-    sync_memory_index(db, creator_id=creator)
+    if not disable_vector_index:
+        try:
+            sync_memory_index(db, creator_id=creator)
+        except Exception as exc:
+            logger.warning("Skipping memory index sync during retrieval: %s", exc)
+            log_trace(
+                "warning",
+                "memory_sync",
+                "Memory index sync skipped during retrieval",
+                task_id=request.task_id,
+                detail={"error": str(exc), "creator_id": creator},
+            )
 
     items = _eligible_items(db, creator)
     query_tokens = set(_tokenize(request.query or request.intent))
     vector_scores: dict[str, float] = {}
-    if items:
-        index = ChromaMemoryIndex()
-        vector_scores = index.query(request, where=_base_where(creator), n_results=min(50, max(10, request.limit * 4)))
+    if items and not disable_vector_index:
+        try:
+            index = ChromaMemoryIndex()
+            vector_scores = index.query(request, where=_base_where(creator), n_results=min(50, max(10, request.limit * 4)))
+        except Exception as exc:
+            logger.warning("Skipping vector memory query during retrieval: %s", exc)
+            log_trace(
+                "warning",
+                "memory_query",
+                "Vector memory query skipped during retrieval",
+                task_id=request.task_id,
+                detail={"error": str(exc), "creator_id": creator},
+            )
 
     ranked: list[RankedContextItem] = []
     request_embedding = embed_text(request.query or request.intent or "")

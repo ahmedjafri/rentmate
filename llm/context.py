@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from db.models import Conversation, MessageType, Property, Suggestion, Task, Unit
+from db.models import Conversation, Lease, MessageType, Property, Suggestion, Task, Tenant, Unit
 from llm.retrieval import RetrievalRequest, compose_prompt_context, retrieve_context
 
 
@@ -207,6 +207,65 @@ def build_task_context_data(db: Session, task_id: str, query: str | None = None)
             },
         })
 
+    prop = db.query(Property).filter_by(id=task.property_id).first() if task.property_id else None
+    unit = db.query(Unit).filter_by(id=task.unit_id).first() if task.unit_id else None
+    tenant = None
+    lease = None
+
+    if unit and getattr(unit, "tenant_id", None):
+        tenant = db.query(Tenant).filter_by(id=unit.tenant_id).first()
+
+    lease_query = db.query(Lease)
+    if task.unit_id:
+        lease = (
+            lease_query.filter_by(unit_id=task.unit_id)
+            .order_by(Lease.start_date.desc())
+            .first()
+        )
+    elif task.property_id:
+        lease = (
+            lease_query.filter_by(property_id=task.property_id)
+            .order_by(Lease.start_date.desc())
+            .first()
+        )
+
+    if lease and not tenant and lease.tenant_id:
+        tenant = db.query(Tenant).filter_by(id=lease.tenant_id).first()
+
+    factual_lines: list[str] = []
+    if prop:
+        address_bits = [prop.address_line1, prop.city, prop.state, prop.postal_code]
+        factual_lines.append(f"Property: {', '.join(bit for bit in address_bits if bit)}")
+        if prop.name:
+            factual_lines.append(f"Property name: {prop.name}")
+    if unit:
+        factual_lines.append(f"Unit: {unit.label}")
+    if tenant:
+        factual_lines.append(f"Tenant ID: {tenant.external_id}")
+        if tenant.user:
+            tenant_name = tenant.user.name or tenant.user.email or "Unknown tenant"
+            factual_lines.append(f"Tenant: {tenant_name}")
+            if tenant.user.phone:
+                factual_lines.append(f"Tenant phone: {tenant.user.phone}")
+            if tenant.user.email:
+                factual_lines.append(f"Tenant email: {tenant.user.email}")
+    if lease:
+        factual_lines.append(f"Lease rent amount: ${lease.rent_amount:,.0f}" if float(lease.rent_amount).is_integer() else f"Lease rent amount: ${lease.rent_amount:,.2f}")
+        if lease.payment_status:
+            factual_lines.append(f"Lease payment status: {lease.payment_status}")
+        factual_lines.append(f"Lease term: {lease.start_date.isoformat()} to {lease.end_date.isoformat()}")
+
+    if factual_lines:
+        lines.append("")
+        lines.append("Current task facts:")
+        lines.extend(factual_lines)
+        sections.append({
+            "section_type": "task_facts",
+            "title": "Current task facts",
+            "content": "\n".join(factual_lines),
+            "origin": {"kind": "task_entities", "task_id": task.id},
+        })
+
     ranked_block = compose_prompt_context(bundle, title="Ranked context")
     if ranked_block:
         lines.append("")
@@ -220,26 +279,22 @@ def build_task_context_data(db: Session, task_id: str, query: str | None = None)
         })
 
     property_summary: dict[str, Any] | None = None
-    if task.property_id:
-        prop = db.query(Property).filter_by(id=task.property_id).first()
-        if prop:
-            property_summary = {
-                "id": str(prop.id),
-                "address": prop.address_line1,
-                "city": prop.city,
-                "state": prop.state,
-                "postal_code": prop.postal_code,
-                "type": prop.property_type,
-            }
+    if prop:
+        property_summary = {
+            "id": str(prop.id),
+            "address": prop.address_line1,
+            "city": prop.city,
+            "state": prop.state,
+            "postal_code": prop.postal_code,
+            "type": prop.property_type,
+        }
 
     unit_summary: dict[str, Any] | None = None
-    if task.unit_id:
-        unit = db.query(Unit).filter_by(id=task.unit_id).first()
-        if unit:
-            unit_summary = {
-                "id": str(unit.id),
-                "label": unit.label,
-            }
+    if unit:
+        unit_summary = {
+            "id": str(unit.id),
+            "label": unit.label,
+        }
 
     return {
         "scope": "task",

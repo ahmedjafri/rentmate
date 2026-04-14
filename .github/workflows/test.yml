@@ -103,7 +103,8 @@ jobs:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-        run: poetry run pytest -m eval --tb=short
+          RENTMATE_DISABLE_VECTOR_INDEX: "1"
+        run: poetry run pytest -m eval --tb=short -n auto
 
   evals-skipped:
     runs-on: ubuntu-latest
