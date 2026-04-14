@@ -80,7 +80,9 @@ class TestAgentRegistry(unittest.TestCase):
             data_dir = tmp_path / "agent"
             data_dir.mkdir(parents=True)
 
-            with patch("llm.registry.DATA_DIR", data_dir):
+            with patch("llm.registry.DATA_DIR", data_dir), patch(
+                "llm.registry._lookup_account_id", return_value=int(DEFAULT_USER_ID)
+            ):
                 registry = AgentRegistry()
                 registry.populate_all_agents(self.db)
 
