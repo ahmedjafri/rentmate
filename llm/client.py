@@ -24,7 +24,7 @@ from backends.local_auth import (
     set_fallback_request_context,
 )
 from llm.model_config import resolve_model_config
-from llm.registry import agent_registry
+from llm.registry import agent_registry, ensure_agent_runtime_dirs
 from llm.tools import current_user_message
 from llm.tracing import log_trace, make_trace_envelope
 
@@ -351,6 +351,8 @@ async def chat_with_agent(
 
     print(f"[agent] model={actual_model} provider={provider} base_url={api_base}")
     print(f"[agent] system_prompt={len(system_message)} chars, history={len(conversation_history)} msgs, user_message={len(user_message)} chars")
+    runtime_dirs = ensure_agent_runtime_dirs(agent_id)
+    hermes_home = runtime_dirs["hermes_home"]
 
     agent = AIAgent(
         base_url=api_base,
@@ -364,6 +366,7 @@ async def chat_with_agent(
         session_id=session_key,
         skip_context_files=True,
         skip_memory=True,
+        hermes_home=hermes_home,
         tool_progress_callback=_tool_progress,
         step_callback=_step_callback,
         verbose_logging=bool(os.getenv("AGENT_VERBOSE")),

@@ -137,6 +137,40 @@ def test_chat_with_agent_logs_tool_traces_with_conversation_id():
         sys.modules.pop("run_agent", None)
 
 
+def test_chat_with_agent_passes_workspace_scoped_hermes_home(tmp_path):
+    from llm.client import chat_with_agent
+
+    captured: dict[str, object] = {}
+
+    class FakeAIAgent:
+        def __init__(self, *args, **kwargs):
+            self.tools = []
+            captured["hermes_home"] = kwargs.get("hermes_home")
+
+        def _build_api_kwargs(self, messages):
+            return {}
+
+        def run_conversation(self, **kwargs):
+            return {"final_response": "ok"}
+
+    fake_module = types.SimpleNamespace(AIAgent=FakeAIAgent)
+    with (
+        patch.dict(sys.modules, {"run_agent": fake_module}),
+        patch("llm.client.agent_registry.build_system_prompt", return_value="system"),
+        patch("llm.client.ensure_agent_runtime_dirs") as mock_runtime_dirs,
+    ):
+        hermes_home = tmp_path / "agent-1" / ".hermes"
+        mock_runtime_dirs.return_value = {
+            "workspace": tmp_path / "agent-1",
+            "hermes_home": hermes_home,
+            "tmp_dir": tmp_path / "agent-1" / ".tmp",
+        }
+        reply = asyncio.run(chat_with_agent("agent-1", "chat:21", [{"role": "user", "content": "hi"}]))
+
+    assert reply == "ok"
+    assert captured["hermes_home"] == hermes_home
+
+
 def test_local_fallback_retries_when_reply_claims_document_without_tool_call():
     from llm.client import _local_fallback
     from llm.tools import pending_suggestion_messages

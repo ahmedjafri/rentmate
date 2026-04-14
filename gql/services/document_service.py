@@ -21,6 +21,11 @@ class ExtractedLeaseRecord(BaseModel):
     lease_start_date: str | None = None
     lease_end_date: str | None = None
     monthly_rent: float | None = None
+    property_type: str | None = None
+    property_context: str | None = None
+    unit_context: str | None = None
+    tenant_context: str | None = None
+    lease_context: str | None = None
     security_deposit: float | None = None
     context: str | None = None
 

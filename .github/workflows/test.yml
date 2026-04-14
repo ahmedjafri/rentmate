@@ -50,13 +50,50 @@ jobs:
       - name: Run tests
         run: poetry run pytest --tb=short -q
 
+  evals:
+    runs-on: ubuntu-latest
+    needs: test
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Cache virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
       - name: Run evals
-        if: ${{ vars.RUN_EVALS == 'true' }}
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
         run: poetry run pytest -m eval --tb=short -q
+
+  evals-skipped:
+    runs-on: ubuntu-latest
+    needs: test
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+
+    steps:
+      - name: Explain eval skip
+        run: echo "Skipping evals for forked PRs because GitHub does not expose repository secrets to untrusted pull_request workflows."
 
   install-test:
     runs-on: ubuntu-latest

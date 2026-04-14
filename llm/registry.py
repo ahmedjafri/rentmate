@@ -26,6 +26,26 @@ def _soul_version(text: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def get_agent_workspace(agent_id: str) -> Path:
+    return (DATA_DIR / str(agent_id)).resolve()
+
+
+def ensure_agent_runtime_dirs(agent_id: str) -> dict[str, Path]:
+    workspace = get_agent_workspace(agent_id)
+    hermes_home = workspace / ".hermes"
+    hermes_profile_home = hermes_home / "home"
+    tmp_dir = workspace / ".tmp"
+    workspace.mkdir(parents=True, exist_ok=True)
+    hermes_home.mkdir(parents=True, exist_ok=True)
+    hermes_profile_home.mkdir(parents=True, exist_ok=True)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "workspace": workspace,
+        "hermes_home": hermes_home,
+        "tmp_dir": tmp_dir,
+    }
+
+
 def _register_rentmate_tools():
     """Register RentMate-specific tools with the agent tool registry."""
     from tools.registry import registry
@@ -91,7 +111,7 @@ class AgentRegistry:
     # ─── Public lifecycle ─────────────────────────────────────────────────────
 
     def populate_all_agents(self, db: Session):
-        agent_dir = DATA_DIR / str(_lookup_account_id())
+        agent_dir = get_agent_workspace(str(_lookup_account_id()))
         self._write_workspace(agent_dir, db, str(_lookup_account_id()))
         print("[agent] Workspace populated")
 
@@ -118,7 +138,7 @@ class AgentRegistry:
     def ensure_agent(self, account_id, db: Session) -> str:
         account_id = str(account_id)
         if account_id not in self._ready:
-            agent_dir = DATA_DIR / account_id
+            agent_dir = get_agent_workspace(account_id)
             self._write_workspace(agent_dir, db, account_id)
             self.start_gateway(account_id)
         return account_id
@@ -213,6 +233,7 @@ class AgentRegistry:
             ))
 
     def _write_workspace(self, agent_dir: Path, db: Session, account_id: str = '', *, creator_id: int | None = None):
+        ensure_agent_runtime_dirs(account_id)
         agent_dir.mkdir(parents=True, exist_ok=True)
         agent_id = account_id
         _cid = creator_id or (int(account_id) if account_id.isdigit() else None)
@@ -258,7 +279,6 @@ class AgentRegistry:
             self._db_write_file(db, agent_id, "USER.md", content, creator_id=_cid)
 
         data_script = Path(__file__).parent / "agent_data.py"
-        workspace_abs = str((DATA_DIR / str(_lookup_account_id())).resolve())
 
         (agent_dir / "TOOLS.md").write_text(
             "# TOOLS.md - Communication Channels & Data Access\n\n"
