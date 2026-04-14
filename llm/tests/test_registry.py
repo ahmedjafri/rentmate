@@ -72,7 +72,7 @@ class TestAgentRegistry(unittest.TestCase):
     # populate_all_agents — workspace files
     # ------------------------------------------------------------------
 
-    def test_populate_all_agents_writes_tools_md(self):
+    def test_populate_all_agents_writes_core_workspace_files(self):
         from llm.registry import AgentRegistry
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -84,10 +84,12 @@ class TestAgentRegistry(unittest.TestCase):
                 registry = AgentRegistry()
                 registry.populate_all_agents(self.db)
 
-            tools_md = data_dir / DEFAULT_USER_ID / "TOOLS.md"
-            self.assertTrue(tools_md.exists(), "TOOLS.md should be created")
-            content = tools_md.read_text()
-            self.assertIn("Data Operations", content)
+            soul_md = data_dir / DEFAULT_USER_ID / "SOUL.md"
+            self.assertTrue(soul_md.exists(), "SOUL.md should be created")
+            self.assertFalse(
+                (data_dir / DEFAULT_USER_ID / "USER.md").exists(),
+                "USER.md should not be created",
+            )
 
     def test_ensure_agent_runtime_dirs_creates_hermes_profile_dirs(self):
         from llm.registry import ensure_agent_runtime_dirs
@@ -100,5 +102,6 @@ class TestAgentRegistry(unittest.TestCase):
 
             self.assertTrue(runtime_dirs["workspace"].is_dir())
             self.assertTrue(runtime_dirs["hermes_home"].is_dir())
-            self.assertTrue((runtime_dirs["hermes_home"] / "home").is_dir())
-            self.assertTrue(runtime_dirs["tmp_dir"].is_dir())
+            self.assertEqual(runtime_dirs["hermes_home"], runtime_dirs["workspace"])
+            self.assertTrue(runtime_dirs["working_dir"].is_dir())
+            self.assertEqual(runtime_dirs["working_dir"], runtime_dirs["workspace"] / "home")
