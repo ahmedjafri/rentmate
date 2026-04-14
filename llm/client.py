@@ -236,6 +236,11 @@ _EMPATHY_PATTERNS = [
         r"\bi understand\b",
         r"\bi'm sorry\b",
         r"\bi am sorry\b",
+        r"\bi(?:'m| am) deeply concerned\b",
+        r"\bconcerned\b",
+        r"\breach out\b",
+        r"\bsupport\b",
+        r"\bcare\b",
         r"\bfrustration\b",
         r"\btoo long\b",
         r"\bthat sounds\b",
@@ -258,7 +263,7 @@ def _reply_is_generic_summary(reply: str) -> bool:
     text = (reply or "").strip()
     if not text:
         return True
-    return any(pattern.search(text) for pattern in _GENERIC_REPLY_PATTERNS)
+    return any(pattern.search(text) for pattern in _GENERIC_REPLY_PATTERNS) or _looks_like_planning_reply(text)
 
 
 def _reply_is_narrow_information_request(reply: str) -> bool:

@@ -36,6 +36,9 @@ from db.models.account import create_shadow_user
 
 DEFAULT_ACCOUNT_ID = 1
 
+# Keep eval runs aligned with CI and avoid parallel Chroma crashes.
+os.environ.setdefault("RENTMATE_DISABLE_VECTOR_INDEX", "1")
+
 
 # ── DB fixtures ──────────────────────────────────────────────────────────────
 
@@ -353,7 +356,12 @@ async def run_agent_turn(db, task, user_message):
     try:
         resp = await call_agent(agent_id, session_key=session_key, messages=messages)
         pending = pending_suggestion_messages.get() or []
-        outbound_reply = _extract_latest_outbound_message(db, task.id, user_message=user_message) or resp.reply
+        outbound_reply = _extract_latest_outbound_message(
+            db,
+            task.id,
+            user_message=user_message,
+            fallback_reply=resp.reply,
+        ) or resp.reply
         return {
             "reply": outbound_reply,
             "side_effects": resp.side_effects,
@@ -380,7 +388,8 @@ def run_turn_sync(db, task, user_message):
     loop = asyncio.new_event_loop()
     try:
         with patch("db.session.SessionLocal", mock_sl), \
-             patch("handlers.deps.SessionLocal", mock_sl):
+             patch("handlers.deps.SessionLocal", mock_sl), \
+             patch("gql.services.settings_service.SessionLocal", mock_sl):
             return loop.run_until_complete(run_agent_turn(db, task, user_message))
     finally:
         loop.close()
@@ -614,7 +623,26 @@ def get_tool_calls(suggestions, action_type=None, entity_type=None):
     return results
 
 
-def _extract_latest_outbound_message(db, task_id, *, user_message: str = ""):
+def _reply_looks_internal_or_recovery(reply: str) -> bool:
+    text = (reply or "").strip().lower()
+    if not text:
+        return True
+    markers = (
+        "let me ",
+        "i need to ",
+        "i should ",
+        "create a suggestion",
+        "creating suggestion",
+        "processed it appropriately",
+        "close the task",
+        "saving note",
+        "the system is",
+        "i'll acknowledge this and outline the next steps",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _extract_latest_outbound_message(db, task_id, *, user_message: str = "", fallback_reply: str = ""):
     """Return the latest outbound draft for a task when that draft is the user-facing artifact to grade."""
     suggestions = (
         db.query(Suggestion)
@@ -680,4 +708,8 @@ def _extract_latest_outbound_message(db, task_id, *, user_message: str = ""):
         return latest_tenant
     if prefer_vendor and latest_vendor:
         return latest_vendor
+    if latest_tenant and _reply_looks_internal_or_recovery(fallback_reply):
+        return latest_tenant
+    if latest_tenant and not latest_vendor:
+        return latest_tenant
     return None

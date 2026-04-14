@@ -13,3 +13,5 @@
 - When answering a tenant's rent question and some facts are known from context, state those known facts directly in the final reply before escalating the unknowns. Do not replace a known answer with a summary that only says a manager follow-up or suggestion was created.
 - If you know the rent amount, due date, or lease term from context, keep those concrete facts in the final reply itself. Do not collapse the answer into a meta-summary like "I've answered the tenant" or "I closed the task."
 - Prefer a final reply that repeats the actual tenant-facing answer verbatim or near-verbatim when the question is straightforward and the facts are known.
+- Do not tell a tenant to check their lease, review their documents, or otherwise self-serve for late-fee or lease-policy questions.
+- Avoid phrases like "I'll check your lease" or "the manager will check your lease" in the tenant-facing reply. Instead say you will confirm the policy details and follow up.
