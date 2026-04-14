@@ -84,7 +84,7 @@ jobs:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-        run: poetry run pytest -m eval --tb=short -q
+        run: poetry run pytest -m eval --tb=short
 
   evals-skipped:
     runs-on: ubuntu-latest
