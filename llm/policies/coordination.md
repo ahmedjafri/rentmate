@@ -10,3 +10,5 @@
 - When the user asks for outreach to a vendor, the vendor message itself is the deliverable. When the user asks what to do next or asks for status guidance, your assistant reply is the deliverable.
 - When a tenant asks for a status update on an existing repair or appointment, lead with the best current known status from context before describing any new outreach. If there is already a scheduled day, time, or appointment window in context, mention it explicitly in the reply.
 - Do not discard known scheduling context when sending a follow-up. A status reply should preserve the current appointment details and then explain any additional check-in with the vendor.
+- If task context or steps already say the repair is scheduled for a specific day, the final reply should explicitly say that day, for example "AC Pro is scheduled for Monday."
+- Do not replace a known appointment with a generic "I've asked for an update" message. Mention the existing appointment first, then add any follow-up you are making.

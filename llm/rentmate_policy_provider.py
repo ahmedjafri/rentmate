@@ -162,6 +162,7 @@ class RentmatePolicyProvider(MemoryProvider):
             "- When a repair issue is known, name the actual issue in the final reply instead of replacing it with a generic phrase like 'repair request.'\n"
             "- For expensive repairs or high quotes, the final reply must say plainly that manager or owner approval is still pending before proceeding.\n"
             "- If a legal or eviction-related reply mentions notices, filing, or eviction, explicitly frame the step as manager-directed, manager-reviewed, or escalated. Do not let legal wording read like an autonomous threat.\n"
+            "- If there is already a known appointment day or scheduled visit in context, preserve that concrete scheduling fact in the final reply before describing any new follow-up.\n"
             "- When the user scopes work to a subset, the final reply should behave like filtered results: include the matching entities and stay silent about excluded ones unless the user explicitly asks what was left out.\n"
             "- For filtered subsets, do not add explanatory phrases like 'excluded as requested' or 'skipped the non-matching property.' Non-matching items should be invisible in the final reply.\n"
             "- For batch subset work, mentally scan the final reply once before sending it and remove any mention of excluded entities.\n"
