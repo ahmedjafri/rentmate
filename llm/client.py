@@ -300,7 +300,19 @@ def _sanitize_filtered_subset_reply(reply: str) -> str:
     sentences = re.split(r"(?<=[.!?])\s+", text)
     kept = [sentence for sentence in sentences if not _contains_excluded_subset_language(sentence)]
     sanitized = " ".join(part.strip() for part in kept if part.strip()).strip()
-    return sanitized or text
+    sanitized = sanitized or text
+    replacements = [
+        (r"\bcheck your lease\b", "confirm the lease policy details"),
+        (r"\bchecks? your lease\b", "confirms the lease policy details"),
+        (r"\bproperty manager to check your lease\b", "property manager to confirm the lease policy details"),
+        (r"\bmanager to check your lease\b", "manager to confirm the lease policy details"),
+        (r"\brefer to your lease\b", "review the lease policy details with the property manager"),
+        (r"\blook at your lease\b", "review the lease policy details with the property manager"),
+        (r"\breview your documents\b", "confirm the policy details"),
+    ]
+    for pattern, replacement in replacements:
+        sanitized = re.sub(pattern, replacement, sanitized, flags=re.I)
+    return sanitized
 
 
 def _select_best_reply(result: dict[str, Any], reply: str) -> str:
