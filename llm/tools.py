@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from backends.local_auth import resolve_account_id, resolve_org_id
-from db.enums import AgentSource, SuggestionOption, TaskCategory, Urgency
+from db.enums import AgentSource, SuggestionOption, TaskCategory, TaskStatus, Urgency
 from db.models import MessageType
 from gql.services.task_service import dump_task_steps
 
@@ -168,8 +168,37 @@ def _load_vendor_by_public_id(db: Any, vendor_id: str):
 
 def _load_tenant_by_public_id(db: Any, tenant_id: str):
     from db.models import Tenant
+    from db.models import User
 
-    return db.query(Tenant).filter_by(external_id=str(tenant_id)).first()
+    tenant = db.query(Tenant).filter_by(external_id=str(tenant_id)).first()
+    if tenant:
+        return tenant
+    user = db.query(User).filter_by(external_id=str(tenant_id)).first()
+    if user:
+        return db.query(Tenant).filter_by(user_id=user.id).first()
+    return None
+
+
+def _resolve_task_tenant(db: Any, task_id: str):
+    from db.models import Lease, Task, Tenant, Unit
+
+    task = db.query(Task).filter_by(id=str(task_id)).first()
+    if not task:
+        return None
+    if getattr(task, "unit_id", None):
+        unit = db.query(Unit).filter_by(id=task.unit_id).first()
+        if unit and getattr(unit, "tenant_id", None):
+            tenant = db.query(Tenant).filter_by(id=unit.tenant_id).first()
+            if tenant:
+                return tenant
+        lease = db.query(Lease).filter_by(unit_id=task.unit_id).order_by(Lease.start_date.desc()).first()
+        if lease:
+            return db.query(Tenant).filter_by(id=lease.tenant_id).first()
+    if getattr(task, "property_id", None):
+        lease = db.query(Lease).filter_by(property_id=task.property_id).order_by(Lease.start_date.desc()).first()
+        if lease:
+            return db.query(Tenant).filter_by(id=lease.tenant_id).first()
+    return None
 
 
 def _load_entity_by_public_id(db: Any, entity_type: str, entity_id: str):
@@ -1000,7 +1029,7 @@ class CloseTaskTool(Tool):
                                "Complete all steps before closing.",
                 })
 
-            task.task_status = "resolved"
+            task.task_status = TaskStatus.RESOLVED
             if not task.resolved_at:
                 task.resolved_at = datetime.now(UTC)
             db.commit()
@@ -1107,6 +1136,8 @@ class MessageExternalPersonTool(Tool):
                 entity_phone = entity.phone if entity else None
             elif entity_type == "tenant":
                 entity = _load_tenant_by_public_id(db, entity_id)
+                if not entity:
+                    entity = _resolve_task_tenant(db, task_id)
                 entity_name = entity.user.name if entity and entity.user else "Tenant"
                 entity_phone = entity.user.phone if entity and entity.user else None
             else:

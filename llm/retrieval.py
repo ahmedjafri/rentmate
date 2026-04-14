@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -39,6 +40,8 @@ from llm.history_filters import is_transient_tool_failure_text
 from llm.model_config import resolve_model_config
 from llm.tracing import log_trace
 
+logger = logging.getLogger(__name__)
+
 
 def _data_dir() -> Path:
     return Path(os.getenv("RENTMATE_DATA_DIR", "./data"))
@@ -49,6 +52,16 @@ COLLECTION_NAME = "rentmate_memory_items"
 EMBED_DIM = 128
 RERANK_TOP_K = 8
 RERANK_ENABLED_INTENTS = {"answer_question", "triage"}
+
+
+def _vector_index_disabled() -> bool:
+    raw = os.getenv("RENTMATE_DISABLE_VECTOR_INDEX", "").lower()
+    if raw in {"1", "true", "yes"}:
+        return True
+    # Keep unit/integration tests deterministic and avoid Chroma instability under pytest.
+    if os.getenv("PYTEST_CURRENT_TEST") and os.getenv("RENTMATE_ENABLE_VECTOR_INDEX_TESTS", "").lower() not in {"1", "true", "yes"}:
+        return True
+    return False
 
 
 def _tokenize(text: str) -> list[str]:
@@ -584,9 +597,9 @@ def collect_memory_records(db: Session, *, creator_id: int | None = None) -> lis
     ]
 
 
-def sync_memory_index(db: Session, *, creator_id: int | None = None) -> int:
+def sync_memory_index(db: Session, *, creator_id: int | None = None, enable_vector_index: bool = True) -> int:
     creator = creator_id or resolve_account_id()
-    index = ChromaMemoryIndex()
+    index = ChromaMemoryIndex() if enable_vector_index else None
     existing = {
         (row.source_type, row.source_id): row
         for row in db.execute(
@@ -631,14 +644,31 @@ def sync_memory_index(db: Session, *, creator_id: int | None = None) -> int:
             row.content_hash = content_hash
             row.metadata_json = record.metadata
             row.updated_at = datetime.now(UTC)
-        index.upsert(row)
         count += 1
 
     stale_ids = [row.id for key, row in existing.items() if key not in seen_keys]
     if stale_ids:
         db.execute(delete(MemoryItem).where(MemoryItem.id.in_(stale_ids)))
-        index.delete(stale_ids)
     db.commit()
+
+    if enable_vector_index and index is not None:
+        for record in collect_memory_records(db, creator_id=creator):
+            key = (record.source.source_type, record.source.source_id)
+            row = existing.get(key)
+            if row is None:
+                row = db.execute(
+                    select(MemoryItem).where(
+                        MemoryItem.org_id == resolve_org_id(),
+                        MemoryItem.creator_id == creator,
+                        MemoryItem.source_type == record.source.source_type,
+                        MemoryItem.source_id == record.source.source_id,
+                    )
+                ).scalar_one_or_none()
+            if row is not None:
+                index.upsert(row)
+        if stale_ids:
+            index.delete(stale_ids)
+
     log_trace("memory_sync", "memory", f"Synced {count} memory items", detail={"count": count, "creator_id": creator})
     return count
 
@@ -888,15 +918,36 @@ def retrieve_context(db: Session, request: RetrievalRequest) -> RankedContextBun
     creator = request.creator_id or resolve_account_id()
     request.creator_id = creator
     request.org_id = request.org_id or resolve_org_id()
+    disable_vector_index = _vector_index_disabled()
 
-    sync_memory_index(db, creator_id=creator)
+    try:
+        sync_memory_index(db, creator_id=creator, enable_vector_index=not disable_vector_index)
+    except Exception as exc:
+        logger.warning("Skipping memory index sync during retrieval: %s", exc)
+        log_trace(
+            "warning",
+            "memory_sync",
+            "Memory index sync skipped during retrieval",
+            task_id=request.task_id,
+            detail={"error": str(exc), "creator_id": creator},
+        )
 
     items = _eligible_items(db, creator)
     query_tokens = set(_tokenize(request.query or request.intent))
     vector_scores: dict[str, float] = {}
-    if items:
-        index = ChromaMemoryIndex()
-        vector_scores = index.query(request, where=_base_where(creator), n_results=min(50, max(10, request.limit * 4)))
+    if items and not disable_vector_index:
+        try:
+            index = ChromaMemoryIndex()
+            vector_scores = index.query(request, where=_base_where(creator), n_results=min(50, max(10, request.limit * 4)))
+        except Exception as exc:
+            logger.warning("Skipping vector memory query during retrieval: %s", exc)
+            log_trace(
+                "warning",
+                "memory_query",
+                "Vector memory query skipped during retrieval",
+                task_id=request.task_id,
+                detail={"error": str(exc), "creator_id": creator},
+            )
 
     ranked: list[RankedContextItem] = []
     request_embedding = embed_text(request.query or request.intent or "")

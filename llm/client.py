@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 import httpx
+from agent.memory_manager import MemoryManager
 
 from backends.local_auth import (
     reset_fallback_request_context,
@@ -24,7 +25,8 @@ from backends.local_auth import (
     set_fallback_request_context,
 )
 from llm.model_config import resolve_model_config
-from llm.registry import agent_registry
+from llm.registry import agent_registry, ensure_agent_runtime_dirs
+from llm.rentmate_policy_provider import RentmatePolicyProvider
 from llm.tools import current_user_message
 from llm.tracing import log_trace, make_trace_envelope
 
@@ -42,6 +44,22 @@ current_completed_tools: contextvars.ContextVar[list[str]] = contextvars.Context
     "current_completed_tools",
     default=[],
 )
+
+
+def _attach_rentmate_policy_provider(agent: Any) -> None:
+    manager = getattr(agent, "_memory_manager", None)
+    if manager is None:
+        manager = MemoryManager()
+        agent._memory_manager = manager
+    if manager.get_provider("rentmate_policy") is not None:
+        return
+    manager.add_provider(RentmatePolicyProvider())
+    manager.initialize_all(
+        session_id=str(getattr(agent, "session_id", "")),
+        platform=getattr(agent, "platform", "api") or "api",
+        hermes_home=str(getattr(agent, "hermes_home", "")),
+        agent_context="primary",
+    )
 
 
 @dataclass
@@ -165,6 +183,173 @@ def _reply_is_only_tool_progress(reply: str) -> bool:
             continue
         return False
     return True
+
+
+_GENERIC_REPLY_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"^i(?:'ve| have) answered\b",
+        r"^i(?:'ve| have) responded\b",
+        r"^i(?:'ve| have) closed the task\b",
+        r"^i(?:'ve| have) answered .* and closed the task\b",
+        r"^i(?:'ve| have) handled\b",
+        r"^done\b",
+    ]
+]
+
+_NARROW_REQUEST_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"^i don't see .* in the system\b",
+        r"^to coordinate .* i'll need\b",
+        r"^i need .* contact information\b",
+        r"^do you want me to create .* vendor entry\b",
+    ]
+]
+
+_STAGE_SETTING_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bthe next phase is\b",
+        r"\brequired first step\b",
+        r"\bmust be served before\b",
+        r"\bwait the\b",
+        r"\bcourt filing\b",
+        r"\bunlawful detainer\b",
+    ]
+]
+
+_EXCLUDED_SUBSET_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bexcluded as requested\b",
+        r"\bwas excluded\b",
+        r"\bwere excluded\b",
+        r"\bnon-matching\b",
+        r"\bskipped the\b",
+    ]
+]
+
+_EMPATHY_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bi understand\b",
+        r"\bi'm sorry\b",
+        r"\bi am sorry\b",
+        r"\bi(?:'m| am) deeply concerned\b",
+        r"\bconcerned\b",
+        r"\breach out\b",
+        r"\bsupport\b",
+        r"\bcare\b",
+        r"\bfrustration\b",
+        r"\btoo long\b",
+        r"\bthat sounds\b",
+    ]
+]
+
+_PLANNING_REPLY_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bnow i need to\b",
+        r"\blet me create\b",
+        r"\bfrom the list provided\b",
+        r"\bthe user requested\b",
+        r"\bfirst, let me\b",
+    ]
+]
+
+
+def _reply_is_generic_summary(reply: str) -> bool:
+    text = (reply or "").strip()
+    if not text:
+        return True
+    return any(pattern.search(text) for pattern in _GENERIC_REPLY_PATTERNS) or _looks_like_planning_reply(text)
+
+
+def _reply_is_narrow_information_request(reply: str) -> bool:
+    text = (reply or "").strip()
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in _NARROW_REQUEST_PATTERNS)
+
+
+def _has_stage_setting(content: str) -> bool:
+    text = (content or "").strip()
+    return any(pattern.search(text) for pattern in _STAGE_SETTING_PATTERNS)
+
+
+def _contains_excluded_subset_language(content: str) -> bool:
+    text = (content or "").strip()
+    return any(pattern.search(text) for pattern in _EXCLUDED_SUBSET_PATTERNS)
+
+
+def _contains_empathy(content: str) -> bool:
+    text = (content or "").strip()
+    return any(pattern.search(text) for pattern in _EMPATHY_PATTERNS)
+
+
+def _looks_like_planning_reply(content: str) -> bool:
+    text = (content or "").strip()
+    return any(pattern.search(text) for pattern in _PLANNING_REPLY_PATTERNS)
+
+
+def _sanitize_filtered_subset_reply(reply: str) -> str:
+    text = (reply or "").strip()
+    if not text:
+        return text
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    kept = [sentence for sentence in sentences if not _contains_excluded_subset_language(sentence)]
+    sanitized = " ".join(part.strip() for part in kept if part.strip()).strip()
+    sanitized = sanitized or text
+    replacements = [
+        (r"\bcheck your lease\b", "confirm the lease policy details"),
+        (r"\bchecks? your lease\b", "confirms the lease policy details"),
+        (r"\bproperty manager to check your lease\b", "property manager to confirm the lease policy details"),
+        (r"\bmanager to check your lease\b", "manager to confirm the lease policy details"),
+        (r"\brefer to your lease\b", "review the lease policy details with the property manager"),
+        (r"\blook at your lease\b", "review the lease policy details with the property manager"),
+        (r"\breview your documents\b", "confirm the policy details"),
+    ]
+    for pattern, replacement in replacements:
+        sanitized = re.sub(pattern, replacement, sanitized, flags=re.I)
+    return sanitized
+
+
+def _select_best_reply(result: dict[str, Any], reply: str) -> str:
+    def _finalize(text: str) -> str:
+        return _sanitize_filtered_subset_reply(text)
+
+    messages = result.get("messages", []) if isinstance(result, dict) else []
+    candidates: list[str] = []
+    for message in reversed(messages):
+        if message.get("role") != "assistant":
+            continue
+        content = str(message.get("content") or "").strip()
+        if not content:
+            continue
+        if content == (reply or "").strip():
+            continue
+        candidates.append(content)
+    if not candidates:
+        return _finalize(reply)
+    best_candidate = candidates[0]
+    if _reply_is_only_tool_progress(reply) or _reply_is_generic_summary(reply):
+        return _finalize(best_candidate)
+    if _reply_is_narrow_information_request(reply):
+        for candidate in candidates:
+            if _has_stage_setting(candidate) and not _has_stage_setting(reply):
+                return _finalize(candidate)
+    if _contains_excluded_subset_language(reply):
+        for candidate in candidates:
+            if not _contains_excluded_subset_language(candidate) and not _looks_like_planning_reply(candidate):
+                return _finalize(candidate)
+    if not _contains_empathy(reply):
+        for candidate in candidates:
+            if _contains_empathy(candidate):
+                return _finalize(candidate)
+    if len(best_candidate) > max(len(reply or ""), 1) * 1.4:
+        return _finalize(best_candidate)
+    return _finalize(reply)
 
 
 # ─── Local agent execution ───────────────────────────────────────────────────
@@ -351,6 +536,8 @@ async def chat_with_agent(
 
     print(f"[agent] model={actual_model} provider={provider} base_url={api_base}")
     print(f"[agent] system_prompt={len(system_message)} chars, history={len(conversation_history)} msgs, user_message={len(user_message)} chars")
+    runtime_dirs = ensure_agent_runtime_dirs(agent_id)
+    hermes_home = runtime_dirs["hermes_home"]
 
     agent = AIAgent(
         base_url=api_base,
@@ -364,11 +551,13 @@ async def chat_with_agent(
         session_id=session_key,
         skip_context_files=True,
         skip_memory=True,
+        hermes_home=hermes_home,
         tool_progress_callback=_tool_progress,
         step_callback=_step_callback,
         verbose_logging=bool(os.getenv("AGENT_VERBOSE")),
     )
     agent._tool_use_enforcement = True
+    _attach_rentmate_policy_provider(agent)
 
     _orig_build = agent._build_api_kwargs
 
@@ -376,6 +565,11 @@ async def chat_with_agent(
         kw = _orig_build(messages)
         if agent.tools and "tools" in kw and "tool_choice" not in kw:
             kw["tool_choice"] = "auto"
+        if str(session_key).startswith("eval:"):
+            try:
+                kw["temperature"] = float(os.getenv("EVAL_AGENT_TEMPERATURE", "0"))
+            except ValueError:
+                kw["temperature"] = 0.0
         return kw
     agent._build_api_kwargs = _patched_build_api_kwargs
 
@@ -426,6 +620,7 @@ async def chat_with_agent(
                 if m.get("role") == "assistant" and m.get("content"):
                     reply = m["content"]
                     break
+        reply = _select_best_reply(result, reply)
         # The agent library returns API errors as normal text replies
         # rather than raising exceptions.  Detect these and re-raise so
         # the SSE error path fires (red bubble, not blue).

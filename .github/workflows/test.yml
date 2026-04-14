@@ -9,6 +9,25 @@ on:
       - main
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      llm_changed: ${{ steps.filter.outputs.llm }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect llm changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            llm:
+              - 'llm/**'
+
   test:
     runs-on: ubuntu-latest
 
@@ -34,7 +53,10 @@ jobs:
           key: venv-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
 
       - name: Install dependencies
-        run: poetry install --no-interaction
+        run: poetry install --with dev --no-interaction
+
+      - name: Ensure pytest-xdist is available
+        run: poetry run python -m pip install pytest-xdist
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -50,13 +72,60 @@ jobs:
       - name: Run tests
         run: poetry run pytest --tb=short -q
 
+  evals:
+    runs-on: ubuntu-latest
+    needs: [changes, test]
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && needs.changes.outputs.llm_changed == 'true') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Cache virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Install dependencies
+        run: poetry install --with dev --no-interaction
+
+      - name: Ensure pytest-xdist is available
+        run: poetry run python -m pip install pytest-xdist
+
       - name: Run evals
-        if: ${{ vars.RUN_EVALS == 'true' }}
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-        run: poetry run pytest -m eval --tb=short -q
+          EVAL_AGENT_TEMPERATURE: "0"
+          RENTMATE_DISABLE_VECTOR_INDEX: "1"
+        run: poetry run pytest evals/ -m eval --tb=short -n auto
+
+  evals-skipped:
+    runs-on: ubuntu-latest
+    needs: [changes, test]
+    if: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || needs.changes.outputs.llm_changed != 'true') }}
+
+    steps:
+      - name: Explain eval skip
+        run: |
+          if [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            echo "Skipping evals for forked PRs because GitHub does not expose repository secrets to untrusted pull_request workflows."
+          else
+            echo "Skipping evals because this PR does not change files under llm/."
+          fi
 
   install-test:
     runs-on: ubuntu-latest

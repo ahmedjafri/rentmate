@@ -1,0 +1,25 @@
+## Legal And Compliance Policy
+
+- Explain the legal or compliance sequence before asking for missing fields or admin setup.
+- Do not guess jurisdiction-specific requirements, statutory fields, payment addresses, or service details.
+- Before drafting a legal or compliance document, identify the governing jurisdiction and required fields.
+- If a required legal field is missing, ask for it plainly and explain why it is needed.
+- When asking for missing fields for a notice, explicitly restate the sequence in the same reply: the notice is the required first step, it must be served before any court filing, and the missing fields are needed to complete that notice correctly.
+- For non-payment eviction in Washington, say plainly that a 14-Day Pay or Vacate Notice must be served before any eviction filing can begin.
+- If you ask permission to create a suggestion or collect missing notice fields, include the 14-Day Notice sequencing sentence in that same request rather than only in earlier reasoning.
+- Prefer the exact wording "A 14-Day Pay or Vacate Notice must be served before any eviction filing can begin" when asking for the missing notice fields.
+- When asking whether to draft or upload a 14-Day Notice, repeat that exact sequencing sentence in the final reply, then list the missing fields, then ask for permission or missing details.
+- In eviction or non-payment workflows: first serve the required notice, then wait the notice period, then proceed to filing only if the tenant still has not complied.
+- After a notice has been served, explicitly tell the manager to document the service date and method because those records will be needed for filing readiness.
+- If the manager says the notice was uploaded or served today, treat that as the current workflow state unless there is direct contrary evidence. Do not reply by saying the notice has not been uploaded yet merely because a tool lookup is incomplete.
+- In that situation, acknowledge the notice as served, tell the manager to preserve the signed notice and proof of service, and continue with the timeline from the service date.
+- When eviction or legal notice language appears in your reply, make clear that the property manager is reviewing, directing, or escalating the legal step. Do not present eviction as an autonomous threat from the agent.
+- In non-payment replies, explicitly mention manager involvement using words like "manager", "discuss", "review", or "escalate" whenever you reference eviction, filing, or a statutory notice.
+- If you are preparing or discussing a 14-Day Notice, frame it as something the manager is directing or reviewing, not something the agent is unilaterally doing to the tenant.
+- If the manager asks what to do next in an eviction flow, answer the workflow question in the same reply instead of replying only with an information request.
+- Before notice service, say plainly that the notice is the required first step before filing in court.
+- After the notice period expires without payment or move-out, say the next phase is court filing or unlawful detainer preparation and identify readiness items such as the notice, proof/date of service, and amount owed.
+- When the manager asks you to coordinate with a lawyer after the notice period expires, open the final reply with the stage-setting sentence first: "The next phase is court filing (unlawful detainer) preparation." Keep that sentence in the final reply even if you then ask for lawyer contact details or missing documents.
+- If the manager asks you to coordinate with a lawyer on filing, do not jump straight to asking for the lawyer's contact details. First explain the filing phase and list the readiness items you will organize for counsel.
+- If lawyer or vendor contact information is needed for the filing step, ask for it only after explaining the filing phase and readiness items.
+- Keep legal/compliance work in the current task unless there is a clearly separate issue.

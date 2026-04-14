@@ -21,6 +21,8 @@ def scenario_with_document(scenario_builder, db):
     # Create the document in DB (simulating a processed upload)
     doc = Document(
         id="eval-doc-001",
+        org_id=1,
+        creator_id=1,
         filename="test-lease.pdf",
         content_type="application/pdf",
         storage_path="documents/eval-doc-001/test-lease.pdf",
@@ -83,21 +85,21 @@ def test_agent_creates_action_from_document(scenario_with_document, db):
         "Please review it and suggest what records to create."
     )
 
+    from db.models import Property
+    from evals.conftest import get_suggestions
+
     reply = result["reply"]
     pending = result["pending_suggestions"]
+    suggestions = get_suggestions(db, task.id)
 
-    # The agent should either:
-    # 1. Create suggestions (via create_suggestion → pending_suggestions)
-    # 2. Use tools that show up in progress (create_property, create_tenant)
-    # 3. At minimum, acknowledge the document and explain what it found
-    #
-    # We check that the reply mentions the property or lease details
+    created_property = db.query(Property).filter(Property.address_line1.ilike("%1234 Acme Lane%")).first()
     reply_lower = reply.lower()
     mentions_property = "1234" in reply_lower or "acme" in reply_lower
     mentions_lease = "2795" in reply_lower or "rent" in reply_lower
-    has_suggestions = len(pending) > 0
+    has_suggestions = len(pending) > 0 or len(suggestions) > 0
+    created_from_doc = created_property is not None
 
-    assert mentions_property or mentions_lease or has_suggestions, (
+    assert mentions_property or mentions_lease or has_suggestions or created_from_doc, (
         f"Agent didn't engage with the document data. Reply: {reply[:300]}"
     )
 

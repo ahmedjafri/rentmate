@@ -12,6 +12,7 @@ from db.models import (
 )
 from evals.conftest import (
     add_message,
+    get_suggestions,
     run_turn_sync,
 )
 
@@ -57,10 +58,18 @@ class TestVendorNegotiation:
                 "Premium Plumbing quoted $4,200 for water heater replacement. Review and respond.",
             )
 
-        # Should escalate to manager for approval (expensive)
         reply = result["reply"].lower()
-        assert "approv" in reply or "manager" in reply or "confirm" in reply or "waiting" in reply, \
-            f"Should escalate expensive quote: {result['reply'][:200]}"
+        suggestions = get_suggestions(db, task.id)
+        suggestion_text = " ".join(
+            ((s.title or "") + " " + (s.body or "")).lower()
+            for s in suggestions
+        )
+
+        # Should get a second quote and escalate the expensive quote to manager review.
+        assert "second quote" in reply or "second quote" in suggestion_text or "review $4,200" in suggestion_text, \
+            f"Should pursue comparison or review on expensive quote: {result['reply'][:200]}"
+        assert "approv" in reply or "manager" in reply or "review" in suggestion_text or "$4,200" in suggestion_text, \
+            f"Should escalate expensive quote for manager review: {result['reply'][:200]}"
 
 
 @pytest.mark.eval

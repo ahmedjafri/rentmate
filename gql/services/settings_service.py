@@ -1,14 +1,18 @@
 """Service for reading and writing app-level settings from the database."""
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Literal
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from db.enums import SuggestionOption, TaskCategory
 from db.models import AppSetting
 from db.models.base import Base
 from db.session import SessionLocal, engine
+
+logger = logging.getLogger(__name__)
 
 # Ensure app_settings table exists (may not if DB was created before this model)
 Base.metadata.create_all(engine, tables=[AppSetting.__table__], checkfirst=True)
@@ -32,6 +36,9 @@ def get_setting(key: str) -> dict | None:
         row = db.query(AppSetting).filter_by(key=key).first()
         if row and row.value:
             return json.loads(row.value)
+        return None
+    except SQLAlchemyError as exc:
+        logger.warning("Failed to read app setting %s; falling back to defaults: %s", key, exc)
         return None
     finally:
         db.close()
@@ -66,6 +73,9 @@ def load_app_settings() -> dict:
                 except Exception:
                     result[row.key] = row.value
         return result
+    except SQLAlchemyError as exc:
+        logger.warning("Failed to load app settings; falling back to empty settings: %s", exc)
+        return {}
     finally:
         db.close()
 

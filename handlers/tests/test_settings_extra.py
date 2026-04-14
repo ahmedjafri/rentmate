@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from backends.local_auth import get_org_external_id, set_request_context
 from handlers.deps import get_db
-from handlers.settings import _mask_integrations
+from handlers.settings import _list_agent_workspace_files, _mask_integrations
 from main import app
 
 
@@ -147,3 +147,19 @@ class TestIntegrationsEndpoint(unittest.TestCase):
             )
         assert response.status_code == 200
         assert os.environ.get("LLM_BASE_URL") == "http://localhost:11434"
+
+
+class TestAgentWorkspaceFiles:
+    def test_lists_all_workspace_files_and_marks_unknown_files_readonly(self, tmp_path):
+        (tmp_path / "SOUL.md").write_text("soul")
+        (tmp_path / "memory").mkdir()
+        (tmp_path / "memory" / "MEMORY.md").write_text("memory")
+        (tmp_path / "home").mkdir()
+        (tmp_path / "home" / ".gitconfig").write_text("[user]\nname = test\n")
+
+        files = _list_agent_workspace_files(tmp_path)
+        by_name = {entry["filename"]: entry for entry in files}
+
+        assert by_name["SOUL.md"]["readonly"] is True
+        assert by_name["memory/MEMORY.md"]["readonly"] is False
+        assert by_name["home/.gitconfig"]["readonly"] is True
