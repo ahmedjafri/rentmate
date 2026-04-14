@@ -380,7 +380,7 @@ def _judge_message(message: str, scenario_desc: str, criteria: list[str]) -> dic
     import litellm
 
     criteria_block = "\n".join(f"{i+1}. {c}" for i, c in enumerate(criteria))
-    judge_model = os.getenv("EVAL_JUDGE_MODEL", "deepseek/deepseek-reasoner")
+    judge_model = os.getenv("EVAL_JUDGE_MODEL") or os.getenv("LLM_MODEL", "deepseek/deepseek-chat")
 
     response = litellm.completion(
         model=judge_model,

@@ -346,8 +346,9 @@ async def run_agent_turn(db, task, user_message):
     try:
         resp = await call_agent(agent_id, session_key=session_key, messages=messages)
         pending = pending_suggestion_messages.get() or []
+        outbound_reply = _extract_latest_outbound_message(db, task.id) or resp.reply
         return {
-            "reply": resp.reply,
+            "reply": outbound_reply,
             "side_effects": resp.side_effects,
             "pending_suggestions": pending,
         }
@@ -418,7 +419,7 @@ def judge_message(message, scenario_desc, criteria):
     import litellm
 
     criteria_block = "\n".join(f"{i+1}. {c}" for i, c in enumerate(criteria))
-    judge_model = os.getenv("EVAL_JUDGE_MODEL", "deepseek/deepseek-reasoner")
+    judge_model = os.getenv("EVAL_JUDGE_MODEL") or os.getenv("LLM_MODEL", "deepseek/deepseek-chat")
 
     response = litellm.completion(
         model=judge_model,
@@ -604,3 +605,26 @@ def get_tool_calls(suggestions, action_type=None, entity_type=None):
             continue
         results.append(s)
     return results
+
+
+def _extract_latest_outbound_message(db, task_id):
+    """Return the latest outbound draft for a task, preferring tenant messages."""
+    suggestions = (
+        db.query(Suggestion)
+        .filter(Suggestion.task_id == task_id)
+        .order_by(Suggestion.created_at.desc())
+        .all()
+    )
+    latest_vendor = None
+    for suggestion in suggestions:
+        payload = suggestion.action_payload or {}
+        if payload.get("action") != "message_person":
+            continue
+        draft = payload.get("draft_message")
+        if not draft:
+            continue
+        if payload.get("entity_type") == "tenant":
+            return draft
+        if latest_vendor is None:
+            latest_vendor = draft
+    return latest_vendor
