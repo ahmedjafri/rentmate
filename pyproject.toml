@@ -62,6 +62,16 @@ pytest-xdist = "^3.5"
 [tool.pytest.ini_options]
 addopts = "--import-mode=prepend -m 'not eval'"
 pythonpath = ["."]
+norecursedirs = [
+  "data",
+  "data/db",
+  "data/documents",
+  ".git",
+  ".venv",
+  "node_modules",
+  ".claude",
+  ".claude/worktrees",
+]
 markers = [
   "eval: LLM-judge eval cases (run with -m eval)",
   "postgres: integration tests that require Docker + a running Postgres container",
