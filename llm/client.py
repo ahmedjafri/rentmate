@@ -44,6 +44,16 @@ current_completed_tools: contextvars.ContextVar[list[str]] = contextvars.Context
     "current_completed_tools",
     default=[],
 )
+_last_eval_debug_payload: dict[str, Any] | None = None
+
+
+def _set_last_eval_debug_payload(payload: dict[str, Any] | None) -> None:
+    global _last_eval_debug_payload
+    _last_eval_debug_payload = payload
+
+
+def get_last_eval_debug_payload() -> dict[str, Any] | None:
+    return _last_eval_debug_payload
 
 
 def _attach_rentmate_policy_provider(agent: Any) -> None:
@@ -397,7 +407,8 @@ async def chat_with_agent(
     provider = resolved_model.provider
 
     # Extract system message and conversation history
-    system_message = agent_registry.build_system_prompt(agent_id)
+    prompt_bundle = agent_registry.build_system_prompt_bundle(agent_id)
+    system_message = str(prompt_bundle.get("system_prompt") or "")
     sys_content = next((m["content"] for m in messages if m.get("role") == "system"), None)
     if sys_content:
         system_message = f"{system_message}\n\n---\n\n{sys_content}"
@@ -559,6 +570,20 @@ async def chat_with_agent(
 
     print(f"[agent] model={actual_model} provider={provider} base_url={api_base}")
     print(f"[agent] system_prompt={len(system_message)} chars, history={len(conversation_history)} msgs, user_message={len(user_message)} chars")
+    if str(session_key).startswith("eval:"):
+        _set_last_eval_debug_payload({
+            "agent_id": agent_id,
+            "session_key": session_key,
+            "model": actual_model,
+            "provider": provider,
+            "api_base": api_base,
+            "system_prompt": system_message,
+            "memory_context": str(prompt_bundle.get("memory_context") or ""),
+            "prompt_parts": prompt_bundle.get("parts") or [],
+            "system_message_override": sys_content or "",
+            "conversation_history": conversation_history,
+            "user_message": user_message,
+        })
     runtime_dirs = ensure_agent_runtime_dirs(agent_id)
     hermes_home = runtime_dirs["hermes_home"]
 
