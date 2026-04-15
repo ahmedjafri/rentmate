@@ -55,11 +55,10 @@ class LiteLLMVectorBackend:
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
                 VectorBase.metadata.create_all(bind=conn, tables=[DocumentChunkVector.__table__], checkfirst=True)
         except SQLAlchemyError as exc:
-            if _is_pytest_runtime():
-                print(f"[vector] pgvector unavailable in test DB, disabling document vectors: {exc}")
-                self._enabled = False
-                return
-            raise
+            context = "test DB" if _is_pytest_runtime() else "runtime DB"
+            print(f"[vector] pgvector unavailable in {context}, disabling document vectors: {exc}")
+            self._enabled = False
+            return
 
     def _get_embedding_config(self) -> tuple[str, str | None, str | None]:
         model = os.getenv("EMBEDDING_MODEL")

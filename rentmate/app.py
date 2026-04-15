@@ -13,6 +13,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect as sa_inspect, text
+from sqlalchemy.exc import SQLAlchemyError
 from strawberry.fastapi import GraphQLRouter
 
 from db.models import Base
@@ -125,6 +126,10 @@ def _ensure_schema():
 
 def _repair_enum_rows() -> None:
     """Repair known bad lowercase enum rows written by older code paths."""
+    startup_check = os.getenv("STARTUP_CHECK", "").strip().lower()
+    if startup_check in {"skip", "0", "false", "off"}:
+        print("Skipping enum row repair startup check.")
+        return
     updates = {
         "tasks": "urgency",
         "suggestions": "urgency",
@@ -136,26 +141,29 @@ def _repair_enum_rows() -> None:
         "critical": "CRITICAL",
     }
 
-    with engine.begin() as conn:
-        existing_tables = set(sa_inspect(engine).get_table_names())
-        for table_name, column_name in updates.items():
-            if table_name not in existing_tables:
-                continue
-            for bad_value, good_value in normalized.items():
-                if engine.dialect.name == "postgresql":
-                    conn.execute(
-                        text(
-                            f"UPDATE {table_name} "
-                            f"SET {column_name} = CAST(:good AS urgency_enum) "
-                            f"WHERE CAST({column_name} AS TEXT) = :bad"
-                        ),
-                        {"good": good_value, "bad": bad_value},
-                    )
-                else:
-                    conn.execute(
-                        text(f"UPDATE {table_name} SET {column_name} = :good WHERE {column_name} = :bad"),
-                        {"good": good_value, "bad": bad_value},
-                    )
+    try:
+        with engine.begin() as conn:
+            existing_tables = set(sa_inspect(engine).get_table_names())
+            for table_name, column_name in updates.items():
+                if table_name not in existing_tables:
+                    continue
+                for bad_value, good_value in normalized.items():
+                    if engine.dialect.name == "postgresql":
+                        conn.execute(
+                            text(
+                                f"UPDATE {table_name} "
+                                f"SET {column_name} = CAST(:good AS urgency_enum) "
+                                f"WHERE CAST({column_name} AS TEXT) = :bad"
+                            ),
+                            {"good": good_value, "bad": bad_value},
+                        )
+                    else:
+                        conn.execute(
+                            text(f"UPDATE {table_name} SET {column_name} = :good WHERE {column_name} = :bad"),
+                            {"good": good_value, "bad": bad_value},
+                        )
+    except SQLAlchemyError as exc:
+        print(f"Skipping enum row repair because database is unavailable: {exc}")
 
 
 async def get_context(request: Request):
@@ -202,6 +210,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        startup_check = os.getenv("STARTUP_CHECK", "").strip().lower()
+        skip_db_bootstrap = startup_check in {"skip", "0", "false", "off"}
+
         async def _init_db():
             await asyncio.to_thread(_ensure_schema)
             print("Database schema ready")
@@ -226,41 +237,53 @@ def create_app(
         load_llm_into_env()
         load_agent_integrations_into_env()
 
-        db = SessionLocal()
-        try:
-            from backends.local_auth import set_request_context
-            from db.models import Document as DocModel, User
+        if skip_db_bootstrap:
+            print("Skipping DB-dependent startup tasks.")
+        else:
+            db = SessionLocal()
+            try:
+                from backends.local_auth import set_request_context
+                from db.models import Document as DocModel, User
 
-            acct = db.query(User).first()
-            if acct:
-                set_request_context(account_id=acct.id, org_id=acct.org_id)
-                agent_registry.populate_all_agents(db)
-            stuck = db.query(DocModel).filter(DocModel.status.in_(["pending", "processing"])).all()
-            for doc in stuck:
-                doc.status = "pending"
-                doc.progress = None
-            if stuck:
-                db.commit()
-                print(f"Re-queuing {len(stuck)} stuck document(s)…")
-                from llm.document_processor import process_document
-
+                acct = db.query(User).first()
+                if acct:
+                    set_request_context(account_id=acct.id, org_id=acct.org_id)
+                    agent_registry.populate_all_agents(db)
+                    if os.getenv("RENTMATE_ENV") == "development":
+                        try:
+                            from demo.seed import seed_if_needed
+                            if seed_if_needed(db):
+                                db.commit()
+                                print("Dev seed data created.")
+                        except Exception as exc:
+                            db.rollback()
+                            print(f"Dev seed failed: {exc}")
+                stuck = db.query(DocModel).filter(DocModel.status.in_(["pending", "processing"])).all()
                 for doc in stuck:
-                    asyncio.create_task(process_document(doc.id))
-        finally:
-            db.close()
+                    doc.status = "pending"
+                    doc.progress = None
+                if stuck:
+                    db.commit()
+                    print(f"Re-queuing {len(stuck)} stuck document(s)…")
+                    from llm.document_processor import process_document
 
-        await agent_registry.restart_channels_async(load_integrations())
+                    for doc in stuck:
+                        asyncio.create_task(process_document(doc.id))
+            finally:
+                db.close()
 
-        from handlers.scheduler import scheduler_loop, seed_default_tasks
+            await agent_registry.restart_channels_async(load_integrations())
 
-        seed_default_tasks()
-        asyncio.create_task(scheduler_loop())
+            from handlers.scheduler import scheduler_loop, seed_default_tasks
 
-        from handlers.heartbeat import heartbeat_loop
-        from handlers.quo_poller import quo_poll_loop
+            seed_default_tasks()
+            asyncio.create_task(scheduler_loop())
 
-        asyncio.create_task(heartbeat_loop())
-        asyncio.create_task(quo_poll_loop())
+            from handlers.heartbeat import heartbeat_loop
+            from handlers.quo_poller import quo_poll_loop
+
+            asyncio.create_task(heartbeat_loop())
+            asyncio.create_task(quo_poll_loop())
 
         data_dir = os.getenv("RENTMATE_DATA_DIR", "./data")
         set_memory_backstop()

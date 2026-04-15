@@ -18,8 +18,9 @@ WORKDIR /rentmate
 # Run install.sh:
 #   NO_CLONE=1   — skip git clone/pull (repo is already present)
 #   RENTMATE_DIR — point install.sh at the pre-populated checkout
+#   RENTMATE_INSTALL_SKIP_DB_SETUP=1 — installer should succeed even before Postgres exists
 # TTY is absent in RUN so the API key prompt is automatically skipped.
-RUN NO_CLONE=1 RENTMATE_DIR=/rentmate bash install.sh
+RUN NO_CLONE=1 RENTMATE_DIR=/rentmate RENTMATE_INSTALL_SKIP_DB_SETUP=1 bash install.sh
 
 # install.sh installs Poetry to ~/.local/bin — make it available in subsequent layers
 ENV PATH="/root/.local/bin:$PATH"
@@ -29,11 +30,10 @@ RUN test -d /rentmate/www/rentmate-ui/dist \
     || (echo "FAIL: frontend dist/ missing after install" && exit 1)
 RUN test -f /rentmate/.env \
     || (echo "FAIL: .env missing after install" && exit 1)
-RUN test -f /rentmate/data/rentmate.db \
-    || (echo "FAIL: database not created after install" && exit 1)
 RUN poetry run python -c "import fastapi, sqlalchemy" \
     || (echo "FAIL: required Python packages not importable" && exit 1)
 
 # Default: start the server so the test runner can probe it
 ENV LLM_API_KEY=sk-test-install-smoke
+ENV STARTUP_CHECK=skip
 CMD ["npm", "start"]

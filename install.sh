@@ -134,7 +134,30 @@ setup_env() {
 
 # ── Database setup ────────────────────────────────────────────────────────────
 
+db_is_reachable() {
+    local db_uri="${RENTMATE_DB_URI:-postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/rentmate}"
+    DATABASE_URL="$db_uri" poetry run python - <<'PY' >/dev/null 2>&1
+import os
+
+from sqlalchemy import create_engine, text
+
+uri = os.environ["DATABASE_URL"]
+engine = create_engine(uri, connect_args={"connect_timeout": 2})
+with engine.connect() as conn:
+    conn.execute(text("SELECT 1"))
+PY
+}
+
 setup_database() {
+    if [[ "${RENTMATE_INSTALL_SKIP_DB_SETUP:-0}" == "1" ]]; then
+        warn "Skipping database migrations (RENTMATE_INSTALL_SKIP_DB_SETUP=1)."
+        return
+    fi
+    if ! db_is_reachable; then
+        warn "Postgres is not reachable yet — skipping migrations for now."
+        warn "Start Postgres, then run: cd ${INSTALL_DIR} && npm run db:migrate"
+        return
+    fi
     info "Running database migrations..."
     npm run db:migrate --prefix "$INSTALL_DIR"
     ok "Database migrated"
@@ -165,7 +188,8 @@ print_next_steps() {
         echo ""
     fi
 
-    echo -e "  Start:   ${BOLD}cd ${INSTALL_DIR} && npm run db:migrate && npm start${NC}"
+    echo -e "  Start:   ${BOLD}cd ${INSTALL_DIR} && npm run dev${NC}"
+    echo -e "  Prod:    ${BOLD}cd ${INSTALL_DIR} && npm run db:migrate && npm start${NC}"
     echo -e "  Open:    ${CYAN}http://localhost:8000${NC}  (password: rentmate)"
     echo -e "  Dev:     ${BOLD}npm run dev${NC}  (auto-recreates DB on schema change)"
     echo -e "  Docs:    ${CYAN}https://github.com/ahmedjafri/rentmate${NC}"
