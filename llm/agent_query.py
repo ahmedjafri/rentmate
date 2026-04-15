@@ -7,7 +7,7 @@ Usage:
 
 Security model:
 - Only SELECT / WITH...SELECT statements are allowed
-- Blocked patterns: information_schema, sqlite_master, semicolons
+- Blocked patterns: information_schema, semicolons
 - Read-only connection (no commit path)
 - Results capped at 200 rows
 """
@@ -26,8 +26,7 @@ from sqlalchemy import create_engine, text
 
 _BLOCKED_PATTERNS = [
     re.compile(r"\binformation_schema\b", re.IGNORECASE),
-    re.compile(r"\bsqlite_master\b", re.IGNORECASE),
-    re.compile(r"\bsqlite_temp_master\b", re.IGNORECASE),
+    re.compile(r"\bpg_catalog\b", re.IGNORECASE),
     re.compile(r";"),  # no multiple statements
 ]
 
@@ -56,8 +55,7 @@ def main():
     parser.add_argument("sql", help="SELECT query to execute")
     args = parser.parse_args()
 
-    db_path = os.environ.get("RENTMATE_DB_PATH", "./data/rentmate.db")
-    db_uri = f"sqlite:///{db_path}"
+    db_uri = os.environ.get("RENTMATE_DB_URI", "").strip() or "postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/rentmate"
 
     # Validate SQL before touching the DB
     err = _validate_sql(args.sql)
@@ -66,7 +64,7 @@ def main():
         sys.exit(0)
 
     try:
-        engine = create_engine(db_uri, connect_args={"check_same_thread": False})
+        engine = create_engine(db_uri)
         with engine.connect() as conn:
             result = conn.execute(text(args.sql))
             columns = list(result.keys())

@@ -38,8 +38,8 @@ class TestValidateSql:
         assert err is not None
         assert "blocked" in err.lower()
 
-    def test_rejects_sqlite_master(self):
-        err = _validate_sql("SELECT * FROM sqlite_master")
+    def test_rejects_pg_catalog(self):
+        err = _validate_sql("SELECT * FROM pg_catalog.pg_tables")
         assert err is not None
 
     def test_rejects_semicolon(self):

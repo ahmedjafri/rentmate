@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import shutil
@@ -8,6 +9,8 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from backends.local_auth import _lookup_account_id
+
+logger = logging.getLogger(__name__)
 
 # Paths
 TEMPLATE_DIR = Path(__file__).parent / "agent_mds"
@@ -144,21 +147,36 @@ class AgentRegistry:
 
     def build_system_prompt(self, account_id: str) -> str:
         """Build the full system prompt from workspace files + persistent memory."""
+        bundle = self.build_system_prompt_bundle(account_id)
+        return bundle["system_prompt"]
+
+    def build_system_prompt_bundle(self, account_id: str) -> dict[str, object]:
+        """Build the full system prompt and expose its component parts for debugging."""
         agent_dir = get_agent_workspace(account_id)
         parts = []
+        file_parts: list[dict[str, str]] = []
         for filename in ["SOUL.md"]:
             path = agent_dir / filename
             if path.exists():
                 content = path.read_text()
                 parts.append(content)
+                file_parts.append({"type": "file", "name": filename, "content": content})
                 if filename == "SOUL.md":
                     print(f"[agent] SOUL.md: {len(content)} chars, v{_soul_version(content)}")
         # Inject persistent memory from DB
         from llm.memory_store import DbMemoryStore
-        memory_context = DbMemoryStore(account_id).get_memory_context()
+        try:
+            memory_context = DbMemoryStore(account_id).get_memory_context()
+        except Exception as exc:
+            logger.warning("Failed to load memory context for account %s: %s", account_id, exc)
+            memory_context = ""
         if memory_context:
             parts.append(memory_context)
-        return "\n\n---\n\n".join(parts)
+        return {
+            "system_prompt": "\n\n---\n\n".join(parts),
+            "memory_context": memory_context,
+            "parts": file_parts,
+        }
 
     # ─── Channel management (Telegram/WhatsApp) ────────
 

@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Micro-benchmark the suggestion action path on an isolated SQLite DB."""
+"""Micro-benchmark the suggestion action path on an isolated Postgres DB."""
 
 from __future__ import annotations
 
 import argparse
 import statistics
-import tempfile
 from collections import defaultdict
-from pathlib import Path
 from time import perf_counter
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from testcontainers.postgres import PostgresContainer
 
 from backends.local_auth import reset_request_context, set_request_context
 from db.enums import AgentSource, SuggestionOption, TaskCategory, Urgency
@@ -34,6 +33,7 @@ def _seed_db(session_factory) -> str:
             active=True,
         )
         vendor = User(
+            id=2,
             org_id=1,
             creator_id=1,
             first_name="Vince",
@@ -160,12 +160,8 @@ def _print_stats(label: str, samples_ms: list[float]) -> None:
 
 
 def run_benchmarks(*, iterations: int = 50) -> dict[str, object]:
-    with tempfile.TemporaryDirectory(prefix="rentmate-suggestion-bench-") as tmpdir:
-        db_path = Path(tmpdir) / "bench.db"
-        engine = create_engine(
-            f"sqlite:///{db_path}",
-            connect_args={"check_same_thread": False},
-        )
+    with PostgresContainer("pgvector/pgvector:pg16") as pg:
+        engine = create_engine(pg.get_connection_url())
         Session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
         Base.metadata.create_all(engine)
         vendor_external_id = _seed_db(Session)
@@ -174,7 +170,7 @@ def run_benchmarks(*, iterations: int = 50) -> dict[str, object]:
         accept_ms, breakdown_ms = _benchmark_accept(Session, iterations, vendor_external_id)
 
     return {
-        "db_path": str(db_path),
+        "db_path": "ephemeral-postgres",
         "dismiss_ms": dismiss_ms,
         "accept_ms": accept_ms,
         "breakdown_ms": breakdown_ms,

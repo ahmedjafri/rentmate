@@ -198,7 +198,6 @@ class Message(Base, OrgId):
 
     __table_args__ = (
         UniqueConstraint("org_id", "conversation_id", "id", name="uq_messages_server"),
-        UniqueConstraint("id", name="uq_messages_id"),
         Index("ix_messages_conversation_sent", "conversation_id", "sent_at"),
         ForeignKeyConstraint(
             ["org_id", "conversation_id"],

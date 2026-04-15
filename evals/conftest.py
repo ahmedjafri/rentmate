@@ -11,9 +11,8 @@ from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from backends.local_auth import reset_request_context, set_request_context
 from db.enums import TaskCategory, TaskMode, TaskSource, TaskStatus, Urgency
@@ -40,16 +39,40 @@ DEFAULT_ACCOUNT_ID = 1
 os.environ.setdefault("RENTMATE_DISABLE_VECTOR_INDEX", "1")
 
 
+def _format_eval_debug_payload(payload: dict | None) -> str:
+    if not payload:
+        return "No Hermes debug payload captured."
+    return "\n\n".join([
+        f"model={payload.get('model')} provider={payload.get('provider')} api_base={payload.get('api_base')}",
+        f"session_key={payload.get('session_key')} agent_id={payload.get('agent_id')}",
+        "USER MESSAGE\n" + str(payload.get("user_message") or ""),
+        "CONVERSATION HISTORY\n" + json.dumps(payload.get("conversation_history") or [], indent=2, ensure_ascii=False),
+        "MEMORY CONTEXT\n" + str(payload.get("memory_context") or ""),
+        "SYSTEM PROMPT\n" + str(payload.get("system_prompt") or ""),
+    ])
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    if report.when != "call" or report.passed or not item.get_closest_marker("eval"):
+        return
+    try:
+        from llm.client import get_last_eval_debug_payload
+
+        payload = get_last_eval_debug_payload()
+        report.sections.append(("Hermes Eval Context", _format_eval_debug_payload(payload)))
+    except Exception as exc:  # noqa: BLE001
+        report.sections.append(("Hermes Eval Context", f"Failed to capture Hermes debug payload: {exc}"))
+
+
 # ── DB fixtures ──────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def engine():
-    eng = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+def engine(isolated_engine):
+    eng = isolated_engine
     Base.metadata.create_all(eng)
     return eng
 

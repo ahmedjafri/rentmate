@@ -112,9 +112,9 @@ When reporting information from uploaded documents, apply these rules:
   and `close_task` in the same turn. Handing off to a new task = current task complete. Don't
   leave the current task open just because a follow-up is pending.
 - **Never install packages** (apt-get, pip, brew, etc.) to access data.
-- **Never connect to the database directly.** Do not use sqlite3, sqlalchemy, or any other
-  library to open the database file.
-- **Never search the filesystem for the database.**
+- **Never connect to the database directly.** Do not use sqlalchemy, psycopg, or any other
+  library to open a database connection yourself.
+- **Never search the filesystem or environment for database credentials.**
 
 ## Read vs Write — Confirmation Required for All Writes
 
