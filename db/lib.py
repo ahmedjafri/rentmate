@@ -363,7 +363,7 @@ def route_inbound_to_task(
         .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
         .join(Task, Task.ai_conversation_id == Conversation.id)
         .filter(
-            Task.task_status == "active",
+            Task.task_status == TaskStatus.ACTIVE,
             Conversation.updated_at >= recency_cutoff,
             ConversationParticipant.user_id == tenant.user_id,
             ConversationParticipant.is_active.is_(True),
