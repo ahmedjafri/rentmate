@@ -42,11 +42,12 @@ pypdf = "^4.0"
 python-multipart = "^0.0.22"
 pyjwt = "^2.9"
 sqlalchemy = "^2.0"
+pgvector = "^0.4.1"
+psycopg2-binary = "^2.9"
 hermes-agent = {git = "https://github.com/ahmedjafri/hermes-agent.git", rev = "831f989d"}
 memray = "^1.19.2"
 croniter = "^6.2.2"
 bcrypt = "^5.0.0"
-chromadb = "^1.5.7"
 weasyprint = "^66.0"
 grpcio = "^1.76.0"
 
@@ -54,9 +55,9 @@ grpcio = "^1.76.0"
 pytest = "^9.0.0"
 alembic = "^1.17.1"
 testcontainers = {extras = ["postgres"], version = "^4.14.2"}
-psycopg2-binary = "^2.9"
 ruff = "^0.15.9"
 pytest-cov = "^7.1.0"
+pytest-xdist = "^3.5"
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=prepend -m 'not eval'"

@@ -14,8 +14,18 @@ from db.session import SessionLocal, engine
 
 logger = logging.getLogger(__name__)
 
-# Ensure app_settings table exists (may not if DB was created before this model)
-Base.metadata.create_all(engine, tables=[AppSetting.__table__], checkfirst=True)
+_app_settings_table_ready = False
+
+
+def _ensure_app_settings_table() -> None:
+    global _app_settings_table_ready
+    if _app_settings_table_ready:
+        return
+    try:
+        Base.metadata.create_all(engine, tables=[AppSetting.__table__], checkfirst=True)
+        _app_settings_table_ready = True
+    except SQLAlchemyError as exc:
+        logger.warning("Failed to ensure app_settings table exists yet: %s", exc)
 
 ActionPolicyLevel = Literal["strict", "balanced", "aggressive"]
 
@@ -31,6 +41,7 @@ _DEFAULT_ACTION_POLICY: dict[str, ActionPolicyLevel] = {
 
 def get_setting(key: str) -> dict | None:
     """Read a setting by key. Returns parsed JSON or None."""
+    _ensure_app_settings_table()
     db = SessionLocal.session_factory()
     try:
         row = db.query(AppSetting).filter_by(key=key).first()
@@ -46,6 +57,7 @@ def get_setting(key: str) -> dict | None:
 
 def set_setting(key: str, *, value: dict) -> None:
     """Write a setting by key (upsert)."""
+    _ensure_app_settings_table()
     db = SessionLocal.session_factory()
     try:
         row = db.query(AppSetting).filter_by(key=key).first()
@@ -62,6 +74,7 @@ def set_setting(key: str, *, value: dict) -> None:
 
 def load_app_settings() -> dict:
     """Read all settings as a merged dict."""
+    _ensure_app_settings_table()
     db = SessionLocal.session_factory()
     try:
         rows = db.query(AppSetting).all()

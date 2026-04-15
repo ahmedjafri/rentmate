@@ -123,7 +123,7 @@ backends/
   └── wire.py             — Backend wiring
 
 db/
-  ├── models/             — SQLAlchemy ORM (SQLite with WAL)
+  ├── models/             — SQLAlchemy ORM (PostgreSQL)
   ├── lib.py              — Legacy DB helpers
   └── queries.py          — Shared query functions
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Seed development dummy data into the local RentMate SQLite database.
+Seed development dummy data into the local RentMate Postgres database.
 
 Creates:
   - 2 existing properties with units, tenants, and active leases
@@ -15,7 +15,6 @@ Usage:
 
 Idempotent — re-running is safe (checks for existing dummy documents first).
 """
-import os
 import sys
 import uuid
 from datetime import UTC, date, datetime
@@ -23,17 +22,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("RENTMATE_DB_PATH", "./data/rentmate.db")
-
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-DB_PATH = os.getenv("RENTMATE_DB_PATH", "./data/rentmate.db")
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+DB_URI = "postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/rentmate"
 
 from db.models import Base, Document, Lease, Property, Tenant, Unit
 
-engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+engine = create_engine(DB_URI)
 Base.metadata.create_all(engine)
 
 # Ensure new columns exist on older DBs

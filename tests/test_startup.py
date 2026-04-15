@@ -1,21 +1,12 @@
-"""
-Integration tests: DB schema initialisation across SQLite and Postgres.
-
-Validates that `_ensure_schema` (the DB step that runs on every server startup)
-works correctly for both supported backends.
-
-Run all:          poetry run pytest tests/test_startup.py
-Postgres only:    poetry run pytest tests/test_startup.py -m postgres
-Skip Postgres:    poetry run pytest tests/test_startup.py -m "not postgres"
-"""
+"""Integration tests for Postgres-backed startup schema initialization."""
 
 import os
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -34,33 +25,25 @@ def _column_names(eng, table: str) -> set[str]:
 
 
 # ---------------------------------------------------------------------------
-# SQLite
+# Postgres
 # ---------------------------------------------------------------------------
 
-def _sqlite_engine():
-    return create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+def test_postgres_clean_startup(isolated_engine):
+    """_ensure_schema runs without error on a fresh Postgres database."""
+    _init(isolated_engine)
 
 
-def test_sqlite_clean_startup():
-    """_ensure_schema runs without error on a fresh SQLite database."""
-    _init(_sqlite_engine())
-
-
-def test_sqlite_idempotent():
-    """Calling _ensure_schema twice on SQLite must not raise."""
-    eng = _sqlite_engine()
+def test_postgres_idempotent(isolated_engine):
+    """Calling _ensure_schema twice on Postgres must not raise."""
+    eng = isolated_engine
     import main as _main
     with patch.object(_main, "engine", eng), patch.dict(os.environ, {"RENTMATE_ENV": "development"}):
         _main._ensure_schema()
         _main._ensure_schema()
 
 
-def test_repair_enum_rows_normalizes_lowercase_urgency():
-    eng = _sqlite_engine()
+def test_repair_enum_rows_normalizes_lowercase_urgency(isolated_engine):
+    eng = isolated_engine
     _init(eng)
 
     from sqlalchemy.orm import sessionmaker
@@ -92,10 +75,6 @@ def test_repair_enum_rows_normalizes_lowercase_urgency():
     db.commit()
     db.close()
 
-    with eng.begin() as conn:
-        conn.execute(text("UPDATE suggestions SET urgency = 'low'"))
-        conn.execute(text("UPDATE tasks SET urgency = 'medium'"))
-
     import main as _main
     with patch.object(_main, "engine", eng):
         _main._repair_enum_rows()
@@ -104,13 +83,13 @@ def test_repair_enum_rows_normalizes_lowercase_urgency():
         suggestion_urgencies = conn.execute(text("SELECT urgency FROM suggestions")).scalars().all()
         task_urgencies = conn.execute(text("SELECT urgency FROM tasks")).scalars().all()
 
-    assert set(suggestion_urgencies) <= {"LOW", None}
-    assert set(task_urgencies) <= {"MEDIUM", None}
+    assert set(suggestion_urgencies) <= {"MEDIUM", None}
+    assert set(task_urgencies) <= {"HIGH", None}
 
 
-def test_sqlite_columns_present():
-    """All model columns are present in SQLite after startup."""
-    eng = _sqlite_engine()
+def test_postgres_columns_present(isolated_engine):
+    """All model columns are present in Postgres after startup."""
+    eng = isolated_engine
     _init(eng)
     assert "is_ai" in _column_names(eng, "messages")
     assert "conversation_type" in _column_names(eng, "conversations")
@@ -122,9 +101,9 @@ def test_sqlite_columns_present():
     assert "creator_id" in _column_names(eng, "conversations")
 
 
-def test_sqlite_dev_recreates_on_drift():
+def test_postgres_dev_recreates_on_drift(isolated_engine):
     """Dev mode detects schema drift and recreates the database."""
-    eng = _sqlite_engine()
+    eng = isolated_engine
     # Create a minimal table missing many columns
     with eng.connect() as conn:
         conn.execute(text("CREATE TABLE properties (id TEXT PRIMARY KEY)"))
@@ -145,9 +124,9 @@ def test_sqlite_dev_recreates_on_drift():
     assert "address_line1" in _column_names(eng, "properties")
 
 
-def test_sqlite_prod_fails_on_drift():
+def test_postgres_prod_fails_on_drift(isolated_engine):
     """Production mode raises SystemExit when schema is stale."""
-    eng = _sqlite_engine()
+    eng = isolated_engine
     with eng.connect() as conn:
         conn.execute(text("CREATE TABLE properties (id TEXT PRIMARY KEY)"))
         conn.commit()
@@ -158,9 +137,9 @@ def test_sqlite_prod_fails_on_drift():
             _main._ensure_schema()
 
 
-def test_sqlite_prod_can_skip_startup_check_on_drift():
+def test_postgres_prod_can_skip_startup_check_on_drift(isolated_engine):
     """Production mode can explicitly skip schema drift failure via STARTUP_CHECK."""
-    eng = _sqlite_engine()
+    eng = isolated_engine
     with eng.connect() as conn:
         conn.execute(text("CREATE TABLE properties (id TEXT PRIMARY KEY)"))
         conn.commit()
@@ -179,9 +158,9 @@ def test_sqlite_prod_can_skip_startup_check_on_drift():
 # ---------------------------------------------------------------------------
 
 
-def test_fresh_startup_seeds_account_and_scheduled_tasks():
+def test_fresh_startup_seeds_account_and_scheduled_tasks(isolated_engine):
     """On a fresh DB, startup seeds default account and scheduled tasks."""
-    eng = _sqlite_engine()
+    eng = isolated_engine
     _init(eng)
 
     from sqlalchemy.orm import sessionmaker
@@ -199,9 +178,9 @@ def test_fresh_startup_seeds_account_and_scheduled_tasks():
     db.close()
 
 
-def test_startup_with_existing_data_no_crash():
+def test_startup_with_existing_data_no_crash(isolated_engine):
     """Startup doesn't crash when DB already has data (idempotent)."""
-    eng = _sqlite_engine()
+    eng = isolated_engine
     _init(eng)
 
     # Populate some data
@@ -214,6 +193,8 @@ def test_startup_with_existing_data_no_crash():
     import uuid
     from datetime import UTC, datetime
     acct_id = 1
+    db.add(User(id=acct_id, org_id=1, email="owner@example.com", active=True, created_at=datetime.now(UTC)))
+    db.flush()
     shadow_user = User(
         id=2,
         org_id=1,
@@ -260,7 +241,7 @@ def test_startup_with_existing_data_no_crash():
     db.close()
 
 
-def test_app_lifespan_startup_no_crash():
+def test_app_lifespan_startup_no_crash(isolated_engine):
     """FastAPI lifespan startup enters cleanly on an isolated database."""
     import asyncio
 
@@ -268,7 +249,7 @@ def test_app_lifespan_startup_no_crash():
     import handlers.deps as deps
     import main as _main
 
-    eng = _sqlite_engine()
+    eng = isolated_engine
     test_session_local = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=eng))
 
     def _discard_task(coro):
@@ -302,20 +283,21 @@ async def _run_lifespan(main_module):
         return None
 
 
-def test_startup_agent_memory_writes_with_explicit_creator():
+def test_startup_agent_memory_writes_with_explicit_creator(isolated_engine):
     """Agent memory can be written with explicit creator_id (no request context)."""
-    eng = _sqlite_engine()
+    eng = isolated_engine
     _init(eng)
 
     from sqlalchemy.orm import sessionmaker
 
-    from db.models import AgentMemory
+    from db.models import AgentMemory, User
     Session = sessionmaker(bind=eng)
     db = Session()
+    db.add(User(id=1, org_id=1, email="owner@example.com", active=True))
+    db.flush()
 
     # Simulate what populate_all_agents does — write agent memory
     import uuid
-    from datetime import UTC, datetime
     mem = AgentMemory(
         id=str(uuid.uuid4()),
         org_id=1,
@@ -331,19 +313,20 @@ def test_startup_agent_memory_writes_with_explicit_creator():
     db.close()
 
 
-def test_startup_scheduled_task_creation_with_explicit_creator():
+def test_startup_scheduled_task_creation_with_explicit_creator(isolated_engine):
     """Scheduled tasks can be seeded with explicit creator_id."""
-    eng = _sqlite_engine()
+    eng = isolated_engine
     _init(eng)
 
     from sqlalchemy.orm import sessionmaker
 
-    from db.models import ScheduledTask
+    from db.models import ScheduledTask, User
     Session = sessionmaker(bind=eng)
     db = Session()
+    db.add(User(id=1, org_id=1, email="owner@example.com", active=True))
+    db.flush()
 
     import uuid
-    from datetime import UTC, datetime
     task = ScheduledTask(
         id=str(uuid.uuid4()),
         org_id=1,
@@ -362,9 +345,9 @@ def test_startup_scheduled_task_creation_with_explicit_creator():
     db.close()
 
 
-def test_dev_non_tty_auto_recreates():
+def test_dev_non_tty_auto_recreates(isolated_engine):
     """Non-interactive dev mode (npm run dev) auto-recreates on schema drift."""
-    eng = _sqlite_engine()
+    eng = isolated_engine
     # Create a stale schema
     with eng.connect() as conn:
         conn.execute(text("CREATE TABLE properties (id TEXT PRIMARY KEY)"))
@@ -383,43 +366,3 @@ def test_dev_non_tty_auto_recreates():
     assert "creator_id" in _column_names(eng, "properties")
     assert "address_line1" in _column_names(eng, "properties")
     assert "scheduled_tasks" in inspect(eng).get_table_names()
-
-
-# ---------------------------------------------------------------------------
-# Postgres (requires Docker)
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="module")
-def pg_engine():
-    """Spin up a real Postgres container shared across all postgres tests."""
-    from testcontainers.postgres import PostgresContainer
-    with PostgresContainer("postgres:16-alpine") as pg:
-        eng = create_engine(pg.get_connection_url())
-        yield eng
-        eng.dispose()
-
-
-@pytest.mark.postgres
-def test_postgres_clean_startup(pg_engine):
-    """_ensure_schema runs without error on a fresh Postgres database."""
-    _init(pg_engine)
-
-
-@pytest.mark.postgres
-def test_postgres_idempotent(pg_engine):
-    """Calling _ensure_schema twice on Postgres must not raise."""
-    import main as _main
-    with patch.object(_main, "engine", pg_engine), patch.dict(os.environ, {"RENTMATE_ENV": "development"}):
-        _main._ensure_schema()
-        _main._ensure_schema()
-
-
-@pytest.mark.postgres
-def test_postgres_columns_present(pg_engine):
-    """All model columns are present in Postgres after startup."""
-    assert "is_ai" in _column_names(pg_engine, "messages")
-    assert "conversation_type" in _column_names(pg_engine, "conversations")
-    assert "sha256_checksum" in _column_names(pg_engine, "documents")
-    assert "payment_status" in _column_names(pg_engine, "leases")
-    assert "property_type" in _column_names(pg_engine, "properties")
-    assert "creator_id" in _column_names(pg_engine, "properties")

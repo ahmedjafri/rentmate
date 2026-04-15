@@ -20,7 +20,6 @@ Operations:
 
 import argparse
 import json
-import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -28,9 +27,6 @@ from pathlib import Path
 # Add project root so db/ can be imported
 _root = Path(__file__).parent.parent
 sys.path.insert(0, str(_root))
-
-from sqlalchemy import create_engine  # noqa: E402
-from sqlalchemy.orm import scoped_session, sessionmaker  # noqa: E402
 
 from db.models import ParticipantType  # noqa: E402
 from db.queries import (  # noqa: E402
@@ -43,16 +39,14 @@ from db.queries import (  # noqa: E402
     format_address,
     tenant_display_name,
 )
+from db.session import SessionLocal  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # DB session (mirrors handlers/deps.py without pulling in FastAPI deps)
 # ---------------------------------------------------------------------------
 
 def _make_session():
-    _data_dir = os.getenv("RENTMATE_DATA_DIR", str(_root / "data"))
-    db_path = os.getenv("RENTMATE_DB_PATH", f"{_data_dir}/rentmate.db")
-    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
-    return scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))()
+    return SessionLocal()
 
 
 # ---------------------------------------------------------------------------

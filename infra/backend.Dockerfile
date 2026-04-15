@@ -48,7 +48,7 @@ COPY llm ./llm
 
 # Environment variable for dev
 ENV RENTMATE_ENV=development
-ENV RENTMATE_DB_PATH=/app/data/rentmate.db
+ENV RENTMATE_DB_URI=postgresql+psycopg2://postgres:postgres@postgres:5432/rentmate
 ENV RENTMATE_DEPLOYMENT_MODE=single-machine
 
 # Expose backend port

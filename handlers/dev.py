@@ -466,7 +466,7 @@ async def reindex_memory(
 ):
     await require_user(request)
     if reset_index:
-        ChromaMemoryIndex().reset()
+        ChromaMemoryIndex(db).reset()
     count = sync_memory_index(db)
     return {"count": count, "reset_index": reset_index}
 

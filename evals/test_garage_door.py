@@ -18,9 +18,8 @@ from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from db.enums import TaskCategory, TaskMode, TaskSource, TaskStatus, Urgency
 from db.models import (
@@ -54,12 +53,8 @@ PROPERTY_ADDR = "16617 3rd Dr SE"
 
 
 @pytest.fixture
-def engine():
-    eng = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+def engine(isolated_engine):
+    eng = isolated_engine
     Base.metadata.create_all(eng)
     return eng
 

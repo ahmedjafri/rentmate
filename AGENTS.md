@@ -6,7 +6,7 @@ Guidance for coding agents (Claude Code, Copilot, etc.) working in this repo.
 
 AI-driven property management assistant. Handles tenant communications, maintenance triage, lease lifecycle events, and automations — so landlords can own property without it owning their time.
 
-Stack: FastAPI + Strawberry GraphQL backend, React/Vite frontend, SQLAlchemy ORM on SQLite, LiteLLM-based AI agent.
+Stack: FastAPI + Strawberry GraphQL backend, React/Vite frontend, SQLAlchemy ORM on PostgreSQL, LiteLLM-based AI agent.
 
 ## Commands
 
@@ -69,7 +69,7 @@ Strict **handlers → services → models** layering:
 
 2. **Services** (`gql/services/`) — Stateless business logic. Each service operates on the DB session it receives. Services must NOT create conversations or manage cross-entity orchestration — that belongs in the handler. Import services as modules (`from gql.services import chat_service`) not individual functions.
 
-3. **Models** (`db/models/`) — SQLAlchemy ORM definitions (SQLite with WAL mode). Pure data layer, no business logic.
+3. **Models** (`db/models/`) — SQLAlchemy ORM definitions for PostgreSQL. Pure data layer, no business logic.
 
 Key rules:
 - Conversation creation/lookup always happens at the handler layer via `chat_service.get_or_create_external_conversation()`. Services like `TaskService.create_task()` create only the task and its AI conversation; the handler is responsible for the external conversation.
@@ -89,7 +89,7 @@ Key rules:
 - Automations: `AutomationRevision`
 - Settings: `AppSetting`
 
-**`db/session.py`** — SQLAlchemy engine and `SessionLocal` factory. SQLite DB at `data/rentmate.db`.
+**`db/session.py`** — SQLAlchemy engine and `SessionLocal` factory. Uses `RENTMATE_DB_URI` for PostgreSQL connections.
 
 **`db/lib.py`** — Legacy DB helpers: `route_inbound_to_task()`, `route_inbound_to_tenant_chat()`, `get_or_create_tenant_by_phone()`, `spawn_task_from_conversation()`.
 
@@ -120,7 +120,7 @@ Key rules:
 - `wire.py` — Wiring for all backends
 - `local_auth.py` — Dev single-tenant auth
 - `local_storage.py` — Local filesystem storage
-- `chroma_vector.py` — Chroma vector DB for document embeddings
+- `litellm_vector.py` — Postgres pgvector-backed document embeddings
 - `single_tenant_sms.py` — Dev SMS routing
 
 **`llm/`** — AI agent:
@@ -133,11 +133,9 @@ Key rules:
 - `tracing.py` — Logs agent operations for debugging
 - `document_processor.py` — PDF text extraction and LLM-based parsing
 
-**`agents/template/`** — Agent identity files (copied to `data/agent/` at runtime):
+**`llm/agent_mds/`** — Agent identity markdown copied into each runtime workspace:
 - `SOUL.md` — Persona, responsibilities, hard constraints, escalation protocol
-- `AGENTS.md` — Session startup, memory system, group chat etiquette
-- `IDENTITY.md` — Name, role, vibe
-- `HEARTBEAT.md` — Periodic background check template
+- `SOUL.md` also includes the identity and onboarding guidance
 
 **`automations/`** — Built-in automation definitions (JSON). DSL-based YAML scripts interpreted by `db/dsl_runner.py`. Stored as `AutomationRevision` rows.
 
@@ -195,7 +193,7 @@ These docs define product behavior and the automation DSL. **Keep them in sync w
 - Import service modules, not individual functions: `from gql.services import chat_service` then `chat_service.should_ai_respond(...)`.
 - All data is multi-tenant: every query scoped to `account_id` from the authenticated user's `AccountUser` record.
 - Tests use per-test transaction rollback (savepoints) for isolation — do not call `db.commit()` inside test fixtures.
-- The agent system prompt is assembled from `agents/template/` files + `llm/.context/index.md`.
+- The agent system prompt is assembled primarily from `SOUL.md`, per-user `USER.md`, and `llm/.context/index.md`.
 - Frontend GraphQL type artifacts live in `www/rentmate-ui/src/graphql/`. Backend GraphQL changes are not done until `schema.graphql` and `generated.ts` are refreshed.
 
 ### Critical constraints

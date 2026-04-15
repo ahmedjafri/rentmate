@@ -25,7 +25,7 @@ poetry run pytest tests/test_db_lib.py          # single file
 poetry run pytest -k "test_name"                # single test
 ```
 
-Tests use an in-memory SQLite database — no external services required.
+Tests use a containerized Postgres database — no manual local DB setup required.
 
 ## Database Migrations
 
