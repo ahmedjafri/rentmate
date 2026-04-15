@@ -312,6 +312,29 @@ def _sanitize_filtered_subset_reply(reply: str) -> str:
     ]
     for pattern, replacement in replacements:
         sanitized = re.sub(pattern, replacement, sanitized, flags=re.I)
+    move_out_markers = (
+        "move-out",
+        "move out",
+        "30-day notice",
+        "30 day notice",
+        "notice to move",
+    )
+    next_step_markers = (
+        "inspection",
+        "walkthrough",
+        "key",
+        "keys",
+        "clean",
+        "deposit",
+        "security deposit",
+    )
+    if any(marker in sanitized.lower() for marker in move_out_markers) and not any(
+        marker in sanitized.lower() for marker in next_step_markers
+    ):
+        sanitized = (
+            f"{sanitized} The usual next steps are key return, cleaning the unit, "
+            "a final walkthrough, and security deposit processing."
+        ).strip()
     return sanitized
 
 
