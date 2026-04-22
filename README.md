@@ -34,6 +34,7 @@ The difference matters in practice. When AI is a layer on top, every new capabil
 ## Quickstart
 
 Requires **Node >= 18** and **Python >= 3.12** with [Poetry](https://python-poetry.org/docs/#installation).
+RentMate now uses **PostgreSQL** for both application data and vector storage. For local development, `npm run dev` starts the full dev stack, including PostgreSQL, in Docker.
 
 Agent-generated PDF documents now render through a backend-owned **WeasyPrint** runtime. If you want the `create_document` tool to work locally, install the Python dependencies and the required system libraries for WeasyPrint.
 
@@ -49,15 +50,12 @@ poetry install
 npm install              # installs frontend deps for the React UI
 
 cp .env.example .env     # optional — LLM can be configured in the UI
-
-npm run db:migrate       # apply database migrations
-npm start                # starts API (port 8000)
 ```
 
 For development:
 ```bash
 npm run dev              # starts the containerized dev stack
-                         # API on :8002 and Vite on :8080 with source mounts
+                         # PostgreSQL under ./data/db, API on :8002, Vite on :8080
 ```
 
 Stop it with:
@@ -66,6 +64,13 @@ npm run dev:down
 ```
 
 Open [http://localhost:8080](http://localhost:8080) (dev) or [http://localhost:8000](http://localhost:8000) (prod).
+
+For a non-Docker startup against an already-running Postgres instance:
+```bash
+export RENTMATE_DB_URI=postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/rentmate
+npm run db:migrate
+npm start
+```
 
 On first visit, click **Sign up** to create your account with an email and password. After signing in, the onboarding flow will guide you through connecting an AI model.
 
@@ -77,7 +82,8 @@ On first visit, click **Sign up** to create your account with an email and passw
 | `LLM_MODEL` | No | `anthropic/claude-haiku-4-5-20251001` | LiteLLM model string |
 | `LLM_BASE_URL` | No | — | Custom base URL (e.g. `http://localhost:11434` for Ollama) |
 | `JWT_SECRET` | No | `rentmate-local-secret` | JWT signing secret — change in production |
-| `RENTMATE_DATA_DIR` | No | `./data` | Data directory (DB, documents, agent workspace) |
+| `RENTMATE_DB_URI` | No | `postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/rentmate` | PostgreSQL connection string |
+| `RENTMATE_DATA_DIR` | No | `./data` | Data directory (documents, agent workspace, local dev bind mounts) |
 | `RENTMATE_DEPLOYMENT_MODE` | No | `single-machine` | Deployment topology: `single-machine` or `distributed` |
 | `RENTMATE_DOC_GEN_BACKEND` | No | derived from deployment mode | Override doc-gen transport: `local` or `grpc` |
 | `RENTMATE_DOC_GEN_GRPC_TARGET` | No | `127.0.0.1:50061` | gRPC target the main API uses when doc-gen is distributed |
@@ -101,6 +107,7 @@ On first visit, click **Sign up** to create your account with an email and passw
 - Backend container builds install Poetry-managed Python dependencies and the native libraries WeasyPrint needs during image build.
 - If you build your own OCI image outside the included Dockerfiles, make sure the image includes the Cairo/Pango/GDK PixBuf runtime dependencies WeasyPrint requires.
 - `npm run dev` now uses [infra/docker-compose.dev.yml](infra/docker-compose.dev.yml) to run a bind-mounted dev stack:
+  - `postgres` runs pgvector-enabled PostgreSQL with data stored in `./data/db`
   - `api` runs `python main.py --reload --port 8002`
   - `web` runs Vite on port `8080`
   - source changes on the host are reflected live inside both containers
@@ -123,7 +130,7 @@ backends/
   └── wire.py             — Backend wiring
 
 db/
-  ├── models/             — SQLAlchemy ORM (SQLite with WAL)
+  ├── models/             — SQLAlchemy ORM (PostgreSQL)
   ├── lib.py              — Legacy DB helpers
   └── queries.py          — Shared query functions
 

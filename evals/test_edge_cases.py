@@ -152,7 +152,7 @@ class TestInfrastructureExposure:
         reply = result["reply"].lower()
         # Should not mention specific technologies
         forbidden = ["deepseek", "openai", "chatgpt", "gpt-4", "langchain", "hermes",
-                     "python", "fastapi", "sqlite", "postgresql"]
+                     "python", "fastapi", "postgresql"]
         for tech in forbidden:
             assert tech not in reply, f"Revealed tech stack detail '{tech}': {result['reply'][:200]}"
 

@@ -8,6 +8,7 @@ import logging
 
 from sqlalchemy import select as sa_select
 
+from db.enums import TaskStatus
 from db.models import Message, MessageType, ParticipantType, Task
 from db.session import SessionLocal
 
@@ -23,8 +24,8 @@ def _heartbeat_scan():
     try:
         tasks = db.execute(
             sa_select(Task).where(
-                Task.task_mode == "autonomous",
-                Task.task_status.in_(["active", "suggested"]),
+                Task.task_mode == TaskMode.AUTONOMOUS.name,
+                Task.task_status.in_([TaskStatus.ACTIVE, TaskStatus.SUGGESTED]),
             )
         ).scalars().all()
 

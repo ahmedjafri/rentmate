@@ -1,8 +1,10 @@
 """Service for reading and writing app-level settings from the database."""
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Literal
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from db.enums import SuggestionOption, TaskCategory
@@ -10,8 +12,20 @@ from db.models import AppSetting
 from db.models.base import Base
 from db.session import SessionLocal, engine
 
-# Ensure app_settings table exists (may not if DB was created before this model)
-Base.metadata.create_all(engine, tables=[AppSetting.__table__], checkfirst=True)
+logger = logging.getLogger(__name__)
+
+_app_settings_table_ready = False
+
+
+def _ensure_app_settings_table() -> None:
+    global _app_settings_table_ready
+    if _app_settings_table_ready:
+        return
+    try:
+        Base.metadata.create_all(engine, tables=[AppSetting.__table__], checkfirst=True)
+        _app_settings_table_ready = True
+    except SQLAlchemyError as exc:
+        logger.warning("Failed to ensure app_settings table exists yet: %s", exc)
 
 ActionPolicyLevel = Literal["strict", "balanced", "aggressive"]
 
@@ -27,11 +41,15 @@ _DEFAULT_ACTION_POLICY: dict[str, ActionPolicyLevel] = {
 
 def get_setting(key: str) -> dict | None:
     """Read a setting by key. Returns parsed JSON or None."""
+    _ensure_app_settings_table()
     db = SessionLocal.session_factory()
     try:
         row = db.query(AppSetting).filter_by(key=key).first()
         if row and row.value:
             return json.loads(row.value)
+        return None
+    except SQLAlchemyError as exc:
+        logger.warning("Failed to read app setting %s; falling back to defaults: %s", key, exc)
         return None
     finally:
         db.close()
@@ -39,6 +57,7 @@ def get_setting(key: str) -> dict | None:
 
 def set_setting(key: str, *, value: dict) -> None:
     """Write a setting by key (upsert)."""
+    _ensure_app_settings_table()
     db = SessionLocal.session_factory()
     try:
         row = db.query(AppSetting).filter_by(key=key).first()
@@ -55,6 +74,7 @@ def set_setting(key: str, *, value: dict) -> None:
 
 def load_app_settings() -> dict:
     """Read all settings as a merged dict."""
+    _ensure_app_settings_table()
     db = SessionLocal.session_factory()
     try:
         rows = db.query(AppSetting).all()
@@ -66,6 +86,9 @@ def load_app_settings() -> dict:
                 except Exception:
                     result[row.key] = row.value
         return result
+    except SQLAlchemyError as exc:
+        logger.warning("Failed to load app settings; falling back to empty settings: %s", exc)
+        return {}
     finally:
         db.close()
 
@@ -163,7 +186,7 @@ def get_autonomy_for_category(category: TaskCategory | str | None) -> str:
 
 
 def get_task_mode_for_category(category: str | None) -> tuple[str, str]:
-    return ("waiting_approval", "suggested")
+    return ("WAITING_APPROVAL", "suggested")
 
 
 # ── LLM config ──────────────────────────────────────────────────────────────
@@ -198,6 +221,15 @@ def save_llm_settings(*, api_key: str | None = None, model: str | None = None, b
     if base_url is not None:
         current["base_url"] = base_url
     set_setting(_LLM_KEY, value=current)
+    _log_llm_config(current, event="updated")
+
+
+def _log_llm_config(settings: dict, *, event: str = "loaded") -> None:
+    key = settings.get("api_key", "")
+    masked = f"{key[:4]}...{key[-4:]}" if len(key) > 8 else ("(set)" if key else "(not set)")
+    model = settings.get("model") or "(default)"
+    base_url = settings.get("base_url") or "(default)"
+    print(f"[llm] Config {event}: model={model}, base_url={base_url}, api_key={masked}")
 
 
 def load_llm_into_env() -> None:
@@ -209,6 +241,7 @@ def load_llm_into_env() -> None:
         val = settings.get(db_key)
         if val and not os.environ.get(env_key):
             os.environ[env_key] = val
+    _log_llm_config(settings, event="loaded")
 
 
 # ── agent integrations ──────────────────────────────────────────────────────

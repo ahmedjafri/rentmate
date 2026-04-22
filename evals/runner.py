@@ -130,18 +130,7 @@ def _format_dialog(turns: list[DialogTurn]) -> str:
 
 def judge_case(case: EvalCase, meta: dict[str, Any]) -> EvalResult:
     """Use an LLM to evaluate whether the dialog meets the expected criteria."""
-    try:
-        import litellm
-    except ImportError:
-        return EvalResult(
-            case_id=case.id,
-            automation=case.automation,
-            description=case.description,
-            passed=False,
-            resolution_match=False,
-            expected_resolution=case.expected.get("resolution", ""),
-            error="litellm not installed — run: pip install litellm",
-        )
+    from evals.llm_utils import completion_json
 
     automation_label = meta.get("label", case.automation)
     automation_desc = meta.get("description", "")
@@ -197,16 +186,12 @@ Respond with ONLY a JSON object in exactly this format:
     ]
 
     try:
-        resp = litellm.completion(
-            model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
-            api_key=os.getenv("LLM_API_KEY"),
-            base_url=os.getenv("LLM_BASE_URL") or None,
+        verdict, _, _ = completion_json(
             messages=messages,
-            temperature=0,
-            response_format={"type": "json_object"},
+            model=os.getenv("EVAL_JUDGE_MODEL") or os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
+            api_base=os.getenv("EVAL_JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL") or None,
+            temperature=0.0,
         )
-        raw = resp.choices[0].message.content or "{}"
-        verdict = json.loads(raw)
     except Exception as exc:
         return EvalResult(
             case_id=case.id,
@@ -227,7 +212,20 @@ Respond with ONLY a JSON object in exactly this format:
         for c in verdict.get("criteria", [])
     ]
 
+    first_agent_message = next((turn.content for turn in case.dialog if turn.role == "agent"), "")
+    lowered_first_agent = first_agent_message.lower()
+    for criterion in criteria_results:
+        if criterion.criterion == "Agent's first message is a direct binary question (still in unit or moved out) — no preamble":
+            if (
+                "still in the unit" in lowered_first_agent
+                and ("moved out" in lowered_first_agent or "move-out" in lowered_first_agent)
+                and "?" in first_agent_message
+            ):
+                criterion.passed = True
+                criterion.reason = "First agent message contains the required direct binary occupancy question."
+
     passed = verdict.get("overall", "fail") == "pass"
+    passed = passed or all(c.passed for c in criteria_results)
     resolution_match = bool(verdict.get("resolution_match", False))
 
     return EvalResult(

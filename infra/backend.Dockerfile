@@ -39,7 +39,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy only runtime backend files to preserve build cache and avoid frontend/test churn
 COPY alembic.ini ./
 COPY main.py ./
-COPY agents ./agents
 COPY backends ./backends
 COPY db ./db
 COPY gql ./gql
@@ -48,7 +47,7 @@ COPY llm ./llm
 
 # Environment variable for dev
 ENV RENTMATE_ENV=development
-ENV RENTMATE_DB_PATH=/app/data/rentmate.db
+ENV RENTMATE_DB_URI=postgresql+psycopg2://postgres:postgres@postgres:5432/rentmate
 ENV RENTMATE_DEPLOYMENT_MODE=single-machine
 
 # Expose backend port

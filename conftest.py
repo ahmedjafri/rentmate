@@ -1,13 +1,18 @@
 import os
+import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import create_engine, event, text
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from db.models import Base, User
+
+_POSTGRES_CONTAINER = None
+_POSTGRES_ADMIN_URL: URL | None = None
+_POSTGRES_SHARED_URL: str | None = None
 
 # Load .env into os.environ so LLM-dependent tests (evals, document extraction)
 # pick up credentials without needing the env vars set externally.
@@ -42,37 +47,56 @@ def _no_llm_suggestion(request):
 
 def pytest_addoption(parser):
     parser.addoption("--pdf", action="store", default=None, help="Path to PDF for document extraction tests")
-    parser.addoption("--postgres", action="store_true", default=False, help="Run tests against a real Postgres container via testcontainers")
+
+
+def _build_admin_url(raw_url: str) -> URL:
+    url = make_url(raw_url)
+    return url.set(database="postgres")
+
+
+def _create_database(name: str) -> str:
+    admin_engine = create_engine(_POSTGRES_ADMIN_URL)
+    with admin_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        conn.execute(text(f'CREATE DATABASE "{name}"'))
+    admin_engine.dispose()
+    return _POSTGRES_ADMIN_URL.set(database=name).render_as_string(hide_password=False)
+
+
+def _drop_database(name: str) -> None:
+    admin_engine = create_engine(_POSTGRES_ADMIN_URL)
+    with admin_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+    admin_engine.dispose()
+
+
+def pytest_sessionstart(session):
+    from testcontainers.postgres import PostgresContainer
+
+    global _POSTGRES_CONTAINER, _POSTGRES_ADMIN_URL, _POSTGRES_SHARED_URL
+    _POSTGRES_CONTAINER = PostgresContainer("postgres:16-alpine")
+    _POSTGRES_CONTAINER.start()
+    _POSTGRES_ADMIN_URL = _build_admin_url(_POSTGRES_CONTAINER.get_connection_url())
+    _POSTGRES_SHARED_URL = _create_database("rentmate_pytest")
+    os.environ["RENTMATE_DB_URI"] = _POSTGRES_SHARED_URL
+    os.environ.setdefault("DATABASE_URL", _POSTGRES_SHARED_URL)
+    eng = create_engine(_POSTGRES_SHARED_URL)
+    Base.metadata.create_all(eng)
+    eng.dispose()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    global _POSTGRES_CONTAINER
+    if _POSTGRES_CONTAINER is not None:
+        _drop_database("rentmate_pytest")
+        _POSTGRES_CONTAINER.stop()
+        _POSTGRES_CONTAINER = None
 
 
 @pytest.fixture(scope="session")
-def _pg_engine(request):
-    """Session-scoped Postgres engine via testcontainers (only created when --postgres is passed)."""
-    if not request.config.getoption("--postgres"):
-        yield None
-        return
-    from testcontainers.postgres import PostgresContainer
-
-    with PostgresContainer("postgres:16-alpine") as pg:
-        eng = create_engine(pg.get_connection_url())
-        Base.metadata.create_all(eng)
-        yield eng
-        eng.dispose()
-
-
-@pytest.fixture
-def engine(request, _pg_engine):
-    """Per-test database engine. Uses Postgres when --postgres is passed, otherwise in-memory SQLite."""
-    if _pg_engine is not None:
-        # Re-use the session-scoped Postgres engine; tables are already created.
-        # Per-test isolation is handled by the transaction rollback in the `db` fixture.
-        return _pg_engine
-
-    eng = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+def engine():
+    """Shared Postgres engine for most tests; per-test isolation is transactional."""
+    eng = create_engine(_POSTGRES_SHARED_URL)
     Base.metadata.create_all(eng)
     return eng
 
@@ -80,6 +104,19 @@ def engine(request, _pg_engine):
 @pytest.fixture
 def Session(engine):
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+@pytest.fixture
+def isolated_engine():
+    """Fresh Postgres database for tests that need startup/schema isolation."""
+    db_name = f"rentmate_test_{uuid.uuid4().hex}"
+    db_url = _create_database(db_name)
+    eng = create_engine(db_url)
+    try:
+        yield eng
+    finally:
+        eng.dispose()
+        _drop_database(db_name)
 
 
 @pytest.fixture

@@ -2,18 +2,17 @@ from __future__ import annotations
 
 import os
 import subprocess
-import tempfile
 from pathlib import Path
+
+from testcontainers.postgres import PostgresContainer
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 def run() -> None:
-    fd, db_path = tempfile.mkstemp(prefix="rentmate_migration_check_", suffix=".db")
-    os.close(fd)
-    env = os.environ.copy()
-    env["DATABASE_URL"] = f"sqlite:///{db_path}"
-    try:
+    with PostgresContainer("pgvector/pgvector:pg16") as pg:
+        env = os.environ.copy()
+        env["DATABASE_URL"] = pg.get_connection_url()
         subprocess.run(
             ["poetry", "run", "alembic", "upgrade", "head"],
             cwd=ROOT,
@@ -26,8 +25,6 @@ def run() -> None:
             env=env,
             check=True,
         )
-    finally:
-        Path(db_path).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

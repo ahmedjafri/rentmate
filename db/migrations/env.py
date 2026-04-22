@@ -5,6 +5,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from db.models import Base  # <-- your SQLAlchemy models Base
+from db.vector_models import VectorBase
 
 # If you use a .env file, uncomment these two lines:
 # from dotenv import load_dotenv
@@ -26,8 +27,8 @@ else:
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Use your models' metadata for autogenerate
-target_metadata = Base.metadata
+# Use all model metadata collections for autogenerate.
+target_metadata = [Base.metadata, VectorBase.metadata]
 
 
 def run_migrations_offline() -> None:

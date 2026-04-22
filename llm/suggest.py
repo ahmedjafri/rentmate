@@ -6,6 +6,7 @@ import logging
 import os
 
 from db.enums import TaskCategory
+from llm.litellm_utils import completion_with_retries
 
 logger = logging.getLogger("rentmate.suggest")
 
@@ -44,8 +45,6 @@ def generate_task_suggestion(
     if not api_key:
         return None
     try:
-        import litellm
-
         category_hint = _CATEGORY_HINTS.get(category, "")
         parts = [f"Task: {subject}", f"Context: {context_body}"]
         if tenant_name:
@@ -54,15 +53,13 @@ def generate_task_suggestion(
             parts.append(f"Property: {property_address}")
         if category_hint:
             parts.append(category_hint)
-
-        response = litellm.completion(
-            model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
-            api_key=api_key,
-            api_base=os.getenv("LLM_BASE_URL") or None,
+        response, _, _ = completion_with_retries(
             messages=[
                 {"role": "system", "content": _SYSTEM},
                 {"role": "user", "content": "\n".join(parts)},
             ],
+            model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
+            api_base=os.getenv("LLM_BASE_URL") or None,
             max_tokens=200,
             temperature=0.4,
         )

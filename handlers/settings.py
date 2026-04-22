@@ -353,12 +353,7 @@ async def update_agent_integrations(body: AgentIntegrationsBody, request: Reques
 
 _AGENT_FILES = [
     {"filename": "SOUL.md",           "readonly": True},
-    {"filename": "AGENTS.md",         "readonly": False},
-    {"filename": "IDENTITY.md",       "readonly": True},
-    {"filename": "HEARTBEAT.md",      "readonly": False},
     {"filename": "memory/MEMORY.md",  "readonly": False},
-    {"filename": "USER.md",           "readonly": False},
-    {"filename": "TOOLS.md",          "readonly": True},
 ]
 
 _AGENT_FILENAMES = {f["filename"] for f in _AGENT_FILES}
@@ -366,20 +361,36 @@ _AGENT_FILENAMES = {f["filename"] for f in _AGENT_FILES}
 
 def _agent_workspace() -> Path:
     from backends.local_auth import _lookup_account_id
-    from llm.registry import DATA_DIR
-    return DATA_DIR / str(_lookup_account_id())
+    from llm.registry import get_agent_data_dir
+    return get_agent_data_dir() / str(_lookup_account_id())
+
+
+def _read_agent_workspace_file(path: Path) -> str:
+    try:
+        return path.read_text()
+    except UnicodeDecodeError:
+        return "[binary file not shown]"
+
+
+def _list_agent_workspace_files(workspace: Path) -> list[dict]:
+    readonly_by_filename = {f["filename"]: f["readonly"] for f in _AGENT_FILES}
+    if not workspace.exists():
+        return []
+    result = []
+    for path in sorted(p for p in workspace.rglob("*") if p.is_file()):
+        rel = path.relative_to(workspace).as_posix()
+        result.append({
+            "filename": rel,
+            "content": _read_agent_workspace_file(path),
+            "readonly": readonly_by_filename.get(rel, True),
+        })
+    return result
 
 
 @router.get("/api/settings/agent/files")
 async def get_agent_files(request: Request):
     await require_user(request)
-    workspace = _agent_workspace()
-    result = []
-    for entry in _AGENT_FILES:
-        path = workspace / entry["filename"]
-        content = path.read_text() if path.exists() else ""
-        result.append({"filename": entry["filename"], "content": content, "readonly": entry["readonly"]})
-    return result
+    return _list_agent_workspace_files(_agent_workspace())
 
 
 class AgentFileBody(BaseModel):

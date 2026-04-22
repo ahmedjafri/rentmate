@@ -33,7 +33,13 @@ def log_trace(
     detail: str | dict | None = None,
     suggestion_id: str | None = None,
 ) -> None:
-    """Persist a trace entry. Best-effort — never raises."""
+    """Persist a trace entry. Best-effort — never raises and never poisons the caller's session.
+
+    The trace insert runs inside a nested SAVEPOINT on the caller's session so that
+    a failure (e.g., FK violation against an uncommitted user under test isolation)
+    rolls back only the savepoint and leaves the caller's session usable. The trace
+    rides along with whatever transaction the caller eventually commits.
+    """
     try:
         from db.models import AgentTrace
         from db.session import SessionLocal
@@ -41,9 +47,10 @@ def log_trace(
         if isinstance(detail, dict):
             detail = json.dumps(detail, default=str)
 
-        db = SessionLocal.session_factory()
+        sess = SessionLocal.session_factory()
+        sp = sess.begin_nested()
         try:
-            db.add(AgentTrace(
+            sess.add(AgentTrace(
                 id=str(uuid.uuid4()),
                 timestamp=datetime.now(UTC),
                 trace_type=trace_type[:TRACE_TYPE_MAX_LENGTH],
@@ -56,8 +63,9 @@ def log_trace(
                 suggestion_id=suggestion_id,
                 creator_id=resolve_account_id(),
             ))
-            db.commit()
-        finally:
-            db.close()
+            sess.flush()
+            sp.commit()
+        except Exception:
+            sp.rollback()
     except Exception:
-        pass  # tracing must never break the main flow
+        pass

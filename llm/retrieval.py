@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import re
+import sys
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-import chromadb
 from openai import OpenAI
-from sqlalchemy import delete, select
+from sqlalchemy import Connection, bindparam, create_engine, delete, select, text
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from backends.local_auth import resolve_account_id, resolve_org_id
@@ -35,20 +39,42 @@ from db.models import (
     User,
 )
 from db.queries import format_address, tenant_display_name
+from db.vector_models import MEMORY_EMBED_DIM, MemoryItemVector, VectorBase
 from llm.history_filters import is_transient_tool_failure_text
 from llm.model_config import resolve_model_config
 from llm.tracing import log_trace
+
+logger = logging.getLogger(__name__)
 
 
 def _data_dir() -> Path:
     return Path(os.getenv("RENTMATE_DATA_DIR", "./data"))
 
 
+# Deprecated compatibility placeholder. Memory indexing no longer uses Chroma.
 CHROMA_PATH = _data_dir() / "chroma"
 COLLECTION_NAME = "rentmate_memory_items"
-EMBED_DIM = 128
+EMBED_DIM = MEMORY_EMBED_DIM
 RERANK_TOP_K = 8
 RERANK_ENABLED_INTENTS = {"answer_question", "triage"}
+
+
+def _vector_index_disabled() -> bool:
+    raw = os.getenv("RENTMATE_DISABLE_VECTOR_INDEX", "").lower()
+    if raw in {"1", "true", "yes"}:
+        return True
+    # Keep unit/integration tests deterministic and avoid Chroma instability under pytest.
+    if os.getenv("PYTEST_CURRENT_TEST") and os.getenv("RENTMATE_ENABLE_VECTOR_INDEX_TESTS", "").lower() not in {"1", "true", "yes"}:
+        return True
+    return False
+
+
+def _is_pytest_runtime() -> bool:
+    return (
+        "pytest" in sys.modules
+        or bool(os.getenv("PYTEST_CURRENT_TEST"))
+        or bool(os.getenv("PYTEST_XDIST_WORKER"))
+    )
 
 
 def _tokenize(text: str) -> list[str]:
@@ -130,52 +156,95 @@ class RankedContextBundle:
 
 
 class ChromaMemoryIndex:
-    def __init__(self) -> None:
-        CHROMA_PATH.mkdir(parents=True, exist_ok=True)
-        self.client = chromadb.PersistentClient(path=str(CHROMA_PATH))
-        self.collection = self.client.get_or_create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
+    def __init__(self, db: Session | None = None) -> None:
+        if db is not None and db.bind is not None and not (isinstance(db.bind, Connection) and _is_pytest_runtime()):
+            self._bind = db.bind
+        else:
+            db_uri = os.getenv("RENTMATE_DB_URI", "").strip()
+            if not db_uri and db is not None and db.bind is not None:
+                db_uri = db.bind.engine.url.render_as_string(hide_password=False)
+            self._bind = create_engine(db_uri) if db_uri else None
+        self._dialect = self._bind.dialect.name if self._bind is not None else ""
+        self._enabled = self._dialect == "postgresql"
+        if self._enabled:
+            self._ensure_schema()
+
+    def _connection_scope(self):
+        if isinstance(self._bind, Connection):
+            return nullcontext(self._bind)
+        return self._bind.begin()
+
+    def _ensure_schema(self) -> None:
+        try:
+            with self._connection_scope() as conn:
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+                VectorBase.metadata.create_all(bind=conn, tables=[MemoryItemVector.__table__], checkfirst=True)
+        except SQLAlchemyError as exc:
+            if _is_pytest_runtime():
+                logger.warning("pgvector unavailable in test DB, disabling memory vector index: %s", exc)
+                self._enabled = False
+                return
+            raise
 
     def upsert(self, item: MemoryItem) -> None:
-        self.collection.upsert(
-            ids=[item.id],
-            documents=[item.content],
-            embeddings=[embed_text(item.content)],
-            metadatas=[{
+        if not self._enabled:
+            return
+        embedding = embed_text(item.content)
+        stmt = insert(MemoryItemVector).values(
+            memory_item_id=item.id,
+            org_id=item.org_id,
+            creator_id=item.creator_id,
+            embedding=embedding,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[MemoryItemVector.memory_item_id],
+            set_={
                 "org_id": item.org_id,
                 "creator_id": item.creator_id,
-                "visibility": item.visibility,
-                "source_type": item.source_type,
-                "entity_type": item.entity_type,
-                "entity_id": item.entity_id,
-            }],
+                "embedding": embedding,
+            },
         )
+        with self._connection_scope() as conn:
+            conn.execute(stmt)
 
     def delete(self, ids: list[str]) -> None:
-        if ids:
-            self.collection.delete(ids=ids)
+        if not self._enabled or not ids:
+            return
+        with self._connection_scope() as conn:
+            conn.execute(
+                delete(MemoryItemVector).where(MemoryItemVector.memory_item_id.in_(bindparam("ids", expanding=True))),
+                {"ids": ids},
+            )
 
     def query(self, request: RetrievalRequest, *, where: dict[str, Any], n_results: int) -> dict[str, float]:
+        if not self._enabled:
+            return {}
         query_text = request.query or request.intent or "property management"
-        result = self.collection.query(
-            query_embeddings=[embed_text(query_text)],
-            where=where,
-            n_results=n_results,
-            include=["distances"],
+        query_embedding = embed_text(query_text)
+        org_id = int(where.get("org_id", resolve_org_id()))
+        creator_id = request.creator_id or resolve_account_id()
+        distance = MemoryItemVector.embedding.cosine_distance(query_embedding)
+        stmt = (
+            select(
+                MemoryItemVector.memory_item_id,
+                (1 - distance).label("score"),
+            )
+            .where(
+                MemoryItemVector.org_id == org_id,
+                MemoryItemVector.creator_id == creator_id,
+            )
+            .order_by(distance)
+            .limit(n_results)
         )
-        ids = result.get("ids", [[]])[0]
-        distances = result.get("distances", [[]])[0]
-        scores: dict[str, float] = {}
-        for item_id, distance in zip(ids, distances):
-            # cosine distance -> similarity
-            scores[item_id] = 1.0 - float(distance)
-        return scores
+        with self._connection_scope() as conn:
+            rows = conn.execute(stmt).mappings().all()
+        return {str(row["memory_item_id"]): float(row["score"]) for row in rows}
 
     def reset(self) -> None:
-        try:
-            self.client.delete_collection(COLLECTION_NAME)
-        except Exception:
-            pass
-        self.collection = self.client.get_or_create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
+        if not self._enabled:
+            return
+        with self._connection_scope() as conn:
+            conn.execute(delete(MemoryItemVector))
 
 
 def _today_str() -> str:
@@ -584,9 +653,10 @@ def collect_memory_records(db: Session, *, creator_id: int | None = None) -> lis
     ]
 
 
-def sync_memory_index(db: Session, *, creator_id: int | None = None) -> int:
+def sync_memory_index(db: Session, *, creator_id: int | None = None, enable_vector_index: bool = True) -> int:
     creator = creator_id or resolve_account_id()
-    index = ChromaMemoryIndex()
+    records = collect_memory_records(db, creator_id=creator)
+    index = ChromaMemoryIndex(db) if enable_vector_index else None
     existing = {
         (row.source_type, row.source_id): row
         for row in db.execute(
@@ -599,7 +669,7 @@ def sync_memory_index(db: Session, *, creator_id: int | None = None) -> int:
 
     seen_keys: set[tuple[str, str]] = set()
     count = 0
-    for record in collect_memory_records(db, creator_id=creator):
+    for record in records:
         key = (record.source.source_type, record.source.source_id)
         seen_keys.add(key)
         content_hash = _hash_content(record.title, record.content, record.metadata)
@@ -631,14 +701,31 @@ def sync_memory_index(db: Session, *, creator_id: int | None = None) -> int:
             row.content_hash = content_hash
             row.metadata_json = record.metadata
             row.updated_at = datetime.now(UTC)
-        index.upsert(row)
         count += 1
 
     stale_ids = [row.id for key, row in existing.items() if key not in seen_keys]
     if stale_ids:
         db.execute(delete(MemoryItem).where(MemoryItem.id.in_(stale_ids)))
-        index.delete(stale_ids)
     db.commit()
+
+    if enable_vector_index and index is not None:
+        for record in records:
+            key = (record.source.source_type, record.source.source_id)
+            row = existing.get(key)
+            if row is None:
+                row = db.execute(
+                    select(MemoryItem).where(
+                        MemoryItem.org_id == resolve_org_id(),
+                        MemoryItem.creator_id == creator,
+                        MemoryItem.source_type == record.source.source_type,
+                        MemoryItem.source_id == record.source.source_id,
+                    )
+                ).scalar_one_or_none()
+            if row is not None:
+                index.upsert(row)
+        if stale_ids:
+            index.delete(stale_ids)
+
     log_trace("memory_sync", "memory", f"Synced {count} memory items", detail={"count": count, "creator_id": creator})
     return count
 
@@ -888,15 +975,36 @@ def retrieve_context(db: Session, request: RetrievalRequest) -> RankedContextBun
     creator = request.creator_id or resolve_account_id()
     request.creator_id = creator
     request.org_id = request.org_id or resolve_org_id()
+    disable_vector_index = _vector_index_disabled()
 
-    sync_memory_index(db, creator_id=creator)
+    try:
+        sync_memory_index(db, creator_id=creator, enable_vector_index=not disable_vector_index)
+    except Exception as exc:
+        logger.warning("Skipping memory index sync during retrieval: %s", exc)
+        log_trace(
+            "warning",
+            "memory_sync",
+            "Memory index sync skipped during retrieval",
+            task_id=request.task_id,
+            detail={"error": str(exc), "creator_id": creator},
+        )
 
     items = _eligible_items(db, creator)
     query_tokens = set(_tokenize(request.query or request.intent))
     vector_scores: dict[str, float] = {}
-    if items:
-        index = ChromaMemoryIndex()
-        vector_scores = index.query(request, where=_base_where(creator), n_results=min(50, max(10, request.limit * 4)))
+    if items and not disable_vector_index:
+        try:
+            index = ChromaMemoryIndex(db)
+            vector_scores = index.query(request, where=_base_where(creator), n_results=min(50, max(10, request.limit * 4)))
+        except Exception as exc:
+            logger.warning("Skipping vector memory query during retrieval: %s", exc)
+            log_trace(
+                "warning",
+                "memory_query",
+                "Vector memory query skipped during retrieval",
+                task_id=request.task_id,
+                detail={"error": str(exc), "creator_id": creator},
+            )
 
     ranked: list[RankedContextItem] = []
     request_embedding = embed_text(request.query or request.intent or "")

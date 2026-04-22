@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backends.local_auth import resolve_account_id
+from db.enums import TaskMode, TaskStatus
 from db.lib import get_conversation_with_messages, route_inbound_to_task
 from db.models import (
     Conversation,
@@ -126,8 +127,8 @@ async def simulate_inbound(
         task = Task(
             creator_id=tenant.creator_id,
             title=f"Message from {tenant_name}",
-            task_status="active",
-            task_mode="autonomous",
+            task_status=TaskStatus.ACTIVE,
+            task_mode=TaskMode.AUTONOMOUS,
             source=DEV_SIM_SOURCE,
             created_at=now,
             updated_at=now,
@@ -175,7 +176,7 @@ async def simulate_inbound(
             .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
             .filter(
                 Task.source == DEV_SIM_SOURCE,
-                Task.task_status == "active",
+                Task.task_status == TaskStatus.ACTIVE,
                 ConversationParticipant.user_id == tenant.user_id,
                 ConversationParticipant.is_active.is_(True),
             )
@@ -203,7 +204,7 @@ async def simulate_inbound(
             .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
             .filter(
                 Task.source == DEV_SIM_SOURCE,
-                Task.task_status == "active",
+                Task.task_status == TaskStatus.ACTIVE,
                 ConversationParticipant.user_id == tenant.user_id,
                 ConversationParticipant.is_active.is_(True),
             )
@@ -289,7 +290,7 @@ async def get_dev_history(
         .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
         .filter(
             Task.source == DEV_SIM_SOURCE,
-            Task.task_status == "active",
+            Task.task_status == TaskStatus.ACTIVE,
             ConversationParticipant.user_id == tenant.user_id,
             ConversationParticipant.is_active.is_(True),
         )
@@ -466,7 +467,7 @@ async def reindex_memory(
 ):
     await require_user(request)
     if reset_index:
-        ChromaMemoryIndex().reset()
+        ChromaMemoryIndex(db).reset()
     count = sync_memory_index(db)
     return {"count": count, "reset_index": reset_index}
 

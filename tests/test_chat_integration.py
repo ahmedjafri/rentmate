@@ -1,8 +1,8 @@
 """
 Integration tests for the /chat/send SSE endpoint.
 
-The real FastAPI app is exercised end-to-end against an in-memory SQLite
-database.  Only two things are mocked:
+The real FastAPI app is exercised end-to-end against an isolated Postgres
+database. Only two things are mocked:
 
   1. ``llm.client.call_agent`` — replaces the agent call so tests are
      fast and deterministic.  The mock can optionally call ``on_progress`` to
@@ -27,9 +27,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from db.enums import TaskCategory, TaskMode, TaskStatus, Urgency
 from db.models import Base, Conversation, Message, MessageType, Task
@@ -37,15 +35,9 @@ from llm.client import AgentResponse
 
 # ─── DB helpers ──────────────────────────────────────────────────────────────
 
-def _make_engine():
-    """Fresh in-memory SQLite engine with the full schema applied."""
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+def _init_engine(engine):
+    """Fresh Postgres test database with the full schema applied."""
     Base.metadata.create_all(engine)
-    return engine
 
 
 def _make_session_factory(engine):
@@ -103,8 +95,9 @@ async def _collect_sse(stream_response) -> list[dict]:
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 @pytest.fixture()
-def engine():
-    eng = _make_engine()
+def engine(isolated_engine):
+    eng = isolated_engine
+    _init_engine(eng)
     yield eng
     eng.dispose()
 
@@ -364,7 +357,7 @@ class TestTaskChatSSE:
                 ):
                     resp = await client.post(
                         "/chat/send",
-                        json={"task_id": str(uuid.uuid4()), "message": "Hello?"},
+                        json={"task_id": "999999", "message": "Hello?"},
                     )
             assert resp.status_code == 404
 

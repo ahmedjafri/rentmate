@@ -1,6 +1,17 @@
 name: rentmate
 
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: rentmate
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ../data/db:/var/lib/postgresql/data
+    networks:
+      - rentmate-network
+
   api:
     build:
       context: ..
@@ -12,12 +23,14 @@ services:
       - ../data:/app/data
     environment:
       - RENTMATE_ENV=development
-      - RENTMATE_DB_PATH=/tmp/rentmate.db
+      - RENTMATE_DB_URI=postgresql+psycopg2://postgres:postgres@postgres:5432/rentmate
       - RENTMATE_DEPLOYMENT_MODE=single-machine
     env_file:
       - ../.env
     networks:
       - rentmate-network
+    depends_on:
+      - postgres
 
   www:
     build:

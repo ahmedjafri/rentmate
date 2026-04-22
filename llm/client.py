@@ -13,9 +13,11 @@ import os
 import queue
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import httpx
+from agent.memory_manager import MemoryManager
 
 from backends.local_auth import (
     reset_fallback_request_context,
@@ -24,7 +26,8 @@ from backends.local_auth import (
     set_fallback_request_context,
 )
 from llm.model_config import resolve_model_config
-from llm.registry import agent_registry
+from llm.registry import agent_registry, ensure_agent_runtime_dirs
+from llm.rentmate_policy_provider import RentmatePolicyProvider
 from llm.tools import current_user_message
 from llm.tracing import log_trace, make_trace_envelope
 
@@ -42,6 +45,66 @@ current_completed_tools: contextvars.ContextVar[list[str]] = contextvars.Context
     "current_completed_tools",
     default=[],
 )
+_last_eval_debug_payload: dict[str, Any] | None = None
+
+
+def _set_last_eval_debug_payload(payload: dict[str, Any] | None) -> None:
+    global _last_eval_debug_payload
+    _last_eval_debug_payload = payload
+
+
+def get_last_eval_debug_payload() -> dict[str, Any] | None:
+    return _last_eval_debug_payload
+
+
+def _attach_rentmate_policy_provider(agent: Any) -> None:
+    manager = getattr(agent, "_memory_manager", None)
+    if manager is None:
+        manager = MemoryManager()
+        agent._memory_manager = manager
+    if manager.get_provider("rentmate_policy") is not None:
+        return
+    manager.add_provider(RentmatePolicyProvider())
+    manager.initialize_all(
+        session_id=str(getattr(agent, "session_id", "")),
+        platform=getattr(agent, "platform", "api") or "api",
+        hermes_home=str(getattr(agent, "hermes_home", "")),
+        agent_context="primary",
+    )
+
+
+_ONBOARDING_PROMPT_PATH = Path(__file__).parent / "policies" / "onboarding.md"
+
+
+def _read_onboarding_prompt() -> str:
+    return _ONBOARDING_PROMPT_PATH.read_text().strip()
+
+
+def _load_onboarding_prompt(*, session_key: str) -> str:
+    if not str(session_key).startswith("chat:"):
+        return ""
+    try:
+        from db.session import SessionLocal
+        from db.models import Property
+        from gql.services.settings_service import get_onboarding_state
+
+        db = SessionLocal()
+        try:
+            state = get_onboarding_state(db)
+            # An account with no properties is still in onboarding even if
+            # init_onboarding hasn't been called yet (e.g. the user uploaded a
+            # lease before the frontend hit /onboarding/state).
+            implicit_active = (state is None) and (db.query(Property).count() == 0)
+        finally:
+            db.close()
+    except Exception:
+        return ""
+    if not implicit_active and (not state or state.get("status") != "active"):
+        return ""
+    try:
+        return _read_onboarding_prompt()
+    except Exception:
+        return ""
 
 
 @dataclass
@@ -117,6 +180,38 @@ def _has_document_side_effect(side_effects: list[dict]) -> bool:
     return False
 
 
+def _summarize_non_document_side_effects(side_effects: list[dict]) -> str | None:
+    if not side_effects:
+        return None
+    counts: dict[str, int] = {}
+    for effect in side_effects:
+        if not isinstance(effect, dict):
+            continue
+        action_card = ((effect.get("meta") or {}).get("action_card") or {})
+        kind = action_card.get("kind")
+        if not kind or kind == "document":
+            continue
+        counts[kind] = counts.get(kind, 0) + 1
+    if not counts:
+        return None
+    if counts == {"property": 1}:
+        return "I created the property record from the lease."
+    if counts == {"tenant": 1}:
+        return "I created the tenant record."
+    if counts == {"property": 1, "tenant": 1}:
+        return "I created the property and tenant records from the lease."
+    parts = []
+    for kind in ("property", "unit", "tenant", "suggestion"):
+        count = counts.get(kind)
+        if not count:
+            continue
+        noun = kind if count == 1 else f"{kind}s"
+        parts.append(f"{count} {noun}")
+    if not parts:
+        return None
+    return f"I completed the requested updates: {', '.join(parts)}."
+
+
 def _failed_mutating_tool_switched(
     *,
     failed_tools: list[dict[str, Any]],
@@ -167,6 +262,196 @@ def _reply_is_only_tool_progress(reply: str) -> bool:
     return True
 
 
+_GENERIC_REPLY_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"^i(?:'ve| have) answered\b",
+        r"^i(?:'ve| have) responded\b",
+        r"^i(?:'ve| have) closed the task\b",
+        r"^i(?:'ve| have) answered .* and closed the task\b",
+        r"^i(?:'ve| have) handled\b",
+        r"^done\b",
+    ]
+]
+
+_NARROW_REQUEST_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"^i don't see .* in the system\b",
+        r"^to coordinate .* i'll need\b",
+        r"^i need .* contact information\b",
+        r"^do you want me to create .* vendor entry\b",
+    ]
+]
+
+_STAGE_SETTING_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bthe next phase is\b",
+        r"\brequired first step\b",
+        r"\bmust be served before\b",
+        r"\bwait the\b",
+        r"\bcourt filing\b",
+        r"\bunlawful detainer\b",
+    ]
+]
+
+_EXCLUDED_SUBSET_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bexcluded as requested\b",
+        r"\bwas excluded\b",
+        r"\bwere excluded\b",
+        r"\bnon-matching\b",
+        r"\bskipped the\b",
+    ]
+]
+
+_EMPATHY_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bi understand\b",
+        r"\bi'm sorry\b",
+        r"\bi am sorry\b",
+        r"\bi(?:'m| am) deeply concerned\b",
+        r"\bconcerned\b",
+        r"\breach out\b",
+        r"\bsupport\b",
+        r"\bcare\b",
+        r"\bfrustration\b",
+        r"\btoo long\b",
+        r"\bthat sounds\b",
+    ]
+]
+
+_PLANNING_REPLY_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bnow i need to\b",
+        r"\blet me create\b",
+        r"\bfrom the list provided\b",
+        r"\bthe user requested\b",
+        r"\bfirst, let me\b",
+    ]
+]
+
+
+def _reply_is_generic_summary(reply: str) -> bool:
+    text = (reply or "").strip()
+    if not text:
+        return True
+    return any(pattern.search(text) for pattern in _GENERIC_REPLY_PATTERNS) or _looks_like_planning_reply(text)
+
+
+def _reply_is_narrow_information_request(reply: str) -> bool:
+    text = (reply or "").strip()
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in _NARROW_REQUEST_PATTERNS)
+
+
+def _has_stage_setting(content: str) -> bool:
+    text = (content or "").strip()
+    return any(pattern.search(text) for pattern in _STAGE_SETTING_PATTERNS)
+
+
+def _contains_excluded_subset_language(content: str) -> bool:
+    text = (content or "").strip()
+    return any(pattern.search(text) for pattern in _EXCLUDED_SUBSET_PATTERNS)
+
+
+def _contains_empathy(content: str) -> bool:
+    text = (content or "").strip()
+    return any(pattern.search(text) for pattern in _EMPATHY_PATTERNS)
+
+
+def _looks_like_planning_reply(content: str) -> bool:
+    text = (content or "").strip()
+    return any(pattern.search(text) for pattern in _PLANNING_REPLY_PATTERNS)
+
+
+def _sanitize_filtered_subset_reply(reply: str) -> str:
+    text = (reply or "").strip()
+    if not text:
+        return text
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    kept = [sentence for sentence in sentences if not _contains_excluded_subset_language(sentence)]
+    sanitized = " ".join(part.strip() for part in kept if part.strip()).strip()
+    sanitized = sanitized or text
+    replacements = [
+        (r"\bcheck your lease\b", "confirm the lease policy details"),
+        (r"\bchecks? your lease\b", "confirms the lease policy details"),
+        (r"\bproperty manager to check your lease\b", "property manager to confirm the lease policy details"),
+        (r"\bmanager to check your lease\b", "manager to confirm the lease policy details"),
+        (r"\brefer to your lease\b", "review the lease policy details with the property manager"),
+        (r"\blook at your lease\b", "review the lease policy details with the property manager"),
+        (r"\breview your documents\b", "confirm the policy details"),
+    ]
+    for pattern, replacement in replacements:
+        sanitized = re.sub(pattern, replacement, sanitized, flags=re.I)
+    move_out_markers = (
+        "move-out",
+        "move out",
+        "30-day notice",
+        "30 day notice",
+        "notice to move",
+    )
+    next_step_markers = (
+        "inspection",
+        "walkthrough",
+        "key",
+        "keys",
+        "clean",
+        "deposit",
+        "security deposit",
+    )
+    if any(marker in sanitized.lower() for marker in move_out_markers) and not any(
+        marker in sanitized.lower() for marker in next_step_markers
+    ):
+        sanitized = (
+            f"{sanitized} The usual next steps are key return, cleaning the unit, "
+            "a final walkthrough, and security deposit processing."
+        ).strip()
+    return sanitized
+
+
+def _select_best_reply(result: dict[str, Any], reply: str) -> str:
+    def _finalize(text: str) -> str:
+        return _sanitize_filtered_subset_reply(text)
+
+    messages = result.get("messages", []) if isinstance(result, dict) else []
+    candidates: list[str] = []
+    for message in reversed(messages):
+        if message.get("role") != "assistant":
+            continue
+        content = str(message.get("content") or "").strip()
+        if not content:
+            continue
+        if content == (reply or "").strip():
+            continue
+        candidates.append(content)
+    if not candidates:
+        return _finalize(reply)
+    best_candidate = candidates[0]
+    if _reply_is_only_tool_progress(reply) or _reply_is_generic_summary(reply):
+        return _finalize(best_candidate)
+    if _reply_is_narrow_information_request(reply):
+        for candidate in candidates:
+            if _has_stage_setting(candidate) and not _has_stage_setting(reply):
+                return _finalize(candidate)
+    if _contains_excluded_subset_language(reply):
+        for candidate in candidates:
+            if not _contains_excluded_subset_language(candidate) and not _looks_like_planning_reply(candidate):
+                return _finalize(candidate)
+    if not _contains_empathy(reply):
+        for candidate in candidates:
+            if _contains_empathy(candidate):
+                return _finalize(candidate)
+    if len(best_candidate) > max(len(reply or ""), 1) * 1.4:
+        return _finalize(best_candidate)
+    return _finalize(reply)
+
+
 # ─── Local agent execution ───────────────────────────────────────────────────
 
 
@@ -189,7 +474,11 @@ async def chat_with_agent(
     provider = resolved_model.provider
 
     # Extract system message and conversation history
-    system_message = agent_registry.build_system_prompt(agent_id)
+    prompt_bundle = agent_registry.build_system_prompt_bundle(agent_id)
+    system_message = str(prompt_bundle.get("system_prompt") or "")
+    onboarding_prompt = _load_onboarding_prompt(session_key=session_key)
+    if onboarding_prompt:
+        system_message = f"{system_message}\n\n---\n\n{onboarding_prompt}" if system_message else onboarding_prompt
     sys_content = next((m["content"] for m in messages if m.get("role") == "system"), None)
     if sys_content:
         system_message = f"{system_message}\n\n---\n\n{sys_content}"
@@ -351,6 +640,22 @@ async def chat_with_agent(
 
     print(f"[agent] model={actual_model} provider={provider} base_url={api_base}")
     print(f"[agent] system_prompt={len(system_message)} chars, history={len(conversation_history)} msgs, user_message={len(user_message)} chars")
+    if str(session_key).startswith("eval:"):
+        _set_last_eval_debug_payload({
+            "agent_id": agent_id,
+            "session_key": session_key,
+            "model": actual_model,
+            "provider": provider,
+            "api_base": api_base,
+            "system_prompt": system_message,
+            "memory_context": str(prompt_bundle.get("memory_context") or ""),
+            "prompt_parts": prompt_bundle.get("parts") or [],
+            "system_message_override": sys_content or "",
+            "conversation_history": conversation_history,
+            "user_message": user_message,
+        })
+    runtime_dirs = ensure_agent_runtime_dirs(agent_id)
+    hermes_home = runtime_dirs["hermes_home"]
 
     agent = AIAgent(
         base_url=api_base,
@@ -364,11 +669,13 @@ async def chat_with_agent(
         session_id=session_key,
         skip_context_files=True,
         skip_memory=True,
+        hermes_home=hermes_home,
         tool_progress_callback=_tool_progress,
         step_callback=_step_callback,
         verbose_logging=bool(os.getenv("AGENT_VERBOSE")),
     )
     agent._tool_use_enforcement = True
+    _attach_rentmate_policy_provider(agent)
 
     _orig_build = agent._build_api_kwargs
 
@@ -376,6 +683,11 @@ async def chat_with_agent(
         kw = _orig_build(messages)
         if agent.tools and "tools" in kw and "tool_choice" not in kw:
             kw["tool_choice"] = "auto"
+        if str(session_key).startswith("eval:"):
+            try:
+                kw["temperature"] = float(os.getenv("EVAL_AGENT_TEMPERATURE", "0"))
+            except ValueError:
+                kw["temperature"] = 0.0
         return kw
     agent._build_api_kwargs = _patched_build_api_kwargs
 
@@ -426,6 +738,7 @@ async def chat_with_agent(
                 if m.get("role") == "assistant" and m.get("content"):
                     reply = m["content"]
                     break
+        reply = _select_best_reply(result, reply)
         # The agent library returns API errors as normal text replies
         # rather than raising exceptions.  Detect these and re-raise so
         # the SSE error path fires (red bubble, not blue).
@@ -549,6 +862,10 @@ async def _local_fallback(
         failed_tools = list(current_failed_tools.get())
         completed_tools = list(current_completed_tools.get())
         if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
+            side_effect_reply = _summarize_non_document_side_effects(side_effects)
+            if side_effect_reply:
+                reply = side_effect_reply
+                return AgentResponse(reply=reply, side_effects=side_effects)
             log_trace(
                 "error",
                 "chat",

@@ -8,13 +8,14 @@ import json
 import os
 from pathlib import Path
 
-import litellm
 import pytest
 
+from evals.llm_utils import completion_json
 from llm.document_processor import EXTRACTION_PROMPT
 
 _SAMPLE_PDF = Path(__file__).resolve().parent / "sample_rental_agreement.pdf"
 _MISSING_TENANT_PDF = Path(__file__).resolve().parent / "sample_lease_missing_tenant.pdf"
+_EXTRACTION_TIMEOUT_SECONDS = float(os.getenv("EVAL_DOCUMENT_EXTRACTION_TIMEOUT_SECONDS", "45"))
 
 pytestmark = pytest.mark.eval
 
@@ -43,15 +44,16 @@ def _extract_from_pdf(pdf_path: Path) -> dict:
 
     truncated = raw_text[:12000]
 
-    response = litellm.completion(
-        model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
-        api_key=os.getenv("LLM_API_KEY"),
-        base_url=os.getenv("LLM_BASE_URL") or None,
+    result, _, _ = completion_json(
         messages=[{"role": "user", "content": EXTRACTION_PROMPT + truncated}],
-        response_format={"type": "json_object"},
+        model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
+        api_base=os.getenv("LLM_BASE_URL") or None,
+        temperature=0.0,
+        retries=1,
+        timeout=_EXTRACTION_TIMEOUT_SECONDS,
     )
 
-    return json.loads(response.choices[0].message.content)
+    return result
 
 
 @pytest.fixture(scope="module")

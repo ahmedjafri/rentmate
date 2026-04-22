@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from backends.local_auth import resolve_account_id, resolve_org_id
+from db.id_utils import normalize_optional_id
 from db.models import (
     Conversation,
     ConversationParticipant,
@@ -303,6 +304,8 @@ def get_or_create_external_conversation(
     """
     now = datetime.now(UTC)
     creator_id = resolve_account_id()
+    property_id = normalize_optional_id(property_id)
+    unit_id = normalize_optional_id(unit_id)
 
     conv = Conversation(
         org_id=resolve_org_id(),

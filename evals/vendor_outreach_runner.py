@@ -64,18 +64,7 @@ def generate_for_case(case: EvalCase) -> str | None:
 
 def judge_vendor_outreach(case: EvalCase, generated_message: str) -> EvalResult:
     """Use an LLM judge to evaluate the generated vendor outreach message."""
-    try:
-        import litellm
-    except ImportError:
-        return EvalResult(
-            case_id=case.id,
-            automation=case.automation,
-            description=case.description,
-            passed=False,
-            resolution_match=True,
-            expected_resolution="active",
-            error="litellm not installed",
-        )
+    from evals.llm_utils import completion_json
 
     criteria = case.expected.get("criteria", [])
     criteria_block = "\n".join(f"{i+1}. {c}" for i, c in enumerate(criteria))
@@ -115,19 +104,15 @@ Respond with ONLY a JSON object in exactly this format:
 }}"""
 
     try:
-        resp = litellm.completion(
-            model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
-            api_key=os.getenv("LLM_API_KEY"),
-            base_url=os.getenv("LLM_BASE_URL") or None,
+        verdict, _, _ = completion_json(
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0,
-            response_format={"type": "json_object"},
+            model=os.getenv("EVAL_JUDGE_MODEL") or os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
+            api_base=os.getenv("EVAL_JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL") or None,
+            temperature=0.0,
         )
-        raw = resp.choices[0].message.content or "{}"
-        verdict = json.loads(raw)
     except Exception as exc:
         return EvalResult(
             case_id=case.id,

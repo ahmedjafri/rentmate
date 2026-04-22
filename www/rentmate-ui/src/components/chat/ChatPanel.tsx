@@ -417,7 +417,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
     setActiveTaskTab(prev => {
       if (!activeTask) return 'ai';
       if (taskChanged) return getDefaultTaskTab(activeTask);
-      if (prev === 'ai') return prev;
+      if (prev === 'ai' || prev === 'progress') return prev;
       const stillExists = linkedChats.some(chat => chat.uid === prev);
       return stillExists ? prev : getDefaultTaskTab(activeTask);
     });

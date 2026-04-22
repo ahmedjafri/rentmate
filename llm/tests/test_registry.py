@@ -72,7 +72,7 @@ class TestAgentRegistry(unittest.TestCase):
     # populate_all_agents — workspace files
     # ------------------------------------------------------------------
 
-    def test_populate_all_agents_writes_tools_md(self):
+    def test_populate_all_agents_writes_core_workspace_files(self):
         from llm.registry import AgentRegistry
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -80,11 +80,30 @@ class TestAgentRegistry(unittest.TestCase):
             data_dir = tmp_path / "agent"
             data_dir.mkdir(parents=True)
 
-            with patch("llm.registry.DATA_DIR", data_dir):
+            with patch("llm.registry.get_agent_data_dir", return_value=data_dir), patch(
+                "llm.registry._lookup_account_id", return_value=int(DEFAULT_USER_ID)
+            ):
                 registry = AgentRegistry()
                 registry.populate_all_agents(self.db)
 
-            tools_md = data_dir / DEFAULT_USER_ID / "TOOLS.md"
-            self.assertTrue(tools_md.exists(), "TOOLS.md should be created")
-            content = tools_md.read_text()
-            self.assertIn("Data Operations", content)
+            soul_md = data_dir / DEFAULT_USER_ID / "SOUL.md"
+            self.assertTrue(soul_md.exists(), "SOUL.md should be created")
+            self.assertFalse(
+                (data_dir / DEFAULT_USER_ID / "USER.md").exists(),
+                "USER.md should not be created",
+            )
+
+    def test_ensure_agent_runtime_dirs_creates_hermes_profile_dirs(self):
+        from llm.registry import ensure_agent_runtime_dirs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            data_dir = tmp_path / "agent"
+            with patch("llm.registry.get_agent_data_dir", return_value=data_dir):
+                runtime_dirs = ensure_agent_runtime_dirs(DEFAULT_USER_ID)
+
+            self.assertTrue(runtime_dirs["workspace"].is_dir())
+            self.assertTrue(runtime_dirs["hermes_home"].is_dir())
+            self.assertEqual(runtime_dirs["hermes_home"], runtime_dirs["workspace"])
+            self.assertTrue(runtime_dirs["working_dir"].is_dir())
+            self.assertEqual(runtime_dirs["working_dir"], runtime_dirs["workspace"] / "home")
