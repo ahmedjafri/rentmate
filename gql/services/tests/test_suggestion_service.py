@@ -2,7 +2,7 @@ import pytest
 
 from backends.local_auth import reset_request_context, set_request_context
 from db.enums import AgentSource, AutomationSource, SuggestionOption, Urgency
-from db.models import Message, Suggestion, Task, User
+from db.models import Conversation, Message, Suggestion, Task, User
 from gql.services import suggestion_service
 from gql.services.suggestion_service import coerce_action_payload
 from gql.services.task_suggestions import SuggestionExecutor
@@ -46,6 +46,25 @@ def test_create_suggestion_coerces_lowercase_urgency(db):
     )
 
     assert suggestion.urgency == Urgency.LOW
+
+
+def test_create_suggestion_normalizes_blank_optional_ids(db):
+    suggestion = suggestion_service.create_suggestion(
+        db,
+        title="Create tenant record from lease",
+        ai_context="Tenant name missing",
+        source=AgentSource(),
+        property_id="   ",
+        unit_id="",
+    )
+
+    db.refresh(suggestion)
+    ai_convo = db.get(Conversation, suggestion.ai_conversation_id)
+    assert suggestion.property_id is None
+    assert suggestion.unit_id is None
+    assert ai_convo is not None
+    assert ai_convo.property_id is None
+    assert ai_convo.unit_id is None
 
 
 def test_act_on_suggestion_tracks_action_and_rejects_repeat_or_unknown_action(db):

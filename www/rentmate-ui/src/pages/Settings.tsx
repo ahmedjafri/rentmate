@@ -74,13 +74,9 @@ interface AgentFile {
 
 const AGENT_FILE_LABELS: Record<string, string> = {
   'SOUL.md': 'Soul',
-  'AGENTS.md': 'Agents',
-  'IDENTITY.md': 'Identity',
-  'HEARTBEAT.md': 'Heartbeat',
-  'memory/MEMORY.md': 'Memory',
-  'USER.md': 'User',
-  'TOOLS.md': 'Tools',
 };
+
+const labelForAgentFile = (filename: string) => AGENT_FILE_LABELS[filename] ?? filename;
 
 const SettingsPage = () => {
   const { actionPolicySettings, setActionPolicySettings } = useApp();
@@ -703,21 +699,21 @@ const SettingsPage = () => {
             <h2 className="text-lg font-bold">AI Agent</h2>
           </div>
           <p className="text-sm text-muted-foreground mb-6">
-            Edit the agent's identity, behaviour, and long-term memory.
+            Inspect the full agent workspace for this account. Only supported files can be edited here.
           </p>
           <Tabs defaultValue={agentFiles[0]?.filename}>
             <TabsList className="flex flex-wrap h-auto gap-1 mb-4">
               {agentFiles.map(f => (
                 <TabsTrigger key={f.filename} value={f.filename} className="text-xs">
                   {f.readonly && <Lock className="h-3 w-3 mr-1 opacity-50" />}
-                  {AGENT_FILE_LABELS[f.filename] ?? f.filename}
+                  {labelForAgentFile(f.filename)}
                 </TabsTrigger>
               ))}
             </TabsList>
             {agentFiles.map(f => (
               <TabsContent key={f.filename} value={f.filename} className="space-y-3">
                 {f.readonly && (
-                  <p className="text-xs text-muted-foreground">Auto-generated on startup — read only.</p>
+                  <p className="text-xs text-muted-foreground">Read only.</p>
                 )}
                 <Textarea
                   className="font-mono text-xs min-h-96 resize-y"
@@ -730,7 +726,7 @@ const SettingsPage = () => {
                   disabled={f.readonly || savingFile === f.filename}
                   className="w-full"
                 >
-                  {savingFile === f.filename ? 'Saving…' : `Save ${AGENT_FILE_LABELS[f.filename] ?? f.filename}`}
+                  {savingFile === f.filename ? 'Saving…' : `Save ${labelForAgentFile(f.filename)}`}
                 </Button>
               </TabsContent>
             ))}

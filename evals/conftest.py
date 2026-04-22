@@ -7,6 +7,16 @@ import asyncio
 import json
 import os
 import uuid
+from time import sleep
+
+
+def pytest_configure(config):
+    agent_model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
+    judge_model = os.getenv("EVAL_JUDGE_MODEL") or agent_model
+    api_key = os.getenv("LLM_API_KEY", "")
+    masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else ("(set)" if api_key else "(NOT SET)")
+    base_url = os.getenv("LLM_BASE_URL") or "(default)"
+    print(f"\n[evals] agent_model={agent_model}, judge_model={judge_model}, base_url={base_url}, api_key={masked}")
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -455,15 +465,10 @@ def get_messages(db, conv_id):
 
 def judge_message(message, scenario_desc, criteria):
     """Use LLM to evaluate message quality. Returns {"scores": {...}, "pass": bool, "reason": str}."""
-    import litellm
+    from evals.llm_utils import completion_json
 
     criteria_block = "\n".join(f"{i+1}. {c}" for i, c in enumerate(criteria))
-    judge_model = os.getenv("EVAL_JUDGE_MODEL") or os.getenv("LLM_MODEL", "deepseek/deepseek-chat")
-
-    response = litellm.completion(
-        model=judge_model,
-        api_key=os.getenv("LLM_API_KEY"),
-        api_base=os.getenv("LLM_BASE_URL") or None,
+    result, _, _ = completion_json(
         messages=[{
             "role": "user",
             "content": f"""You are evaluating a property management AI's response quality.
@@ -509,16 +514,10 @@ Return ONLY valid JSON (no markdown):
 
 A message passes if ALL scores are >= 3.""",
         }],
+        model=os.getenv("EVAL_JUDGE_MODEL") or os.getenv("LLM_MODEL", "deepseek/deepseek-chat"),
+        api_base=os.getenv("EVAL_JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL") or None,
         temperature=0.0,
     )
-
-    text = response.choices[0].message.content.strip()
-    if "```" in text:
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    result = json.loads(text)
 
     scores = dict(result.get("scores") or {})
     reply_lower = message.lower()
@@ -713,7 +712,7 @@ def _extract_latest_outbound_message(db, task_id, *, user_message: str = "", fal
             "all matching properties",
         )
     ):
-        prefer_vendor = False
+        prefer_vendor = True
     for suggestion in suggestions:
         payload = suggestion.action_payload or {}
         if payload.get("action") != "message_person":

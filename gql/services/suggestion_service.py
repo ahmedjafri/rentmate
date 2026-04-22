@@ -7,6 +7,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from backends.local_auth import resolve_account_id, resolve_org_id
+from db.id_utils import normalize_optional_id
 from db.enums import (
     AutomationSource,
     SuggestionOption,
@@ -101,6 +102,8 @@ def coerce_action_payload(action_payload: BaseModel | dict | None) -> dict | Non
 
 
 def _get_creator_id(sess: Session, property_id: str | None, unit_id: str | None) -> int:
+    property_id = normalize_optional_id(property_id)
+    unit_id = normalize_optional_id(unit_id)
     try:
         if property_id:
             res = sess.execute(text("SELECT creator_id FROM properties WHERE id = :id"), {"id": property_id}).fetchone()
@@ -149,6 +152,8 @@ def create_suggestion(
         unit_id: Scoping FK — the unit this suggestion relates to.
     """
     now = datetime.now(UTC)
+    property_id = normalize_optional_id(property_id)
+    unit_id = normalize_optional_id(unit_id)
     creator_id = _get_creator_id(sess, property_id, unit_id)
 
     # Decompose source union into DB columns

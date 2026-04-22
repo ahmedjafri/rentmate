@@ -13,6 +13,7 @@ import os
 import queue
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import httpx
@@ -70,6 +71,36 @@ def _attach_rentmate_policy_provider(agent: Any) -> None:
         hermes_home=str(getattr(agent, "hermes_home", "")),
         agent_context="primary",
     )
+
+
+_ONBOARDING_PROMPT_PATH = Path(__file__).parent / "policies" / "onboarding.md"
+
+
+def _load_onboarding_prompt(*, session_key: str) -> str:
+    if not str(session_key).startswith("chat:"):
+        return ""
+    try:
+        from rentmate.app import SessionLocal
+        from db.models import Property
+        from gql.services.settings_service import get_onboarding_state
+
+        db = SessionLocal()
+        try:
+            state = get_onboarding_state(db)
+            # An account with no properties is still in onboarding even if
+            # init_onboarding hasn't been called yet (e.g. the user uploaded a
+            # lease before the frontend hit /onboarding/state).
+            implicit_active = (state is None) and (db.query(Property).count() == 0)
+        finally:
+            db.close()
+    except Exception:
+        return ""
+    if not implicit_active and (not state or state.get("status") != "active"):
+        return ""
+    try:
+        return _ONBOARDING_PROMPT_PATH.read_text().strip()
+    except Exception:
+        return ""
 
 
 @dataclass
@@ -143,6 +174,38 @@ def _has_document_side_effect(side_effects: list[dict]) -> bool:
         if action_card.get("kind") == "document":
             return True
     return False
+
+
+def _summarize_non_document_side_effects(side_effects: list[dict]) -> str | None:
+    if not side_effects:
+        return None
+    counts: dict[str, int] = {}
+    for effect in side_effects:
+        if not isinstance(effect, dict):
+            continue
+        action_card = ((effect.get("meta") or {}).get("action_card") or {})
+        kind = action_card.get("kind")
+        if not kind or kind == "document":
+            continue
+        counts[kind] = counts.get(kind, 0) + 1
+    if not counts:
+        return None
+    if counts == {"property": 1}:
+        return "I created the property record from the lease."
+    if counts == {"tenant": 1}:
+        return "I created the tenant record."
+    if counts == {"property": 1, "tenant": 1}:
+        return "I created the property and tenant records from the lease."
+    parts = []
+    for kind in ("property", "unit", "tenant", "suggestion"):
+        count = counts.get(kind)
+        if not count:
+            continue
+        noun = kind if count == 1 else f"{kind}s"
+        parts.append(f"{count} {noun}")
+    if not parts:
+        return None
+    return f"I completed the requested updates: {', '.join(parts)}."
 
 
 def _failed_mutating_tool_switched(
@@ -409,6 +472,9 @@ async def chat_with_agent(
     # Extract system message and conversation history
     prompt_bundle = agent_registry.build_system_prompt_bundle(agent_id)
     system_message = str(prompt_bundle.get("system_prompt") or "")
+    onboarding_prompt = _load_onboarding_prompt(session_key=session_key)
+    if onboarding_prompt:
+        system_message = f"{system_message}\n\n---\n\n{onboarding_prompt}" if system_message else onboarding_prompt
     sys_content = next((m["content"] for m in messages if m.get("role") == "system"), None)
     if sys_content:
         system_message = f"{system_message}\n\n---\n\n{sys_content}"
@@ -792,6 +858,10 @@ async def _local_fallback(
         failed_tools = list(current_failed_tools.get())
         completed_tools = list(current_completed_tools.get())
         if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
+            side_effect_reply = _summarize_non_document_side_effects(side_effects)
+            if side_effect_reply:
+                reply = side_effect_reply
+                return AgentResponse(reply=reply, side_effects=side_effects)
             log_trace(
                 "error",
                 "chat",

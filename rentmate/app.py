@@ -286,8 +286,11 @@ def create_app(
             asyncio.create_task(quo_poll_loop())
 
         data_dir = os.getenv("RENTMATE_DATA_DIR", "./data")
+        from backends.local_storage import ensure_runtime_storage_contract
+
+        data_dir, _ = ensure_runtime_storage_contract()
         set_memory_backstop()
-        start_memory_monitor(data_dir)
+        start_memory_monitor(str(data_dir))
 
         yield
 

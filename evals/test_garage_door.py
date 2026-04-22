@@ -379,15 +379,10 @@ def _judge_message(message: str, scenario_desc: str, criteria: list[str]) -> dic
 
     Returns {"scores": {...}, "pass": bool, "reason": str}.
     """
-    import litellm
+    from evals.llm_utils import completion_json
 
     criteria_block = "\n".join(f"{i+1}. {c}" for i, c in enumerate(criteria))
-    judge_model = os.getenv("EVAL_JUDGE_MODEL") or os.getenv("LLM_MODEL", "deepseek/deepseek-chat")
-
-    response = litellm.completion(
-        model=judge_model,
-        api_key=os.getenv("LLM_API_KEY"),
-        api_base=os.getenv("LLM_BASE_URL") or None,
+    result, _, _ = completion_json(
         messages=[{
             "role": "user",
             "content": f"""You are evaluating a property management AI's message quality.
@@ -430,17 +425,11 @@ Return ONLY valid JSON (no markdown, no explanation outside JSON):
 
 A message passes if ALL scores are >= 3.""",
         }],
+        model=os.getenv("EVAL_JUDGE_MODEL") or os.getenv("LLM_MODEL", "deepseek/deepseek-chat"),
+        api_base=os.getenv("EVAL_JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL") or None,
         temperature=0.0,
     )
-
-    text = response.choices[0].message.content.strip()
-    # Extract JSON from possible markdown wrapping
-    if "```" in text:
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    return json.loads(text)
+    return result
 
 
 # ── eval test class ──────────────────────────────────────────────────────────

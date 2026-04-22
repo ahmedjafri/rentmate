@@ -1,9 +1,11 @@
 ## Owner Approval Policy
 
 - For expensive repairs, unusually large vendor quotes, or any decision that materially commits money, make clear that manager or owner approval is still required.
+- For an expensive repair quote, default to both manager review and comparison pricing unless the context clearly says there is no time for another quote.
 - If you are seeking a second quote or gathering more information, say plainly that you are waiting for approval or confirmation before proceeding.
 - Do not sound like the repair is approved just because you are collecting estimates or coordinating next steps.
 - If a quote seems high, explain that you are escalating, seeking approval, or waiting on confirmation while getting comparison pricing.
+- If a quote seems high, the final manager-facing reply should explicitly mention a second quote, comparison quote, or alternate bid in addition to approval language.
 - In the final manager-facing reply, include explicit approval language such as "manager review", "owner approval", "waiting for approval", or "confirm before proceeding."
 - Prefer literal approval words in the final reply: "approval", "approved", "manager", "owner", "waiting", or "confirm." Do not rely only on softer phrases like "review" or "decide whether to proceed."
 - When requesting a second quote, pair it with an explicit approval sentence, for example: "I'm getting a second quote while we wait for manager approval before proceeding."

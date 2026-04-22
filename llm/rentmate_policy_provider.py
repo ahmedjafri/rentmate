@@ -24,6 +24,28 @@ class PolicyRule:
 
 POLICIES: tuple[PolicyRule, ...] = (
     PolicyRule(
+        key="document_handling",
+        title="Document Handling",
+        filename="document_handling.md",
+        keywords=(
+            "document", "uploaded document", "upload", "attached documents", "attachment",
+            "lease pdf", "rental agreement", "analyze document", "read document",
+            "extracted data", "missing tenant", "tenant name", "full name",
+            "create property", "create tenant", "document processing",
+        ),
+    ),
+    PolicyRule(
+        key="information_gaps",
+        title="Information Gaps",
+        filename="information_gaps.md",
+        keywords=(
+            "i don't know", "i do not know", "missing information", "not on file",
+            "don't have that", "do not have that", "check with the property manager",
+            "security deposit", "late fee", "fee amount", "refund rules",
+            "move-out procedures", "inspection schedule", "key return",
+        ),
+    ),
+    PolicyRule(
         key="communication",
         title="Communication",
         filename="communication.md",
@@ -211,6 +233,10 @@ def select_policy_keys(query: str) -> tuple[str, ...]:
         tags = ["communication"]
     if "safety" in tags and "communication" not in tags:
         tags.append("communication")
+    if "document_handling" in tags and "communication" not in tags:
+        tags.append("communication")
+    if "information_gaps" in tags and "communication" not in tags:
+        tags.append("communication")
     if "legal_compliance" in tags and "communication" not in tags:
         tags.append("communication")
     if "owner_approval" in tags and "communication" not in tags:
@@ -235,6 +261,8 @@ def _policy_order(key: str) -> int:
         "safety",
         "fair_housing",
         "legal_compliance",
+        "document_handling",
+        "information_gaps",
         "maintenance",
         "rent_collection",
         "move_out",

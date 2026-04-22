@@ -1166,7 +1166,7 @@ class SpawnTaskRequest(BaseModel):
     category: Optional[str] = None
     urgency: Optional[str] = None
     priority: Optional[str] = None
-    task_mode: str = "autonomous"
+    task_mode: str = "AUTONOMOUS"
     source: str = TaskSource.MANUAL
 
 @router.post("/chat/task/spawn")

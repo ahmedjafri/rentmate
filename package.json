@@ -19,7 +19,10 @@
     "test:postgres": "poetry run pytest --postgres",
     "test:ui": "npm test --prefix www/rentmate-ui",
     "test:install": "bash tests/test-install.sh",
-    "evals": "poetry run pytest evals/ -m eval -v -n auto",
+    "evals": "poetry run pytest evals/ -m eval -v",
+    "eval": "poetry run pytest -m eval -v -s",
+    "evals:parallel": "poetry run pytest evals/ -m eval -v -n auto",
+    "eval:parallel": "poetry run pytest -m eval -v -n auto",
     "test:evals": "poetry run python evals/runner.py",
     "test:all": "npm test && npm run test:install && npm run test:evals"
   },

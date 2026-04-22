@@ -249,6 +249,32 @@ def test_external_conversations_use_shadow_user_ids_for_tenant_and_vendor(db):
     assert tenant_participant.participant_type == ParticipantType.TENANT
 
 
+def test_external_conversation_normalizes_blank_optional_ids(db):
+    vendor = User(
+        org_id=1,
+        creator_id=1,
+        user_type="vendor",
+        first_name="Pat",
+        last_name="Vendor",
+        phone="+15550006666",
+        active=True,
+    )
+    db.add(vendor)
+    db.flush()
+
+    convo = chat_service.get_or_create_external_conversation(
+        db,
+        conversation_type=ConversationType.VENDOR,
+        subject="Vendor thread",
+        property_id="  ",
+        unit_id="",
+        vendor_id=vendor.id,
+    )
+
+    assert convo.property_id is None
+    assert convo.unit_id is None
+
+
 def test_message_and_conversation_json_payloads_are_typed():
     meta = chat_service.dump_message_meta(
         draft_reply="Draft body",

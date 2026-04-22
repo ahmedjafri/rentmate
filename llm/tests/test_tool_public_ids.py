@@ -121,6 +121,20 @@ def test_create_tenant_returns_external_id(db):
     assert tenant.user.email == "tina@example.com"
 
 
+def test_create_tenant_rejects_placeholder_name(db):
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            CreateTenantTool(),
+            first_name="Tenant",
+            last_name="Unknown",
+        ))
+
+    assert payload["status"] == "error"
+    assert "Tenant name is required" in payload["message"]
+    assert db.query(Tenant).count() == 0
+
+
 def test_create_property_queues_action_card_message(db):
     conv_token = active_conversation_id.set("conv-123")
     pending_token = pending_suggestion_messages.set([])
@@ -578,6 +592,7 @@ def test_message_person_tool_uses_external_tenant_id_in_payload(db):
     suggestion = db.query(Suggestion).filter_by(id=payload["suggestion_id"]).one()
     assert suggestion.action_payload["entity_id"] == tenant.external_id
     assert "blocked by outbound policy" in payload["policy_reason"]
+    assert db.query(Tenant).count() == 1
 
 
 def test_propose_task_tool_uses_external_vendor_id_in_payload(db):
@@ -644,7 +659,7 @@ def test_create_suggestion_tool_queues_inline_action_card_message(db):
     conv_token = active_conversation_id.set("conv-suggestion")
     pending_token = pending_suggestion_messages.set([])
     try:
-        with patch("db.session.SessionLocal.session_factory", return_value=db), \
+        with patch("handlers.deps.SessionLocal", return_value=db), \
              patch.object(db, "close", lambda: None):
             payload = json.loads(_run_tool(
                 CreateSuggestionTool(),
@@ -662,6 +677,207 @@ def test_create_suggestion_tool_queues_inline_action_card_message(db):
     assert queued[0]["message_type"].name == "ACTION"
     assert queued[0]["meta"]["action_card"]["kind"] == "suggestion"
     assert queued[0]["meta"]["action_card"]["title"] == "Upload notice"
+
+
+def test_create_suggestion_tool_normalizes_blank_optional_ids_and_leaves_session_usable(db):
+    conv_token = active_conversation_id.set("conv-suggestion")
+    pending_token = pending_suggestion_messages.set([])
+    try:
+        with patch("db.session.SessionLocal.session_factory", return_value=db), \
+             patch.object(db, "close", lambda: None):
+            payload = json.loads(_run_tool(
+                CreateSuggestionTool(),
+                title="Create tenant record from lease",
+                body="Tenant name missing.",
+                suggestion_type="compliance",
+                risk_score=8,
+                property_id="   ",
+                unit_id="",
+            ))
+    finally:
+        pending_suggestion_messages.reset(pending_token)
+        active_conversation_id.reset(conv_token)
+
+    assert payload["status"] == "ok"
+    suggestion = db.query(Suggestion).filter_by(id=payload["suggestion_id"]).one()
+    convo = db.query(Conversation).filter_by(id=suggestion.ai_conversation_id).one()
+    assert suggestion.property_id is None
+    assert suggestion.unit_id is None
+    assert convo.property_id is None
+    assert convo.unit_id is None
+    assert db.query(Suggestion).count() >= 1
+
+
+def test_create_suggestion_tool_redacts_vendor_identity_from_tenant_draft(db):
+    vendor = User(
+        org_id=1,
+        creator_id=1,
+        user_type="vendor",
+        first_name="Handyman",
+        last_name="Rob",
+        phone="206-555-0200",
+        active=True,
+    )
+    tenant_user = User(
+        org_id=1,
+        creator_id=1,
+        user_type="tenant",
+        first_name="Alice",
+        last_name="Renter",
+        phone="206-555-0100",
+        active=True,
+    )
+    db.add_all([vendor, tenant_user])
+    db.flush()
+    tenant = Tenant(org_id=1, creator_id=1, user_id=tenant_user.id)
+    convo = Conversation(
+        org_id=1,
+        creator_id=1,
+        subject="Garage door is broken",
+        conversation_type=ConversationType.TASK_AI,
+        is_group=False,
+        is_archived=False,
+    )
+    db.add_all([tenant, convo])
+    db.flush()
+    task = Task(org_id=1, creator_id=1, title="Garage door is broken", ai_conversation_id=convo.id)
+    db.add(task)
+    db.flush()
+
+    vendor_conv = Conversation(
+        org_id=1,
+        creator_id=1,
+        subject="Garage door repair",
+        conversation_type=ConversationType.VENDOR,
+        is_group=False,
+        is_archived=False,
+    )
+    db.add(vendor_conv)
+    db.flush()
+    task.external_conversation_id = vendor_conv.id
+    db.add(Message(
+        org_id=1,
+        conversation_id=vendor_conv.id,
+        sender_type=ParticipantType.EXTERNAL_CONTACT,
+        body="I can come at 2pm tomorrow",
+        message_type=MessageType.MESSAGE,
+        sender_name="Handyman Rob",
+        is_ai=False,
+    ))
+    db.flush()
+
+    conv_token = active_conversation_id.set(str(convo.id))
+    pending_token = pending_suggestion_messages.set([])
+    try:
+        with patch("db.session.SessionLocal.session_factory", return_value=db), \
+             patch.object(db, "close", lambda: None):
+            payload = json.loads(_run_tool(
+                CreateSuggestionTool(),
+                title="Check tenant availability",
+                body="Ask the tenant if Handyman Rob can come at 2pm tomorrow to assess the garage door.",
+                suggestion_type="maintenance",
+                risk_score=5,
+                task_id=str(task.id),
+                action_payload={
+                    "action": "message_person",
+                    "entity_type": "tenant",
+                    "entity_id": tenant.external_id,
+                    "entity_name": "Alice Renter",
+                    "draft_message": "Hi Alice, Handyman Rob can come at 2pm tomorrow to assess the garage door. Will you be available? You can reach him at 206-555-0200.",
+                },
+            ))
+    finally:
+        pending_suggestion_messages.reset(pending_token)
+        active_conversation_id.reset(conv_token)
+
+    assert payload["status"] == "ok"
+    suggestion = db.query(Suggestion).filter_by(id=payload["suggestion_id"]).one()
+    draft = suggestion.action_payload["draft_message"]
+    assert "Handyman Rob" not in draft
+    assert "206-555-0200" not in draft
+    assert "contractor" in draft.lower()
+
+
+def test_message_person_tool_redacts_vendor_identity_from_tenant_draft(db):
+    vendor = User(
+        org_id=1,
+        creator_id=1,
+        user_type="vendor",
+        first_name="Handyman",
+        last_name="Rob",
+        phone="206-555-0200",
+        active=True,
+    )
+    tenant_user = User(
+        org_id=1,
+        creator_id=1,
+        user_type="tenant",
+        first_name="Alice",
+        last_name="Renter",
+        phone="206-555-0100",
+        active=True,
+    )
+    db.add_all([vendor, tenant_user])
+    db.flush()
+    tenant = Tenant(org_id=1, creator_id=1, user_id=tenant_user.id)
+    convo = Conversation(
+        org_id=1,
+        creator_id=1,
+        subject="Garage door is broken",
+        conversation_type=ConversationType.TASK_AI,
+        is_group=False,
+        is_archived=False,
+    )
+    db.add_all([tenant, convo])
+    db.flush()
+    task = Task(org_id=1, creator_id=1, title="Garage door is broken", ai_conversation_id=convo.id)
+    db.add(task)
+    db.flush()
+
+    vendor_conv = Conversation(
+        org_id=1,
+        creator_id=1,
+        subject="Garage door repair",
+        conversation_type=ConversationType.VENDOR,
+        is_group=False,
+        is_archived=False,
+    )
+    db.add(vendor_conv)
+    db.flush()
+    task.external_conversation_id = vendor_conv.id
+    db.add(Message(
+        org_id=1,
+        conversation_id=vendor_conv.id,
+        sender_type=ParticipantType.EXTERNAL_CONTACT,
+        body="I can come at 2pm tomorrow",
+        message_type=MessageType.MESSAGE,
+        sender_name="Handyman Rob",
+        is_ai=False,
+    ))
+    db.flush()
+
+    conv_token = active_conversation_id.set(str(convo.id))
+    pending_token = pending_suggestion_messages.set([])
+    try:
+        with patch("db.session.SessionLocal.session_factory", return_value=db), \
+             patch.object(db, "close", lambda: None):
+            payload = json.loads(_run_tool(
+                MessageExternalPersonTool(),
+                task_id=str(task.id),
+                entity_id=tenant.external_id,
+                entity_type="tenant",
+                draft_message="Hi Alice, Handyman Rob can come at 2pm tomorrow to assess the garage door. Will you be available? You can reach him at 206-555-0200.",
+            ))
+    finally:
+        pending_suggestion_messages.reset(pending_token)
+        active_conversation_id.reset(conv_token)
+
+    assert payload["status"] == "ok"
+    suggestion = db.query(Suggestion).filter_by(id=payload["suggestion_id"]).one()
+    draft = suggestion.action_payload["draft_message"]
+    assert "Handyman Rob" not in draft
+    assert "206-555-0200" not in draft
+    assert "contractor" in draft.lower()
 
 
 def test_create_suggestion_tool_blocks_explicit_direct_draft_request(db):
@@ -917,7 +1133,7 @@ def test_save_memory_private_entity_note_uses_current_account(db):
 
     with patch("db.session.SessionLocal.session_factory", return_value=db), \
          patch.object(db, "close", lambda: None), \
-         patch("llm.tools.resolve_account_id", return_value=property_owner.id):
+         patch("llm.tools.memory.resolve_account_id", return_value=property_owner.id):
         payload = json.loads(_run_tool(
             SaveMemoryTool(),
             content="Owner prefers weekend vendor visits only.",
@@ -970,7 +1186,7 @@ def test_recall_memory_private_entity_note_uses_current_account(db):
 
     with patch("db.session.SessionLocal.session_factory", return_value=db), \
          patch.object(db, "close", lambda: None), \
-         patch("llm.tools.resolve_account_id", return_value=property_owner.id):
+         patch("llm.tools.memory.resolve_account_id", return_value=property_owner.id):
         payload = json.loads(_run_tool(
             RecallMemoryTool(),
             entity_type="property",

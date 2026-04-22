@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from backends.local_auth import resolve_account_id, resolve_org_id
-from db.enums import TaskStatus
+from db.id_utils import normalize_optional_id
+from db.enums import TaskStatus, parse_task_mode
 from db.models import (
     Conversation,
     ConversationType,
@@ -41,6 +42,8 @@ class TaskService:
     def create_task(sess: Session, input: CreateTaskInput) -> Task:
         creator_id = resolve_account_id()
         org_id = resolve_org_id()
+        property_id = normalize_optional_id(input.property_id)
+        unit_id = normalize_optional_id(input.unit_id)
         seq = sess.get(TaskNumberSequence, org_id)
         current_max_id = sess.execute(
             select(func.coalesce(func.max(Task.id), 0)).where(Task.org_id == org_id)
@@ -58,14 +61,14 @@ class TaskService:
             creator_id=creator_id,
             title=input.title,
             task_status=input.task_status,
-            task_mode=input.task_mode,
+            task_mode=parse_task_mode(input.task_mode),
             source=input.source,
             category=input.category,
             urgency=input.urgency,
             priority=input.priority,
             confidential=input.confidential,
-            property_id=input.property_id,
-            unit_id=input.unit_id,
+            property_id=property_id,
+            unit_id=unit_id,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
@@ -75,9 +78,9 @@ class TaskService:
         ai_convo = Conversation(
             org_id=org_id,
             subject=input.title,
-            property_id=input.property_id,
+            property_id=property_id,
             creator_id=creator_id,
-            unit_id=input.unit_id,
+            unit_id=unit_id,
             conversation_type=ConversationType.TASK_AI,
             is_group=False,
             is_archived=False,
@@ -119,7 +122,7 @@ class TaskService:
         if not task:
             raise ValueError(f"Task {input.uid} not found")
         if input.task_mode is not None:
-            task.task_mode = input.task_mode
+            task.task_mode = parse_task_mode(input.task_mode)
         if input.task_status is not None:
             task.task_status = input.task_status
             if input.task_status == TaskStatus.RESOLVED and not task.resolved_at:

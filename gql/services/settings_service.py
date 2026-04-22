@@ -186,7 +186,7 @@ def get_autonomy_for_category(category: TaskCategory | str | None) -> str:
 
 
 def get_task_mode_for_category(category: str | None) -> tuple[str, str]:
-    return ("waiting_approval", "suggested")
+    return ("WAITING_APPROVAL", "suggested")
 
 
 # ── LLM config ──────────────────────────────────────────────────────────────
@@ -221,6 +221,15 @@ def save_llm_settings(*, api_key: str | None = None, model: str | None = None, b
     if base_url is not None:
         current["base_url"] = base_url
     set_setting(_LLM_KEY, value=current)
+    _log_llm_config(current, event="updated")
+
+
+def _log_llm_config(settings: dict, *, event: str = "loaded") -> None:
+    key = settings.get("api_key", "")
+    masked = f"{key[:4]}...{key[-4:]}" if len(key) > 8 else ("(set)" if key else "(not set)")
+    model = settings.get("model") or "(default)"
+    base_url = settings.get("base_url") or "(default)"
+    print(f"[llm] Config {event}: model={model}, base_url={base_url}, api_key={masked}")
 
 
 def load_llm_into_env() -> None:
@@ -232,6 +241,7 @@ def load_llm_into_env() -> None:
         val = settings.get(db_key)
         if val and not os.environ.get(env_key):
             os.environ[env_key] = val
+    _log_llm_config(settings, event="loaded")
 
 
 # ── agent integrations ──────────────────────────────────────────────────────

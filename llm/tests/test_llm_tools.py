@@ -171,6 +171,41 @@ def test_chat_with_agent_passes_workspace_scoped_hermes_home(tmp_path):
     assert captured["hermes_home"] == hermes_home
 
 
+def test_load_onboarding_prompt_only_for_active_chat_sessions():
+    from llm.client import _load_onboarding_prompt
+
+    fake_db = MagicMock()
+    fake_session_local = MagicMock(return_value=fake_db)
+
+    with (
+        patch("llm.client._ONBOARDING_PROMPT_PATH.read_text", return_value="## Onboarding Mode\nUse onboarding rules."),
+        patch("db.session.SessionLocal", fake_session_local),
+        patch("gql.services.settings_service.get_onboarding_state", return_value={"status": "active"}),
+    ):
+        prompt = _load_onboarding_prompt(session_key="chat:21")
+
+    assert "Onboarding Mode" in prompt
+    fake_db.close.assert_called_once()
+
+
+def test_load_onboarding_prompt_skips_non_chat_or_inactive_sessions():
+    from llm.client import _load_onboarding_prompt
+
+    fake_db = MagicMock()
+    fake_session_local = MagicMock(return_value=fake_db)
+
+    with (
+        patch("llm.client._ONBOARDING_PROMPT_PATH.read_text", return_value="## Onboarding Mode\nUse onboarding rules."),
+        patch("db.session.SessionLocal", fake_session_local),
+        patch("gql.services.settings_service.get_onboarding_state", return_value={"status": "completed"}),
+    ):
+        inactive_prompt = _load_onboarding_prompt(session_key="chat:21")
+        task_prompt = _load_onboarding_prompt(session_key="task:abc")
+
+    assert inactive_prompt == ""
+    assert task_prompt == ""
+
+
 def test_local_fallback_retries_when_reply_claims_document_without_tool_call():
     from llm.client import _local_fallback
     from llm.tools import pending_suggestion_messages
@@ -211,6 +246,45 @@ def test_local_fallback_retries_when_reply_claims_document_without_tool_call():
     assert "System correction:" in calls[1][-1]["content"]
     assert result.reply == "Created document: Notice-1.pdf"
     assert result.side_effects[0]["meta"]["action_card"]["kind"] == "document"
+
+
+def test_local_fallback_does_not_retry_after_non_document_side_effects_already_exist():
+    from llm.client import _local_fallback
+    from llm.tools import pending_suggestion_messages
+
+    calls: list[list[dict]] = []
+
+    async def fake_chat_with_agent(agent_id, session_key, messages, on_progress=None, trace_context=None):
+        calls.append(messages)
+        pending_suggestion_messages.set([
+            {
+                "type": "chat_message",
+                "body": "Created property 1234 Acme Lane",
+                "meta": {
+                    "action_card": {
+                        "kind": "property",
+                        "title": "1234 Acme Lane",
+                    },
+                },
+            },
+        ])
+        return "I've created a new notice document. It is available in your Documents area."
+
+    with patch("llm.client.chat_with_agent", side_effect=fake_chat_with_agent), \
+         patch("llm.client.set_fallback_request_context", return_value=object()), \
+         patch("llm.client.reset_fallback_request_context"), \
+         patch("llm.client.resolve_account_id", return_value=1), \
+         patch("llm.client.resolve_org_id", return_value=1):
+        result = asyncio.run(_local_fallback(
+            "agent-1",
+            "chat:21",
+            [{"role": "user", "content": "Create the records from this lease"}],
+            trace_context={"conversation_id": "21"},
+        ))
+
+    assert len(calls) == 1
+    assert result.reply == "I created the property record from the lease."
+    assert result.side_effects[0]["meta"]["action_card"]["kind"] == "property"
 
 
 def test_local_fallback_blocks_switch_to_different_mutating_tool_after_failure():

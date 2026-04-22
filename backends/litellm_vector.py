@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 
 from db.vector_models import DOCUMENT_EMBED_DIM, DocumentChunkVector, VectorBase
+from llm.model_config import resolve_model_config
 
 _DB_URI = os.getenv("RENTMATE_DB_URI", "").strip()
 
@@ -61,23 +62,21 @@ class LiteLLMVectorBackend:
             return
 
     def _get_embedding_config(self) -> tuple[str, str | None, str | None]:
-        model = os.getenv("EMBEDDING_MODEL")
         api_key = os.getenv("LLM_API_KEY", "")
+        llm_model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
         api_base = os.getenv("LLM_BASE_URL") or None
+        resolved = resolve_model_config(model=llm_model, api_base=api_base)
+        model = os.getenv("EMBEDDING_MODEL")
 
         if model:
-            return model, api_key or None, api_base
+            embedding_resolved = resolve_model_config(model=model, api_base=api_base)
+            return embedding_resolved.litellm_model, api_key or None, embedding_resolved.api_base
 
-        llm_model = os.getenv("LLM_MODEL", "")
-        provider = llm_model.split("/")[0] if "/" in llm_model else ""
-        provider_embedding = {
-            "openai": "text-embedding-3-small",
-            "anthropic": "text-embedding-3-small",
-            "deepseek": "deepseek/text-embedding-v1",
-        }
-        if provider in provider_embedding:
-            return provider_embedding[provider], api_key or None, api_base
-        return "text-embedding-3-small", api_key or None, api_base
+        if resolved.provider == "openrouter":
+            return "openrouter/openai/text-embedding-3-small", api_key or None, resolved.api_base
+        if llm_model.startswith("deepseek/"):
+            return "deepseek/text-embedding-v1", api_key or None, resolved.api_base
+        return "text-embedding-3-small", api_key or None, resolved.api_base
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
         model, api_key, api_base = self._get_embedding_config()
