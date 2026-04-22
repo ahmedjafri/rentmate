@@ -178,7 +178,7 @@ def test_load_onboarding_prompt_only_for_active_chat_sessions():
     fake_session_local = MagicMock(return_value=fake_db)
 
     with (
-        patch("llm.client._ONBOARDING_PROMPT_PATH.read_text", return_value="## Onboarding Mode\nUse onboarding rules."),
+        patch("llm.client._read_onboarding_prompt", return_value="## Onboarding Mode\nUse onboarding rules."),
         patch("db.session.SessionLocal", fake_session_local),
         patch("gql.services.settings_service.get_onboarding_state", return_value={"status": "active"}),
     ):
@@ -195,7 +195,7 @@ def test_load_onboarding_prompt_skips_non_chat_or_inactive_sessions():
     fake_session_local = MagicMock(return_value=fake_db)
 
     with (
-        patch("llm.client._ONBOARDING_PROMPT_PATH.read_text", return_value="## Onboarding Mode\nUse onboarding rules."),
+        patch("llm.client._read_onboarding_prompt", return_value="## Onboarding Mode\nUse onboarding rules."),
         patch("db.session.SessionLocal", fake_session_local),
         patch("gql.services.settings_service.get_onboarding_state", return_value={"status": "completed"}),
     ):

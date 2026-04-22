@@ -3,6 +3,7 @@ import json
 import re
 from typing import Any
 
+from backends.local_auth import resolve_account_id
 from db.enums import SuggestionOption, TaskCategory, TaskStatus, Urgency
 from gql.services.task_service import dump_task_steps
 
@@ -612,7 +613,6 @@ class CreateScheduledTaskTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        from backends.local_auth import resolve_account_id
         from db.models import ScheduledTask
         from handlers.scheduler import human_schedule, next_run, parse_schedule
         from llm.tools._common import tool_session

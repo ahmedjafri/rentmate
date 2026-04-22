@@ -76,11 +76,15 @@ def _attach_rentmate_policy_provider(agent: Any) -> None:
 _ONBOARDING_PROMPT_PATH = Path(__file__).parent / "policies" / "onboarding.md"
 
 
+def _read_onboarding_prompt() -> str:
+    return _ONBOARDING_PROMPT_PATH.read_text().strip()
+
+
 def _load_onboarding_prompt(*, session_key: str) -> str:
     if not str(session_key).startswith("chat:"):
         return ""
     try:
-        from rentmate.app import SessionLocal
+        from db.session import SessionLocal
         from db.models import Property
         from gql.services.settings_service import get_onboarding_state
 
@@ -98,7 +102,7 @@ def _load_onboarding_prompt(*, session_key: str) -> str:
     if not implicit_active and (not state or state.get("status") != "active"):
         return ""
     try:
-        return _ONBOARDING_PROMPT_PATH.read_text().strip()
+        return _read_onboarding_prompt()
     except Exception:
         return ""
 
