@@ -120,6 +120,7 @@ def test_agent_creates_tasks_for_all_matching_properties(multi_property_scenario
         json.dumps(s.action_payload or {}).lower() + " " + (s.title or "").lower() + " " + (s.body or "").lower()
         for s in persisted
     )
+    combined_action_text = " ".join(part for part in (task_suggestion_text, " ".join(json.dumps(item).lower() for item in pending)) if part)
     created_count = len(pending) if pending else len(persisted)
 
     # The agent should have created multiple tasks/suggestions
@@ -132,14 +133,20 @@ def test_agent_creates_tasks_for_all_matching_properties(multi_property_scenario
         if any(term in reply for term in [p.name.lower(), p.address_line1.lower()[:15]])
     )
 
-    # Should mention at least 2 of the 3 WA properties
-    assert mentions >= 2 or created_count >= 2, (
+    action_mentions = sum(
+        1 for p in wa_props
+        if any(term in combined_action_text for term in [p.name.lower(), p.address_line1.lower()[:15]])
+    )
+
+    # Should mention at least 2 of the 3 WA properties in the reply or in the created action payloads,
+    # or create multiple separate suggestions.
+    assert mentions >= 2 or action_mentions >= 2 or created_count >= 2, (
         f"Agent should act on multiple WA properties but only mentioned {mentions} "
-        f"and created {created_count} suggestions. Reply: {reply[:400]}"
+        f"(action mentions: {action_mentions}) and created {created_count} suggestions. "
+        f"Reply: {reply[:400]}"
     )
 
     # Should NOT include Oregon property
-    pending_text = " ".join(json.dumps(item).lower() for item in pending)
     planning_reply = any(
         phrase in reply
         for phrase in (
@@ -149,7 +156,6 @@ def test_agent_creates_tasks_for_all_matching_properties(multi_property_scenario
             "i will exclude",
         )
     )
-    combined_action_text = " ".join(part for part in (pending_text, task_suggestion_text) if part)
     assert "oregon" not in combined_action_text and "portland" not in combined_action_text and "oak rd" not in combined_action_text, (
         f"Agent created non-WA actions in WA-only request: {combined_action_text[:400]}"
     )

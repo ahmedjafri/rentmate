@@ -3,7 +3,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = [
-    ROOT / "llm" / "tools.py",
+    ROOT / "llm" / "tools" / "__init__.py",
+    ROOT / "llm" / "tools" / "_common.py",
+    ROOT / "llm" / "tools" / "documents.py",
+    ROOT / "llm" / "tools" / "entities.py",
+    ROOT / "llm" / "tools" / "memory.py",
+    ROOT / "llm" / "tools" / "messaging.py",
+    ROOT / "llm" / "tools" / "onboarding.py",
+    ROOT / "llm" / "tools" / "tasks.py",
+    ROOT / "llm" / "tools" / "vendors.py",
     ROOT / "llm" / "context.py",
     ROOT / "handlers" / "dev.py",
     ROOT / "db" / "queries.py",

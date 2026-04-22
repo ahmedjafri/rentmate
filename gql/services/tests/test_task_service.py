@@ -45,6 +45,25 @@ def test_create_task_creates_backing_ai_conversation(db):
     assert convo.subject == "Fix sink"
 
 
+def test_create_task_normalizes_blank_optional_ids(db):
+    task = TaskService.create_task(
+        db,
+        CreateTaskInput(
+            title="Fix sink",
+            source=TaskSource.MANUAL,
+            property_id="   ",
+            unit_id="",
+        ),
+    )
+
+    convo = db.get(Conversation, task.ai_conversation_id)
+    assert task.property_id is None
+    assert task.unit_id is None
+    assert convo is not None
+    assert convo.property_id is None
+    assert convo.unit_id is None
+
+
 def test_update_task_status_sets_resolved_at_and_update_task_changes_mode(db):
     task = _create_task(db)
 
@@ -54,6 +73,27 @@ def test_update_task_status_sets_resolved_at_and_update_task_changes_mode(db):
     assert updated.task_status == TaskStatus.RESOLVED
     assert updated.resolved_at is not None
     assert changed.task_mode == TaskMode.AUTONOMOUS
+
+
+def test_create_task_normalizes_lowercase_task_mode(db):
+    task = TaskService.create_task(
+        db,
+        CreateTaskInput(
+            title="Fix sink",
+            source=TaskSource.MANUAL,
+            task_mode="autonomous",
+        ),
+    )
+
+    assert task.task_mode == TaskMode.AUTONOMOUS
+
+
+def test_update_task_normalizes_lowercase_task_mode(db):
+    task = _create_task(db)
+
+    changed = TaskService.update_task(db, UpdateTaskInput(uid=task.id, task_mode="waiting_approval"))
+
+    assert changed.task_mode == TaskMode.WAITING_APPROVAL
 
 
 def test_assign_vendor_and_delete_task_cleanup_related_rows(db):

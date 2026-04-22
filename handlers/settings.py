@@ -346,8 +346,8 @@ _AGENT_FILENAMES = {f["filename"] for f in _AGENT_FILES}
 
 def _agent_workspace() -> Path:
     from backends.local_auth import _lookup_account_id
-    from llm.registry import DATA_DIR
-    return DATA_DIR / str(_lookup_account_id())
+    from llm.registry import get_agent_data_dir
+    return get_agent_data_dir() / str(_lookup_account_id())
 
 
 def _read_agent_workspace_file(path: Path) -> str:

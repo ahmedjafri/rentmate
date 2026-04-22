@@ -1,5 +1,4 @@
 import logging
-import os
 import re
 import shutil
 import threading
@@ -9,13 +8,12 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from backends.local_auth import _lookup_account_id
+from backends.local_storage import ensure_runtime_storage_contract
 
 logger = logging.getLogger(__name__)
 
 # Paths
 TEMPLATE_DIR = Path(__file__).parent / "agent_mds"
-_data_base = Path(os.environ.get("RENTMATE_DATA_DIR", str(Path(__file__).parent.parent / "data")))
-DATA_DIR = _data_base / "agent"
 
 _STATIC_TEMPLATE_FILES = ["SOUL.md"]
 
@@ -27,8 +25,13 @@ def _soul_version(text: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def get_agent_data_dir() -> Path:
+    data_dir, _ = ensure_runtime_storage_contract()
+    return data_dir / "agent"
+
+
 def get_agent_workspace(agent_id: str) -> Path:
-    return (DATA_DIR / str(agent_id)).resolve()
+    return (get_agent_data_dir() / str(agent_id)).resolve()
 
 
 def ensure_agent_runtime_dirs(agent_id: str) -> dict[str, Path]:
@@ -104,7 +107,7 @@ class AgentRegistry:
         self._lock = threading.Lock()
         self._ready: dict[str, bool] = {}  # account_id → True when workspace is populated
         self._tools_registered = False
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        get_agent_data_dir().mkdir(parents=True, exist_ok=True)
 
     # ─── Public lifecycle ─────────────────────────────────────────────────────
 

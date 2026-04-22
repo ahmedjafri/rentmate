@@ -50,6 +50,23 @@ class TaskMode(int, enum.Enum):
     AUTONOMOUS = 3
 
 
+def parse_task_mode(value: "TaskMode | str | int | None") -> "TaskMode | None":
+    if value is None or value == "":
+        return None
+    if isinstance(value, TaskMode):
+        return value
+    if isinstance(value, int):
+        return TaskMode(value)
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if normalized.isdigit():
+            return TaskMode(int(normalized))
+        return TaskMode[normalized.upper()]
+    raise ValueError(f"Unsupported task mode value: {value!r}")
+
+
 class TaskPriority(int, enum.Enum):
     ROUTINE = 1
     URGENT = 2

@@ -4,11 +4,11 @@ import os
 from datetime import UTC, datetime
 from io import BytesIO
 
-import litellm
 from pypdf import PdfReader
 from sqlalchemy.orm import Session
 
 from db.models import Document
+from llm.litellm_utils import completion_json_with_retries
 
 
 def _split_text(text: str, *, chunk_size: int = 800, overlap: int = 100) -> list[str]:
@@ -216,18 +216,14 @@ async def process_document(document_id: str) -> None:
                     input_chars_sent_to_llm=len(truncated),
                 )
             user_content = EXTRACTION_PROMPT + truncated
-            response = litellm.completion(
-                model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
-                api_key=os.getenv("LLM_API_KEY"),
-                base_url=os.getenv("LLM_BASE_URL") or None,
-                messages=[
-                    {"role": "user", "content": user_content},
-                ],
-                response_format={"type": "json_object"},
-            )
             try:
-                extracted_data = json.loads(response.choices[0].message.content)
-            except (json.JSONDecodeError, AttributeError):
+                extracted_data, _, _ = completion_json_with_retries(
+                    messages=[{"role": "user", "content": user_content}],
+                    model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
+                    api_base=os.getenv("LLM_BASE_URL") or None,
+                    temperature=0.0,
+                )
+            except Exception:
                 extracted_data = {"leases": []}
 
         leases = extracted_data.get("leases") if isinstance(extracted_data, dict) else []

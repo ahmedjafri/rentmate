@@ -39,7 +39,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy only runtime backend files to preserve build cache and avoid frontend/test churn
 COPY alembic.ini ./
 COPY main.py ./
-COPY agents ./agents
 COPY backends ./backends
 COPY db ./db
 COPY gql ./gql

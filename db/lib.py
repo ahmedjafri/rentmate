@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from backends.local_auth import resolve_account_id
 
-from .enums import TaskMode, TaskStatus, parse_urgency
+from .enums import TaskMode, TaskStatus, parse_task_mode, parse_urgency
 from .models import (
     Conversation,
     ConversationParticipant,
@@ -612,7 +612,7 @@ def spawn_task_from_conversation(
     category: Optional[str] = None,
     urgency: Optional[str] = None,
     priority: Optional[str] = None,
-    task_mode: str = "autonomous",
+    task_mode: str | TaskMode = TaskMode.AUTONOMOUS,
     source: str = "manual",
     creator_id: Optional[str] = None,
 ) -> Task:
@@ -644,7 +644,7 @@ def spawn_task_from_conversation(
         creator_id=creator_id,
         title=objective,
         task_status=TaskStatus.ACTIVE,
-        task_mode=TaskMode[task_mode.upper()] if isinstance(task_mode, str) else task_mode,
+        task_mode=parse_task_mode(task_mode),
         source=source,
         category=category,
         urgency=parse_urgency(urgency),

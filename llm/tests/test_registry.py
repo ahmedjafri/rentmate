@@ -80,7 +80,7 @@ class TestAgentRegistry(unittest.TestCase):
             data_dir = tmp_path / "agent"
             data_dir.mkdir(parents=True)
 
-            with patch("llm.registry.DATA_DIR", data_dir), patch(
+            with patch("llm.registry.get_agent_data_dir", return_value=data_dir), patch(
                 "llm.registry._lookup_account_id", return_value=int(DEFAULT_USER_ID)
             ):
                 registry = AgentRegistry()
@@ -99,7 +99,7 @@ class TestAgentRegistry(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             data_dir = tmp_path / "agent"
-            with patch("llm.registry.DATA_DIR", data_dir):
+            with patch("llm.registry.get_agent_data_dir", return_value=data_dir):
                 runtime_dirs = ensure_agent_runtime_dirs(DEFAULT_USER_ID)
 
             self.assertTrue(runtime_dirs["workspace"].is_dir())
