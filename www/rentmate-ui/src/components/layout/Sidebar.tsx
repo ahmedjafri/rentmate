@@ -27,7 +27,7 @@ const navItems = [
   { title: 'Suggestions', url: '/action-desk', icon: Lightbulb },
   { title: 'Tasks', url: '/tasks', icon: ClipboardList },
   { title: 'Chats', url: '/chats', icon: MessageCircle },
-  { title: 'Scheduled Tasks', url: '/scheduled-tasks', icon: Zap },
+  { title: 'Routines', url: '/routines', icon: Zap },
   { title: 'Settings', url: '/settings', icon: Settings },
 ];
 

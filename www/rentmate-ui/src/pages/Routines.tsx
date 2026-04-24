@@ -8,13 +8,13 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Zap, Plus, Play, Pause, Trash2, Clock, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
-import { createScheduledTask, deleteScheduledTask, listScheduledTasks, updateScheduledTask } from '@/graphql/client';
+import { createRoutine, deleteRoutine, listRoutines, updateRoutine } from '@/graphql/client';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { PageLoader } from '@/components/ui/page-loader';
 import { cn } from '@/lib/utils';
 
-interface ScheduledTask {
+interface Routine {
   uid: string;
   name: string;
   prompt: string;
@@ -31,9 +31,9 @@ interface ScheduledTask {
   createdAt: string;
 }
 
-const ScheduledTasksPage = () => {
+const RoutinesPage = () => {
   const navigate = useNavigate();
-  const [tasks, setTasks] = useState<ScheduledTask[]>([]);
+  const [tasks, setTasks] = useState<Routine[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -41,8 +41,8 @@ const ScheduledTasksPage = () => {
 
   const fetchTasks = async () => {
     try {
-      const data = await listScheduledTasks();
-      setTasks(data.scheduledTasks ?? []);
+      const data = await listRoutines();
+      setTasks(data.routines ?? []);
     } catch { /* ignore */ } finally { setLoading(false); }
   };
 
@@ -51,26 +51,26 @@ const ScheduledTasksPage = () => {
   const handleCreate = async () => {
     if (!form.name.trim() || !form.prompt.trim() || !form.schedule.trim()) return;
     try {
-      await createScheduledTask(form.name, form.prompt, form.schedule);
-      toast.success('Scheduled task created');
+      await createRoutine(form.name, form.prompt, form.schedule);
+      toast.success('Routine created');
       setCreating(false);
       setForm({ name: '', prompt: '', schedule: '' });
       fetchTasks();
     } catch (e) { toast.error(e instanceof Error ? e.message : 'Failed'); }
   };
 
-  const toggle = async (task: ScheduledTask) => {
+  const toggle = async (task: Routine) => {
     try {
-      await updateScheduledTask(task.uid, { enabled: !task.enabled });
+      await updateRoutine(task.uid, { enabled: !task.enabled });
       toast.success(task.enabled ? 'Paused' : 'Resumed');
       fetchTasks();
     } catch { toast.error('Failed'); }
   };
 
-  const remove = async (task: ScheduledTask) => {
+  const remove = async (task: Routine) => {
     if (!confirm(`Delete "${task.name}"?`)) return;
     try {
-      await deleteScheduledTask(task.uid);
+      await deleteRoutine(task.uid);
       setTasks(prev => prev.filter(t => t.uid !== task.uid));
       toast.success('Deleted');
     } catch { toast.error('Failed'); }
@@ -82,26 +82,26 @@ const ScheduledTasksPage = () => {
     <div className="p-6 max-w-3xl mx-auto space-y-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Scheduled Tasks</h1>
+          <h1 className="text-2xl font-bold">Routines</h1>
           <p className="text-sm text-muted-foreground">
-            Recurring AI tasks that run on a schedule
+            Saved agent prompts that run on a schedule
           </p>
         </div>
         <Button onClick={() => setCreating(true)} className="gap-1.5 shrink-0">
-          <Plus className="h-4 w-4" /> New Task
+          <Plus className="h-4 w-4" /> New Routine
         </Button>
       </div>
 
       {tasks.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground">
           <Zap className="h-10 w-10 mx-auto mb-3 opacity-30" />
-          <p className="text-sm font-medium">No scheduled tasks yet</p>
+          <p className="text-sm font-medium">No routines yet</p>
           <p className="text-xs mt-1">Create one to automate recurring property management work</p>
         </div>
       ) : (
         <div className="space-y-3">
           {tasks.map(task => (
-            <Card key={task.uid} className="rounded-xl overflow-hidden cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate(`/scheduled-tasks/${task.uid}`)}>
+            <Card key={task.uid} className="rounded-xl overflow-hidden cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate(`/routines/${task.uid}`)}>
               <div className="p-4 space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2 min-w-0">
@@ -165,7 +165,7 @@ const ScheduledTasksPage = () => {
       <Dialog open={creating} onOpenChange={setCreating}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>New Scheduled Task</DialogTitle>
+            <DialogTitle>New Routine</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="space-y-2">
@@ -187,7 +187,7 @@ const ScheduledTasksPage = () => {
               <p className="text-[10px] text-muted-foreground">Examples: weekly, daily, every 4h, monthly, or cron expression like 0 9 * * 1</p>
             </div>
             <Button onClick={handleCreate} disabled={!form.name || !form.prompt || !form.schedule} className="w-full">
-              Create Scheduled Task
+              Create Routine
             </Button>
           </div>
         </DialogContent>
@@ -196,4 +196,4 @@ const ScheduledTasksPage = () => {
   );
 };
 
-export default ScheduledTasksPage;
+export default RoutinesPage;

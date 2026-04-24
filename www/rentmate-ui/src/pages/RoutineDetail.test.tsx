@@ -2,17 +2,17 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import ScheduledTaskDetail from './ScheduledTaskDetail';
+import RoutineDetail from './RoutineDetail';
 
-const mockGetScheduledTask = vi.fn();
-const mockUpdateScheduledTask = vi.fn();
-const mockDeleteScheduledTask = vi.fn();
+const mockGetRoutine = vi.fn();
+const mockUpdateRoutine = vi.fn();
+const mockDeleteRoutine = vi.fn();
 const mockAuthFetch = vi.fn();
 
 vi.mock('@/graphql/client', () => ({
-  getScheduledTask: (...args: unknown[]) => mockGetScheduledTask(...args),
-  updateScheduledTask: (...args: unknown[]) => mockUpdateScheduledTask(...args),
-  deleteScheduledTask: (...args: unknown[]) => mockDeleteScheduledTask(...args),
+  getRoutine: (...args: unknown[]) => mockGetRoutine(...args),
+  updateRoutine: (...args: unknown[]) => mockUpdateRoutine(...args),
+  deleteRoutine: (...args: unknown[]) => mockDeleteRoutine(...args),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -41,23 +41,23 @@ const task = {
 function renderPage() {
   return render(
     <MemoryRouter
-      initialEntries={['/scheduled-tasks/task-1']}
+      initialEntries={['/routines/task-1']}
       future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
     >
       <Routes>
-        <Route path="/scheduled-tasks/:id" element={<ScheduledTaskDetail />} />
+        <Route path="/routines/:id" element={<RoutineDetail />} />
       </Routes>
     </MemoryRouter>,
   );
 }
 
-describe('ScheduledTaskDetail simulation', () => {
+describe('RoutineDetail simulation', () => {
   beforeEach(() => {
-    mockGetScheduledTask.mockReset();
-    mockUpdateScheduledTask.mockReset();
-    mockDeleteScheduledTask.mockReset();
+    mockGetRoutine.mockReset();
+    mockUpdateRoutine.mockReset();
+    mockDeleteRoutine.mockReset();
     mockAuthFetch.mockReset();
-    mockGetScheduledTask.mockResolvedValue({ scheduledTask: task });
+    mockGetRoutine.mockResolvedValue({ routine: task });
   });
 
   it('streams run reasoning traces and final output', async () => {

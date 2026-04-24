@@ -11,13 +11,13 @@ import {
   ArrowLeft, Zap, Play, Pause, Trash2, Clock, CheckCircle2, XCircle,
   Loader2, Save, FlaskConical,
 } from 'lucide-react';
-import { deleteScheduledTask, getScheduledTask, updateScheduledTask } from '@/graphql/client';
+import { deleteRoutine, getRoutine, updateRoutine } from '@/graphql/client';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { PageLoader } from '@/components/ui/page-loader';
 import { cn } from '@/lib/utils';
 
-interface ScheduledTask {
+interface Routine {
   uid: string;
   name: string;
   prompt: string;
@@ -36,8 +36,9 @@ interface ScheduledTask {
   createdAt: string;
 }
 
-interface SimulatedSuggestion {
+interface SimulatedAction {
   id: string;
+  tool?: string | null;
   title: string;
   body: string;
   category?: string | null;
@@ -48,11 +49,11 @@ interface SimulatedSuggestion {
   action_payload?: Record<string, unknown> | null;
 }
 
-const ScheduledTaskDetail = () => {
+const RoutineDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
-  const [task, setTask] = useState<ScheduledTask | null>(null);
+  const [task, setTask] = useState<Routine | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -61,7 +62,7 @@ const ScheduledTaskDetail = () => {
   const [simulating, setSimulating] = useState(false);
   const [simTrace, setSimTrace] = useState<string[]>([]);
   const [simOutput, setSimOutput] = useState<string | null>(null);
-  const [simSuggestions, setSimSuggestions] = useState<SimulatedSuggestion[]>([]);
+  const [simActions, setSimActions] = useState<SimulatedAction[]>([]);
   const runScrollRef = useRef<HTMLPreElement>(null);
   const simScrollRef = useRef<HTMLPreElement>(null);
 
@@ -73,8 +74,8 @@ const ScheduledTaskDetail = () => {
   const fetchTask = async () => {
     if (!id) return;
     try {
-      const data = await getScheduledTask(id);
-      const st = data.scheduledTask;
+      const data = await getRoutine(id);
+      const st = data.routine;
       setTask(st);
       if (st) {
         setEditName(st.name);
@@ -90,7 +91,7 @@ const ScheduledTaskDetail = () => {
     if (!task || task.isDefault) return;
     setSaving(true);
     try {
-      await updateScheduledTask(task.uid, {
+      await updateRoutine(task.uid, {
         name: editName || undefined,
         prompt: editPrompt || undefined,
         schedule: editSchedule || undefined,
@@ -104,7 +105,7 @@ const ScheduledTaskDetail = () => {
   const handleToggle = async () => {
     if (!task) return;
     try {
-      await updateScheduledTask(task.uid, { enabled: !task.enabled });
+      await updateRoutine(task.uid, { enabled: !task.enabled });
       toast.success(task.enabled ? 'Paused' : 'Resumed');
       fetchTask();
     } catch { toast.error('Failed'); }
@@ -114,9 +115,9 @@ const ScheduledTaskDetail = () => {
     if (!task || task.isDefault) return;
     if (!confirm(`Delete "${task.name}"?`)) return;
     try {
-      await deleteScheduledTask(task.uid);
+      await deleteRoutine(task.uid);
       toast.success('Deleted');
-      navigate('/scheduled-tasks');
+      navigate('/routines');
     } catch { toast.error('Failed'); }
   };
 
@@ -126,7 +127,7 @@ const ScheduledTaskDetail = () => {
     setRunTrace([]);
     setRunOutput(null);
     try {
-      const res = await authFetch(`/api/scheduled-task/${task.uid}/run`, { method: 'POST' });
+      const res = await authFetch(`/api/routines/${task.uid}/run`, { method: 'POST' });
       if (!res.ok) {
         setRunOutput(`Error: HTTP ${res.status}`);
         return;
@@ -159,7 +160,7 @@ const ScheduledTaskDetail = () => {
                   nextRunAt: event.task.nextRunAt ?? prev.nextRunAt,
                   state: event.task.state ?? prev.state,
                   enabled: event.task.enabled ?? prev.enabled,
-                } as ScheduledTask : prev);
+                } as Routine : prev);
               }
             } else if (event.type === 'error') {
               setRunOutput(`Error: ${event.message}`);
@@ -178,9 +179,9 @@ const ScheduledTaskDetail = () => {
     setSimulating(true);
     setSimTrace([]);
     setSimOutput(null);
-    setSimSuggestions([]);
+    setSimActions([]);
     try {
-      const res = await authFetch(`/api/scheduled-task/${task.uid}/simulate`, { method: 'POST' });
+      const res = await authFetch(`/api/routines/${task.uid}/simulate`, { method: 'POST' });
       if (!res.ok) {
         setSimOutput(`Error: HTTP ${res.status}`);
         return;
@@ -203,10 +204,12 @@ const ScheduledTaskDetail = () => {
               simScrollRef.current?.scrollTo(0, simScrollRef.current.scrollHeight);
             } else if (event.type === 'done') {
               setSimOutput(event.reply);
-              setSimSuggestions(Array.isArray(event.suggestions) ? event.suggestions : []);
+              const fromActions = Array.isArray(event.actions) ? event.actions : null;
+              const fromSuggestions = Array.isArray(event.suggestions) ? event.suggestions : [];
+              setSimActions(fromActions ?? fromSuggestions);
             } else if (event.type === 'error') {
               setSimOutput(`Error: ${event.message}`);
-              setSimSuggestions([]);
+              setSimActions([]);
             }
           } catch { /* skip malformed */ }
         }
@@ -220,8 +223,8 @@ const ScheduledTaskDetail = () => {
   if (!task) {
     return (
       <div className="p-6 text-center text-muted-foreground">
-        <p>Scheduled task not found</p>
-        <Button variant="ghost" className="mt-4" onClick={() => navigate('/scheduled-tasks')}>
+        <p>Routine not found</p>
+        <Button variant="ghost" className="mt-4" onClick={() => navigate('/routines')}>
           <ArrowLeft className="h-4 w-4 mr-2" /> Back
         </Button>
       </div>
@@ -235,7 +238,7 @@ const ScheduledTaskDetail = () => {
     <div className="p-6 max-w-3xl mx-auto space-y-5">
       {/* Header */}
       <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={() => navigate('/scheduled-tasks')} className="shrink-0">
+        <Button variant="ghost" size="icon" onClick={() => navigate('/routines')} className="shrink-0">
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="min-w-0 flex-1">
@@ -327,7 +330,7 @@ const ScheduledTaskDetail = () => {
         </div>
 
         {/* Simulation trace + output */}
-        {(runTrace.length > 0 || runOutput !== null || simTrace.length > 0 || simOutput !== null || simSuggestions.length > 0) && (
+        {(runTrace.length > 0 || runOutput !== null || simTrace.length > 0 || simOutput !== null || simActions.length > 0) && (
           <div className="space-y-2">
             {runTrace.length > 0 && (
               <div className="space-y-1.5">
@@ -403,44 +406,45 @@ const ScheduledTaskDetail = () => {
               </div>
             )}
 
-            {simSuggestions.length > 0 && (
+            {simActions.length > 0 && (
               <div className="space-y-2">
                 <div className="flex items-center gap-1.5">
                   <FlaskConical className="h-3.5 w-3.5 text-violet-500" />
                   <span className="text-xs font-semibold text-violet-600 dark:text-violet-400">
-                    Suggestions That Would Be Created
+                    Actions That Would Be Taken
                   </span>
                 </div>
                 <div className="space-y-3">
-                  {simSuggestions.map((suggestion, index) => (
+                  {simActions.map((action, index) => (
                     <Card
-                      key={suggestion.id || `${suggestion.title}-${index}`}
+                      key={action.id || `${action.title}-${index}`}
                       className="rounded-xl border-violet-200 bg-violet-50/70 p-4 dark:border-violet-900 dark:bg-violet-950/20"
                     >
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div className="space-y-1">
-                          <h3 className="text-sm font-semibold text-foreground">{suggestion.title}</h3>
+                          <h3 className="text-sm font-semibold text-foreground">{action.title}</h3>
                           <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-                            {suggestion.category && <Badge variant="secondary">{suggestion.category}</Badge>}
-                            {suggestion.urgency && <Badge variant="outline">{suggestion.urgency}</Badge>}
-                            {suggestion.property_id && <span>Property: {suggestion.property_id}</span>}
-                            {suggestion.task_id && <span>Task: {suggestion.task_id}</span>}
-                            {suggestion.risk_score !== null && suggestion.risk_score !== undefined && (
-                              <span>Risk: {suggestion.risk_score}</span>
+                            {action.tool && <Badge variant="secondary">{action.tool}</Badge>}
+                            {action.category && <Badge variant="secondary">{action.category}</Badge>}
+                            {action.urgency && <Badge variant="outline">{action.urgency}</Badge>}
+                            {action.property_id && <span>Property: {action.property_id}</span>}
+                            {action.task_id && <span>Task: {action.task_id}</span>}
+                            {action.risk_score !== null && action.risk_score !== undefined && (
+                              <span>Risk: {action.risk_score}</span>
                             )}
                           </div>
                         </div>
                       </div>
-                      {suggestion.body && (
-                        <p className="mt-3 whitespace-pre-wrap text-sm text-foreground/90">{suggestion.body}</p>
+                      {action.body && (
+                        <p className="mt-3 whitespace-pre-wrap text-sm text-foreground/90">{action.body}</p>
                       )}
-                      {suggestion.action_payload && Object.keys(suggestion.action_payload).length > 0 && (
+                      {action.action_payload && Object.keys(action.action_payload).length > 0 && (
                         <div className="mt-3 space-y-1.5">
                           <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                             Action Payload
                           </div>
                           <pre className="overflow-x-auto rounded-lg border bg-background/80 p-3 text-[11px] whitespace-pre-wrap font-mono">
-                            {JSON.stringify(suggestion.action_payload, null, 2)}
+                            {JSON.stringify(action.action_payload, null, 2)}
                           </pre>
                         </div>
                       )}
@@ -483,4 +487,4 @@ const ScheduledTaskDetail = () => {
   );
 };
 
-export default ScheduledTaskDetail;
+export default RoutineDetail;
