@@ -99,6 +99,12 @@ class SuggestionStatus(str, enum.Enum):
     EXPIRED = "expired"
 
 
+class RoutineState(str, enum.Enum):
+    SCHEDULED = "scheduled"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+
+
 # ─── Suggestion source (union) ───────────────────────────────────────────────
 
 @dataclass(frozen=True)

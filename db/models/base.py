@@ -1,6 +1,15 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKeyConstraint, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKeyConstraint,
+    Integer,
+    PrimaryKeyConstraint,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -23,8 +32,41 @@ class PrimaryId:
 
 
 class NumberedPrimaryId:
-    """Auto-incrementing integer primary key for models with sequential numbering."""
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    """Per-org sequential integer primary key with a composite `(org_id, id)` PK.
+
+    The `id` value is NOT driven by a DB sequence — it must be assigned by
+    `NumberAllocator.allocate_next(sess, entity_type, org_id)` before insert,
+    using the shared `id_sequences` table. This gives each org its own 1..N
+    numbering per entity type: id=1 can coexist in org 1 and org 2.
+
+    Any insert that omits `id` will fail with NotNullViolation — this is
+    intentional to prevent accidental global autoincrement from interfering
+    with the per-org counter.
+
+    Subclasses MUST include `NumberedPrimaryId.primary_key(cls)` in their
+    `__table_args__` to declare the composite PK.
+    """
+    id = Column(Integer, nullable=False, autoincrement=False)
+
+    @staticmethod
+    def primary_key(cls) -> PrimaryKeyConstraint:
+        return PrimaryKeyConstraint(
+            "org_id", "id", name=f"pk_{cls.__tablename__}"
+        )
+
+
+class IdSequence(Base):
+    """Per-org, per-entity-type monotonic counter for `NumberedPrimaryId` models.
+
+    Only ever incremented — never decremented or reset — so ids aren't reused
+    even after rows are deleted. Concurrent allocations are race-safe via an
+    atomic UPSERT with RETURNING in `NumberAllocator.allocate_next`.
+    """
+    __tablename__ = "id_sequences"
+
+    org_id = Column(Integer, primary_key=True)
+    entity_type = Column(String(64), primary_key=True)
+    last_number = Column(Integer, nullable=False, default=0)
 
 
 class SmallPrimaryId:

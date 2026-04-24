@@ -27,8 +27,8 @@ from .account import User
 from .agent_memory import AgentMemory
 from .agent_trace import AgentTrace
 
-# AutomationRevision removed — replaced by ScheduledTask
-from .base import Base, EntityNote, HasCreatorId
+# AutomationRevision removed — replaced by Routine
+from .base import Base, EntityNote, HasCreatorId, IdSequence
 from .documents import Document, DocumentTag
 from .memory_item import MemoryItem
 from .messaging import (
@@ -42,10 +42,10 @@ from .messaging import (
     ParticipantType,
 )
 from .rental import Lease, Property, Tenant, Unit
-from .scheduled_task import ScheduledTask
+from .routine import Routine
 from .settings import AppSetting
 from .suggestions import Suggestion
-from .tasks import Task, TaskNumberSequence
+from .tasks import Task
 
 __all__ = [
     "User",
@@ -61,7 +61,7 @@ __all__ = [
     "MessageType",
     "DraftApprovalStatus",
     "Task",
-    "TaskNumberSequence",
+    "IdSequence",
     "Suggestion",
     "Conversation",
     "ConversationParticipant",
@@ -73,7 +73,7 @@ __all__ = [
     "AgentTrace",
     "MemoryItem",
     "AppSetting",
-    "ScheduledTask",
+    "Routine",
     "ChannelType",
     "TaskCategory",
     "TaskMode",
