@@ -77,7 +77,7 @@ Key rules:
 
 ### Backend detail
 
-**`main.py`** — FastAPI entry point. Mounts routers, middleware, and the SPA catch-all. On startup: creates DB tables, runs schema migrations, starts the agent gateway, and kicks off polling loops (Quo SMS, automation audit/heartbeat). Also runnable directly (`python main.py --port 8002 --reload`).
+**`main.py`** — FastAPI entry point. Mounts routers, middleware, and the SPA catch-all. On startup: creates DB tables, runs schema migrations, starts the agent gateway, and kicks off polling loops (Quo SMS, automation audit/routine). Also runnable directly (`python main.py --port 8002 --reload`).
 
 **`db/models/`** — SQLAlchemy ORM models:
 - Rental hierarchy: `Account` → `Property` → `Unit` → `Lease` → `Tenant`
@@ -109,7 +109,7 @@ Key rules:
 
 **`handlers/`** — HTTP route handlers:
 - `chat.py` — Agent chat execution, streaming responses, progress events
-- `automations.py` — Automation DSL execution, audit and heartbeat loops
+- `automations.py` — Automation DSL execution, audit and routine loops
 - `documents.py` — Document upload, extraction, embedding
 - `settings.py` — Integration configuration (Quo, etc.)
 - `quo_poller.py` — SMS polling from Quo/OpenPhone (5 min dev, 15 min prod)
