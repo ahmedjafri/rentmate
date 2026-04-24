@@ -10,9 +10,11 @@ from backends.local_auth import resolve_account_id, resolve_org_id
 from db.enums import AgentSource, SuggestionSource, TaskMode, TaskPriority, TaskSource, TaskStatus
 from db.models import (
     Conversation,
+    ConversationParticipant,
     ConversationType,
     Message,
     MessageType,
+    ParticipantType,
     Suggestion,
     Task,
 )
@@ -94,6 +96,7 @@ class SuggestionExecutor:
 
     def _create_task_from_suggestion(self, suggestion: Suggestion) -> Task:
         """Create a new Task and transfer the AI conversation from the suggestion."""
+        payload = suggestion.action_payload or {}
         task = TaskService.create_task(self.db, CreateTaskInput(
             title=suggestion.title or "",
             source=TaskSource(suggestion.source or "automation"),
@@ -104,6 +107,7 @@ class SuggestionExecutor:
             priority=TaskPriority.ROUTINE,
             property_id=suggestion.property_id,
             unit_id=suggestion.unit_id,
+            goal=(payload.get("goal") or suggestion.title or "").strip(),
         ))
 
         # Capture before clearing — needed for approval message update
@@ -130,27 +134,70 @@ class SuggestionExecutor:
 
         return task
 
-    def _wire_vendor_conversation(self, task: Task, suggestion: Suggestion, vendor_id: str) -> None:
-        """Create or find the vendor conversation and link it to the task."""
+    def _task_conversation_with_entity(
+        self,
+        task: Task,
+        *,
+        conversation_type: ConversationType,
+        participant_type: ParticipantType,
+        entity_user_id: int,
+    ) -> Conversation | None:
+        """Find the task's existing coordination thread with a specific entity.
+
+        Returns the Conversation if this task already has one matching
+        (conversation_type, participant with the given user_id + participant_type),
+        otherwise None. Used to decide whether to reuse or create a new thread
+        when the agent reaches out to the same tenant/vendor more than once.
+        """
+        for convo in task.external_conversations:
+            if convo.conversation_type != conversation_type:
+                continue
+            participant = self.db.execute(
+                select(ConversationParticipant).where(
+                    ConversationParticipant.conversation_id == convo.id,
+                    ConversationParticipant.user_id == entity_user_id,
+                    ConversationParticipant.participant_type == participant_type,
+                )
+            ).scalar_one_or_none()
+            if participant:
+                return convo
+        return None
+
+    def _wire_vendor_conversation(self, task: Task, suggestion: Suggestion, vendor_id: str) -> Conversation:
+        """Create or reuse the vendor's task-scoped conversation.
+
+        Reuses an existing conversation on this task *with this specific vendor*;
+        otherwise creates a new one. Multiple vendors on the same task each get
+        their own thread.
+        """
         vendor = get_vendor_by_external_id(self.db, str(vendor_id))
         if not vendor:
             raise ValueError(f"Vendor {vendor_id} not found")
-        ext_convo = chat_service.get_or_create_external_conversation(
-            self.db,
+        existing = self._task_conversation_with_entity(
+            task,
             conversation_type=ConversationType.VENDOR,
-            subject=suggestion.title or "",
-            property_id=suggestion.property_id,
-            unit_id=suggestion.unit_id,
-            vendor_id=vendor.id,
+            participant_type=ParticipantType.EXTERNAL_CONTACT,
+            entity_user_id=vendor.id,
         )
-        task.external_conversation_id = ext_convo.id
+        if existing is None:
+            existing = chat_service.get_or_create_external_conversation(
+                self.db,
+                conversation_type=ConversationType.VENDOR,
+                subject=suggestion.title or "",
+                property_id=suggestion.property_id,
+                unit_id=suggestion.unit_id,
+                vendor_id=vendor.id,
+                parent_task_id=task.id,
+            )
         TaskService.assign_vendor_to_task(self.db, task_id=task.id, vendor_id=vendor.id)
+        return existing
 
     def _send_draft_message(self, task: Task, draft: str) -> None:
-        """Send a draft message to the task's external conversation."""
-        if task.external_conversation_id:
+        """Send a draft message to the task's most recent external conversation."""
+        ext_convo = task.latest_external_conversation
+        if ext_convo:
             chat_service.send_autonomous_message(
-                self.db, conversation_id=task.external_conversation_id, body=draft, task_id=task.id,
+                self.db, conversation_id=ext_convo.id, body=draft, task_id=task.id,
             )
 
     def _resolve_suggestion(
@@ -440,11 +487,27 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
         suggestion = self._fetch_suggestion(suggestion_id)
         task = None
 
+        if action in ("message_person_send", "edit_message") and not suggestion.task_id:
+            # Standalone (no-task) message suggestion: the tool intentionally
+            # did NOT create the conversation at draft time. Materialise it
+            # now, drop the draft into it, and let ``_resolve_suggestion``
+            # mark the suggestion accepted below. Nothing to do for task.
+            payload = suggestion.action_payload or {}
+            entity_id = payload.get("entity_id")
+            entity_type = payload.get("entity_type")
+            draft = edited_body or payload.get("draft_message")
+            if entity_id and entity_type and draft:
+                self._send_standalone_message(
+                    suggestion=suggestion,
+                    entity_id=str(entity_id),
+                    entity_type=str(entity_type),
+                    draft=str(draft),
+                )
+
         if action in ("message_person_send", "edit_message") and suggestion.task_id:
             payload = suggestion.action_payload or {}
             entity_id = payload.get("entity_id")
             entity_type = payload.get("entity_type")
-            entity_phone = payload.get("entity_phone")
             draft = edited_body or payload.get("draft_message")
 
             task = self.db.execute(
@@ -452,10 +515,14 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
             ).scalar_one_or_none()
 
             if task and entity_id and draft:
-                # Wire conversation if not already linked
+                target_convo: Conversation | None = None
+                # Wire a task-scoped conversation per (task, entity). Reuses if
+                # this task already has a thread with this specific entity;
+                # otherwise creates a new one — so reaching out to vendor B
+                # while vendor A already has a thread produces a distinct
+                # conversation rather than piggybacking on vendor A's.
                 if entity_type == "vendor":
-                    if not task.external_conversation_id:
-                        self._wire_vendor_conversation(task, suggestion, entity_id)
+                    target_convo = self._wire_vendor_conversation(task, suggestion, entity_id)
                 elif entity_type == "tenant":
                     from db.models import Tenant as TenantModel
                     from gql.services.tenant_service import TenantService
@@ -465,88 +532,168 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
                     ).scalar_one_or_none()
                     if not t_obj:
                         raise ValueError(f"Tenant {entity_id} not found")
-                    has_tenant_conv = False
-                    if task.parent_conversation_id:
-                        from db.models import Conversation as Conv
-                        pc = self.db.get(Conv, task.parent_conversation_id)
-                        if pc and getattr(pc, "conversation_type", None) == ConversationType.TENANT:
-                            has_tenant_conv = True
-                    if not has_tenant_conv:
-                        ext_convo = chat_service.get_or_create_external_conversation(
+                    existing = self._task_conversation_with_entity(
+                        task,
+                        conversation_type=ConversationType.TENANT,
+                        participant_type=ParticipantType.TENANT,
+                        entity_user_id=t_obj.user_id,
+                    )
+                    if existing is None:
+                        target_convo = chat_service.get_or_create_external_conversation(
                             self.db,
                             conversation_type=ConversationType.TENANT,
                             subject=suggestion.title or "",
                             property_id=suggestion.property_id,
                             unit_id=suggestion.unit_id,
-                            tenant_id=t_obj.id if t_obj else None,
+                            tenant_id=t_obj.id,
+                            parent_task_id=task.id,
                         )
                         if not task.parent_conversation_id:
-                            task.parent_conversation_id = ext_convo.id
-                        elif not task.external_conversation_id:
-                            task.external_conversation_id = ext_convo.id
-                    # Ensure tenant has a portal token
-                    if t_obj:
-                        TenantService.ensure_portal_token(self.db, t_obj)
+                            task.parent_conversation_id = target_convo.id
+                    else:
+                        target_convo = existing
+                    TenantService.ensure_portal_token(self.db, t_obj)
 
                 # Find the conversation to send to
-                conv_id = self._resolve_conversation_for_entity(task, entity_type)
+                conv_id = target_convo.id if target_convo is not None else self._resolve_conversation_for_entity(task, entity_type, entity_id)
                 if conv_id:
                     chat_service.send_autonomous_message(
                         self.db, conversation_id=conv_id, body=draft, task_id=task.id,
                     )
-                    if entity_phone:
-                        # For tenants, include a portal link in the SMS
-                        sms_body = draft
-                        if entity_type == "tenant":
-                            sms_body = self._append_tenant_portal_link(entity_id, draft)
-                        self._dispatch_sms(entity_phone, sms_body)
+                    # Notify the recipient out-of-band (SMS) with a login-less
+                    # link back to the conversation.
+                    self._notify_recipient(
+                        task=task,
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        conversation_id=conv_id,
+                        draft=draft,
+                    )
 
         suggestion = self._resolve_suggestion(suggestion_id, action, task)
         return suggestion, task
 
-    def _resolve_conversation_for_entity(self, task: Task, entity_type: str) -> str | None:
-        """Find the conversation ID for the given entity type on a task."""
+    def _send_standalone_message(
+        self,
+        *,
+        suggestion: Suggestion,
+        entity_id: str,
+        entity_type: str,
+        draft: str,
+    ) -> None:
+        """Materialise a standalone (no-task) conversation at approval time.
+
+        The no-task ``message_person`` tool path intentionally defers
+        conversation creation until the manager approves the draft so a
+        dismissed/edited suggestion leaves no orphaned Conversation rows
+        behind. This helper creates the conversation, records the draft,
+        and writes the resolved conversation_id back onto the suggestion's
+        ``action_payload`` for traceability.
+        """
+        from db.models import Tenant as TenantModel
+
+        conv_type = (
+            ConversationType.TENANT if entity_type == "tenant"
+            else ConversationType.VENDOR
+        )
+        if entity_type == "tenant":
+            tenant = self.db.execute(
+                select(TenantModel).where(TenantModel.external_id == str(entity_id))
+            ).scalar_one_or_none()
+            if not tenant:
+                raise ValueError(f"Tenant {entity_id} not found")
+            participant_kwargs = {"tenant_id": tenant.id}
+        else:
+            vendor = get_vendor_by_external_id(self.db, str(entity_id))
+            if not vendor:
+                raise ValueError(f"Vendor {entity_id} not found")
+            participant_kwargs = {"vendor_id": vendor.id}
+
+        convo = chat_service.get_or_create_external_conversation(
+            self.db,
+            conversation_type=conv_type,
+            subject=suggestion.title or "",
+            property_id=suggestion.property_id,
+            unit_id=suggestion.unit_id,
+            **participant_kwargs,
+        )
+        chat_service.send_autonomous_message(
+            self.db, conversation_id=convo.id, body=draft,
+        )
+        # Record the materialised conversation on the suggestion so the UI
+        # can link it after approval.
+        updated_payload = dict(suggestion.action_payload or {})
+        updated_payload["conversation_id"] = str(convo.id)
+        suggestion.action_payload = updated_payload
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(suggestion, "action_payload")
+
+    def _resolve_conversation_for_entity(
+        self, task: Task, entity_type: str, entity_id: str | None,
+    ) -> int | None:
+        """Find the task-scoped conversation ID for a specific entity."""
         if entity_type == "vendor":
-            return task.external_conversation_id
+            vendor = get_vendor_by_external_id(self.db, str(entity_id)) if entity_id else None
+            if not vendor:
+                return None
+            convo = self._task_conversation_with_entity(
+                task,
+                conversation_type=ConversationType.VENDOR,
+                participant_type=ParticipantType.EXTERNAL_CONTACT,
+                entity_user_id=vendor.id,
+            )
+            return convo.id if convo else None
         elif entity_type == "tenant":
-            if task.parent_conversation_id:
-                from db.models import Conversation as Conv
-                pc = self.db.get(Conv, task.parent_conversation_id)
-                if pc and getattr(pc, "conversation_type", None) == ConversationType.TENANT:
-                    return task.parent_conversation_id
-            return task.external_conversation_id
+            from db.models import Tenant as TenantModel
+            t_obj = self.db.execute(
+                select(TenantModel).where(TenantModel.external_id == str(entity_id))
+            ).scalar_one_or_none() if entity_id else None
+            if not t_obj:
+                return None
+            convo = self._task_conversation_with_entity(
+                task,
+                conversation_type=ConversationType.TENANT,
+                participant_type=ParticipantType.TENANT,
+                entity_user_id=t_obj.user_id,
+            )
+            return convo.id if convo else None
         return None
 
-    def _append_tenant_portal_link(self, tenant_id: str, draft: str) -> str:
-        """Ensure tenant has a portal token and append the link to the SMS body."""
-        try:
-            from db.models import Tenant
-            from gql.services.tenant_service import TenantService
-            tenant = self.db.execute(
-                select(Tenant).where(Tenant.external_id == str(tenant_id))
-            ).scalar_one_or_none()
-            if tenant:
-                TenantService.ensure_portal_token(self.db, tenant)
-                self.db.flush()
-                portal_url = TenantService.get_portal_url(tenant)
-                if portal_url:
-                    return f"{draft}\n\nReply here: {portal_url}"
-        except Exception:
-            pass
-        return draft
+    def _notify_recipient(
+        self,
+        *,
+        task: Task,
+        entity_type: str,
+        entity_id: str,
+        conversation_id: int,
+        draft: str,
+    ) -> None:
+        """Dispatch a notification (SMS today) with a login-less link to the thread."""
+        from gql.services.notification_service import Notification, NotificationService
 
-    def _dispatch_sms(self, to_phone: str, body: str) -> None:
-        """Dispatch an SMS via Quo (best-effort, non-blocking)."""
-        try:
-            from gql.services.sms_service import get_quo_api_key, get_quo_from_number, send_sms_reply
-            api_key = get_quo_api_key()
-            from_num = get_quo_from_number()
-            if api_key:
-                import asyncio
-                try:
-                    loop = asyncio.get_event_loop()
-                    loop.create_task(send_sms_reply(from_num, to_phone, body, api_key))
-                except RuntimeError:
-                    pass
-        except Exception:
-            pass
+        recipient_user_id = self._recipient_user_id(entity_type, entity_id)
+        if recipient_user_id is None:
+            return
+        blurb = f"RentMate update: {task.title}" if task.title else "RentMate update"
+        NotificationService.dispatch(
+            self.db,
+            Notification(
+                recipient_user_id=recipient_user_id,
+                conversation_id=conversation_id,
+                blurb=blurb,
+                messages=[draft],
+            ),
+        )
+
+    def _recipient_user_id(self, entity_type: str, entity_id: str) -> int | None:
+        """Resolve a tenant or vendor external id to its underlying User.id."""
+        if entity_type == "vendor":
+            vendor = get_vendor_by_external_id(self.db, str(entity_id))
+            return vendor.id if vendor else None
+        if entity_type == "tenant":
+            from db.models import Tenant as TenantModel
+            tenant = self.db.execute(
+                select(TenantModel).where(TenantModel.external_id == str(entity_id))
+            ).scalar_one_or_none()
+            return tenant.user_id if tenant else None
+        return None

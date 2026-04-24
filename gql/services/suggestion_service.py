@@ -24,6 +24,7 @@ from db.models import (
     ParticipantType as PT,
     Suggestion,
 )
+from gql.services.number_allocator import NumberAllocator
 
 
 class SuggestionOptionRecord(BaseModel):
@@ -56,6 +57,10 @@ class MessagePersonPayload(SuggestionActionPayloadBase):
     entity_name: str | None = None
     entity_phone: str | None = None
     draft_message: str
+    risk_level: Literal["low", "medium", "high", "critical"] | None = None
+    # Populated for standalone (no-task) suggestions so the manager can
+    # trace the suggestion back to its conversation.
+    conversation_id: str | int | None = None
 
 
 class RequestFileUploadPayload(SuggestionActionPayloadBase):
@@ -183,8 +188,11 @@ def create_suggestion(
     sess.add(ai_convo)
     sess.flush()
 
+    org_id = resolve_org_id()
+    next_id = NumberAllocator.allocate_next(sess, entity_type="suggestion", org_id=org_id)
     suggestion = Suggestion(
-        org_id=resolve_org_id(),
+        id=next_id,
+        org_id=org_id,
         creator_id=creator_id,
         title=title,
         body=ai_context,
