@@ -7,8 +7,9 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from backends.local_auth import get_org_external_id, set_request_context
-from db.enums import TaskMode, TaskStatus
-from db.models import AgentMemory, AgentTrace, Conversation, Message, MessageType, ParticipantType, Property, Task
+from db.enums import RoutineState, TaskMode, TaskStatus
+from db.models import AgentMemory, AgentTrace, Conversation, Message, MessageType, ParticipantType, Property, Routine, Task
+from gql.services.number_allocator import NumberAllocator
 from handlers.deps import get_db
 from llm.retrieval import ChromaMemoryIndex
 from main import app
@@ -131,6 +132,7 @@ class TestDevMemoryEndpoints:
         self.db.add(conv)
         self.db.flush()
         task = Task(
+            id=NumberAllocator.allocate_next(self.db, entity_type="task", org_id=1),
             org_id=1,
             creator_id=1,
             title="Trace Task",
@@ -178,7 +180,7 @@ class TestDevMemoryEndpoints:
 
         tasks_response = self.client.get("/dev/trace-filters/tasks", headers=AUTH)
         assert tasks_response.status_code == 200
-        assert any(str(row["id"]) == str(task.id) for row in tasks_response.json())
+        assert any(row["id"] == f"task:{task.id}" and row["raw_id"] == str(task.id) for row in tasks_response.json())
 
         chats_response = self.client.get("/dev/trace-filters/chats", headers=AUTH)
         assert chats_response.status_code == 200
@@ -190,3 +192,29 @@ class TestDevMemoryEndpoints:
         assert detail_payload["id"] == trace.id
         assert detail_payload["detail"]["kind"] == "llm_exchange"
         assert detail_payload["detail"]["retrieval"]["request"]["query"] == "hi"
+
+    def test_trace_task_filters_include_routines_with_runs(self):
+        routine = Routine(
+            id=NumberAllocator.allocate_next(self.db, entity_type="routine", org_id=1),
+            org_id=1,
+            creator_id=1,
+            name="Scheduled lease review",
+            prompt="Review expiring leases.",
+            schedule="daily",
+            enabled=True,
+            state=RoutineState.SCHEDULED,
+            simulated_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        self.db.add(routine)
+        self.db.commit()
+
+        response = self.client.get("/dev/trace-filters/tasks", headers=AUTH)
+
+        assert response.status_code == 200
+        rows = response.json()
+        assert any(
+            row["id"] == f"routine:{routine.id}" and row["raw_id"] == str(routine.id) and row["source"] == "routine"
+            for row in rows
+        )
+
