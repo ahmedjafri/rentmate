@@ -28,6 +28,12 @@ interface ChatPanelState {
   taskId: string | null;
   conversationId: string | null;
   pageContext: string | null;
+  // Incremented each time an external trigger (e.g. the Trigger Agent
+  // button in TaskDetail) wants ChatPanel to run an SSE review stream
+  // on the current task. ChatPanel watches ``reviewTrigger.nonce`` as
+  // its dependency; non-null + matching taskId drives a POST to
+  // /api/tasks/:id/review and populates the existing progress log.
+  reviewTrigger: { taskId: string; nonce: number } | null;
 }
 
 interface AppContextType {
@@ -67,6 +73,7 @@ interface AppContextType {
   removeDocument: (id: string) => void;
   openChat: (opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; conversationId?: string | null; lazy?: boolean }) => void;
   setChatConversationId: (id: string) => void;
+  triggerReviewStream: (taskId: string) => void;
   closeChat: () => void;
   setActionPolicySettings: (settings: ActionPolicySettings) => void;
   refreshData: () => void;
@@ -150,7 +157,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [documents, setDocuments] = useState<ManagedDocument[]>([]);
   const [actionPolicySettings, setActionPolicySettings] = useState<ActionPolicySettings>(() => loadFromStorage('rm_action_policy', defaultActionPolicySettings));
-  const [chatPanel, setChatPanel] = useState<ChatPanelState>({ isOpen: false, suggestionId: null, taskId: null, conversationId: null, pageContext: null });
+  const [chatPanel, setChatPanel] = useState<ChatPanelState>({ isOpen: false, suggestionId: null, taskId: null, conversationId: null, pageContext: null, reviewTrigger: null });
 
   const [entityContext, setEntityContextState] = useState<Record<string, string>>(() => loadFromStorage('rm_entity_context', {}));
 
@@ -277,37 +284,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const openChat = useCallback((opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; conversationId?: string | null; lazy?: boolean }) => {
     if (opts?.taskId || opts?.suggestionId) {
-      setChatPanel({
+      setChatPanel(prev => ({
+        ...prev,
         isOpen: true,
         taskId: opts?.taskId ?? null,
         suggestionId: opts?.suggestionId ?? null,
-        conversationId: null,
+        conversationId: opts?.conversationId ?? null,
         pageContext: opts?.pageContext ?? null,
-      });
+      }));
       return;
     }
 
     if (opts?.conversationId) {
-      setChatPanel({
+      setChatPanel(prev => ({
+        ...prev,
         isOpen: true,
         taskId: null,
         suggestionId: null,
-        conversationId: opts.conversationId,
+        conversationId: opts.conversationId!,
         pageContext: opts?.pageContext ?? null,
-      });
+      }));
       return;
     }
 
     // Lazy mode: just open the panel without creating a conversation.
     // The backend will auto-create one when the user sends a message.
     if (opts?.lazy) {
-      setChatPanel({
+      setChatPanel(prev => ({
+        ...prev,
         isOpen: true,
         taskId: null,
         suggestionId: null,
         conversationId: null,
         pageContext: opts?.pageContext ?? null,
-      });
+      }));
       return;
     }
 
@@ -318,23 +328,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     })
       .then(r => r.json())
       .then(data => {
-        setChatPanel({
+        setChatPanel(prev => ({
+          ...prev,
           isOpen: true,
           taskId: null,
           suggestionId: null,
           conversationId: data.id,
           pageContext: opts?.pageContext ?? null,
-        });
+        }));
       })
       .catch(() => {});
   }, []);
 
   const closeChat = useCallback(() => {
-    setChatPanel({ isOpen: false, suggestionId: null, taskId: null, conversationId: null, pageContext: null });
+    setChatPanel({ isOpen: false, suggestionId: null, taskId: null, conversationId: null, pageContext: null, reviewTrigger: null });
   }, []);
 
   const setChatConversationId = useCallback((id: string) => {
     setChatPanel(prev => ({ ...prev, conversationId: id }));
+  }, []);
+
+  const triggerReviewStream = useCallback((taskId: string) => {
+    setChatPanel(prev => ({
+      ...prev,
+      reviewTrigger: { taskId, nonce: (prev.reviewTrigger?.nonce ?? 0) + 1 },
+    }));
   }, []);
 
   return (
@@ -343,7 +361,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       chatPanel, entityContext, getEntityContext, setEntityContext,
       updateSuggestionStatus, updateSuggestion, addChatMessage, updateTaskMessage, setTaskMessages, updateTask,
       addTask, removeTask,
-      addProperty, updateProperty, removeProperty, addTenant, updateTenant, removeTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, setChatConversationId, closeChat, setActionPolicySettings, refreshData,
+      addProperty, updateProperty, removeProperty, addTenant, updateTenant, removeTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, setChatConversationId, triggerReviewStream, closeChat, setActionPolicySettings, refreshData,
     }}>
       {children}
     </AppContext.Provider>

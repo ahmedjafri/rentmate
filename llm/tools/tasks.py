@@ -1,10 +1,11 @@
-"""Task-lifecycle tools: propose, close, generic suggestion, scheduled task."""
+"""Task-lifecycle tools: propose, close, generic suggestion, routine."""
 import json
 import re
+from datetime import UTC
 from typing import Any
 
-from backends.local_auth import resolve_account_id
-from db.enums import SuggestionOption, TaskCategory, TaskStatus, Urgency
+from backends.local_auth import resolve_account_id, resolve_org_id
+from db.enums import RoutineState, SuggestionOption, TaskCategory, TaskStatus, Urgency
 from gql.services.task_service import dump_task_steps
 
 from llm.tools._common import (
@@ -59,6 +60,27 @@ _SUGGESTION_CONFIRM_PATTERNS = [
     ]
 ]
 
+_OUTCOME_CONFIRM_STEP_RE = re.compile(
+    r"("
+    r"\bconfirm\b.*\b(works?|working|worked|fixed|resolved|repair|repaired|completed)\b"
+    r"|"
+    r"\bverify\b.*\b(works?|working|worked|fixed|resolved|repair|repaired|completed)\b"
+    r"|"
+    r"\bcheck\b.*\b(works?|working|worked|fixed|resolved|repair|repaired|completed)\b"
+    r"|"
+    r"\bmake sure\b.*\b(works?|working|worked|fixed|resolved)\b"
+    r")",
+    re.I,
+)
+_AFFIRMATIVE_CONFIRM_RE = re.compile(
+    r"\b(yes|works|working|fixed|resolved|all good|good now|looks good|confirmed|done|complete|completed)\b",
+    re.I,
+)
+_NEGATIVE_CONFIRM_RE = re.compile(
+    r"\b(still|not|isn't|isnt|doesn't|doesnt|won't|wont|broken|issue|problem|noise|leak|error|wrong|bad)\b",
+    re.I,
+)
+
 
 def _has_user_confirmed_upload_request(task_id: str) -> bool:
     current_message = current_user_message.get()
@@ -68,6 +90,52 @@ def _has_user_confirmed_upload_request(task_id: str) -> bool:
         if any(pattern.search(message) for pattern in _SUGGESTION_CONFIRM_PATTERNS):
             return True
     return False
+
+
+def _is_confirmation_style_step(step: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(step.get(key) or "")
+        for key in ("key", "label", "note")
+    )
+    return bool(_OUTCOME_CONFIRM_STEP_RE.search(text))
+
+
+def _task_external_confirmation_received(db: Any, *, task_id: str) -> bool:
+    from db.models import Message, ParticipantType, Task
+
+    task = db.query(Task).filter_by(id=task_id).first()
+    if not task:
+        return False
+
+    convo_ids: list[int] = []
+    if getattr(task, "parent_conversation_id", None):
+        convo_ids.append(int(task.parent_conversation_id))
+    convo_ids.extend(
+        int(convo.id)
+        for convo in (getattr(task, "external_conversations", []) or [])
+        if getattr(convo, "id", None) is not None and int(convo.id) not in convo_ids
+    )
+    if not convo_ids:
+        return False
+
+    inbound = (
+        db.query(Message)
+        .filter(
+            Message.conversation_id.in_(convo_ids),
+            Message.sender_type.in_([ParticipantType.TENANT, ParticipantType.EXTERNAL_CONTACT]),
+        )
+        .order_by(Message.sent_at.desc())
+        .first()
+    )
+    if inbound is None:
+        return False
+
+    body = (inbound.body or "").strip()
+    if not body:
+        return False
+    if _NEGATIVE_CONFIRM_RE.search(body):
+        return False
+    return bool(_AFFIRMATIVE_CONFIRM_RE.search(body))
 
 
 def _normalize_current_task_suggestion_payload(
@@ -245,6 +313,7 @@ class ProposeTaskTool(Tool):
             "Only use propose_task for a genuinely separate issue that needs its own task. "
             "Never use propose_task when the user asked you to draft a notice, letter, or document directly in chat. "
             "You MUST provide a vendor_id external UUID — use lookup_vendors first. "
+            "You MUST provide a goal — one sentence stating what 'done' looks like, outcome-flavored and specific. "
             "Include a draft_message and steps (3-6 steps)."
         )
 
@@ -252,9 +321,17 @@ class ProposeTaskTool(Tool):
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "required": ["title", "category", "vendor_id"],
+            "required": ["title", "category", "vendor_id", "goal"],
             "properties": {
                 "title": {"type": "string", "description": "Short task title"},
+                "goal": {
+                    "type": "string",
+                    "description": (
+                        "One-sentence manager-facing intent statement — what 'done' looks like. "
+                        "Outcome-flavored and concrete. Example: \"Fix the kitchen leak with a trusted plumber "
+                        "this week and confirm the repair with Marcus.\" Do NOT restate the title."
+                    ),
+                },
                 "category": {
                     "type": "string",
                     "enum": [c.value for c in TaskCategory],
@@ -316,6 +393,9 @@ class ProposeTaskTool(Tool):
             "vendor_id": vendor_id,
             "vendor_name": vendor_name,
         }
+        goal = (kwargs.get("goal") or "").strip()
+        if goal:
+            action_payload["goal"] = goal
         draft_message = kwargs.get("draft_message")
         if draft_message:
             action_payload["draft_message"] = draft_message
@@ -409,6 +489,120 @@ class CloseTaskTool(Tool):
             if not task.resolved_at:
                 task.resolved_at = datetime.now(UTC)
             return json.dumps({"status": "ok", "message": "Task resolved."})
+
+
+class UpdateTaskProgressTool(Tool):
+    """Update progress steps on an existing task."""
+
+    @property
+    def name(self) -> str:
+        return "update_task_progress"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Update one progress step on a task by marking it pending, active, or done. "
+            "Use this whenever work advances so the task can be closed once all steps are done. "
+            "Provide either step_key or step_label to identify the step."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["task_id", "status"],
+            "properties": {
+                "task_id": {"type": "string", "description": "ID of the task to update"},
+                "step_key": {"type": "string", "description": "Unique step key to update"},
+                "step_label": {"type": "string", "description": "Step label to update when key is unknown"},
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "active", "done"],
+                    "description": "New step status",
+                },
+                "note": {"type": "string", "description": "Optional step note to store"},
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        task_id = kwargs["task_id"]
+        step_key = (kwargs.get("step_key") or "").strip()
+        step_label = (kwargs.get("step_label") or "").strip()
+        status = kwargs["status"]
+        note = kwargs.get("note")
+
+        if not step_key and not step_label:
+            return json.dumps({"status": "error", "message": "Provide step_key or step_label."})
+
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from db.models import Task as TaskModel
+        from llm.tools._common import tool_session
+
+        with tool_session() as db:
+            task = db.query(TaskModel).filter_by(id=task_id).first()
+            if not task:
+                return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
+
+            steps = list(task.steps or [])
+            if not steps:
+                return json.dumps({"status": "error", "message": f"Task {task_id} has no progress steps"})
+
+            updated_step = None
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                matches_key = step_key and str(step.get("key") or "") == step_key
+                matches_label = step_label and str(step.get("label") or "").strip().lower() == step_label.lower()
+                if matches_key or matches_label:
+                    step["status"] = status
+                    if note is not None:
+                        step["note"] = note
+                    updated_step = step
+                    break
+
+            if updated_step is None:
+                identifier = step_key or step_label
+                return json.dumps({"status": "error", "message": f"Step '{identifier}' not found on task {task_id}"})
+
+            if status == "done" and _is_confirmation_style_step(updated_step):
+                if not _task_external_confirmation_received(db, task_id=str(task_id)):
+                    return json.dumps({
+                        "status": "error",
+                        "message": (
+                            f"Cannot mark step '{updated_step.get('label', updated_step.get('key', 'step'))}' done "
+                            "until an external tenant/vendor confirmation has actually been received."
+                        ),
+                    })
+
+            # Keep only one active step. If a step was just completed, advance the next pending step.
+            if status == "active":
+                for step in steps:
+                    if step is updated_step or not isinstance(step, dict):
+                        continue
+                    if step.get("status") == "active":
+                        step["status"] = "pending"
+            elif status == "done":
+                for step in steps:
+                    if not isinstance(step, dict) or step is updated_step:
+                        continue
+                    if step.get("status") == "active":
+                        step["status"] = "pending"
+                next_pending = next(
+                    (step for step in steps if isinstance(step, dict) and step.get("status") == "pending"),
+                    None,
+                )
+                if next_pending is not None:
+                    next_pending["status"] = "active"
+
+            task.steps = dump_task_steps(steps)
+            flag_modified(task, "steps")
+
+            return json.dumps({
+                "status": "ok",
+                "message": f"Updated step '{updated_step.get('label', updated_step.get('key', 'step'))}' to {status}.",
+                "steps": task.steps,
+            })
 
 
 class CreateSuggestionTool(Tool):
@@ -576,17 +770,17 @@ class CreateSuggestionTool(Tool):
             return json.dumps({"status": "error", "message": str(e)})
 
 
-class CreateScheduledTaskTool(Tool):
-    """Create a recurring or one-shot scheduled task."""
+class CreateRoutineTool(Tool):
+    """Create a recurring or one-shot routine."""
 
     @property
     def name(self) -> str:
-        return "create_scheduled_task"
+        return "create_routine"
 
     @property
     def description(self) -> str:
         return (
-            "Create a scheduled task that runs the AI agent on a recurring schedule. "
+            "Create a routine that runs the AI agent on a recurring schedule. "
             "Use for recurring checks (lease expiry, rent reminders, maintenance schedules). "
             "Schedule can be: cron expression ('0 9 * * 1'), interval ('every 4h'), "
             "or named ('daily', 'weekly', 'monthly'). The prompt describes what the "
@@ -599,7 +793,7 @@ class CreateScheduledTaskTool(Tool):
             "type": "object",
             "required": ["name", "prompt", "schedule"],
             "properties": {
-                "name": {"type": "string", "description": "Human-friendly name for this scheduled task"},
+                "name": {"type": "string", "description": "Human-friendly name for this routine"},
                 "prompt": {"type": "string", "description": "What the agent should do each run (natural language)"},
                 "schedule": {
                     "type": "string",
@@ -613,8 +807,8 @@ class CreateScheduledTaskTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        from db.models import ScheduledTask
-        from handlers.scheduler import human_schedule, next_run, parse_schedule
+        from db.models import Routine
+        from handlers.routines import human_schedule, next_run, parse_schedule
         from llm.tools._common import tool_session
 
         name = kwargs["name"]
@@ -627,18 +821,21 @@ class CreateScheduledTaskTool(Tool):
 
         try:
             with tool_session() as db:
-                import uuid
                 from datetime import UTC, datetime
 
-                task = ScheduledTask(
-                    id=str(uuid.uuid4()),
+                from gql.services.number_allocator import NumberAllocator
+
+                org_id = resolve_org_id()
+                task = Routine(
+                    id=NumberAllocator.allocate_next(db, entity_type="routine", org_id=org_id),
+                    org_id=org_id,
                     creator_id=resolve_account_id(),
                     name=name,
                     prompt=prompt,
                     schedule=cron_expr,
                     schedule_display=display,
                     enabled=True,
-                    state="scheduled",
+                    state=RoutineState.SCHEDULED,
                     repeat=kwargs.get("repeat"),
                     next_run_at=nxt,
                     created_at=datetime.now(UTC),
@@ -649,10 +846,10 @@ class CreateScheduledTaskTool(Tool):
 
             return json.dumps({
                 "status": "ok",
-                "scheduled_task_id": task_id,
+                "routine_id": task_id,
                 "schedule": display,
                 "next_run": nxt.isoformat(),
-                "message": f"Scheduled task '{name}' created — {display}, next run {nxt.strftime('%b %d at %H:%M')}.",
+                "message": f"Routine '{name}' created — {display}, next run {nxt.strftime('%b %d at %H:%M')}.",
             })
         except Exception as e:
             return json.dumps({"status": "error", "message": str(e)})
@@ -661,6 +858,7 @@ class CreateScheduledTaskTool(Tool):
 __all__ = [
     "ProposeTaskTool",
     "CloseTaskTool",
+    "UpdateTaskProgressTool",
     "CreateSuggestionTool",
-    "CreateScheduledTaskTool",
+    "CreateRoutineTool",
 ]

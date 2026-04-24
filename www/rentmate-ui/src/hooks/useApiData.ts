@@ -256,10 +256,11 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
     assignedVendorId: t.assignedVendorId,
     assignedVendorName: t.assignedVendorName,
     steps: t.steps ?? undefined,
+    goal: t.goal ?? null,
     suggestionOptions: t.suggestionOptions ?? undefined,
     aiConversationId: t.aiConversationId ?? null,
-    externalConversationId: t.externalConversationId ?? null,
-    parentConversationId: t.externalConversationId ?? t.parentConversationId ?? null,
+    externalConversationIds: t.externalConversationIds ?? [],
+    parentConversationId: t.externalConversationIds?.[0] ?? t.parentConversationId ?? null,
     linkedConversations: (t.linkedConversations ?? []).map(lc => ({
       uid: lc.uid,
       label: lc.label,
@@ -268,6 +269,10 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
       messageCount: lc.messageCount,
       participants: lc.participants ?? [],
     })),
+    lastReviewedAt: t.lastReviewedAt ?? null,
+    lastReviewStatus: t.lastReviewStatus ?? null,
+    lastReviewSummary: t.lastReviewSummary ?? null,
+    lastReviewNextStep: t.lastReviewNextStep ?? null,
   };
 }
 
@@ -416,7 +421,7 @@ interface ApiTask {
   suggestionOptions?: { key: string; label: string; action: string; variant: string }[];
   aiConversationId?: string | null;
   parentConversationId?: string | null;
-  externalConversationId?: string | null;
+  externalConversationIds?: string[];
   linkedConversations?: { uid: string; label: string; conversationType: string; lastMessageAt?: string; messageCount: number; participants?: { name: string; participantType: string; entityId?: string | null; portalUrl?: string | null }[] }[];
 }
 
