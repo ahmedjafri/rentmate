@@ -24,6 +24,8 @@ if _ENV_FILE.exists():
             _k, _, _v = _line.partition("=")
             os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
 
+os.environ.setdefault("HERMES_HOME", str((Path(__file__).parent / "data" / "test-hermes").resolve()))
+
 
 @pytest.fixture(autouse=True)
 def _set_creator_context():
@@ -200,8 +202,9 @@ def _isolate_app_sessionlocal(request, monkeypatch):
         "db.session.SessionLocal",
         "handlers.deps.SessionLocal",
         "handlers.chat.SessionLocal",
-        "handlers.heartbeat.SessionLocal",
-        "handlers.scheduler.SessionLocal",
+        "handlers.reply_scanner.SessionLocal",
+        "handlers.routines.SessionLocal",
+        "handlers.task_review.SessionLocal",
         "main.SessionLocal",
         "rentmate.app.SessionLocal",
     ):
