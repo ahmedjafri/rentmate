@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from backends.local_auth import resolve_account_id
+from backends.local_auth import resolve_org_id
 
 TRACE_ENVELOPE_VERSION = 1
 TRACE_TYPE_MAX_LENGTH = 30
@@ -53,6 +54,7 @@ def log_trace(
             sess.add(AgentTrace(
                 id=str(uuid.uuid4()),
                 timestamp=datetime.now(UTC),
+                org_id=resolve_org_id(),
                 trace_type=trace_type[:TRACE_TYPE_MAX_LENGTH],
                 source=source,
                 task_id=task_id,
@@ -65,7 +67,9 @@ def log_trace(
             ))
             sess.flush()
             sp.commit()
+            sess.commit()
         except Exception:
             sp.rollback()
+            sess.rollback()
     except Exception:
         pass

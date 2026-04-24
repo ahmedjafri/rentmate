@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from db.models import Conversation, Lease, MessageType, Property, Suggestion, Task, Tenant, Unit
+from db.models import Conversation, ConversationType, Lease, MessageType, Property, Suggestion, Task, Tenant, Unit
 from llm.retrieval import RetrievalRequest, compose_prompt_context, retrieve_context
 
 
@@ -81,12 +81,83 @@ def _resolve_task(db: Session, task_or_conversation_id: str) -> Task | None:
             .filter(
                 (Task.ai_conversation_id == conversation.id)
                 | (Task.parent_conversation_id == conversation.id)
-                | (Task.external_conversation_id == conversation.id)
+                | (Task.id == conversation.parent_task_id)
             )
             .order_by(Task.id.asc())
             .first()
         )
     return None
+
+
+def _label_task_conversation(conv: Conversation) -> str:
+    convo_type = getattr(conv, "conversation_type", None)
+    if convo_type == ConversationType.TASK_AI:
+        return "AI conversation"
+    if convo_type == ConversationType.SUGGESTION_AI:
+        return "Suggestion AI conversation"
+    if convo_type == ConversationType.TENANT:
+        return "Tenant conversation"
+    if convo_type == ConversationType.VENDOR:
+        return "Vendor conversation"
+    if convo_type == ConversationType.USER_AI:
+        return "AI conversation"
+    return "Linked conversation"
+
+
+def build_task_conversation_transcripts(task: Task, *, limit: int = 20) -> tuple[str, list[dict[str, Any]]]:
+    """Render recent linked-conversation transcripts for a task.
+
+    Includes the task AI thread plus any tenant/vendor coordination threads.
+    Returns ``(rendered_text, sections)`` where sections carry per-conversation
+    provenance for trace/debug surfaces.
+    """
+    conversations: list[Conversation] = []
+    seen: set[int] = set()
+
+    def _add(conversation: Conversation | None) -> None:
+        if not conversation or getattr(conversation, "id", None) is None:
+            return
+        cid = int(conversation.id)
+        if cid in seen:
+            return
+        seen.add(cid)
+        conversations.append(conversation)
+
+    _add(getattr(task, "ai_conversation", None))
+    _add(getattr(task, "parent_conversation", None))
+    for convo in list(getattr(task, "external_conversations", []) or []):
+        _add(convo)
+
+    rendered_blocks: list[str] = []
+    sections: list[dict[str, Any]] = []
+    for convo in conversations:
+        convo_msgs = sorted(
+            [
+                m for m in (getattr(convo, "messages", []) or [])
+                if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)
+            ],
+            key=lambda m: m.sent_at,
+        )[-limit:]
+        if not convo_msgs:
+            continue
+        label = _label_task_conversation(convo)
+        lines = [f"[{m.sender_name or 'Unknown'}]: {m.body or ''}" for m in convo_msgs]
+        rendered_blocks.append(f"{label}:\n" + "\n".join(lines))
+        sections.append({
+            "section_type": "conversation_transcript",
+            "title": label,
+            "content": "\n".join(lines),
+            "origin": {
+                "kind": "conversation",
+                "conversation_id": convo.id,
+                "conversation_type": getattr(convo, "conversation_type", None),
+                "task_id": task.id,
+            },
+        })
+
+    if not rendered_blocks:
+        return "", []
+    return "\n\n".join(rendered_blocks), sections
 
 
 def build_task_context_data(db: Session, task_id: str, query: str | None = None) -> dict[str, Any]:
@@ -265,6 +336,13 @@ def build_task_context_data(db: Session, task_id: str, query: str | None = None)
             "content": "\n".join(factual_lines),
             "origin": {"kind": "task_entities", "task_id": task.id},
         })
+
+    transcript_block, transcript_sections = build_task_conversation_transcripts(task)
+    if transcript_block:
+        lines.append("")
+        lines.append("Linked conversation transcripts:")
+        lines.append(transcript_block)
+        sections.extend(transcript_sections)
 
     ranked_block = compose_prompt_context(bundle, title="Ranked context")
     if ranked_block:

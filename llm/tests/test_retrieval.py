@@ -18,6 +18,7 @@ from db.models import (
     Unit,
     User,
 )
+from gql.services.number_allocator import NumberAllocator
 from llm.retrieval import RankedContextItem, RetrievalRequest, _llm_rerank, retrieve_context
 
 
@@ -69,7 +70,10 @@ def test_person_query_ranks_tenant_above_task_shell(db):
         user_id=tenant_user.id,
         context="Primary tenant for the Acme Lane lease.",
     )
+    db.add_all([property_row, unit_row, tenant])
+    db.flush()
     task = Task(
+        id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
         org_id=1,
         creator_id=1,
         title="Create property and tenant from lease",
@@ -78,7 +82,7 @@ def test_person_query_ranks_tenant_above_task_shell(db):
         task_mode=TaskMode.MANUAL,
         urgency=Urgency.MEDIUM,
     )
-    db.add_all([property_row, unit_row, tenant, task])
+    db.add(task)
     db.flush()
 
     db.add(Lease(

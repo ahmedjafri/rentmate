@@ -95,6 +95,8 @@ def test_chat_with_agent_logs_tool_traces_with_conversation_id():
         def __init__(self, *args, **kwargs):
             self.tools = []
             self.tool_progress_callback = kwargs["tool_progress_callback"]
+            # Caller assigns tool_complete_callback after construction.
+            self.tool_complete_callback = None
 
         def _build_api_kwargs(self, messages):
             return {}
@@ -111,9 +113,15 @@ def test_chat_with_agent_logs_tool_traces_with_conversation_id():
                 "create_suggestion",
                 None,
                 {"title": "Draft notice"},
-                result='{"status":"ok"}',
                 is_error=False,
             )
+            if self.tool_complete_callback:
+                self.tool_complete_callback(
+                    "call-1",
+                    "create_suggestion",
+                    {"title": "Draft notice"},
+                    '{"status":"ok"}',
+                )
             return {"final_response": "ok"}
 
     fake_module = types.SimpleNamespace(AIAgent=FakeAIAgent)

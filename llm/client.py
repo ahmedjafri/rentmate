@@ -127,7 +127,7 @@ _TOOL_LABELS = {
     "create_property": "Creating property",
     "create_tenant": "Creating tenant",
     "create_suggestion": "Creating suggestion",
-    "create_scheduled_task": "Scheduling task",
+    "create_routine": "Creating routine",
     "create_document": "Creating document",
     "read_document": "Reading document",
     "analyze_document": "Analyzing document",
@@ -153,7 +153,7 @@ _MUTATING_TOOLS = {
     "create_property",
     "create_tenant",
     "create_suggestion",
-    "create_scheduled_task",
+    "create_routine",
     "create_document",
 }
 
@@ -582,58 +582,105 @@ async def chat_with_agent(
                 ),
             )
         elif event_type == "tool.completed":
-            is_error = kwargs.get("is_error", False)
+            # All "tool.completed" bookkeeping (failed/completed contextvars,
+            # progress events, trace rows) happens in ``_tool_complete_cb``
+            # below — that callback is the only place where we can see the
+            # real ``function_result`` string. The upstream library's
+            # tool.completed event passes only ``is_error`` and ``duration``,
+            # so relying on it alone produces "Sending message: error" with
+            # no detail about *what* failed.
+            pass
+
+    def _tool_complete_cb(tool_call_id, function_name, function_args, function_result):
+        """Fires right after tool.completed with the real result string.
+
+        Parses the tool's return payload to extract success/error status and
+        any ``message`` / ``error`` field, then logs a trace row and pushes a
+        progress event that actually contains the detail the user needs to
+        diagnose a failure.
+        """
+        try:
+            label = _TOOL_LABELS.get(function_name, function_name)
+            trace_detail = current_trace_context.get() or trace_context or {}
+            trace_conversation_id = (
+                str(trace_detail.get("conversation_id") or "") if isinstance(trace_detail, dict) else ""
+            ) or _trace_conversation_id
+
+            result_text = function_result if isinstance(function_result, str) else str(function_result or "")
+            is_error = False
+            error_message: str | None = None
+            try:
+                parsed = json.loads(result_text) if result_text else None
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict):
+                status_val = str(parsed.get("status") or "").lower()
+                if status_val == "error" or parsed.get("error"):
+                    is_error = True
+                    error_message = str(
+                        parsed.get("message") or parsed.get("error") or ""
+                    ).strip() or None
+            if not is_error and result_text and "error" in result_text[:80].lower():
+                is_error = True
+                error_message = result_text
+
             if is_error:
-                failed = list(current_failed_tools.get())
-                failed.append({
-                    "tool_name": tool_name,
-                    "args": args or {},
-                    "error": kwargs.get("error") or kwargs.get("result") or "",
-                })
-                current_failed_tools.set(failed)
-                raw_error_detail = kwargs.get("error", "") or kwargs.get("result", "")
-                display_error = raw_error_detail
-                if isinstance(display_error, str) and len(display_error) > 220:
-                    display_error = display_error[:220] + "…"
+                display_error = error_message or result_text or ""
+                if isinstance(display_error, str) and len(display_error) > 400:
+                    display_error = display_error[:400] + "…"
                 msg = f"{label}: error" + (f" — {display_error}" if display_error else "")
                 progress_events.append(msg)
                 progress_queue.put(msg)
+                failed = list(current_failed_tools.get())
+                failed.append({
+                    "tool_name": function_name,
+                    "args": function_args or {},
+                    "error": error_message or result_text,
+                })
+                current_failed_tools.set(failed)
                 log_trace(
                     "error",
                     _trace_source,
                     msg,
                     task_id=_trace_task_id,
                     conversation_id=trace_conversation_id,
-                    tool_name=tool_name,
+                    tool_name=function_name,
                     detail=make_trace_envelope(
                         "tool_error",
-                        tool_name=tool_name,
-                        error=str(raw_error_detail),
-                        result=kwargs.get("result"),
+                        tool_name=function_name,
+                        args=function_args or {},
+                        error=error_message or result_text,
+                        result=result_text,
                         trace_context=trace_detail,
                     ),
                 )
-            else:
-                completed = list(current_completed_tools.get())
-                completed.append(tool_name)
-                current_completed_tools.set(completed)
-                result = kwargs.get("result", "")
-                if isinstance(result, str) and len(result) > 500:
-                    result = result[:500] + "…"
-                log_trace(
+                return
+
+            # Success path — record completion + log the (truncated) result.
+            completed = list(current_completed_tools.get())
+            completed.append(function_name)
+            current_completed_tools.set(completed)
+            trimmed = result_text
+            if len(trimmed) > 500:
+                trimmed = trimmed[:500] + "…"
+            log_trace(
+                "tool_result",
+                _trace_source,
+                f"{label} completed",
+                task_id=_trace_task_id,
+                conversation_id=trace_conversation_id,
+                tool_name=function_name,
+                detail=make_trace_envelope(
                     "tool_result",
-                    _trace_source,
-                    f"{label} completed",
-                    task_id=_trace_task_id,
-                    conversation_id=trace_conversation_id,
-                    tool_name=tool_name,
-                    detail=make_trace_envelope(
-                        "tool_result",
-                        tool_name=tool_name,
-                        result=result,
-                        trace_context=trace_detail,
-                    ),
-                )
+                    tool_name=function_name,
+                    args=function_args or {},
+                    result=trimmed,
+                    trace_context=trace_detail,
+                ),
+            )
+        except Exception:
+            # Never let trace plumbing break tool execution.
+            pass
 
     def _step_callback(iteration: int, prev_tools: list | None, **kwargs):
         pass  # progress is emitted via _tool_progress
@@ -674,6 +721,10 @@ async def chat_with_agent(
         step_callback=_step_callback,
         verbose_logging=bool(os.getenv("AGENT_VERBOSE")),
     )
+    # Hermes fires ``tool_complete_callback`` with the real result string;
+    # this is the only hook that can surface *what* a tool returned (and
+    # what it errored on) back into our progress queue + trace rows.
+    agent.tool_complete_callback = _tool_complete_cb
     agent._tool_use_enforcement = True
     _attach_rentmate_policy_provider(agent)
 
