@@ -1,7 +1,9 @@
 import logging
+import os
 import re
 import shutil
 import threading
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -47,16 +49,35 @@ def ensure_agent_runtime_dirs(agent_id: str) -> dict[str, Path]:
     }
 
 
+def ensure_hermes_runtime_home() -> Path:
+    """Require a writable HERMES_HOME for embedded agent runtime.
+
+    We intentionally do not fall back to ``~/.hermes`` here. Embedded/API
+    deployments must set an explicit runtime location so container users
+    without a real home directory do not silently resolve to ``/.hermes``.
+    """
+    raw = os.getenv("HERMES_HOME", "").strip()
+    if not raw:
+        raise RuntimeError("HERMES_HOME must be set for the embedded agent runtime.")
+
+    path = Path(raw).expanduser().resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path, prefix=".rentmate-write-test-", delete=True):
+        pass
+    return path
+
+
 def _register_rentmate_tools():
     """Register RentMate-specific tools with the agent tool registry."""
     from tools.registry import registry
 
     from llm.tools import (
         AnalyzeDocumentTool,
+        AskManagerTool,
         CloseTaskTool,
         CreateDocumentTool,
         CreatePropertyTool,
-        CreateScheduledTaskTool,
+        CreateRoutineTool,
         CreateSuggestionTool,
         CreateTenantTool,
         CreateVendorTool,
@@ -66,18 +87,21 @@ def _register_rentmate_tools():
         ProposeTaskTool,
         ReadDocumentTool,
         RecallMemoryTool,
+        RecordTaskReviewTool,
         SaveMemoryTool,
+        UpdateTaskProgressTool,
         UpdateOnboardingTool,
     )
 
     for tool_cls in (
-        ProposeTaskTool, CloseTaskTool, MessageExternalPersonTool,
+        ProposeTaskTool, CloseTaskTool, UpdateTaskProgressTool, MessageExternalPersonTool,
         LookupVendorsTool, CreateVendorTool,
         SaveMemoryTool, RecallMemoryTool, EditMemoryTool,
         CreatePropertyTool, CreateTenantTool, CreateSuggestionTool,
-        CreateScheduledTaskTool,
+        CreateRoutineTool,
         CreateDocumentTool,
         ReadDocumentTool, AnalyzeDocumentTool,
+        AskManagerTool, RecordTaskReviewTool,
         UpdateOnboardingTool,
     ):
         tool = tool_cls()
@@ -88,8 +112,27 @@ def _register_rentmate_tools():
             "parameters": tool.parameters,
         }
 
-        # Async handler — bridged via _run_async when is_async=True
+        # Async handler — bridged via _run_async when is_async=True.
+        # When the request is running inside a simulation (e.g. the
+        # routine Simulate button), read-write tools are blackholed: we
+        # record the inputs and skip ``execute``. Read-only tools always
+        # run normally so the agent sees real data in simulation.
         async def _handler(args, _tool=tool, **kwargs):
+            import json as _json
+
+            from llm.tools._common import (
+                ToolMode,
+                is_simulating,
+                record_simulated_action,
+            )
+
+            if _tool.mode == ToolMode.READ_WRITE and is_simulating():
+                sim_id = record_simulated_action(_tool.name, args or {})
+                return _json.dumps({
+                    "status": "ok",
+                    "simulation_id": sim_id,
+                    "message": f"(simulation) would call {_tool.name}",
+                })
             return await _tool.execute(**args)
 
         registry.register(

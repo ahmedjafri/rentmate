@@ -3,7 +3,7 @@ import json
 import re
 from typing import Any
 
-from backends.local_auth import resolve_account_id
+from backends.local_auth import resolve_account_id, resolve_org_id
 from db.models import MessageType
 
 from llm.tools._common import Tool, _action_card_field, _queue_chat_message
@@ -103,6 +103,36 @@ class CreatePropertyTool(Tool):
         from llm.tools._common import tool_session
         try:
             with tool_session() as db:
+                from sqlalchemy import func
+
+                from db.models import Property as SqlProperty, Unit as SqlUnit
+
+                normalized_address = address.strip()
+                existing = (
+                    db.query(SqlProperty)
+                    .filter(
+                        SqlProperty.org_id == resolve_org_id(),
+                        SqlProperty.creator_id == resolve_account_id(),
+                        func.lower(func.trim(SqlProperty.address_line1)) == normalized_address.lower(),
+                    )
+                    .first()
+                )
+                if existing:
+                    existing_units = (
+                        db.query(SqlUnit)
+                        .filter(SqlUnit.property_id == existing.id)
+                        .order_by(SqlUnit.created_at)
+                        .all()
+                    )
+                    return json.dumps({
+                        "status": "already_exists",
+                        "property_id": str(existing.id),
+                        "address": existing.address_line1,
+                        "name": existing.name,
+                        "units": [{"id": str(u.id), "label": u.label} for u in existing_units],
+                        "message": f"Property at '{existing.address_line1}' already exists.",
+                    })
+
                 prop, units = PropertyService.create_property(
                     db,
                     address=address,

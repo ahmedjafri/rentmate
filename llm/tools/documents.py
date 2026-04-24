@@ -12,6 +12,7 @@ from db.models import MessageType
 
 from llm.tools._common import (
     Tool,
+    ToolMode,
     _action_card_field,
     _load_entity_by_public_id,
     _load_tenant_by_public_id,
@@ -528,6 +529,8 @@ class CreateDocumentTool(Tool):
 class ReadDocumentTool(Tool):
     """Read uploaded document content, search document text, or list recent documents."""
 
+    mode = ToolMode.READ_ONLY
+
     @property
     def name(self) -> str:
         return "read_document"
@@ -678,6 +681,8 @@ class ReadDocumentTool(Tool):
 
 class AnalyzeDocumentTool(Tool):
     """Trigger text extraction and AI analysis on an unprocessed document."""
+
+    mode = ToolMode.READ_ONLY
 
     @property
     def name(self) -> str:

@@ -107,3 +107,21 @@ class TestAgentRegistry(unittest.TestCase):
             self.assertEqual(runtime_dirs["hermes_home"], runtime_dirs["workspace"])
             self.assertTrue(runtime_dirs["working_dir"].is_dir())
             self.assertEqual(runtime_dirs["working_dir"], runtime_dirs["workspace"] / "home")
+
+    def test_ensure_hermes_runtime_home_requires_env(self):
+        from llm.registry import ensure_hermes_runtime_home
+
+        with patch.dict("os.environ", {"HERMES_HOME": ""}, clear=False):
+            with self.assertRaisesRegex(RuntimeError, "HERMES_HOME must be set"):
+                ensure_hermes_runtime_home()
+
+    def test_ensure_hermes_runtime_home_accepts_writable_path(self):
+        from llm.registry import ensure_hermes_runtime_home
+
+        with tempfile.TemporaryDirectory() as tmp:
+            hermes_home = Path(tmp) / "hermes-home"
+            with patch.dict("os.environ", {"HERMES_HOME": str(hermes_home)}, clear=False):
+                resolved = ensure_hermes_runtime_home()
+
+            self.assertEqual(resolved, hermes_home.resolve())
+            self.assertTrue(resolved.is_dir())
