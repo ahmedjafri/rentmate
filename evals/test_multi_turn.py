@@ -42,8 +42,8 @@ class TestVendorNegotiation:
             db, conversation_type=ConversationType.VENDOR,
             subject="Water heater", vendor_id=str(vendor.id),
             property_id=s["property"].id,
+            parent_task_id=task.id,
         )
-        task.external_conversation_id = vendor_conv.id
         db.flush()
 
         add_message(db, vendor_conv.id, "RentMate",

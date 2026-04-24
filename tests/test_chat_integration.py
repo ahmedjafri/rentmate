@@ -31,6 +31,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 
 from db.enums import TaskCategory, TaskMode, TaskStatus, Urgency
 from db.models import Base, Conversation, Message, MessageType, Task
+from gql.services.number_allocator import NumberAllocator
 from llm.client import AgentResponse
 
 # ─── DB helpers ──────────────────────────────────────────────────────────────
@@ -118,6 +119,7 @@ def db(session_factory):
 def task_id(db):
     """Insert a minimal Task with a linked Conversation and return the Task's ID."""
     task = Task(
+        id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
         creator_id=1,
         title="HVAC Repair",
         task_status=TaskStatus.ACTIVE,

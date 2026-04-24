@@ -42,6 +42,7 @@ from db.models import (
     User,
 )
 from db.models.account import create_shadow_user
+from gql.services.number_allocator import NumberAllocator
 
 DEFAULT_ACCOUNT_ID = 1
 
@@ -125,7 +126,10 @@ def db(Session, engine):
 
 @pytest.fixture
 def mock_sms():
-    with patch("gql.services.sms_service.send_sms_reply", new_callable=AsyncMock) as mock:
+    with patch(
+        "gql.services.notification_service.NotificationService._send_sms",
+        new_callable=AsyncMock,
+    ) as mock:
         yield mock
 
 
@@ -291,6 +295,7 @@ class ScenarioBuilder:
             ))
 
         task = Task(
+            id=NumberAllocator.allocate_next(self.db, entity_type="task", org_id=1),
             org_id=1,
             creator_id=DEFAULT_ACCOUNT_ID,
             title=title,
@@ -337,20 +342,20 @@ def build_messages(db, task, user_message):
 
     # Gather external conversation messages
     ext_parts = []
-    for conv_id_attr in ["external_conversation_id", "parent_conversation_id"]:
-        cid = getattr(task, conv_id_attr, None)
-        if not cid:
-            continue
-        conv = db.get(Conversation, cid)
-        if not conv:
-            continue
+    ext_convos: list[tuple[object, str]] = []
+    for conv in task.external_conversations:
+        ext_convos.append((conv, "External"))
+    if task.parent_conversation_id:
+        parent_conv = db.get(Conversation, task.parent_conversation_id)
+        if parent_conv and parent_conv not in [c for c, _ in ext_convos]:
+            ext_convos.append((parent_conv, "Tenant"))
+    for conv, label in ext_convos:
         ext_msgs = sorted(
             [m for m in (conv.messages or [])
              if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
             key=lambda m: m.sent_at,
         )[-20:]
         if ext_msgs:
-            label = "External" if conv_id_attr == "external_conversation_id" else "Tenant"
             lines = [f"[{m.sender_name or 'Unknown'}]: {m.body}" for m in ext_msgs]
             ext_parts.append(f"\n\n{label} conversation:\n" + "\n".join(lines))
 

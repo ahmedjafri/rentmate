@@ -14,7 +14,7 @@ import {
   CreatePropertyDocument,
   GetConversationsDocument,
   HousesDocument,
-  ScheduledTasksDocument,
+  RoutinesDocument,
   SuggestionsDocument,
   TasksDocument,
   TenantsDocument,
@@ -80,8 +80,8 @@ test.describe('Full-stack smoke tests', () => {
     expect(convs.conversations).toBeInstanceOf(Array);
 
     // Scheduled tasks
-    const scheduled = await graphqlRequest(page, ScheduledTasksDocument, {}, token);
-    expect(scheduled.scheduledTasks).toBeInstanceOf(Array);
+    const scheduled = await graphqlRequest(page, RoutinesDocument, {}, token);
+    expect(scheduled.routines).toBeInstanceOf(Array);
   });
 
   test('can create a property via GraphQL', async ({ page }) => {
@@ -166,7 +166,7 @@ test.describe('Full-stack smoke tests', () => {
     expect(critical).toHaveLength(0);
   });
 
-  test('scheduled tasks page loads without errors', async ({ page }) => {
+  test('routines page loads without errors', async ({ page }) => {
     const token = await getToken(page);
     await page.addInitScript((t: string) => {
       localStorage.setItem('jwtToken', t);
@@ -175,11 +175,11 @@ test.describe('Full-stack smoke tests', () => {
     const errors: string[] = [];
     page.on('pageerror', err => errors.push(err.message));
 
-    await page.goto('/scheduled-tasks');
+    await page.goto('/routines');
     await page.waitForLoadState('networkidle');
 
-    // Should show scheduled tasks heading
-    await expect(page.getByText('Scheduled Tasks')).toBeVisible({ timeout: 10000 });
+    // Should show routines heading
+    await expect(page.getByText('Routines')).toBeVisible({ timeout: 10000 });
 
     const critical = errors.filter(e =>
       !e.includes('ResizeObserver') &&

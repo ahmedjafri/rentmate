@@ -42,8 +42,9 @@ def test_handler_sessionlocal_imports_are_covered_by_isolation_fixture():
         "db.session.SessionLocal",
         "handlers.deps.SessionLocal",
         "handlers.chat.SessionLocal",
-        "handlers.heartbeat.SessionLocal",
-        "handlers.scheduler.SessionLocal",
+        "handlers.reply_scanner.SessionLocal",
+        "handlers.routines.SessionLocal",
+        "handlers.task_review.SessionLocal",
         "main.SessionLocal",
     }
 

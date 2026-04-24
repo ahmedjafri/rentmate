@@ -38,6 +38,7 @@ from db.models import (
     User,
 )
 from gql.schema import schema
+from gql.services.number_allocator import NumberAllocator
 
 DEFAULT_ACCOUNT_ID = 1
 
@@ -111,6 +112,7 @@ def _mk_lease(db, prop, unit, tenant, payment_status="current"):
 def _mk_task(
     db,
     subject="Fix something",
+    goal="Fix the issue and confirm the work is complete.",
     task_status="active",
     category="maintenance",
     source="manual",
@@ -123,8 +125,10 @@ def _mk_task(
     prop=None,
 ):
     task = Task(
+        id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
         creator_id=DEFAULT_ACCOUNT_ID,
         title=subject,
+        goal=goal,
         task_status=_coerce_enum(task_status, TaskStatus),
         category=_coerce_enum(category, TaskCategory),
         source=_coerce_enum(source, TaskSource),
@@ -157,7 +161,8 @@ def _mk_task(
     )
     db.add(ext_conv)
     db.flush()
-    task.external_conversation_id = ext_conv.id
+    ext_conv.parent_task_id = task.id
+    db.flush()
     return task
 
 
@@ -226,6 +231,43 @@ class TestTasksQuery:
         uids = [t["uid"] for t in result.data["tasks"]]
         assert task.id in uids
         assert len(uids) == 1
+
+    def test_tasks_derives_last_message_at_from_linked_conversations(self, db):
+        prop = _mk_property(db)
+        unit = _mk_unit(db, prop)
+        tenant = _mk_tenant(db)
+        lease = _mk_lease(db, prop, unit, tenant)
+        task = _mk_task(db, subject="Need review", lease=lease, unit=unit, prop=prop)
+        task.last_message_at = None
+        parent_conv = Conversation(
+            subject="Tenant thread",
+            creator_id=DEFAULT_ACCOUNT_ID,
+            property_id=prop.id,
+            unit_id=unit.id,
+            lease_id=lease.id,
+        )
+        db.add(parent_conv)
+        db.flush()
+        task.parent_conversation_id = parent_conv.id
+        db.flush()
+
+        _add_message(db, task, body="Older AI note")
+        parent_msg = _add_message(
+            db,
+            parent_conv,
+            body="Newest tenant reply",
+            sender_type=ParticipantType.TENANT,
+            sender_name="Alice",
+        )
+        db.commit()
+
+        result = schema.execute_sync(
+            "{ tasks { uid lastMessageAt } }",
+            context_value=_gql_context(db),
+        )
+        assert result.errors is None
+        rows = {row["uid"]: row for row in result.data["tasks"]}
+        assert rows[task.id]["lastMessageAt"] == f"{parent_msg.sent_at.isoformat()}Z"
 
     def test_tasks_filter_by_category(self, db):
         _mk_task(db, subject="Rent overdue", category="rent")
@@ -341,7 +383,7 @@ class TestTasksQuery:
                 createTask(input: $input) { uid }
             }""",
             context_value=_gql_context(db),
-            variable_values={"input": {"title": "Gutter cleaning", "source": "AI_SUGGESTION"}},
+            variable_values={"input": {"title": "Gutter cleaning", "goal": "Get the gutters cleaned before winter weather arrives.", "source": "AI_SUGGESTION"}},
         )
         assert create_result.errors is None
         task_uid = create_result.data["createTask"]["uid"]
@@ -549,7 +591,7 @@ class TestCreateTaskMutation:
         result = schema.execute_sync(
             self.CREATE_TASK_MUTATION,
             context_value=_gql_context(db),
-            variable_values={"input": {"title": "Fix roof", "source": "MANUAL"}},
+            variable_values={"input": {"title": "Fix roof", "goal": "Get the roof repaired and watertight.", "source": "MANUAL"}},
         )
         assert result.errors is None
         task = result.data["createTask"]
@@ -566,6 +608,7 @@ class TestCreateTaskMutation:
             variable_values={
                 "input": {
                     "title": "Inspect unit",
+                    "goal": "Inspect the unit and document any required repairs.",
                     "source": "AI_SUGGESTION",
                     "taskStatus": "SUGGESTED",
                     "category": "MAINTENANCE",
@@ -590,7 +633,7 @@ class TestCreateTaskMutation:
         result = schema.execute_sync(
             self.CREATE_TASK_MUTATION,
             context_value=_gql_context(db),
-            variable_values={"input": {"title": "Check boiler", "source": "TENANT_REPORT"}},
+            variable_values={"input": {"title": "Check boiler", "goal": "Inspect the boiler and resolve the reported issue.", "source": "TENANT_REPORT"}},
         )
         assert result.errors is None
         uid = result.data["createTask"]["uid"]
@@ -602,35 +645,74 @@ class TestCreateTaskMutation:
         assert task.title == "Check boiler"
         assert task.source == TaskSource.TENANT_REPORT
 
-    def test_create_task_sets_external_conversation_id(self, db):
+    def test_create_task_links_external_conversation(self, db):
         result = schema.execute_sync(
             """
             mutation CreateTask($input: CreateTaskInput!) {
                 createTask(input: $input) {
-                    uid externalConversationId
+                    uid externalConversationIds
                 }
             }
             """,
             context_value=_gql_context(db),
-            variable_values={"input": {"title": "Pipe leak", "source": "MANUAL"}},
+            variable_values={"input": {"title": "Pipe leak", "goal": "Stop the leak and confirm there is no further water damage.", "source": "MANUAL"}},
         )
         assert result.errors is None
         task = result.data["createTask"]
-        assert task["externalConversationId"] is not None
+        assert task["externalConversationIds"]
 
-        # Verify the DB task has distinct ai and external conversations
+        # Verify the DB task has an AI conversation and at least one external conversation
+        # with parent_task_id pointing back to the task.
         from sqlalchemy import select
         db.expire_all()
         db_task = db.execute(select(Task).where(Task.id == task["uid"])).scalar_one()
         assert db_task.ai_conversation_id is not None
-        assert db_task.external_conversation_id is not None
-        assert db_task.ai_conversation_id != db_task.external_conversation_id
+        assert db_task.external_conversations
+        ext_ids = {c.id for c in db_task.external_conversations}
+        assert db_task.ai_conversation_id not in ext_ids
+
+    def test_task_type_keeps_deprecated_external_conversation_id_alias(self, db):
+        create_result = schema.execute_sync(
+            """
+            mutation CreateTask($input: CreateTaskInput!) {
+                createTask(input: $input) {
+                    uid
+                    externalConversationId
+                    externalConversationIds
+                }
+            }
+            """,
+            context_value=_gql_context(db),
+            variable_values={"input": {"title": "Old client alias", "goal": "Create the task and preserve external conversation aliases.", "source": "MANUAL"}},
+        )
+        assert create_result.errors is None
+        created = create_result.data["createTask"]
+        assert created["externalConversationIds"]
+        assert created["externalConversationId"] == created["externalConversationIds"][0]
+
+        task_result = schema.execute_sync(
+            """
+            query Task($uid: Int!) {
+                task(uid: $uid) {
+                    uid
+                    externalConversationId
+                    externalConversationIds
+                }
+            }
+            """,
+            context_value=_gql_context(db),
+            variable_values={"uid": created["uid"]},
+        )
+        assert task_result.errors is None
+        task = task_result.data["task"]
+        assert task["externalConversationIds"]
+        assert task["externalConversationId"] == task["externalConversationIds"][0]
 
     def test_create_task_unauthenticated_fails(self, db):
         result = schema.execute_sync(
             self.CREATE_TASK_MUTATION,
             context_value={"db_session": db, "user": None},
-            variable_values={"input": {"title": "Unauthorized", "source": "MANUAL"}},
+            variable_values={"input": {"title": "Unauthorized", "goal": "This should not be created.", "source": "MANUAL"}},
         )
         assert result.errors is not None
 
@@ -717,7 +799,7 @@ class TestUpdateTaskMutation:
     UPDATE_TASK_MUTATION = """
     mutation UpdateTask($input: UpdateTaskInput!) {
         updateTask(input: $input) {
-            uid taskMode taskStatus
+            uid taskMode taskStatus category urgency
         }
     }
     """
@@ -748,6 +830,32 @@ class TestUpdateTaskMutation:
         assert updated["taskStatus"] == "PAUSED"
         assert updated["taskMode"] == "MANUAL"
 
+    def test_update_task_category_only(self, db):
+        task = _mk_task(db, category="maintenance", urgency="low")
+
+        result = schema.execute_sync(
+            self.UPDATE_TASK_MUTATION,
+            context_value=_gql_context(db),
+            variable_values={"input": {"uid": task.id, "category": "RENT"}},
+        )
+        assert result.errors is None
+        updated = result.data["updateTask"]
+        assert updated["category"] == "RENT"
+        assert updated["urgency"] == "LOW"
+
+    def test_update_task_urgency_only(self, db):
+        task = _mk_task(db, category="maintenance", urgency="low")
+
+        result = schema.execute_sync(
+            self.UPDATE_TASK_MUTATION,
+            context_value=_gql_context(db),
+            variable_values={"input": {"uid": task.id, "urgency": "HIGH"}},
+        )
+        assert result.errors is None
+        updated = result.data["updateTask"]
+        assert updated["urgency"] == "HIGH"
+        assert updated["category"] == "MAINTENANCE"
+
     def test_update_task_mode_and_status_together(self, db):
         task = _mk_task(db, task_mode="manual", task_status="active")
 
@@ -766,6 +874,27 @@ class TestUpdateTaskMutation:
         updated = result.data["updateTask"]
         assert updated["taskMode"] == "WAITING_APPROVAL"
         assert updated["taskStatus"] == "PAUSED"
+
+    def test_update_task_persists_category_and_urgency_to_db(self, db):
+        task = _mk_task(db, category="maintenance", urgency="low")
+
+        schema.execute_sync(
+            self.UPDATE_TASK_MUTATION,
+            context_value=_gql_context(db),
+            variable_values={
+                "input": {
+                    "uid": task.id,
+                    "category": "RENT",
+                    "urgency": "CRITICAL",
+                }
+            },
+        )
+
+        db.expire_all()
+        from sqlalchemy import select
+        fetched = db.execute(select(Task).where(Task.id == task.id)).scalar_one()
+        assert fetched.category == TaskCategory.RENT
+        assert fetched.urgency == Urgency.CRITICAL
 
     def test_update_task_not_found_raises_error(self, db):
         result = schema.execute_sync(
@@ -1137,6 +1266,7 @@ class TestDocumentSuggestionModel:
         task = _mk_task(db, subject="Doc task")
 
         suggestion = Suggestion(
+            id=NumberAllocator.allocate_next(db, entity_type="suggestion", org_id=1),
             org_id=1,
             creator_id=1,
             title="Review document",
@@ -1156,8 +1286,8 @@ class TestDocumentSuggestionModel:
         task1 = _mk_task(db, subject="Task 1")
         task2 = _mk_task(db, subject="Task 2")
 
-        db.add(Suggestion(org_id=1, creator_id=1, title="Suggestion 1", document_id=doc.id, task_id=task1.id))
-        db.add(Suggestion(org_id=1, creator_id=1, title="Suggestion 2", document_id=doc.id, task_id=task2.id))
+        db.add(Suggestion(id=NumberAllocator.allocate_next(db, entity_type="suggestion", org_id=1), org_id=1, creator_id=1, title="Suggestion 1", document_id=doc.id, task_id=task1.id))
+        db.add(Suggestion(id=NumberAllocator.allocate_next(db, entity_type="suggestion", org_id=1), org_id=1, creator_id=1, title="Suggestion 2", document_id=doc.id, task_id=task2.id))
         db.flush()
 
         results = db.execute(
@@ -1170,8 +1300,8 @@ class TestDocumentSuggestionModel:
         doc2 = _mk_document(db, filename="doc2.pdf")
         task = _mk_task(db, subject="Multi-doc task")
 
-        db.add(Suggestion(org_id=1, creator_id=1, title="Doc 1", document_id=doc1.id, task_id=task.id))
-        db.add(Suggestion(org_id=1, creator_id=1, title="Doc 2", document_id=doc2.id, task_id=task.id))
+        db.add(Suggestion(id=NumberAllocator.allocate_next(db, entity_type="suggestion", org_id=1), org_id=1, creator_id=1, title="Doc 1", document_id=doc1.id, task_id=task.id))
+        db.add(Suggestion(id=NumberAllocator.allocate_next(db, entity_type="suggestion", org_id=1), org_id=1, creator_id=1, title="Doc 2", document_id=doc2.id, task_id=task.id))
         db.flush()
 
         results = db.execute(
@@ -1270,11 +1400,11 @@ class TestTaskNumberNeverReused:
         from gql.services.task_service import TaskService
         from gql.types import CreateTaskInput
 
-        inp = CreateTaskInput(title="Task A", source=TaskSource.MANUAL)
+        inp = CreateTaskInput(title="Task A", goal="Complete task A successfully.", source=TaskSource.MANUAL)
         task_a = TaskService.create_task(db, inp)
         assert task_a.id == 1
 
-        inp2 = CreateTaskInput(title="Task B", source=TaskSource.MANUAL)
+        inp2 = CreateTaskInput(title="Task B", goal="Complete task B successfully.", source=TaskSource.MANUAL)
         task_b = TaskService.create_task(db, inp2)
         assert task_b.id == 2
 
@@ -1282,7 +1412,7 @@ class TestTaskNumberNeverReused:
         TaskService.delete_task(db, task_b.id)
 
         # New task must get 3, not reuse 2
-        inp3 = CreateTaskInput(title="Task C", source=TaskSource.MANUAL)
+        inp3 = CreateTaskInput(title="Task C", goal="Complete task C successfully.", source=TaskSource.MANUAL)
         task_c = TaskService.create_task(db, inp3)
         assert task_c.id == 3
 
@@ -1290,11 +1420,11 @@ class TestTaskNumberNeverReused:
         from gql.services.task_service import TaskService
         from gql.types import CreateTaskInput
 
-        t1 = TaskService.create_task(db, CreateTaskInput(title="T1", source=TaskSource.MANUAL))
+        t1 = TaskService.create_task(db, CreateTaskInput(title="T1", goal="Complete T1 successfully.", source=TaskSource.MANUAL))
         assert t1.id == 1
 
         TaskService.delete_task(db, t1.id)
 
         # All tasks gone — next task must still be 2, not 1
-        t2 = TaskService.create_task(db, CreateTaskInput(title="T2", source=TaskSource.MANUAL))
+        t2 = TaskService.create_task(db, CreateTaskInput(title="T2", goal="Complete T2 successfully.", source=TaskSource.MANUAL))
         assert t2.id == 2
