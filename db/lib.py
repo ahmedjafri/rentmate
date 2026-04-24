@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from backends.local_auth import resolve_account_id
 
-from .enums import TaskMode, TaskStatus, parse_task_mode, parse_urgency
+from .enums import ChannelType, TaskMode, TaskSource, TaskStatus, parse_task_mode, parse_urgency
 from .models import (
     Conversation,
     ConversationParticipant,
@@ -34,6 +34,15 @@ def _tenant_name(tenant: Tenant) -> str:
     if not user:
         return "Tenant"
     return " ".join(part for part in [user.first_name, user.last_name] if part).strip() or "Tenant"
+
+
+def _parse_inbound_channel_type(value: str | None) -> ChannelType | None:
+    if not value:
+        return None
+    normalized = str(value).strip().upper()
+    if not normalized:
+        return None
+    return ChannelType[normalized]
 
 
 def _normalize_address(addr: str) -> str:
@@ -341,7 +350,7 @@ def route_inbound_to_task(
     body: str,
     channel_type: str,
     sender_meta: dict,
-    creator_id: str = "default",
+    creator_id: int | None = None,
 ) -> tuple:
     """
     Central router for all inbound channels (SMS, email).
@@ -351,6 +360,8 @@ def route_inbound_to_task(
     """
     now = datetime.now(UTC)
     recency_cutoff = now - timedelta(days=30)
+    resolved_creator_id = creator_id or tenant.creator_id or resolve_account_id()
+    parsed_channel_type = _parse_inbound_channel_type(channel_type)
 
     # Find active tasks for this tenant updated within last 30 days
     # Join from Conversation to Task via Task.ai_conversation_id (inverted FK)
@@ -398,24 +409,21 @@ def route_inbound_to_task(
             task_created = True
 
     if task_created or conv is None:
+        from gql.services.number_allocator import NumberAllocator
         task = Task(
-            creator_id=creator_id,
+            id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
+            creator_id=resolved_creator_id,
             title=f"Message from {_tenant_name(tenant)}",
+            goal=f"Respond to {_tenant_name(tenant)} and resolve the reported issue from their incoming {parsed_channel_type.value.lower()} message.",
             task_status=TaskStatus.ACTIVE,
             task_mode=TaskMode.AUTONOMOUS,
-            source=channel_type,
+            source=TaskSource.TENANT_REPORT,
+            channel_type=parsed_channel_type,
             created_at=now,
             updated_at=now,
         )
         db.add(task)
         db.flush()
-
-        # Assign task_number per account
-        max_num = db.execute(
-            sa_select(func.coalesce(func.max(Task.task_number), 0))
-            .where(Task.creator_id == task.creator_id)
-        ).scalar()
-        task.task_number = max_num + 1
 
         conv = Conversation(
             creator_id=resolve_account_id(),
@@ -640,9 +648,12 @@ def spawn_task_from_conversation(
 
     now = datetime.now(UTC)
 
+    from gql.services.number_allocator import NumberAllocator
     task = Task(
+        id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
         creator_id=creator_id,
         title=objective,
+        goal=objective,
         task_status=TaskStatus.ACTIVE,
         task_mode=parse_task_mode(task_mode),
         source=source,
@@ -677,7 +688,11 @@ def spawn_task_from_conversation(
 
     task.ai_conversation_id = convo.id
     task.parent_conversation_id = parent_conversation_id
-    task.external_conversation_id = parent_conversation_id
+    # Attach the originating tenant/vendor thread as the task's first coordination conversation.
+    if parent_conversation_id is not None:
+        parent_convo = db.get(Conversation, parent_conversation_id)
+        if parent_convo is not None and parent_convo.parent_task_id is None:
+            parent_convo.parent_task_id = task.id
     return task
 
 

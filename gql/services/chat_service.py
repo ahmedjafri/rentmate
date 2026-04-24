@@ -90,7 +90,7 @@ class MessageActionCard(BaseModel):
 
 
 class MessageMeta(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     source: str | None = None
     direction: Literal["inbound", "outbound"] | None = None
@@ -297,10 +297,12 @@ def get_or_create_external_conversation(
     vendor_id: int | None = None,
     tenant_id: int | None = None,
     ai_typing: bool = False,
+    parent_task_id: int | None = None,
 ) -> Conversation:
     """Create a new conversation for a vendor or tenant.
 
     Always creates a fresh conversation so each task gets its own thread.
+    Passing `parent_task_id` links this coordination thread to its owning task.
     """
     now = datetime.now(UTC)
     creator_id = resolve_account_id()
@@ -317,6 +319,7 @@ def get_or_create_external_conversation(
         is_group=False,
         is_archived=False,
         extra=set_conversation_ai_typing(None, ai_typing=True) if ai_typing else None,
+        parent_task_id=parent_task_id,
         created_at=now,
         updated_at=now,
     )
@@ -400,6 +403,93 @@ def send_autonomous_message(
     db.commit()
     db.refresh(msg)
     return msg
+
+
+def persist_policy_gated_tenant_reply(
+    db: Session,
+    *,
+    conversation_id: int,
+    tenant: Tenant,
+    reply: str,
+    tenant_name: str | None = None,
+    entity_phone: str | None = None,
+    side_effects: list[dict] | None = None,
+    risk_level: str = "medium",
+    sent_at: datetime | None = None,
+) -> tuple[bool, Message]:
+    """Persist an inbound-tenant reply according to outbound message policy.
+
+    Returns ``(sent_directly, message)`` where ``message`` is either the direct
+    assistant reply or the created suggestion/approval message.
+    """
+    from db.enums import AgentSource, SuggestionOption
+    from gql.services import suggestion_service
+    from llm.action_policy import ActionCandidate, evaluate_action_candidate
+    from llm.side_effects import process_side_effects
+
+    now = sent_at or datetime.now(UTC)
+    side_effects = side_effects or []
+    tenant_name = tenant_name or "Tenant"
+    decision = evaluate_action_candidate(ActionCandidate(
+        action_class="outbound_message",
+        action_name="message_person_send",
+        risk_level=risk_level,
+    ))
+
+    if decision.allowed:
+        msg = send_autonomous_message(
+            db,
+            conversation_id=conversation_id,
+            body=reply,
+        )
+        process_side_effects(db, side_effects=side_effects, conversation_id=conversation_id, base_time=now)
+        return True, msg
+
+    convo = db.query(Conversation).filter_by(
+        id=conversation_id,
+        org_id=resolve_org_id(),
+        creator_id=resolve_account_id(),
+    ).first()
+    if not convo:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    options = [
+        SuggestionOption(key="send", label=f"Send to {tenant_name}", action="message_person_send", variant="default"),
+        SuggestionOption(key="edit", label="Edit Message", action="edit_message", variant="outline"),
+        SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
+    ]
+    action_payload = {
+        "action": "message_person",
+        "entity_id": str(tenant.external_id),
+        "entity_type": "tenant",
+        "entity_name": tenant_name,
+        "entity_phone": entity_phone,
+        "draft_message": reply,
+    }
+    suggestion = suggestion_service.create_suggestion(
+        db,
+        title=f"Reply to {tenant_name}",
+        ai_context=f"The agent drafted a reply to {tenant_name}.\n\nDraft message:\n{reply}",
+        source=AgentSource(),
+        options=options,
+        action_payload=action_payload,
+        property_id=str(convo.property_id) if convo.property_id else None,
+        unit_id=str(convo.unit_id) if convo.unit_id else None,
+    )
+    msg = send_message(
+        db,
+        conversation_id=conversation_id,
+        body=f"Suggested reply for {tenant_name}.",
+        message_type=MessageType.SUGGESTION,
+        sender_name="RentMate",
+        is_ai=True,
+        draft_reply=reply,
+        related_task_ids={"suggestion_id": suggestion.id},
+        sent_at=now,
+    )
+    convo.updated_at = now
+    process_side_effects(db, side_effects=side_effects, conversation_id=conversation_id, base_time=now)
+    return False, msg
 
 
 def send_message(

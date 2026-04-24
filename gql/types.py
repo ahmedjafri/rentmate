@@ -7,6 +7,7 @@ import strawberry
 from db.enums import (  # noqa: F401 — re-exported
     AgentSource,
     AutomationSource,
+    RoutineState,
     SuggestionOption,
     SuggestionSource,
     SuggestionSourceEnum,
@@ -28,6 +29,7 @@ TaskStatusEnum = strawberry.enum(TaskStatus, name="TaskStatus")
 UrgencyEnum = strawberry.enum(Urgency, name="Urgency")
 SuggestionSourceEnumType = strawberry.enum(SuggestionSourceEnum, name="SuggestionSource")
 SuggestionStatusEnum = strawberry.enum(SuggestionStatus, name="SuggestionStatus")
+RoutineStateEnum = strawberry.enum(RoutineState, name="RoutineState")
 ConversationTypeEnum = strawberry.enum(ConversationType, name="ConversationType")
 MessageTypeEnum = strawberry.enum(MessageType, name="MessageType")
 
@@ -87,6 +89,7 @@ class UpdatePropertyInput:
 @strawberry.input
 class CreateTaskInput:
     title: str
+    goal: str
     source: TaskSourceEnum
     task_status: TaskStatusEnum = TaskStatus.ACTIVE
     category: typing.Optional[TaskCategoryEnum] = None
@@ -128,6 +131,8 @@ class UpdateTaskInput:
     uid: int
     task_mode: typing.Optional[TaskModeEnum] = None
     task_status: typing.Optional[TaskStatusEnum] = None
+    category: typing.Optional[TaskCategoryEnum] = None
+    urgency: typing.Optional[UrgencyEnum] = None
 
 @strawberry.input
 class CreateTenantWithLeaseInput:
@@ -529,15 +534,50 @@ class TaskType:
     require_vendor_type: typing.Optional[str] = None
     assigned_vendor_id: typing.Optional[str] = None
     assigned_vendor_name: typing.Optional[str] = None
-    external_conversation_id: typing.Optional[str] = None
+    external_conversation_ids: typing.List[str] = strawberry.field(default_factory=list)
+    external_conversation_id: typing.Optional[str] = strawberry.field(
+        default=None,
+        deprecation_reason="Use externalConversationIds instead.",
+    )
     steps: typing.Optional[strawberry.scalars.JSON] = None
+    goal: typing.Optional[str] = None
     suggestion_options: typing.Optional[strawberry.scalars.JSON] = None
     linked_conversations: typing.List[LinkedConversationType] = strawberry.field(default_factory=list)
+    last_reviewed_at: typing.Optional[str] = None
+    last_review_status: typing.Optional[str] = None
+    last_review_summary: typing.Optional[str] = None
+    last_review_next_step: typing.Optional[str] = None
 
     @classmethod
     def from_sql(cls, t: typing.Any) -> "TaskType":
         from db.models import ParticipantType as PT
         from gql.services.chat_service import parse_conversation_extra
+        def _latest_message_at(*conversations: typing.Any) -> typing.Optional[str]:
+            latest = None
+            for conv in conversations:
+                if conv is None:
+                    continue
+                for msg in getattr(conv, "messages", []) or []:
+                    sent_at = getattr(msg, "sent_at", None)
+                    if sent_at is None:
+                        continue
+                    if latest is None or sent_at > latest:
+                        latest = sent_at
+            return _utc_iso(latest) if latest else None
+
+        def _first_active_participant_name(conv: typing.Any) -> typing.Optional[str]:
+            """Return the first active non-account participant's first name, if any."""
+            for p in getattr(conv, "participants", []) or []:
+                if not getattr(p, "is_active", True):
+                    continue
+                ptype = getattr(p, "participant_type", None)
+                if ptype == PT.ACCOUNT_USER:
+                    continue
+                user = getattr(p, "user", None)
+                first = getattr(user, "first_name", None) if user else None
+                if first:
+                    return first
+            return None
         # Collect messages from the task's AI conversation
         ai_convo = getattr(t, "ai_conversation", None)
         all_msgs = list(getattr(ai_convo, "messages", [])) if ai_convo else []
@@ -570,15 +610,42 @@ class TaskType:
         if ai_convo:
             linked.append(LinkedConversationType.from_sql(ai_convo, "AI"))
         parent_convo = getattr(t, "parent_conversation", None)
+        ext_convos = list(getattr(t, "external_conversations", []) or [])
+        parent_id = parent_convo.id if parent_convo else None
+
+        # Collect external + parent conversations so we can disambiguate labels
+        # when multiple of the same type are attached to one task (e.g. two
+        # vendor quote threads on a single maintenance task).
+        external_convos = []
         if parent_convo:
-            ptype = getattr(parent_convo, "conversation_type", None) or "tenant"
-            plabel = "Tenant" if ptype == "tenant" else "Vendor" if ptype == "vendor" else ptype.replace("_", " ").title()
-            linked.append(LinkedConversationType.from_sql(parent_convo, plabel))
-        ext_convo = getattr(t, "external_conversation", None)
-        if ext_convo and (not parent_convo or ext_convo.id != parent_convo.id):
-            etype = getattr(ext_convo, "conversation_type", None) or "vendor"
-            elabel = "Vendor" if etype == "vendor" else "Tenant" if etype == "tenant" else etype.replace("_", " ").title()
-            linked.append(LinkedConversationType.from_sql(ext_convo, elabel))
+            external_convos.append(parent_convo)
+        for ext_convo in ext_convos:
+            if parent_id is not None and ext_convo.id == parent_id:
+                continue
+            external_convos.append(ext_convo)
+
+        type_counts: dict[str, int] = {}
+        for convo in external_convos:
+            ctype = getattr(convo, "conversation_type", None) or "vendor"
+            type_counts[ctype] = type_counts.get(ctype, 0) + 1
+
+        for convo in external_convos:
+            ctype = getattr(convo, "conversation_type", None) or "vendor"
+            type_label = (
+                "Tenant" if ctype == "tenant"
+                else "Vendor" if ctype == "vendor"
+                else ctype.replace("_", " ").title()
+            )
+            # When multiple conversations of the same type exist, disambiguate
+            # with the contact's first name so tabs read "Mike" / "Sarah"
+            # instead of two ambiguous "Vendor" tabs.
+            contact_name = _first_active_participant_name(convo)
+            if type_counts.get(ctype, 0) > 1 and contact_name:
+                label = contact_name
+            else:
+                label = type_label
+            linked.append(LinkedConversationType.from_sql(convo, label))
+        last_message_at = _latest_message_at(ai_convo, parent_convo, *ext_convos)
 
         return cls(
             uid=t.id,
@@ -591,7 +658,7 @@ class TaskType:
             urgency=t.urgency,
             priority=t.priority,
             confidential=t.confidential,
-            last_message_at=_utc_iso(t.last_message_at) or None,
+            last_message_at=last_message_at,
             property_id=str(t.property_id) if t.property_id else None,
             unit_id=str(t.unit_id) if t.unit_id else None,
             created_at=_utc_iso(t.created_at),
@@ -606,10 +673,16 @@ class TaskType:
             require_vendor_type=extra.require_vendor_type,
             assigned_vendor_id=str(extra.assigned_vendor_id) if extra.assigned_vendor_id is not None else None,
             assigned_vendor_name=extra.assigned_vendor_name,
-            external_conversation_id=str(t.external_conversation_id) if t.external_conversation_id else None,
+            external_conversation_ids=[str(c.id) for c in ext_convos],
+            external_conversation_id=str(ext_convos[0].id) if ext_convos else None,
             steps=t.steps,
+            goal=t.goal,
             suggestion_options=extra.suggestion_options,
             linked_conversations=linked,
+            last_reviewed_at=_utc_iso(t.last_reviewed_at) if t.last_reviewed_at else None,
+            last_review_status=t.last_review_status,
+            last_review_summary=t.last_review_summary,
+            last_review_next_step=t.last_review_next_step,
         )
 
 
@@ -673,15 +746,15 @@ class SuggestionType:
 
 
 @strawberry.type
-class ScheduledTaskType:
-    uid: str
+class RoutineType:
+    uid: int
     name: str
     prompt: str
     schedule: str
     schedule_display: typing.Optional[str] = None
     is_default: bool = False
     enabled: bool = True
-    state: str = "scheduled"
+    state: RoutineStateEnum = RoutineState.SCHEDULED
     repeat: typing.Optional[int] = None
     completed_count: int = 0
     next_run_at: typing.Optional[str] = None
@@ -692,16 +765,16 @@ class ScheduledTaskType:
     created_at: str = ""
 
     @classmethod
-    def from_sql(cls, st: typing.Any) -> "ScheduledTaskType":
+    def from_sql(cls, st: typing.Any) -> "RoutineType":
         return cls(
-            uid=str(st.id),
+            uid=st.id,
             name=st.name,
             prompt=st.prompt,
             schedule=st.schedule,
             schedule_display=st.schedule_display,
             is_default=getattr(st, "is_default", False),
             enabled=st.enabled,
-            state=st.state or "scheduled",
+            state=st.state or RoutineState.SCHEDULED,
             repeat=st.repeat,
             completed_count=st.completed_count or 0,
             next_run_at=_utc_iso(st.next_run_at) if st.next_run_at else None,

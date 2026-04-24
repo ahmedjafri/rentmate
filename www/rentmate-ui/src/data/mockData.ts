@@ -49,15 +49,20 @@ export interface ActionDeskTask {
   chatThread: ChatMessage[];
   confidential?: boolean;
   aiConversationId?: string | null;
-  externalConversationId?: string | null;
+  externalConversationIds?: string[];
   parentConversationId?: string | null;
   ancestorIds?: string[];
   requireVendorType?: string;
   assignedVendorId?: string;
   assignedVendorName?: string;
   steps?: { key: string; label: string; status: 'pending' | 'active' | 'done'; note?: string }[];
+  goal?: string | null;
   suggestionOptions?: { key: string; label: string; action: string; variant: string }[];
   linkedConversations?: LinkedConversation[];
+  lastReviewedAt?: string | null;
+  lastReviewStatus?: string | null;
+  lastReviewSummary?: string | null;
+  lastReviewNextStep?: string | null;
 }
 
 export type ChatMessageType = 'message' | 'internal' | 'approval' | 'context' | 'error' | 'action';

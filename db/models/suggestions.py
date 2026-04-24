@@ -10,9 +10,8 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import declared_attr, relationship
 
 from db.enums import SuggestionSourceEnum, SuggestionStatus, TaskCategory, Urgency
 
@@ -74,36 +73,38 @@ class Suggestion(Base, OrgId, NumberedPrimaryId, HasCreatorId):
     task            = relationship("Task", foreign_keys=[task_id])
     document        = relationship("Document", foreign_keys=[document_id])
 
-    __table_args__ = (
-        UniqueConstraint("org_id", "id", name="uq_suggestions_org"),
-        Index("ix_suggestions_status", "status"),
-        ForeignKeyConstraint(
-            ["org_id", "creator_id"],
-            ["users.org_id", "users.id"],
-        ),
-        ForeignKeyConstraint(
-            ["org_id", "property_id"],
-            ["properties.org_id", "properties.id"],
-            ondelete="SET NULL",
-        ),
-        ForeignKeyConstraint(
-            ["org_id", "unit_id"],
-            ["units.org_id", "units.id"],
-            ondelete="SET NULL",
-        ),
-        ForeignKeyConstraint(
-            ["org_id", "document_id"],
-            ["documents.org_id", "documents.id"],
-            ondelete="SET NULL",
-        ),
-        ForeignKeyConstraint(
-            ["org_id", "ai_conversation_id"],
-            ["conversations.org_id", "conversations.id"],
-            ondelete="SET NULL",
-        ),
-        ForeignKeyConstraint(
-            ["org_id", "task_id"],
-            ["tasks.org_id", "tasks.id"],
-            ondelete="CASCADE",
-        ),
-    )
+    @declared_attr
+    def __table_args__(cls):
+        return (
+            NumberedPrimaryId.primary_key(cls),
+            Index("ix_suggestions_status", "status"),
+            ForeignKeyConstraint(
+                ["org_id", "creator_id"],
+                ["users.org_id", "users.id"],
+            ),
+            ForeignKeyConstraint(
+                ["org_id", "property_id"],
+                ["properties.org_id", "properties.id"],
+                ondelete="SET NULL",
+            ),
+            ForeignKeyConstraint(
+                ["org_id", "unit_id"],
+                ["units.org_id", "units.id"],
+                ondelete="SET NULL",
+            ),
+            ForeignKeyConstraint(
+                ["org_id", "document_id"],
+                ["documents.org_id", "documents.id"],
+                ondelete="SET NULL",
+            ),
+            ForeignKeyConstraint(
+                ["org_id", "ai_conversation_id"],
+                ["conversations.org_id", "conversations.id"],
+                ondelete="SET NULL",
+            ),
+            ForeignKeyConstraint(
+                ["org_id", "task_id"],
+                ["tasks.org_id", "tasks.id"],
+                ondelete="CASCADE",
+            ),
+        )

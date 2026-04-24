@@ -1,5 +1,5 @@
 import { useRef, useEffect, useMemo, useState } from 'react';
-import { X, Bot, Sparkles, Users, Lock, MessageSquare, RotateCcw, Loader2, Trash2, Link as LinkIcon } from 'lucide-react';
+import { X, Bot, Sparkles, Users, Lock, MessageSquare, RotateCcw, Loader2, Trash2, Link as LinkIcon, User, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -26,24 +26,54 @@ import {
   getConversationMessages,
   getTask,
   sendMessage,
+  triggerTaskReview,
   updateTaskStatus,
 } from '@/graphql/client';
 
-export function getDefaultTaskTab(task: ActionDeskTask | null | undefined): string {
-  if (!task) return 'ai';
+export type EmbeddedTaskThreadSelection =
+  | { kind: 'ai' }
+  | { kind: 'conversation'; id: string };
 
-  const linkedChats = (task.linkedConversations ?? []).filter(
-    lc => lc.conversationType !== 'task_ai' && lc.conversationType !== 'suggestion_ai',
+export function getLinkedConversationTabLabel(
+  conversation: Pick<LinkedConversation, 'conversationType' | 'label' | 'participants'>,
+  allConversations: Array<Pick<LinkedConversation, 'conversationType' | 'label' | 'participants'>> = [],
+): string {
+  const isVendor = conversation.conversationType === 'vendor';
+  const isTenant = conversation.conversationType === 'tenant';
+  if (!isVendor && !isTenant) return conversation.label;
+
+  const roleTitle = isVendor ? 'Vendor' : 'Tenant';
+  const sameTypeCount = allConversations.filter(c => c.conversationType === conversation.conversationType).length;
+  const participantType = isVendor ? 'vendor' : 'tenant';
+  const namedParticipants = (conversation.participants ?? []).filter(
+    p => p.participantType === participantType && p.name?.trim(),
   );
-  if (linkedChats.length === 0) return 'ai';
+  const preferredName =
+    sameTypeCount === 1 && namedParticipants.length === 1 && conversation.label.trim().toLowerCase() === roleTitle.toLowerCase()
+      ? namedParticipants[0].name.trim()
+      : conversation.label;
 
-  const preferredConversationId = task.externalConversationId || task.parentConversationId;
-  if (preferredConversationId) {
-    const preferred = linkedChats.find(lc => lc.uid === preferredConversationId);
-    if (preferred) return preferred.uid;
-  }
+  return `${roleTitle}: ${preferredName}`;
+}
 
-  return linkedChats[0].uid;
+export function getDefaultTaskTab(_task: ActionDeskTask | null | undefined): string {
+  // Always default to the AI thread when landing on a task — that's the
+  // manager's primary agent-facing surface. External conversations are
+  // one click away in the left rail.
+  return 'ai';
+}
+
+function isAiConversationType(conversationType: string | null | undefined): boolean {
+  return conversationType === 'task_ai' || conversationType === 'suggestion_ai' || conversationType === 'user_ai';
+}
+
+function getTaskAiConversationId(task: ActionDeskTask | null | undefined): string | null {
+  if (!task) return null;
+  if (task.aiConversationId) return task.aiConversationId;
+  const linkedAiConversation = (task.linkedConversations ?? []).find(
+    lc => isAiConversationType(lc.conversationType),
+  );
+  return linkedAiConversation?.uid ?? null;
 }
 
 function backendStatusToFrontend(status: string): ManagedDocument['status'] {
@@ -127,7 +157,13 @@ export async function performTaskDismiss(args: {
   refreshData();
 }
 
-export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
+export function ChatPanel({
+  embedded = false,
+  embeddedTaskSelection,
+}: {
+  embedded?: boolean;
+  embeddedTaskSelection?: EmbeddedTaskThreadSelection | null;
+} = {}) {
   const { chatPanel, closeChat, openChat, setChatConversationId, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, addDocument, replaceDocument, removeDocument, refreshData } = useApp();
   const [dismissConfirm, setDismissConfirm] = useState(false);
   const [dismissing, setDismissing] = useState(false);
@@ -219,6 +255,12 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
     chatPanel.taskId ? actionDeskTasks.find(t => t.id === chatPanel.taskId) : null,
     [chatPanel.taskId, actionDeskTasks]
   );
+  const effectiveTaskTab =
+    embedded && embeddedTaskSelection
+      ? embeddedTaskSelection.kind === 'ai'
+        ? 'ai'
+        : embeddedTaskSelection.id
+      : activeTaskTab;
 
   // DB-backed conversation messages (for conversationId-based chats)
   const [convMessages, setConvMessages] = useState<ChatMessage[]>([]);
@@ -405,11 +447,12 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
 
   // Determine the non-AI linked conversations
   const linkedChats: LinkedConversation[] = (activeTask?.linkedConversations ?? []).filter(
-    lc => lc.conversationType !== 'task_ai' && lc.conversationType !== 'suggestion_ai'
+    lc => !isAiConversationType(lc.conversationType)
   );
 
   const lastTaskIdRef = useRef<string | null>(null);
   useEffect(() => {
+    if (embedded && embeddedTaskSelection) return;
     const currentTaskId = activeTask?.id ?? null;
     const taskChanged = lastTaskIdRef.current !== currentTaskId;
     lastTaskIdRef.current = currentTaskId;
@@ -421,17 +464,98 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
       const stillExists = linkedChats.some(chat => chat.uid === prev);
       return stillExists ? prev : getDefaultTaskTab(activeTask);
     });
-  }, [activeTask?.id, linkedChats, activeTask]);
+  }, [activeTask?.id, linkedChats, activeTask, embedded, embeddedTaskSelection]);
+
+  // Sync the active tab with any external conversation selection (e.g. the
+  // left-rail ConvRow in TaskDetail calls setChatConversationId).
+  useEffect(() => {
+    if (embedded && embeddedTaskSelection) return;
+    if (!activeTask) return;
+    const convId = chatPanel.conversationId;
+    if (!convId) return;
+    if (convId === getTaskAiConversationId(activeTask)) {
+      setActiveTaskTab('ai');
+      return;
+    }
+    if (linkedChats.some(chat => chat.uid === convId)) {
+      setActiveTaskTab(convId);
+    }
+  }, [chatPanel.conversationId, activeTask, linkedChats, embedded, embeddedTaskSelection]);
 
   // Load participant messages when a linked conversation tab is active
   useEffect(() => {
-    if (activeTaskTab === 'ai' || !activeTaskTab) return;
+    if (effectiveTaskTab === 'ai' || !effectiveTaskTab) return;
     // activeTaskTab is a conversation UID
-    const convoId = activeTaskTab;
+    const convoId = effectiveTaskTab;
     loadParticipantMessages(convoId, true);
     const interval = setInterval(() => loadParticipantMessages(convoId), 5000);
     return () => clearInterval(interval);
-  }, [activeTaskTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [effectiveTaskTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // External trigger — the Trigger Agent button in TaskDetail bumps
+  // chatPanel.reviewTrigger.nonce to ask this panel to run an SSE review
+  // stream against the active task. Reuses the same isTyping/progressLog
+  // rendering the normal chat stream uses, so the agent-thinking UI is
+  // identical whether a review was triggered by the user or by the
+  // background loop.
+  const reviewTrigger = chatPanel.reviewTrigger;
+  useEffect(() => {
+    if (!reviewTrigger) return;
+    if (!activeTask || String(activeTask.id) !== String(reviewTrigger.taskId)) return;
+
+    const controller = new AbortController();
+    setIsTyping(true);
+    setProgressLog([]);
+    // Make sure the AI tab is on screen.
+    setActiveTaskTab('ai');
+
+    (async () => {
+      try {
+        const res = await triggerTaskReview(reviewTrigger.taskId);
+        if (!res.ok || !res.body) {
+          setIsTyping(false);
+          toast.error('Agent review failed to start');
+          return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const event = JSON.parse(line.slice(6));
+              if (event.type === 'progress') {
+                setProgressLog(prev => [...prev, event.text as string]);
+              } else if (event.type === 'done') {
+                setIsTyping(false);
+                setProgressLog([]);
+                refreshData();
+                return;
+              } else if (event.type === 'error') {
+                setIsTyping(false);
+                toast.error(`Agent error: ${event.message}`);
+                return;
+              }
+            } catch { /* skip malformed */ }
+          }
+        }
+        setIsTyping(false);
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          setIsTyping(false);
+          toast.error(err instanceof Error ? err.message : 'Agent review failed');
+        }
+      }
+    })();
+
+    return () => controller.abort();
+  }, [reviewTrigger?.nonce, activeTask?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reconnect to an in-flight chat when the panel opens.
   // If the agent is still running, stream its remaining progress so the user
@@ -849,7 +973,8 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
         ? "h-full w-full"
         : "fixed inset-0 z-50 md:static md:inset-auto md:z-auto md:w-[320px] lg:w-[380px] md:border-l md:shrink-0 md:h-full"
     )}>
-      {/* Header */}
+      {/* Header — hidden in embedded mode (e.g. TaskDetail provides its own) */}
+      {!embedded && (
       <div className="flex items-center justify-between p-4 border-b bg-card shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary shrink-0">
@@ -927,6 +1052,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
           )}
         </div>
       </div>
+      )}
 
       {/* Task Context */}
       {activeTask && (
@@ -962,22 +1088,29 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
 
       {activeTask ? (
         <Tabs
-          value={activeTaskTab}
+          value={effectiveTaskTab}
           onValueChange={v => setActiveTaskTab(v)}
           className="flex-1 flex flex-col min-h-0"
         >
+          {/* Tab strip — hidden in embedded mode (TaskDetail's left rail replaces it) */}
+          {!embedded && (
           <TabsList className="shrink-0 mx-3 mt-2 mb-0 h-8 self-start gap-1 bg-muted/50">
             <TabsTrigger value="ai" className="text-xs h-6 px-3">AI</TabsTrigger>
-            {linkedChats.map(lc => (
-              <TabsTrigger key={lc.uid} value={lc.uid} className="text-xs h-6 px-3">
-                {lc.label}
-                {lc.messageCount > 0 && (
-                  <span className="ml-1 text-[9px] text-muted-foreground">{lc.messageCount}</span>
-                )}
-              </TabsTrigger>
-            ))}
+            {linkedChats.map(lc => {
+              const isVendor = lc.conversationType === 'vendor';
+              const isTenant = lc.conversationType === 'tenant';
+              const Icon = isVendor ? Wrench : isTenant ? User : null;
+              const roleTitle = isVendor ? 'Vendor' : isTenant ? 'Tenant' : lc.conversationType;
+              return (
+                <TabsTrigger key={lc.uid} value={lc.uid} className="text-xs h-6 px-3 gap-1">
+                  {Icon && <Icon className="h-3 w-3" aria-label={roleTitle} />}
+                  <span>{getLinkedConversationTabLabel(lc, linkedChats)}</span>
+                </TabsTrigger>
+              );
+            })}
             <TabsTrigger value="progress" className="text-xs h-6 px-3">Progress</TabsTrigger>
           </TabsList>
+          )}
 
           {/* AI tab — internal RentMate thread */}
           <TabsContent value="ai" className="hidden data-[state=active]:flex flex-1 flex-col min-h-0 mt-0">

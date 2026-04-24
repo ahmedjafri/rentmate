@@ -48,6 +48,7 @@ export function AgentTaskProposal({ proposal, onDismiss }: Props) {
     try {
       const result = await createTask({
         title: proposal.title,
+        goal: proposal.description?.trim() || `Complete: ${proposal.title}`,
         source: 'agent',
         taskStatus: 'active',
         taskMode: 'manual',

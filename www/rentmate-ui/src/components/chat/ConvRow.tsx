@@ -36,20 +36,22 @@ export const typeColors: Record<string, string> = {
   vendor: 'bg-orange-100 text-orange-700 dark:bg-orange-900/20 dark:text-orange-400',
 };
 
-export function ConvRow({ conv, onClick, onDelete, isActive }: { conv: ConvSummary; onClick: () => void; onDelete: () => void; isActive?: boolean }) {
+export function ConvRow({ conv, onClick, onDelete, isActive }: { conv: ConvSummary; onClick: () => void; onDelete?: () => void; isActive?: boolean }) {
   const TabIcon = TAB_CONFIG.find(t => t.key === conv.conversationType)?.icon ?? MessageCircle;
   const at = conv.lastMessageAt ?? conv.updatedAt;
   const relTime = at ? formatDistanceToNow(new Date(at), { addSuffix: true }) : null;
 
   return (
     <Card className={`px-3 py-2.5 rounded-xl hover:shadow-md transition-shadow cursor-pointer relative group ${isActive ? 'ring-2 ring-primary/40 bg-primary/5' : ''}`} onClick={onClick}>
-      <button
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className="absolute top-2 right-2 h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors hidden group-hover:flex"
-        title="Delete conversation"
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </button>
+      {onDelete && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="absolute top-2 right-2 h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors hidden group-hover:flex"
+          title="Delete conversation"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      )}
 
       <div className="flex items-center justify-between gap-2 pr-6">
         <div className="flex items-center gap-1.5 flex-wrap min-w-0">

@@ -16,6 +16,7 @@ from db.models import (
     User,
 )
 from gql.services import chat_service
+from gql.services.number_allocator import NumberAllocator
 
 
 @contextmanager
@@ -133,7 +134,8 @@ def test_build_agent_message_history_omits_transient_tool_failure_replies(db):
 
 def test_persist_and_send_message_helpers_update_conversation_state(db):
     convo = _conversation(db, extra={"ai_typing": True})
-    task = Task(org_id=1, creator_id=1, title="Task", ai_conversation_id=convo.id)
+    task_id = NumberAllocator.allocate_next(db, entity_type="task", org_id=1)
+    task = Task(id=task_id, org_id=1, creator_id=1, title="Task", ai_conversation_id=convo.id)
     db.add(task)
     db.commit()
 
@@ -307,6 +309,19 @@ def test_message_and_conversation_json_payloads_are_typed():
         },
     }
     assert extra == {"assigned_vendor_id": 12, "assigned_vendor_name": "Pat Vendor"}
+
+
+def test_parse_message_meta_ignores_legacy_extra_keys():
+    meta = chat_service.parse_message_meta({
+        "source": "dev_sim",
+        "direction": "inbound",
+        "simulated": True,
+        "draft_reply": "Draft body",
+    })
+
+    assert meta.source == "dev_sim"
+    assert meta.direction == "inbound"
+    assert meta.draft_reply == "Draft body"
 
 
 def test_build_agent_message_history_does_not_read_other_org_conversation(db):

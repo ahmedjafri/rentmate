@@ -3,7 +3,7 @@ import { useApp } from '@/context/AppContext';
 import { PageLoader } from '@/components/ui/page-loader';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Building2, Users, Wrench, ShieldCheck, Bot, Clock, MessageCircle, Hand, Lock, Zap, Plus } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { TaskMode, TaskParticipantType, categoryColors, categoryLabels } from '@/data/mockData';
@@ -30,6 +30,7 @@ const participantIcon: Record<TaskParticipantType, React.ElementType> = {
 };
 
 const Index = () => {
+  const navigate = useNavigate();
   const { properties, tenants, vendors, actionDeskTasks, suggestions, updateSuggestionStatus, refreshData, openChat, closeChat, chatPanel, isLoading } = useApp();
   const { conversations: aiConvs, loading: aiLoading, refresh: refreshAi, removeConversation: removeAiConv } = useConversations('user_ai', 20);
   const { conversations: tenantConvs, loading: tenantLoading, refresh: refreshTenants, removeConversation: removeTenantConv } = useConversations('tenant', 20);
@@ -238,7 +239,7 @@ const Index = () => {
                   const property = task.propertyId ? properties.find(p => p.id === task.propertyId) : null;
 
                   return (
-                    <Card key={task.id} className="p-3 rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={() => openChat({ taskId: task.id })}>
+                    <Card key={task.id} className="p-3 rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={() => navigate(`/tasks/${task.id}`)}>
                       <div className="flex items-start justify-between gap-2 mb-1.5">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <Badge variant="secondary" className={cn('text-[10px] rounded-lg gap-1', mode.className)}>

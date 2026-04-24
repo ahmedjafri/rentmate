@@ -5,6 +5,7 @@ import pytest
 from backends.local_auth import reset_request_context, set_request_context
 from db.enums import TaskCategory, TaskMode, TaskPriority, TaskSource, TaskStatus, Urgency
 from db.models import Conversation, ConversationType, Suggestion, User
+from gql.services.number_allocator import NumberAllocator
 from gql.services.task_service import TaskService
 from gql.types import CreateTaskInput, UpdateTaskInput
 
@@ -14,6 +15,7 @@ def _create_task(db):
         db,
         CreateTaskInput(
             title="Fix sink",
+            goal="Fix the sink and confirm the repair is complete.",
             source=TaskSource.MANUAL,
             task_status=TaskStatus.ACTIVE,
             task_mode=TaskMode.MANUAL,
@@ -50,6 +52,7 @@ def test_create_task_normalizes_blank_optional_ids(db):
         db,
         CreateTaskInput(
             title="Fix sink",
+            goal="Fix the sink and confirm the repair is complete.",
             source=TaskSource.MANUAL,
             property_id="   ",
             unit_id="",
@@ -62,6 +65,18 @@ def test_create_task_normalizes_blank_optional_ids(db):
     assert convo is not None
     assert convo.property_id is None
     assert convo.unit_id is None
+
+
+def test_create_task_requires_non_blank_goal(db):
+    with pytest.raises(ValueError, match="Task goal is required"):
+        TaskService.create_task(
+            db,
+            CreateTaskInput(
+                title="Fix sink",
+                goal="   ",
+                source=TaskSource.MANUAL,
+            ),
+        )
 
 
 def test_update_task_status_sets_resolved_at_and_update_task_changes_mode(db):
@@ -80,6 +95,7 @@ def test_create_task_normalizes_lowercase_task_mode(db):
         db,
         CreateTaskInput(
             title="Fix sink",
+            goal="Fix the sink and confirm the repair is complete.",
             source=TaskSource.MANUAL,
             task_mode="autonomous",
         ),
@@ -107,7 +123,8 @@ def test_assign_vendor_and_delete_task_cleanup_related_rows(db):
         phone="+15550005555",
         role_label="Plumber",
     )
-    suggestion = Suggestion(org_id=1, creator_id=1, task_id=task.id, status="pending")
+    suggestion_id = NumberAllocator.allocate_next(db, entity_type="suggestion", org_id=1)
+    suggestion = Suggestion(id=suggestion_id, org_id=1, creator_id=1, task_id=task.id, status="pending")
     db.add_all([vendor, suggestion])
     db.flush()
 
@@ -118,9 +135,9 @@ def test_assign_vendor_and_delete_task_cleanup_related_rows(db):
     assert convo.extra["assigned_vendor_name"] == vendor.name
 
     assert TaskService.delete_task(db, task.id) is True
-    assert db.get(type(task), task.id) is None
+    assert db.get(type(task), (task.org_id, task.id)) is None
     assert db.get(Conversation, convo.id) is None
-    assert db.get(Suggestion, suggestion.id) is None
+    assert db.get(Suggestion, (suggestion.org_id, suggestion.id)) is None
 
 
 def test_assign_vendor_rejects_unknown_vendor(db):
@@ -138,7 +155,7 @@ def test_update_task_status_rejects_task_from_other_org(db):
     with _request_scope(account_id=2, org_id=2):
         foreign_task = TaskService.create_task(
             db,
-            CreateTaskInput(title="Foreign task", source=TaskSource.MANUAL),
+            CreateTaskInput(title="Foreign task", goal="Complete the foreign task.", source=TaskSource.MANUAL),
         )
 
     with pytest.raises(ValueError, match=f"Task {foreign_task.id} not found"):

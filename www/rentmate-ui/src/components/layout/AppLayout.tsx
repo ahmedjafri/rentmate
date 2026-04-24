@@ -93,6 +93,9 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
 
   const location = useLocation();
   const isDashboard = location.pathname === '/';
+  // /tasks/:id has its own embedded ChatPanel in the center column; suppress
+  // the slide-out on that route so we don't render the chat twice.
+  const isTaskDetail = /^\/tasks\/[^/]+$/.test(location.pathname);
   const pendingSuggestions = suggestions.filter(s => s.status === 'pending');
   const attentionCount = pendingSuggestions.length;
 
@@ -187,7 +190,7 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
             <main className="flex-1 overflow-auto">
               {children}
             </main>
-            {chatPanel.isOpen && !isDashboard && <ChatPanel />}
+            {chatPanel.isOpen && !isDashboard && !isTaskDetail && <ChatPanel />}
           </div>
         </div>
       </div>
