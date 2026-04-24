@@ -80,11 +80,15 @@ const AGENT_FILE_LABELS: Record<string, string> = {
   'SOUL.md': 'Soul',
   'AGENTS.md': 'Agents',
   'IDENTITY.md': 'Identity',
-  'HEARTBEAT.md': 'Heartbeat',
+  'ROUTINE.md': 'Routine',
   'memory/MEMORY.md': 'Memory',
   'USER.md': 'User',
   'TOOLS.md': 'Tools',
 };
+
+function labelForAgentFile(filename: string): string {
+  return AGENT_FILE_LABELS[filename] ?? filename;
+}
 
 export const SettingsPage = ({ hideLlmConfig = false }: SettingsPageProps) => {
   const { actionPolicySettings, setActionPolicySettings } = useApp();
