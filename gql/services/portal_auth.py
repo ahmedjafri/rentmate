@@ -49,6 +49,11 @@ def build_portal_url(token: str) -> str:
     return f"http://localhost:{port}/t/{token}"
 
 
+def build_portal_conversation_url(token: str, conversation_external_id: str) -> str:
+    """Build a login-less URL that deep-links to a specific conversation."""
+    return f"{build_portal_url(token)}?conv={conversation_external_id}"
+
+
 def create_portal_jwt(entity_type: str, entity_id: str) -> str:
     """Create a JWT for portal access (vendor or tenant)."""
     payload = {

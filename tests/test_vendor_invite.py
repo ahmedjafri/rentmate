@@ -21,7 +21,7 @@ from gql.schema import schema
 from gql.services.task_service import TaskService
 from gql.services.vendor_service import VendorService
 from gql.types import CreateTaskInput, CreateVendorInput, VendorType
-from handlers.vendor_invite import get_vendor_token
+from handlers.portals.vendor_invite import get_vendor_token
 
 FAKE_USER = {"id": "test-user-id", "email": "admin@test.com"}
 
@@ -195,7 +195,7 @@ class TestVendorTokenEndpoint:
 class TestAssignVendorToTask:
 
     def _mk_task(self, db):
-        return TaskService.create_task(db, CreateTaskInput(title="Fix sink", source="manual"))
+        return TaskService.create_task(db, CreateTaskInput(title="Fix sink", goal="Fix the sink and confirm it is working.", source="manual"))
 
     def test_vendor_can_be_assigned(self, db):
         vendor = VendorService.create_vendor(db, CreateVendorInput(name="Oscar", phone="555-0070", vendor_type="Plumber"))

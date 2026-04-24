@@ -1,9 +1,7 @@
-import asyncio
 import unittest
 import unittest.mock
 from unittest.mock import AsyncMock, Mock, patch
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -11,14 +9,15 @@ from db.models import (
     Conversation,
     ConversationParticipant,
     Message,
+    MessageType,
     Tenant,
     User,
 )
 from db.utils import normalize_phone
-from gql.services.sms_service import send_sms_reply
 from handlers.chat import is_in_whitelist
 from handlers.deps import get_db
 from llm.client import AgentResponse
+from llm.action_policy import ActionDecision
 from main import app
 
 MOCK_AGENT_REPLY = "This is a mock response."
@@ -53,11 +52,11 @@ class TestQuoWebhook(unittest.TestCase):
         self.db.add(self.tenant)
         self.db.flush()
 
-    @patch('handlers.chat.send_via_channel', new_callable=AsyncMock)
+    @patch('handlers.chat.NotificationService.notify', new_callable=AsyncMock)
     @patch('llm.client.call_agent', new_callable=AsyncMock)
     @patch('handlers.chat.agent_registry.ensure_agent', return_value=MOCK_AGENT_ID)
     def test_handle_new_message_with_mocked_agent(
-        self, mock_ensure, mock_chat, mock_send_via_channel
+        self, mock_ensure, mock_chat, mock_notify
     ):
         mock_chat.return_value = AgentResponse(reply=MOCK_AGENT_REPLY, side_effects=[])
         app.dependency_overrides[get_db] = lambda: self.db
@@ -90,8 +89,8 @@ class TestQuoWebhook(unittest.TestCase):
         self.assertEqual(call_messages[-1]["role"], "user")
         self.assertEqual(call_messages[-1]["content"], "Hello, how can I help?")
 
-        # send_via_channel was called
-        mock_send_via_channel.assert_called_once()
+        # Notification was dispatched for the tenant reply
+        mock_notify.assert_called_once()
 
         # DB assertions: tenant conversation + message persisted
         conv = (
@@ -116,11 +115,60 @@ class TestQuoWebhook(unittest.TestCase):
 
         app.dependency_overrides = {}
 
-    @patch('handlers.chat.send_via_channel', new_callable=AsyncMock)
+    @patch('handlers.chat.NotificationService.notify', new_callable=AsyncMock)
+    @patch('llm.client.call_agent', new_callable=AsyncMock)
+    @patch('handlers.chat.agent_registry.ensure_agent', return_value=MOCK_AGENT_ID)
+    def test_handle_new_message_creates_suggestion_when_policy_blocks_send(
+        self, mock_ensure, mock_chat, mock_notify
+    ):
+        mock_chat.return_value = AgentResponse(reply="Draft response for review.", side_effects=[])
+        app.dependency_overrides[get_db] = lambda: self.db
+
+        mock_sms_router = Mock()
+        mock_sms_router.resolve.return_value = ("default-account", self.tenant, "inbound", "tenant")
+
+        payload = {
+            "type": "message.received",
+            "data": {
+                "from": self.from_number,
+                "to": [self.to_number],
+                "body": "Can you waive my late fee?",
+            },
+        }
+
+        with patch('backends.wire.sms_router', mock_sms_router), \
+             patch('handlers.chat.PHONE_WHITELIST', [self.from_number]), \
+             patch('llm.action_policy.evaluate_action_candidate', return_value=ActionDecision(False, "blocked", 2)):
+            response = self.client.post("/quo-webhook", json=payload)
+
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+        mock_notify.assert_not_called()
+
+        conv = (
+            self.db.query(Conversation)
+            .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
+            .filter(ConversationParticipant.user_id == self.tenant.user_id)
+            .one()
+        )
+        ai_msgs = (
+            self.db.query(Message)
+            .filter(Message.conversation_id == conv.id, Message.is_ai.is_(True))
+            .order_by(Message.id.asc())
+            .all()
+        )
+        assert len(ai_msgs) == 1
+        assert ai_msgs[0].message_type == MessageType.SUGGESTION
+        assert ai_msgs[0].meta["draft_reply"] == "Draft response for review."
+        assert ai_msgs[0].meta["related_task_ids"]["suggestion_id"] is not None
+
+        app.dependency_overrides = {}
+
+    @patch('handlers.chat.NotificationService.notify', new_callable=AsyncMock)
     @patch('llm.client.call_agent', new_callable=AsyncMock)
     @patch('handlers.chat.agent_registry.ensure_agent', return_value=MOCK_AGENT_ID)
     def test_handle_existing_message_with_mocked_agent(
-        self, mock_ensure, mock_chat, mock_send_via_channel
+        self, mock_ensure, mock_chat, mock_notify
     ):
         mock_chat.return_value = AgentResponse(reply=MOCK_AGENT_REPLY, side_effects=[])
         app.dependency_overrides[get_db] = lambda: self.db
@@ -156,25 +204,6 @@ class TestQuoWebhook(unittest.TestCase):
         self.assertEqual(messages[-1]["content"], "Message2")
 
         app.dependency_overrides = {}
-
-    @patch('gql.services.sms_service.httpx.AsyncClient')
-    def test_send_sms_reply_success(self, mock_client_class):
-        """
-        Test the `send_sms_reply` function to ensure it makes a successful API call.
-        """
-        mock_client = AsyncMock()
-        mock_client_class.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client_class.return_value.__aexit__ = AsyncMock(return_value=None)
-        mock_client.post = AsyncMock(return_value=httpx.Response(200, json={"status": "ok"}))
-
-        asyncio.run(send_sms_reply("5559876543", "5550001234", "This is a test reply.", api_key="test-key"))
-
-        mock_client.post.assert_called_once()
-        args, kwargs = mock_client.post.call_args
-        self.assertIn("https://api.openphone.com/v1/messages", args[0])
-        self.assertEqual(kwargs["json"]["from"], "+15559876543")
-        self.assertIn("+15550001234", kwargs["json"]["to"])
-        self.assertEqual(kwargs["json"]["content"], "This is a test reply.")
 
     def test_is_in_whitelist(self):
         """

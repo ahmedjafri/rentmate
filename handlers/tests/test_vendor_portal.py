@@ -28,6 +28,7 @@ def _assigned_task(db, vendor):
         db,
         CreateTaskInput(
             title="Fix leaking sink",
+            goal="Fix the leaking sink and confirm the repair is complete.",
             source=TaskSource.MANUAL,
             category=TaskCategory.MAINTENANCE,
             urgency=Urgency.MEDIUM,
@@ -38,8 +39,8 @@ def _assigned_task(db, vendor):
         subject=task.title,
         conversation_type="vendor",
         vendor_id=vendor.id,
+        parent_task_id=task.id,
     )
-    task.external_conversation_id = ext_convo.id
     TaskService.assign_vendor_to_task(db, task_id=task.id, vendor_id=vendor.id)
     db.commit()
     return task, ext_convo

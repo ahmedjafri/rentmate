@@ -16,15 +16,19 @@ from db.models import (
 )
 from gql.services.vendor_service import VendorService, get_vendor_login_email, vendor_has_account
 from handlers.deps import get_db
+from handlers.portals._common import (
+    SendMessageBody,
+    read_bearer_token,
+    serialize_task_list_row,
+    serialize_visible_messages,
+    trigger_task_autoreply,
+)
 
 router = APIRouter(prefix="/api/vendor")
 
 
 def _require_vendor(request: Request) -> dict:
-    auth = request.headers.get("Authorization", "")
-    token = auth.removeprefix("Bearer ").strip()
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = read_bearer_token(request)
     try:
         return VendorService.validate_vendor_token(token)
     except Exception:
@@ -87,24 +91,27 @@ def vendor_tasks(request: Request):
     tasks = db.execute(
         select(Task).where(Task.ai_conversation_id.in_(convo_ids))
     ).scalars().all()
-    return [
-        {
-            "id": str(t.id),
-            "task_number": t.id,
-            "title": t.title,
-            "status": t.task_status,
-            "category": t.category,
-            "created_at": t.created_at.isoformat() + "Z",
-        }
-        for t in tasks
-    ]
+    return [serialize_task_list_row(t) for t in tasks]
 
 
-def _task_messages_for_vendor(db, task: Task) -> list:
-    """Return messages from the external conversation visible to the vendor."""
-    if not task.external_conversation_id:
-        return []
-    convo = db.get(Conversation, task.external_conversation_id)
+def _vendor_conversation_for_task(db, task: Task, vendor_id: int) -> Conversation | None:
+    """Find the external conversation on this task where the vendor is a participant."""
+    for convo in task.external_conversations:
+        participant = db.execute(
+            select(ConversationParticipant).where(
+                ConversationParticipant.conversation_id == convo.id,
+                ConversationParticipant.participant_type == ParticipantType.EXTERNAL_CONTACT,
+                ConversationParticipant.user_id == vendor_id,
+            )
+        ).scalar_one_or_none()
+        if participant:
+            return convo
+    return None
+
+
+def _task_messages_for_vendor(db, task: Task, vendor_id: int) -> list:
+    """Return messages from the vendor's external conversation for this task."""
+    convo = _vendor_conversation_for_task(db, task, vendor_id)
     if not convo:
         return []
     msgs = db.execute(
@@ -112,18 +119,7 @@ def _task_messages_for_vendor(db, task: Task) -> list:
         .where(Message.conversation_id == convo.id)
         .order_by(Message.sent_at)
     ).scalars().all()
-    return [
-        {
-            "id": str(m.id),
-            "body": m.body or "",
-            "sender_name": m.sender_name or "",
-            "sender_type": m.sender_type.value if m.sender_type else "account_user",
-            "is_ai": m.is_ai,
-            "sent_at": m.sent_at.isoformat() + "Z",
-        }
-        for m in msgs
-        if m.message_type not in (MessageType.INTERNAL, MessageType.APPROVAL, MessageType.SUGGESTION, MessageType.CONTEXT)
-    ]
+    return serialize_visible_messages(msgs)
 
 
 def _verify_vendor_task(db, task_id: str, vendor_id: int) -> Task:
@@ -143,12 +139,11 @@ def vendor_task_detail(task_id: str, request: Request):
     db = get_db(request)
     vendor = _load_vendor(db, info["vendor_id"])
     task = _verify_vendor_task(db, task_id, vendor.id)
-    # Check if someone is typing in the external conversation
+    # Check if someone is typing in the vendor's external conversation
     ai_typing = False
-    if task.external_conversation_id:
-        ext_conv = db.get(Conversation, task.external_conversation_id)
-        if ext_conv and (ext_conv.extra or {}).get("ai_typing"):
-            ai_typing = True
+    ext_conv = _vendor_conversation_for_task(db, task, vendor.id)
+    if ext_conv and (ext_conv.extra or {}).get("ai_typing"):
+        ai_typing = True
     return {
         "id": str(task.id),
         "task_number": task.id,
@@ -157,13 +152,9 @@ def vendor_task_detail(task_id: str, request: Request):
         "category": task.category,
         "urgency": task.urgency,
         "created_at": task.created_at.isoformat() + "Z",
-        "messages": _task_messages_for_vendor(db, task),
+        "messages": _task_messages_for_vendor(db, task, vendor.id),
         "typing": ai_typing,
     }
-
-
-class SendMessageBody(BaseModel):
-    body: str
 
 
 class VendorLoginBody(BaseModel):
@@ -228,13 +219,15 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
     db = get_db(request)
     vendor = _load_vendor(db, info["vendor_id"])
     task = _verify_vendor_task(db, task_id, vendor.id)
-    if not task.external_conversation_id:
+    convo = _vendor_conversation_for_task(db, task, vendor.id)
+    if not convo:
         raise HTTPException(status_code=400, detail="No external conversation for this task")
+    convo_id = convo.id
 
     # Ensure vendor is a participant on the external conversation (idempotent)
     existing = db.execute(
         select(ConversationParticipant).where(
-            ConversationParticipant.conversation_id == task.external_conversation_id,
+            ConversationParticipant.conversation_id == convo_id,
             ConversationParticipant.participant_type == ParticipantType.EXTERNAL_CONTACT,
             ConversationParticipant.user_id == vendor.id,
         )
@@ -243,7 +236,7 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
         db.add(ConversationParticipant(
             org_id=vendor.org_id,
             creator_id=vendor.creator_id,
-            conversation_id=task.external_conversation_id,
+            conversation_id=convo_id,
             user_id=vendor.id,
             participant_type=ParticipantType.EXTERNAL_CONTACT,
             is_active=True,
@@ -251,7 +244,7 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
         db.flush()
         existing = db.execute(
             select(ConversationParticipant).where(
-                ConversationParticipant.conversation_id == task.external_conversation_id,
+                ConversationParticipant.conversation_id == convo_id,
                 ConversationParticipant.participant_type == ParticipantType.EXTERNAL_CONTACT,
                 ConversationParticipant.user_id == vendor.id,
             )
@@ -260,7 +253,7 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
     now = datetime.now(UTC)
     msg = Message(
         org_id=vendor.org_id,
-        conversation_id=task.external_conversation_id,
+        conversation_id=convo_id,
         sender_type=ParticipantType.EXTERNAL_CONTACT,
         sender_id=existing.id,
         body=body.body.strip(),
@@ -273,13 +266,7 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
     task.last_message_at = now
     db.commit()
 
-    # Trigger agent heartbeat in background
-    import threading
-    _task_id = str(task.id)
-    _hint = f"{vendor.name} sent a message: {body.body.strip()[:100]}"
-    threading.Thread(
-        target=_run_heartbeat, args=(_task_id, _hint), daemon=True,
-    ).start()
+    trigger_task_autoreply(str(task.id), sender_name=vendor.name, body=body.body)
 
     return {
         "id": str(msg.id),
@@ -289,17 +276,3 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
         "is_ai": False,
         "sent_at": msg.sent_at.isoformat() + "Z",
     }
-
-
-def _run_heartbeat(task_id: str, hint: str):
-    import time
-    print(f"\033[33m[heartbeat] Triggering for task {task_id}: {hint}\033[0m")
-    time.sleep(1)  # let the request session close before accessing DB
-    try:
-        from handlers.chat import agent_task_heartbeat
-        result = agent_task_heartbeat(task_id, hint=hint)
-        print(f"\033[33m[heartbeat] Result for task {task_id}: {'replied' if result else 'no response'}\033[0m")
-    except Exception as e:
-        print(f"\033[31m[heartbeat] Failed for task {task_id}: {e}\033[0m")
-        import traceback
-        traceback.print_exc()
