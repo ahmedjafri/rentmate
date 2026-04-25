@@ -47,6 +47,7 @@ class SendMsgAndCreateTaskPayload(SuggestionActionPayloadBase):
     vendor_id: str | int
     vendor_name: str | None = None
     draft_message: str | None = None
+    goal: str | None = None
     steps: list[dict] | None = None
 
 

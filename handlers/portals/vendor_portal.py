@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import Integer, cast, or_, select
+from sqlalchemy.orm import selectinload
 
 from db.models import (
     Conversation,
@@ -17,8 +18,10 @@ from db.models import (
 from gql.services.vendor_service import VendorService, get_vendor_login_email, vendor_has_account
 from handlers.deps import get_db
 from handlers.portals._common import (
+    notify_task_owner_of_portal_message,
     SendMessageBody,
     read_bearer_token,
+    serialize_portal_conversation_row,
     serialize_task_list_row,
     serialize_visible_messages,
     trigger_task_autoreply,
@@ -94,6 +97,28 @@ def vendor_tasks(request: Request):
     return [serialize_task_list_row(t) for t in tasks]
 
 
+def _vendor_portal_conversations(db, vendor_id: int) -> list[dict]:
+    tasks = db.execute(
+        select(Task)
+        .options(selectinload(Task.external_conversations).selectinload(Conversation.messages))
+    ).scalars().all()
+    rows: list[dict] = []
+    for task in tasks:
+        convo = _vendor_conversation_for_task(db, task, vendor_id)
+        if convo:
+            rows.append(serialize_portal_conversation_row(convo, task=task))
+    rows.sort(key=lambda row: row["last_message_at"] or row["updated_at"], reverse=True)
+    return rows
+
+
+@router.get("/conversations")
+def vendor_conversations(request: Request):
+    info = _require_vendor(request)
+    db = get_db(request)
+    vendor = _load_vendor(db, info["vendor_id"])
+    return _vendor_portal_conversations(db, vendor.id)
+
+
 def _vendor_conversation_for_task(db, task: Task, vendor_id: int) -> Conversation | None:
     """Find the external conversation on this task where the vendor is a participant."""
     for convo in task.external_conversations:
@@ -133,6 +158,30 @@ def _verify_vendor_task(db, task_id: str, vendor_id: int) -> Task:
     return task
 
 
+def _verify_vendor_conversation(db, conversation_id: int, vendor_id: int) -> tuple[Task | None, Conversation]:
+    conversation = db.execute(
+        select(Conversation)
+        .where(Conversation.id == conversation_id)
+        .options(selectinload(Conversation.messages))
+    ).scalar_one_or_none()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    participant = db.execute(
+        select(ConversationParticipant).where(
+            ConversationParticipant.conversation_id == conversation_id,
+            ConversationParticipant.participant_type == ParticipantType.EXTERNAL_CONTACT,
+            ConversationParticipant.user_id == vendor_id,
+            ConversationParticipant.is_active.is_(True),
+        )
+    ).scalar_one_or_none()
+    if not participant:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    task = None
+    if conversation.parent_task_id:
+        task = db.execute(select(Task).where(Task.id == conversation.parent_task_id)).scalar_one_or_none()
+    return task, conversation
+
+
 @router.get("/tasks/{task_id}")
 def vendor_task_detail(task_id: str, request: Request):
     info = _require_vendor(request)
@@ -154,6 +203,18 @@ def vendor_task_detail(task_id: str, request: Request):
         "created_at": task.created_at.isoformat() + "Z",
         "messages": _task_messages_for_vendor(db, task, vendor.id),
         "typing": ai_typing,
+    }
+
+
+@router.get("/conversations/{conversation_id}")
+def vendor_conversation_detail(conversation_id: int, request: Request):
+    info = _require_vendor(request)
+    db = get_db(request)
+    vendor = _load_vendor(db, info["vendor_id"])
+    task, conversation = _verify_vendor_conversation(db, conversation_id, vendor.id)
+    return {
+        **serialize_portal_conversation_row(conversation, task=task),
+        "messages": serialize_visible_messages(conversation.messages),
     }
 
 
@@ -264,9 +325,72 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
     )
     db.add(msg)
     task.last_message_at = now
+    notify_task_owner_of_portal_message(
+        db,
+        task=task,
+        conversation=convo,
+        sender_label=vendor.name,
+        body=body.body,
+        actor_kind="vendor",
+    )
     db.commit()
 
     trigger_task_autoreply(str(task.id), sender_name=vendor.name, body=body.body)
+
+    return {
+        "id": str(msg.id),
+        "body": msg.body,
+        "sender_name": msg.sender_name,
+        "sender_type": "external_contact",
+        "is_ai": False,
+        "sent_at": msg.sent_at.isoformat() + "Z",
+    }
+
+
+@router.post("/conversations/{conversation_id}/messages")
+def vendor_send_conversation_message(conversation_id: int, body: SendMessageBody, request: Request):
+    info = _require_vendor(request)
+    if not body.body.strip():
+        raise HTTPException(status_code=400, detail="Message body required")
+    db = get_db(request)
+    vendor = _load_vendor(db, info["vendor_id"])
+    task, conversation = _verify_vendor_conversation(db, conversation_id, vendor.id)
+
+    existing = db.execute(
+        select(ConversationParticipant).where(
+            ConversationParticipant.conversation_id == conversation.id,
+            ConversationParticipant.participant_type == ParticipantType.EXTERNAL_CONTACT,
+            ConversationParticipant.user_id == vendor.id,
+        )
+    ).scalar_one()
+
+    now = datetime.now(UTC)
+    msg = Message(
+        org_id=vendor.org_id,
+        conversation_id=conversation.id,
+        sender_type=ParticipantType.EXTERNAL_CONTACT,
+        sender_id=existing.id,
+        body=body.body.strip(),
+        message_type=MessageType.MESSAGE,
+        sender_name=vendor.name,
+        is_ai=False,
+        sent_at=now,
+    )
+    db.add(msg)
+    if task is not None:
+        task.last_message_at = now
+    notify_task_owner_of_portal_message(
+        db,
+        task=task,
+        conversation=conversation,
+        sender_label=vendor.name,
+        body=body.body,
+        actor_kind="vendor",
+    )
+    db.commit()
+
+    if task is not None:
+        trigger_task_autoreply(str(task.id), sender_name=vendor.name, body=body.body)
 
     return {
         "id": str(msg.id),

@@ -248,18 +248,30 @@ class TestReviewPersistsToAIConversation:
         messages = (
             self.db.query(Message)
             .filter_by(conversation_id=task.ai_conversation_id)
+            .order_by(Message.sent_at.asc())
             .all()
         )
-        assert len(messages) == 1, "exactly one summary message should be posted"
-        msg = messages[0]
-        assert msg.is_ai is True
-        assert msg.message_type == MessageType.MESSAGE
-        assert "Agent review (manual)" in msg.body
-        assert "Quote pending" in msg.body
-        assert "Ping vendor for quote status." in msg.body
-        # Reasoning bullets from the on_progress events made it into the body.
-        assert "Reading task context" in msg.body
-        assert "Checking recent activity" in msg.body
+        # Two rows: INTERNAL trace (rendered as ThinkingChain) + MESSAGE
+        # summary (rendered as the manager-facing reply).
+        assert len(messages) == 2, "review should post one trace + one summary"
+        trace, summary = messages
+
+        # 1. INTERNAL trace carries the reasoning bullets — chat panel
+        #    renders these as a compact ThinkingChain.
+        assert trace.is_ai is True
+        assert trace.message_type == MessageType.INTERNAL
+        assert "Reading task context" in trace.body
+        assert "Checking recent activity" in trace.body
+
+        # 2. MESSAGE summary is the manager-facing reply — no reasoning
+        #    bullets crammed in here.
+        assert summary.is_ai is True
+        assert summary.message_type == MessageType.MESSAGE
+        assert "Agent review (manual)" in summary.body
+        assert "Quote pending" in summary.body
+        assert "Ping vendor for quote status." in summary.body
+        assert "Reasoning" not in summary.body
+        assert "Reading task context" not in summary.body
 
     def test_review_logs_llm_request_trace_with_context_and_retrieval(self):
         """The trace UI surfaces system prompt + context sections + retrieval
@@ -293,9 +305,14 @@ class TestReviewPersistsToAIConversation:
             asyncio.run(mod._review_one_task(task, trigger="manual"))
 
         self.db.expire_all()
+        from db.models import AgentRun
         traces = (
             self.db.query(AgentTrace)
-            .filter_by(task_id=str(task.id), source="task_review")
+            .join(
+                AgentRun,
+                (AgentTrace.org_id == AgentRun.org_id) & (AgentTrace.run_id == AgentRun.id),
+            )
+            .filter(AgentRun.task_id == str(task.id), AgentTrace.source == "task_review")
             .order_by(AgentTrace.timestamp.asc())
             .all()
         )
@@ -531,6 +548,42 @@ class TestReviewPersistsToAIConversation:
         prompt = _build_review_prompt(task, self.db)
         assert "wait about 24 hours before another follow-up" in prompt
         assert "Do not mark a confirmation/check-it-worked step done just because you sent a reminder" in prompt
+
+    def test_review_prompt_requires_asking_manager_for_missing_concrete_values(self):
+        task = Task(
+            id=NumberAllocator.allocate_next(self.db, entity_type="task", org_id=1),
+            org_id=1,
+            creator_id=1,
+            title="Payment portal follow-up",
+            task_status=TaskStatus.ACTIVE,
+        )
+        self.db.add(task)
+        self.db.flush()
+
+        from handlers.task_review import _build_review_prompt
+
+        prompt = _build_review_prompt(task, self.db)
+        assert "Never send or stage a tenant/vendor message with bracketed placeholders" in prompt
+        assert "[payment portal link]" in prompt
+        assert "call `ask_manager` and get the exact value before messaging anyone" in prompt
+
+    def test_review_prompt_routes_in_task_pm_approvals_to_ask_manager(self):
+        task = Task(
+            id=NumberAllocator.allocate_next(self.db, entity_type="task", org_id=1),
+            org_id=1,
+            creator_id=1,
+            title="Landscape spring cleanup — getting quotes",
+            task_status=TaskStatus.ACTIVE,
+        )
+        self.db.add(task)
+        self.db.flush()
+
+        from handlers.task_review import _build_review_prompt
+
+        prompt = _build_review_prompt(task, self.db)
+        assert "If the blocker is PM approval or another manager decision on this same task" in prompt
+        assert "Do not create a suggestion for an in-task approval step" in prompt
+        assert "use `ask_manager` in the task AI conversation" in prompt
 
     def test_review_skips_chat_write_when_task_has_no_ai_conversation(self):
         # Task without ai_conversation_id — review still runs, no crash, no

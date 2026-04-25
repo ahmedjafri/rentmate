@@ -28,6 +28,7 @@ from backends.local_auth import (
 from llm.model_config import resolve_model_config
 from llm.registry import agent_registry, ensure_agent_runtime_dirs
 from llm.rentmate_policy_provider import RentmatePolicyProvider
+from llm.runs import accumulate_run_totals, derive_run_metadata, start_run
 from llm.tools import current_user_message
 from llm.tracing import log_trace, make_trace_envelope
 
@@ -570,8 +571,6 @@ async def chat_with_agent(
                 "tool_call",
                 _trace_source,
                 msg,
-                task_id=_trace_task_id,
-                conversation_id=trace_conversation_id,
                 tool_name=tool_name,
                 detail=make_trace_envelope(
                     "tool_call",
@@ -642,8 +641,6 @@ async def chat_with_agent(
                     "error",
                     _trace_source,
                     msg,
-                    task_id=_trace_task_id,
-                    conversation_id=trace_conversation_id,
                     tool_name=function_name,
                     detail=make_trace_envelope(
                         "tool_error",
@@ -667,8 +664,6 @@ async def chat_with_agent(
                 "tool_result",
                 _trace_source,
                 f"{label} completed",
-                task_id=_trace_task_id,
-                conversation_id=trace_conversation_id,
                 tool_name=function_name,
                 detail=make_trace_envelope(
                     "tool_result",
@@ -779,6 +774,11 @@ async def chat_with_agent(
               f"input_tokens={result.get('input_tokens', '?')} "
               f"output_tokens={result.get('output_tokens', '?')} "
               f"progress_events={len(progress_events)}")
+        accumulate_run_totals(
+            input_tokens=int(result.get("input_tokens", 0) or 0),
+            output_tokens=int(result.get("output_tokens", 0) or 0),
+            iteration_count=int(result.get("api_calls", 0) or 0),
+        )
         if progress_events:
             for evt in progress_events:
                 print(f"[agent]   progress: {evt}")
@@ -907,112 +907,122 @@ async def _local_fallback(
         )
     except RuntimeError:
         fallback_token = None
+
+    run_metadata = derive_run_metadata(
+        session_key=session_key,
+        conversation_id=str((trace_context or {}).get("conversation_id") or "") or None,
+    )
+
     try:
-        reply = await chat_with_agent(agent_id, session_key, messages, on_progress, trace_context=trace_context)
-        side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
-        failed_tools = list(current_failed_tools.get())
-        completed_tools = list(current_completed_tools.get())
-        if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
-            side_effect_reply = _summarize_non_document_side_effects(side_effects)
-            if side_effect_reply:
-                reply = side_effect_reply
-                return AgentResponse(reply=reply, side_effects=side_effects)
-            log_trace(
-                "error",
-                "chat",
-                "Assistant claimed document creation without create_document tool call",
-                conversation_id=str((trace_context or {}).get("conversation_id") or "") or None,
-                detail=make_trace_envelope(
-                    "tool_enforcement",
-                    expected_tool="create_document",
-                    reply=reply,
-                    trace_context=trace_context,
-                ),
-            )
-            pending_suggestion_messages.set([])
-            corrective_messages = [
-                *messages,
-                {"role": "assistant", "content": reply},
-                {
-                    "role": "user",
-                    "content": (
-                        "System correction: you claimed a document was created, but no create_document tool was called. "
-                        "If the user asked for a document, call create_document now. "
-                        "Do not claim a document exists unless the tool succeeds."
-                    ),
-                },
-            ]
-            reply = await chat_with_agent(
-                agent_id,
-                session_key,
-                corrective_messages,
-                on_progress,
-                trace_context=trace_context,
-            )
-            side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
-            if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
-                reply = (
-                    "I did not create the document. The document tool was not executed successfully, "
-                    "so there is no new file in Documents."
-                )
-        switched_mutating_tool = _failed_mutating_tool_switched(
-            failed_tools=failed_tools,
-            completed_tools=completed_tools,
-        )
-        if switched_mutating_tool:
-            failed_tool, replacement_tool = switched_mutating_tool
-            log_trace(
-                "error",
-                "chat",
-                "Assistant switched to a different mutating tool after tool failure",
-                conversation_id=str((trace_context or {}).get("conversation_id") or "") or None,
-                detail=make_trace_envelope(
-                    "tool_enforcement",
-                    failed_tool=failed_tool,
-                    replacement_tool=replacement_tool,
-                    reply=reply,
-                    trace_context=trace_context,
-                ),
-            )
-            pending_suggestion_messages.set([])
-            current_failed_tools.set([])
-            current_completed_tools.set([])
-            corrective_messages = [
-                *messages,
-                {"role": "assistant", "content": reply},
-                {
-                    "role": "user",
-                    "content": (
-                        "System correction: your last mutating tool failed. "
-                        f"Do not switch from {failed_tool} to a different mutating tool such as {replacement_tool} in the same turn. "
-                        "Either retry the same tool if appropriate, ask the user for missing input, or explain the failure without creating other side effects."
-                    ),
-                },
-            ]
-            reply = await chat_with_agent(
-                agent_id,
-                session_key,
-                corrective_messages,
-                on_progress,
-                trace_context=trace_context,
-            )
+        with start_run(
+            **run_metadata,
+            trigger_input=latest_user,
+        ) as run:
+            reply = await chat_with_agent(agent_id, session_key, messages, on_progress, trace_context=trace_context)
             side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
             failed_tools = list(current_failed_tools.get())
             completed_tools = list(current_completed_tools.get())
-            if _failed_mutating_tool_switched(
+            if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
+                side_effect_reply = _summarize_non_document_side_effects(side_effects)
+                if side_effect_reply:
+                    reply = side_effect_reply
+                    run.complete(status="completed", final_response=reply)
+                    return AgentResponse(reply=reply, side_effects=side_effects)
+                log_trace(
+                    "error",
+                    "chat",
+                    "Assistant claimed document creation without create_document tool call",
+                    detail=make_trace_envelope(
+                        "tool_enforcement",
+                        expected_tool="create_document",
+                        reply=reply,
+                        trace_context=trace_context,
+                    ),
+                )
+                pending_suggestion_messages.set([])
+                corrective_messages = [
+                    *messages,
+                    {"role": "assistant", "content": reply},
+                    {
+                        "role": "user",
+                        "content": (
+                            "System correction: you claimed a document was created, but no create_document tool was called. "
+                            "If the user asked for a document, call create_document now. "
+                            "Do not claim a document exists unless the tool succeeds."
+                        ),
+                    },
+                ]
+                reply = await chat_with_agent(
+                    agent_id,
+                    session_key,
+                    corrective_messages,
+                    on_progress,
+                    trace_context=trace_context,
+                )
+                side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
+                if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
+                    reply = (
+                        "I did not create the document. The document tool was not executed successfully, "
+                        "so there is no new file in Documents."
+                    )
+            switched_mutating_tool = _failed_mutating_tool_switched(
                 failed_tools=failed_tools,
                 completed_tools=completed_tools,
-            ):
-                pending_suggestion_messages.set([])
-                side_effects = []
-                reply = (
-                    f"The requested action failed when attempting {failed_tool}. "
-                    "I did not perform a different side effect in its place."
+            )
+            if switched_mutating_tool:
+                failed_tool, replacement_tool = switched_mutating_tool
+                log_trace(
+                    "error",
+                    "chat",
+                    "Assistant switched to a different mutating tool after tool failure",
+                    detail=make_trace_envelope(
+                        "tool_enforcement",
+                        failed_tool=failed_tool,
+                        replacement_tool=replacement_tool,
+                        reply=reply,
+                        trace_context=trace_context,
+                    ),
                 )
-        synthesized_failure_reply = _synthesize_failed_tool_reply(failed_tools)
-        if synthesized_failure_reply and not side_effects and _reply_is_only_tool_progress(reply):
-            reply = synthesized_failure_reply
-        return AgentResponse(reply=reply, side_effects=side_effects)
+                pending_suggestion_messages.set([])
+                current_failed_tools.set([])
+                current_completed_tools.set([])
+                corrective_messages = [
+                    *messages,
+                    {"role": "assistant", "content": reply},
+                    {
+                        "role": "user",
+                        "content": (
+                            "System correction: your last mutating tool failed. "
+                            f"Do not switch from {failed_tool} to a different mutating tool such as {replacement_tool} in the same turn. "
+                            "Either retry the same tool if appropriate, ask the user for missing input, or explain the failure without creating other side effects."
+                        ),
+                    },
+                ]
+                reply = await chat_with_agent(
+                    agent_id,
+                    session_key,
+                    corrective_messages,
+                    on_progress,
+                    trace_context=trace_context,
+                )
+                side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
+                failed_tools = list(current_failed_tools.get())
+                completed_tools = list(current_completed_tools.get())
+                if _failed_mutating_tool_switched(
+                    failed_tools=failed_tools,
+                    completed_tools=completed_tools,
+                ):
+                    pending_suggestion_messages.set([])
+                    side_effects = []
+                    reply = (
+                        f"The requested action failed when attempting {failed_tool}. "
+                        "I did not perform a different side effect in its place."
+                    )
+            synthesized_failure_reply = _synthesize_failed_tool_reply(failed_tools)
+            if synthesized_failure_reply and not side_effects and _reply_is_only_tool_progress(reply):
+                reply = synthesized_failure_reply
+            run.complete(status="completed", final_response=reply)
+            return AgentResponse(reply=reply, side_effects=side_effects)
     finally:
         if fallback_token is not None:
             reset_fallback_request_context(fallback_token)

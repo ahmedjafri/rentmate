@@ -145,6 +145,10 @@ def _build_review_prompt(task, db) -> str:
         "new or refreshed quote. Use that existing vendor response to "
         "decide the next step — usually tenant coordination, approval "
         "handling, or waiting. "
+        "Never send or stage a tenant/vendor message with bracketed placeholders "
+        "like [payment portal link], [vendor phone], or [time window]. If a "
+        "concrete detail is missing, call `ask_manager` and get the exact value "
+        "before messaging anyone. "
         "Do not mark a confirmation/check-it-worked step done just because "
         "you sent a reminder or follow-up. A confirmation-style step is only "
         "done after the tenant/vendor actually confirms the outcome. "
@@ -154,6 +158,9 @@ def _build_review_prompt(task, db) -> str:
         "If work has moved to the next listed step, mark that next step "
         "`active` as well. `record_task_review` only records review metadata "
         "and does NOT update task progress for you. "
+        "If the blocker is PM approval or another manager decision on this "
+        "same task, use `ask_manager` in the task AI conversation. Do not "
+        "create a suggestion for an in-task approval step. "
         "If you need clarification from the manager to move forward — "
         "e.g. a decision only they can make, missing context, or an "
         "approval — call `ask_manager` to post a direct question to "
@@ -210,19 +217,18 @@ def _select_due_tasks(db):
     return db.execute(stmt).scalars().all()
 
 
-def _format_review_message_body(
+def _format_summary_only(
     *,
     trigger: TriggerSource,
     status: str | None,
     summary: str | None,
     next_step: str | None,
-    trace_events: list[str],
 ) -> str:
-    """Compose the one-message summary posted to the task's AI conversation.
+    """Compose the manager-facing summary posted to the AI conversation.
 
-    Keeps the trace compact — one bullet per tool step — so the manager
-    can scroll through the agent's reasoning without drowning in every
-    intermediate token.
+    Reasoning trace lives in a separate INTERNAL message — the chat panel
+    renders that as a compact ThinkingChain — so it doesn't get crammed
+    into the reply body here.
     """
     trigger_label = "(manual)" if trigger == "manual" else "(auto)"
     header_status = (status or "recorded").replace("_", " ")
@@ -231,10 +237,6 @@ def _format_review_message_body(
         parts.append(f"\nSummary\n{summary.strip()}")
     if next_step:
         parts.append(f"\nNext step\n{next_step.strip()}")
-    if trace_events:
-        bullets = "\n".join(f"• {line}" for line in trace_events if line)
-        if bullets:
-            parts.append(f"\nReasoning\n{bullets}")
     return "\n".join(parts).strip()
 
 
@@ -245,15 +247,27 @@ def _persist_review_summary_to_ai_conversation(
     trigger: TriggerSource,
     trace_events: list[str],
 ) -> None:
-    """Insert one MESSAGE row summarising this review into the task's AI chat.
+    """Persist this review into the task's AI chat as two rows:
 
-    Skips silently when the task has no AI conversation (some legacy tasks
-    don't). Re-reads the review fields from the fresh Task row so we pick up
-    whatever ``record_task_review`` just wrote.
+    1. an ``INTERNAL`` row containing the reasoning trace (rendered by
+       ``ChatMessage.tsx`` as a compact ThinkingChain);
+    2. a ``MESSAGE`` row containing only the manager-facing summary
+       (status / summary / next step).
+
+    Splitting the two lets the chat UI lay them out as separate items
+    instead of bundling the trace into the reply body. Skips silently
+    when the task has no AI conversation (some legacy tasks don't).
+    Re-reads review fields from a fresh Task row so we pick up whatever
+    ``record_task_review`` just wrote.
     """
     if ai_conversation_id is None:
         return
-    from db.models import Task as TaskModel
+    from db.models import (
+        Message,
+        MessageType,
+        ParticipantType,
+        Task as TaskModel,
+    )
     from db.session import SessionLocal
     from gql.services import chat_service
 
@@ -262,17 +276,33 @@ def _persist_review_summary_to_ai_conversation(
         fresh = db.query(TaskModel).filter_by(id=task_id).first()
         if fresh is None:
             return
-        body = _format_review_message_body(
+
+        # 1. Reasoning trace as INTERNAL — chat UI renders ThinkingChain.
+        trace_lines = [line for line in trace_events if line]
+        if trace_lines:
+            now = datetime.now(UTC)
+            db.add(Message(
+                conversation_id=ai_conversation_id,
+                sender_type=ParticipantType.ACCOUNT_USER,
+                body="\n".join(trace_lines),
+                message_type=MessageType.INTERNAL,
+                sender_name="RentMate",
+                is_ai=True,
+                sent_at=now,
+            ))
+            db.flush()
+
+        # 2. Summary as MESSAGE — the manager-facing reply.
+        summary_body = _format_summary_only(
             trigger=trigger,
             status=fresh.last_review_status,
             summary=fresh.last_review_summary,
             next_step=fresh.last_review_next_step,
-            trace_events=trace_events,
         )
         chat_service.send_autonomous_message(
             db,
             conversation_id=ai_conversation_id,
-            body=body,
+            body=summary_body,
             task_id=fresh.id,
         )
         db.commit()
@@ -383,43 +413,50 @@ async def _review_one_task(
             prompt=prompt,
             context_data=context_data,
         )
-        log_trace(
-            "llm_request",
-            "task_review",
-            f"Prepared review for task {task.id}",
-            task_id=str(task.id),
-            detail=trace_detail,
-        )
-        messages = [
-            {"role": "system", "content": context_text},
-            {"role": "user", "content": prompt},
-        ]
-        resp = await call_agent(
-            agent_id,
-            session_key=session_key,
-            messages=messages,
-            on_progress=_capture_progress,
-            trace_context=trace_detail,
-        )
-        log_trace(
-            "llm_reply",
-            "task_review",
-            (resp.reply or "")[:200],
-            task_id=str(task.id),
-            detail=_task_review_trace_detail(
+        from llm.runs import derive_run_metadata, start_run
+        with start_run(
+            **derive_run_metadata(
                 session_key=session_key,
                 task_id=str(task.id),
-                prompt=prompt,
-                context_data=context_data,
-                reply=resp.reply,
+                source_override="task_review",
             ),
-        )
-        _persist_review_summary_to_ai_conversation(
-            task_id=task.id,
-            ai_conversation_id=ai_conversation_id,
-            trigger=trigger,
-            trace_events=trace_events,
-        )
+            trigger_input=prompt,
+        ):
+            log_trace(
+                "llm_request",
+                "task_review",
+                f"Prepared review for task {task.id}",
+                detail=trace_detail,
+            )
+            messages = [
+                {"role": "system", "content": context_text},
+                {"role": "user", "content": prompt},
+            ]
+            resp = await call_agent(
+                agent_id,
+                session_key=session_key,
+                messages=messages,
+                on_progress=_capture_progress,
+                trace_context=trace_detail,
+            )
+            log_trace(
+                "llm_reply",
+                "task_review",
+                (resp.reply or "")[:200],
+                detail=_task_review_trace_detail(
+                    session_key=session_key,
+                    task_id=str(task.id),
+                    prompt=prompt,
+                    context_data=context_data,
+                    reply=resp.reply,
+                ),
+            )
+            _persist_review_summary_to_ai_conversation(
+                task_id=task.id,
+                ai_conversation_id=ai_conversation_id,
+                trigger=trigger,
+                trace_events=trace_events,
+            )
     finally:
         reset_request_context(tokens)
 

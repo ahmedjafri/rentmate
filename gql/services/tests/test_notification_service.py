@@ -8,12 +8,13 @@ from backends.local_auth import set_request_context
 from db.models import (
     Conversation,
     ConversationParticipant,
+    Notification,
     ConversationType,
     ParticipantType,
     Tenant,
     User,
 )
-from gql.services.notification_service import Notification, NotificationService
+from gql.services.notification_service import NotificationRequest, NotificationService
 
 
 @pytest.fixture(autouse=True)
@@ -78,15 +79,16 @@ def test_notify_sends_sms_with_blurb_messages_and_login_less_link(db):
     with patch.object(NotificationService, "_send_sms", AsyncMock(side_effect=_fake_send)):
         delivered = asyncio.run(NotificationService.notify(
             db,
-            Notification(
+            NotificationRequest(
                 recipient_user_id=tenant_user.id,
                 conversation_id=convo.id,
-                blurb="RentMate update: Pipe leak",
+                title="RentMate update: Pipe leak",
                 messages=["We have a plumber scheduled Thursday 10am."],
+                kind="conversation_update",
             ),
         ))
 
-    assert delivered is True
+    assert delivered.delivery_status == "sent"
     assert len(sent) == 1
     to_phone, body = sent[0]
     assert to_phone == tenant_user.phone
@@ -95,6 +97,10 @@ def test_notify_sends_sms_with_blurb_messages_and_login_less_link(db):
     # Login-less portal link deep-links to this conversation.
     assert f"conv={convo.external_id}" in body
     assert "/t/" in body
+    rows = db.query(Notification).all()
+    assert len(rows) == 1
+    assert rows[0].title == "RentMate update: Pipe leak"
+    assert rows[0].delivery_status == "sent"
 
 
 def test_dispatch_falls_back_silently_when_recipient_has_no_phone(db):
@@ -115,13 +121,16 @@ def test_dispatch_falls_back_silently_when_recipient_has_no_phone(db):
     convo = _seed_conversation(db, tenant_user)
 
     with patch.object(NotificationService, "_send_sms", AsyncMock()) as send:
-        NotificationService.dispatch(
+        row = NotificationService.dispatch(
             db,
-            Notification(
+            NotificationRequest(
                 recipient_user_id=tenant_user.id,
                 conversation_id=convo.id,
-                blurb="Anything",
+                title="Anything",
                 messages=["Anything"],
             ),
         )
     send.assert_not_called()
+    assert row.delivery_status in {"pending", "skipped"}
+    persisted = db.query(Notification).filter(Notification.id == row.id).one()
+    assert persisted.title == "Anything"

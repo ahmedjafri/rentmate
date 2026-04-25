@@ -246,7 +246,7 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
     lastMessage: last?.content ?? '',
     lastMessageBy: last?.senderName ?? '',
     lastMessageAt: last ? new Date(last.timestamp) : parseUtc(t.createdAt),
-    unreadCount: 0,
+    unreadCount: t.unreadCount ?? 0,
     propertyId: t.propertyId ?? undefined,
     category: (fromGraphqlEnum(t.category) as ActionDeskTask['category']) ?? 'maintenance',
     urgency: (fromGraphqlEnum(t.urgency) as ActionDeskTask['urgency']) ?? 'low',

@@ -14,7 +14,7 @@ import { toast } from 'sonner';
 import { ChatPanel, performTaskDismiss, type EmbeddedTaskThreadSelection } from '@/components/chat/ChatPanel';
 import { ConvRow, ConvSummary } from '@/components/chat/ConvRow';
 import { ProgressSteps } from '@/components/chat/ProgressSteps';
-import { sendMessage, updateTask as updateTaskMutation, updateTaskGoal, updateTaskStatus } from '@/graphql/client';
+import { markTaskSeen, sendMessage, updateTask as updateTaskMutation, updateTaskGoal, updateTaskStatus } from '@/graphql/client';
 
 const CATEGORY_OPTIONS = [
   'rent',
@@ -521,8 +521,9 @@ function TaskGoalPanel({ task, onSelectAi }: { task: ActionDeskTask; onSelectAi:
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { actionDeskTasks, openChat, closeChat, isLoading } = useApp();
+  const { actionDeskTasks, openChat, closeChat, isLoading, updateTask } = useApp();
   const openedRef = useRef(false);
+  const seenTaskRef = useRef<string | null>(null);
 
   const task = useMemo(
     () => actionDeskTasks.find(t => String(t.id) === String(id)),
@@ -551,6 +552,19 @@ export default function TaskDetail() {
   useEffect(() => {
     setSelectedThread({ kind: 'ai' });
   }, [task?.id]);
+
+  useEffect(() => {
+    if (!task) return;
+    if (seenTaskRef.current === task.id) return;
+    seenTaskRef.current = task.id;
+    if ((task.unreadCount ?? 0) > 0) {
+      updateTask(task.id, { unreadCount: 0 });
+    }
+    void markTaskSeen(task.id).catch(() => {
+      // Keep the local badge cleared for this session; next refresh will
+      // rehydrate the server value if the mutation truly failed.
+    });
+  }, [task?.id, task?.unreadCount, updateTask]);
 
   useEffect(() => {
     if (selectedThread.kind !== 'conversation') return;
@@ -590,7 +604,7 @@ export default function TaskDetail() {
         <span className="text-xs text-muted-foreground">·</span>
         <h1 className="text-sm font-medium truncate">{task.title}</h1>
         {task.taskNumber != null && (
-          <Badge variant="outline" className="text-[10px] font-mono">#{task.taskNumber}</Badge>
+          <Badge variant="outline" className="text-[10px] font-mono">Task #{task.taskNumber}</Badge>
         )}
       </div>
       <div className="grid grid-cols-[280px_minmax(0,1fr)_360px] flex-1 min-h-0">

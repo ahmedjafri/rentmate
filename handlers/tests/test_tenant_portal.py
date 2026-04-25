@@ -3,7 +3,8 @@ from datetime import UTC, date, datetime
 from fastapi.testclient import TestClient
 
 from db.enums import TaskCategory, TaskSource, Urgency
-from db.models import Lease, User
+from db.models import ConversationType, Lease, Notification, User
+from gql.services import chat_service
 from gql.services.task_service import TaskService
 from gql.services.tenant_service import TenantService
 from gql.types import CreateTaskInput, CreateTenantWithLeaseInput
@@ -81,9 +82,30 @@ def _tenant_task(db, prop, unit):
     return task
 
 
+def _tenant_conversation(db, tenant, task):
+    convo = chat_service.get_or_create_external_conversation(
+        db,
+        subject=task.title,
+        conversation_type=ConversationType.TENANT,
+        tenant_id=tenant.id,
+        parent_task_id=task.id,
+    )
+    task.parent_conversation_id = convo.id
+    chat_service.send_message(
+        db,
+        conversation_id=convo.id,
+        body="We can stop by tomorrow morning.",
+        sender_name="RentMate",
+        is_ai=False,
+    )
+    db.commit()
+    return convo
+
+
 def test_tenant_portal_uses_external_tenant_id_from_jwt(db):
     tenant, prop, unit, _lease, headers = _tenant_headers(db)
     task = _tenant_task(db, prop, unit)
+    convo = _tenant_conversation(db, tenant, task)
 
     client = TestClient(app)
 
@@ -101,3 +123,36 @@ def test_tenant_portal_uses_external_tenant_id_from_jwt(db):
     detail = client.get(f"/api/tenant/tasks/{task.id}", headers=headers)
     assert detail.status_code == 200
     assert detail.json()["id"] == str(task.id)
+    assert detail.json()["messages"][0]["body"] == "We can stop by tomorrow morning."
+
+    conversations = client.get("/api/tenant/conversations", headers=headers)
+    assert conversations.status_code == 200
+    conv_payload = conversations.json()
+    assert len(conv_payload) == 1
+    assert conv_payload[0]["id"] == str(convo.id)
+    assert conv_payload[0]["linked_task"]["id"] == str(task.id)
+
+    conv_detail = client.get(f"/api/tenant/conversations/{convo.id}", headers=headers)
+    assert conv_detail.status_code == 200
+    assert conv_detail.json()["messages"][0]["body"] == "We can stop by tomorrow morning."
+
+
+def test_tenant_portal_message_creates_pm_notification(db):
+    tenant, prop, unit, _lease, headers = _tenant_headers(db)
+    task = _tenant_task(db, prop, unit)
+    convo = _tenant_conversation(db, tenant, task)
+
+    client = TestClient(app)
+    response = client.post(
+        f"/api/tenant/conversations/{convo.id}/messages",
+        headers=headers,
+        json={"body": "Can you confirm the plumber is still coming?"},
+    )
+
+    assert response.status_code == 200
+    notification = db.query(Notification).filter(Notification.task_id == task.id).order_by(Notification.id.desc()).first()
+    assert notification is not None
+    assert notification.recipient_user_id == task.creator_id
+    assert notification.kind == "conversation_update"
+    assert notification.title == "New tenant message"
+    assert "plumber is still coming" in (notification.body or "")

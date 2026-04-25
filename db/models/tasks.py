@@ -46,6 +46,7 @@ class Task(Base, OrgId, NumberedPrimaryId, HasCreatorId):
     last_review_status    = Column(String(32), nullable=True)
     last_review_summary   = Column(Text,       nullable=True)
     last_review_next_step = Column(Text,       nullable=True)
+    last_seen_at          = Column(DateTime, nullable=True)
 
     property_id  = Column(String(36), nullable=True)
     unit_id      = Column(String(36), nullable=True)

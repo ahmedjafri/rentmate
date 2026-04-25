@@ -39,6 +39,11 @@ def dump_task_steps(steps: list[dict] | list[TaskProgressStep] | None) -> list[d
 
 class TaskService:
     @staticmethod
+    def touch_task(task: Task) -> Task:
+        task.updated_at = datetime.now(UTC)
+        return task
+
+    @staticmethod
     def create_task(sess: Session, input: CreateTaskInput) -> Task:
         creator_id = resolve_account_id()
         org_id = resolve_org_id()
@@ -65,6 +70,7 @@ class TaskService:
             unit_id=unit_id,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
+            last_seen_at=datetime.now(UTC),
         )
         sess.add(task)
         sess.flush()
@@ -101,6 +107,7 @@ class TaskService:
         task.task_status = status
         if status == TaskStatus.RESOLVED and not task.resolved_at:
             task.resolved_at = datetime.now(UTC)
+        TaskService.touch_task(task)
         sess.flush()
         return task
 
@@ -119,6 +126,7 @@ class TaskService:
         if not cleaned:
             raise ValueError("Task goal is required")
         task.goal = cleaned
+        TaskService.touch_task(task)
         sess.flush()
         return task
 
@@ -139,10 +147,26 @@ class TaskService:
             task.task_status = input.task_status
             if input.task_status == TaskStatus.RESOLVED and not task.resolved_at:
                 task.resolved_at = datetime.now(UTC)
+        TaskService.touch_task(task)
         if input.category is not None:
             task.category = input.category
         if input.urgency is not None:
             task.urgency = input.urgency
+        sess.flush()
+        return task
+
+    @staticmethod
+    def mark_task_seen(sess: Session, *, uid: int) -> Task:
+        task = sess.execute(
+            select(Task).where(
+                Task.id == uid,
+                Task.org_id == resolve_org_id(),
+                Task.creator_id == resolve_account_id(),
+            )
+        ).scalar_one_or_none()
+        if not task:
+            raise ValueError(f"Task {uid} not found")
+        task.last_seen_at = datetime.now(UTC)
         sess.flush()
         return task
 
@@ -213,5 +237,6 @@ class TaskService:
                 vendor_name=vendor.name,
             )
             flag_modified(ai_convo, "extra")
+        TaskService.touch_task(task)
         sess.flush()
         return task

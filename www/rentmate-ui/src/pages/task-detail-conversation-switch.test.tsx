@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 import type { ActionDeskTask, ChatMessage } from '@/data/mockData';
+import { markTaskSeen as markTaskSeenMutation } from '@/graphql/client';
 import { updateTask as updateTaskMutation } from '@/graphql/client';
 import TaskDetail from './TaskDetail';
 
@@ -68,6 +69,7 @@ vi.mock('@/graphql/client', () => ({
         : [],
   })),
   sendMessage: vi.fn(async () => undefined),
+  markTaskSeen: vi.fn(async () => ({ markTaskSeen: { uid: 1, unreadCount: 0 } })),
   updateTask: vi.fn(async () => undefined),
   updateTaskGoal: vi.fn(async () => undefined),
   updateTaskStatus: vi.fn(async () => undefined),
@@ -169,7 +171,14 @@ function makeAppState(task: ActionDeskTask) {
     addChatMessage: vi.fn(),
     updateTaskMessage: vi.fn(),
     setTaskMessages: vi.fn(),
-    updateTask: vi.fn(),
+    updateTask: vi.fn((taskId: string, updates: Partial<ActionDeskTask>) => {
+      setState(prev => ({
+        ...prev,
+        actionDeskTasks: prev.actionDeskTasks.map((task: ActionDeskTask) =>
+          task.id === taskId ? { ...task, ...updates } : task,
+        ),
+      }));
+    }),
     addTask: vi.fn(),
     removeTask: vi.fn(),
     addProperty: vi.fn(),
@@ -265,6 +274,25 @@ describe('TaskDetail conversation switching', () => {
     await waitFor(() => {
       expect(screen.getByText('AI thread ready')).toBeInTheDocument();
     });
+  });
+
+  it('marks the task seen when the task detail opens', async () => {
+    const task = makeTask({ unreadCount: 3 });
+    appStore.setState(makeAppState(task));
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(markTaskSeenMutation).toHaveBeenCalledWith('task-1');
+    });
+
+    expect(appStore.getState().actionDeskTasks[0].unreadCount).toBe(0);
   });
 
   it('lets the manager switch back to AI when the AI conversation is present in linkedConversations', async () => {

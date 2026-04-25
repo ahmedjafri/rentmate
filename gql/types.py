@@ -547,6 +547,7 @@ class TaskType:
     last_review_status: typing.Optional[str] = None
     last_review_summary: typing.Optional[str] = None
     last_review_next_step: typing.Optional[str] = None
+    unread_count: int = 0
 
     @classmethod
     def from_sql(cls, t: typing.Any) -> "TaskType":
@@ -564,6 +565,15 @@ class TaskType:
                     if latest is None or sent_at > latest:
                         latest = sent_at
             return _utc_iso(latest) if latest else None
+
+        def _latest_activity_at(*values: typing.Any) -> typing.Any:
+            latest = None
+            for value in values:
+                if value is None:
+                    continue
+                if latest is None or value > latest:
+                    latest = value
+            return latest
 
         def _first_active_participant_name(conv: typing.Any) -> typing.Optional[str]:
             """Return the first active non-account participant's first name, if any."""
@@ -646,6 +656,22 @@ class TaskType:
                 label = type_label
             linked.append(LinkedConversationType.from_sql(convo, label))
         last_message_at = _latest_message_at(ai_convo, parent_convo, *ext_convos)
+        latest_activity_at = _latest_activity_at(
+            getattr(t, "updated_at", None),
+            getattr(t, "last_reviewed_at", None),
+            getattr(t, "last_message_at", None),
+            max(
+                (
+                    getattr(msg, "sent_at", None)
+                    for conv in [ai_convo, parent_convo, *ext_convos]
+                    for msg in (getattr(conv, "messages", []) or [])
+                    if getattr(msg, "sent_at", None) is not None
+                ),
+                default=None,
+            ),
+        )
+        last_seen_at = getattr(t, "last_seen_at", None)
+        unread_count = 1 if latest_activity_at and (last_seen_at is None or latest_activity_at > last_seen_at) else 0
 
         return cls(
             uid=t.id,
@@ -667,14 +693,14 @@ class TaskType:
             unit_label=unit_label,
             ai_triage_suggestion=ai_triage_suggestion,
             vendor_assigned=vendor_assigned,
-            ai_conversation_id=str(t.ai_conversation_id) if t.ai_conversation_id else None,
-            parent_conversation_id=str(t.parent_conversation_id) if t.parent_conversation_id else None,
+            ai_conversation_id=str(ai_convo.external_id) if ai_convo and getattr(ai_convo, "external_id", None) else None,
+            parent_conversation_id=str(parent_convo.external_id) if parent_convo and getattr(parent_convo, "external_id", None) else None,
             ancestor_ids=[],
             require_vendor_type=extra.require_vendor_type,
             assigned_vendor_id=str(extra.assigned_vendor_id) if extra.assigned_vendor_id is not None else None,
             assigned_vendor_name=extra.assigned_vendor_name,
-            external_conversation_ids=[str(c.id) for c in ext_convos],
-            external_conversation_id=str(ext_convos[0].id) if ext_convos else None,
+            external_conversation_ids=[str(c.external_id) for c in ext_convos if getattr(c, "external_id", None)],
+            external_conversation_id=str(ext_convos[0].external_id) if ext_convos and getattr(ext_convos[0], "external_id", None) else None,
             steps=t.steps,
             goal=t.goal,
             suggestion_options=extra.suggestion_options,
@@ -683,6 +709,7 @@ class TaskType:
             last_review_status=t.last_review_status,
             last_review_summary=t.last_review_summary,
             last_review_next_step=t.last_review_next_step,
+            unread_count=unread_count,
         )
 
 

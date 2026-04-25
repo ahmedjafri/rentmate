@@ -1,9 +1,16 @@
 """Task-review tools — record_task_review + ask_manager."""
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from llm.tools._common import Tool, tool_session
+from llm.tools._common import (
+    Tool,
+    _resolve_task_id_from_active_conversation,
+    tool_session,
+)
+
+logger = logging.getLogger(__name__)
 
 
 _VALID_STATUSES: frozenset[str] = frozenset({
@@ -69,10 +76,29 @@ class RecordTaskReviewTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        task_id = str(kwargs.get("task_id") or "").strip()
+        agent_supplied_task_id = str(kwargs.get("task_id") or "").strip() or None
+        task_id = agent_supplied_task_id or ""
         status = (kwargs.get("status") or "").strip().lower()
         summary = (kwargs.get("summary") or "").strip()
         next_step = (kwargs.get("next_step") or "").strip() or None
+
+        # Active conversation is ground truth: a review running inside a
+        # task's AI conversation belongs to that task. Override any
+        # agent-supplied task_id (frequently a hallucination from a
+        # context window with multiple task ids).
+        active_task_id = _resolve_task_id_from_active_conversation()
+        if active_task_id is not None:
+            if (
+                agent_supplied_task_id is not None
+                and str(agent_supplied_task_id) != str(active_task_id)
+            ):
+                logger.warning(
+                    "record_task_review task_id override: agent passed %s "
+                    "but active conversation belongs to task %s — using "
+                    "active task",
+                    agent_supplied_task_id, active_task_id,
+                )
+            task_id = active_task_id
 
         if not task_id:
             return json.dumps({"status": "error", "message": "task_id is required"})
@@ -109,6 +135,7 @@ class RecordTaskReviewTool(Tool):
             task.last_review_status = status
             task.last_review_summary = summary
             task.last_review_next_step = next_step
+            task.updated_at = now
 
         # Log a mirror AgentTrace row for history. log_trace runs in its own
         # savepoint and never raises, so a trace failure won't undo the
@@ -118,7 +145,6 @@ class RecordTaskReviewTool(Tool):
             "task_review",
             "task_review",
             summary[:500],
-            task_id=task_id,
             tool_name="record_task_review",
             detail={
                 "status": status,
@@ -180,8 +206,27 @@ class AskManagerTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        task_id = str(kwargs.get("task_id") or "").strip()
+        agent_supplied_task_id = str(kwargs.get("task_id") or "").strip() or None
+        task_id = agent_supplied_task_id or ""
         question = (kwargs.get("question") or "").strip()
+
+        # Active conversation is ground truth: posting from inside a
+        # task's AI conversation means the question belongs to that
+        # task. Override any hallucinated task_id and rescue agents
+        # that omit it entirely.
+        active_task_id = _resolve_task_id_from_active_conversation()
+        if active_task_id is not None:
+            if (
+                agent_supplied_task_id is not None
+                and str(agent_supplied_task_id) != str(active_task_id)
+            ):
+                logger.warning(
+                    "ask_manager task_id override: agent passed %s but "
+                    "active conversation belongs to task %s — using "
+                    "active task",
+                    agent_supplied_task_id, active_task_id,
+                )
+            task_id = active_task_id
 
         if not task_id:
             return json.dumps({"status": "error", "message": "task_id is required"})
@@ -200,8 +245,16 @@ class AskManagerTool(Tool):
                 "message": "question is required and must not be empty",
             })
 
-        from db.models import Task as TaskModel
-        from gql.services import chat_service
+        from db.models import (
+            Conversation,
+            Message,
+            MessageType,
+            ParticipantType,
+            Task as TaskModel,
+        )
+        from gql.services.chat_service import dump_message_meta
+        from gql.services.notification_service import NotificationRequest, NotificationService
+        from sqlalchemy.orm.attributes import flag_modified
 
         with tool_session() as db:
             task = db.query(TaskModel).filter_by(id=task_id).first()
@@ -217,17 +270,52 @@ class AskManagerTool(Tool):
                         f"Task {task_id} has no AI conversation to post into."
                     ),
                 })
-            msg = chat_service.send_autonomous_message(
-                db,
+
+            now = datetime.now(UTC)
+            # Write the question as an action-card message so the chat UI
+            # routes it through ActionCardBubble and renders the question
+            # kind with an inline reply form.
+            msg = Message(
                 conversation_id=task.ai_conversation_id,
+                sender_type=ParticipantType.ACCOUNT_USER,
                 body=question,
-                task_id=int(task_id),
+                message_type=MessageType.ACTION,
+                sender_name="RentMate",
+                is_ai=True,
+                sent_at=now,
+                meta=dump_message_meta(action_card={
+                    "kind": "question",
+                    "title": question,
+                }),
+            )
+            db.add(msg)
+
+            convo = db.query(Conversation).filter_by(id=task.ai_conversation_id).first()
+            if convo is not None:
+                convo.updated_at = now
+                if hasattr(convo, "extra"):
+                    flag_modified(convo, "extra")
+
+            db.flush()
+
+            NotificationService.create(
+                db,
+                NotificationRequest(
+                    recipient_user_id=task.creator_id,
+                    task_id=int(task_id),
+                    conversation_id=task.ai_conversation_id,
+                    kind="manager_attention",
+                    channel="in_app",
+                    title=f"Task needs your input: {task.title or f'Task #{task.id}'}",
+                    body=question,
+                ),
             )
             return json.dumps({
                 "status": "ok",
                 "task_id": task_id,
                 "conversation_id": str(task.ai_conversation_id),
                 "message_id": str(msg.id),
+                "action_card_kind": "question",
             })
 
 

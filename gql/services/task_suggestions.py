@@ -22,6 +22,7 @@ from gql.services import chat_service, settings_service, suggestion_service
 from gql.services.task_service import TaskService, dump_task_steps
 from gql.services.vendor_service import get_vendor_by_external_id, get_vendor_by_id
 from gql.types import CreateTaskInput
+from llm.tools._common import _placeholder_message_block_error
 
 
 class SuggestionExecutor:
@@ -194,6 +195,9 @@ class SuggestionExecutor:
 
     def _send_draft_message(self, task: Task, draft: str) -> None:
         """Send a draft message to the task's most recent external conversation."""
+        placeholder_error = _placeholder_message_block_error(draft)
+        if placeholder_error:
+            raise ValueError(placeholder_error)
         ext_convo = task.latest_external_conversation
         if ext_convo:
             chat_service.send_autonomous_message(
@@ -212,7 +216,6 @@ class SuggestionExecutor:
         log_trace(
             "suggestion_executed", "executor",
             f"Suggestion {action}: {result.title or suggestion_id}",
-            task_id=task.id if task else None,
             suggestion_id=suggestion_id,
             detail={"action": action, "status": result.status},
         )
@@ -331,6 +334,7 @@ class CreateTaskSuggestionExecutor(SuggestionExecutor):
                 task.steps = dump_task_steps(steps)
                 from sqlalchemy.orm.attributes import flag_modified
                 flag_modified(task, "steps")
+                task.updated_at = now
 
             vendor_id = payload.get("vendor_id")
             if vendor_id:
@@ -669,7 +673,7 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
         draft: str,
     ) -> None:
         """Dispatch a notification (SMS today) with a login-less link to the thread."""
-        from gql.services.notification_service import Notification, NotificationService
+        from gql.services.notification_service import NotificationRequest, NotificationService
 
         recipient_user_id = self._recipient_user_id(entity_type, entity_id)
         if recipient_user_id is None:
@@ -677,11 +681,13 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
         blurb = f"RentMate update: {task.title}" if task.title else "RentMate update"
         NotificationService.dispatch(
             self.db,
-            Notification(
+            NotificationRequest(
                 recipient_user_id=recipient_user_id,
                 conversation_id=conversation_id,
-                blurb=blurb,
+                title=blurb,
                 messages=[draft],
+                kind="conversation_update",
+                task_id=task.id,
             ),
         )
 

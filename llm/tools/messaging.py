@@ -1,5 +1,6 @@
 """Messaging tools: send messages to tenants or vendors on a task."""
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -11,9 +12,13 @@ from llm.tools._common import (
     _create_suggestion,
     _load_tenant_by_public_id,
     _load_vendor_by_public_id,
+    _placeholder_message_block_error,
+    _resolve_task_id_from_active_conversation,
     _resolve_task_tenant,
     _sanitize_tenant_outbound_draft,
 )
+
+logger = logging.getLogger("rentmate.llm.message_person")
 
 
 _VALID_RISK_LEVELS: frozenset[str] = frozenset({"low", "medium", "high", "critical"})
@@ -85,7 +90,7 @@ class MessageExternalPersonTool(Tool):
                 "task_id": {
                     "type": "string",
                     "description": (
-                        "ID of the task this message is about. Optional — omit for "
+                        "ID of the task this message should be associated with. Optional — omit for "
                         "standalone outreach (creates a new conversation with the "
                         "recipient that isn't attached to any task)."
                     ),
@@ -118,7 +123,8 @@ class MessageExternalPersonTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        task_id = kwargs.get("task_id") or None
+        agent_supplied_task_id = kwargs.get("task_id") or None
+        task_id = agent_supplied_task_id
         entity_id = _strip_entity_prefix(str(kwargs["entity_id"]))
         entity_type = kwargs["entity_type"]
         draft_message = kwargs["draft_message"]
@@ -131,6 +137,25 @@ class MessageExternalPersonTool(Tool):
                     f"{sorted(_VALID_RISK_LEVELS)}; got {kwargs.get('risk_level')!r}."
                 ),
             })
+
+        # Active conversation is ground truth: if the agent is responding
+        # inside a task's AI conversation, the message belongs to that
+        # task — override any agent-supplied task_id (it's frequently a
+        # hallucination from a context window with multiple task ids) and
+        # rescue forgetful agents that omit task_id entirely.
+        active_task_id = _resolve_task_id_from_active_conversation()
+        if active_task_id is not None:
+            if (
+                agent_supplied_task_id is not None
+                and str(agent_supplied_task_id) != str(active_task_id)
+            ):
+                logger.warning(
+                    "message_person task_id override: agent passed %s but "
+                    "active conversation belongs to task %s — using active task",
+                    agent_supplied_task_id, active_task_id,
+                )
+            task_id = active_task_id
+
         if task_id is not None:
             # Task.id is an integer PK; reject obvious placeholder values
             # ("current", "latest", etc.) up front so the query below doesn't
@@ -186,6 +211,9 @@ class MessageExternalPersonTool(Tool):
                     task_id=task_id,
                     draft_message=draft_message,
                 )
+            placeholder_error = _placeholder_message_block_error(draft_message)
+            if placeholder_error:
+                return json.dumps({"status": "error", "message": placeholder_error})
 
             action_payload: dict[str, Any] = {
                 "action": "message_person",

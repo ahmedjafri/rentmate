@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
-  Suggestion, Property, Tenant, Vendor, MaintenanceTicket, ActionPolicySettings, ChatMessage, ActionDeskTask, ManagedDocument,
+  Suggestion, Property, Tenant, Vendor, MaintenanceTicket, ActionPolicySettings, ChatMessage, ActionDeskTask, ManagedDocument, NotificationItem,
   defaultActionPolicySettings,
   SuggestionStatus, ActionDeskTask as ADT,
 } from '@/data/mockData';
@@ -43,6 +43,8 @@ interface AppContextType {
   suggestions: Suggestion[];
   tickets: MaintenanceTicket[];
   actionDeskTasks: ActionDeskTask[];
+  notifications: NotificationItem[];
+  unreadNotificationCount: number;
   isLoading: boolean;
   documents: ManagedDocument[];
   actionPolicySettings: ActionPolicySettings;
@@ -76,6 +78,9 @@ interface AppContextType {
   triggerReviewStream: (taskId: string) => void;
   closeChat: () => void;
   setActionPolicySettings: (settings: ActionPolicySettings) => void;
+  markNotificationRead: (id: string) => Promise<void>;
+  markNotificationUnread: (id: string) => Promise<void>;
+  archiveNotification: (id: string) => Promise<void>;
   refreshData: () => void;
 }
 
@@ -98,6 +103,17 @@ function coerceTenant(t: Tenant): Tenant {
   return { ...t, leaseEnd: t.leaseEnd instanceof Date ? t.leaseEnd : new Date(t.leaseEnd as unknown as string) };
 }
 
+function coerceNotification(n: NotificationItem): NotificationItem {
+  return {
+    ...n,
+    createdAt: n.createdAt instanceof Date ? n.createdAt : new Date(n.createdAt as unknown as string),
+    readAt: !n.readAt ? n.readAt : n.readAt instanceof Date ? n.readAt : new Date(n.readAt as unknown as string),
+    archivedAt: !n.archivedAt ? n.archivedAt : n.archivedAt instanceof Date ? n.archivedAt : new Date(n.archivedAt as unknown as string),
+    sentAt: !n.sentAt ? n.sentAt : n.sentAt instanceof Date ? n.sentAt : new Date(n.sentAt as unknown as string),
+    failedAt: !n.failedAt ? n.failedAt : n.failedAt instanceof Date ? n.failedAt : new Date(n.failedAt as unknown as string),
+  };
+}
+
 const loadFromStorage = <T,>(key: string, fallback: T): T => {
   try {
     const stored = localStorage.getItem(key);
@@ -110,15 +126,11 @@ const loadFromStorage = <T,>(key: string, fallback: T): T => {
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { properties: apiProperties, tenants: apiTenants, vendors: apiVendors, actionDeskTasks: apiActionDeskTasks, tickets: apiTickets, suggestions: apiSuggestions, isLoading: apiLoading, error: apiError, refresh: refreshData } = useApiData();
+  const { properties: apiProperties, tenants: apiTenants, vendors: apiVendors, actionDeskTasks: apiActionDeskTasks, tickets: apiTickets, suggestions: apiSuggestions, isLoading: apiLoading, error: apiError, refresh: refreshApiData } = useApiData();
 
   // Re-fetch on route navigation
   const location = useLocation();
   const isFirstRender = useRef(true);
-  useEffect(() => {
-    if (isFirstRender.current) { isFirstRender.current = false; return; }
-    refreshData();
-  }, [location.pathname]);
 
   // Seed from localStorage so a page reload (e.g. iOS Safari evicting the tab from memory)
   // shows cached data immediately instead of a blank loading state. Dates are coerced back
@@ -129,6 +141,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [suggestions, setSuggestions] = useState<Suggestion[]>(() => loadFromStorage('rm_suggestions', []));
   const [tickets, setTickets] = useState<MaintenanceTicket[]>(() => loadFromStorage('rm_tickets', []));
   const [actionDeskTasks, setActionDeskTasks] = useState<ActionDeskTask[]>(() => (loadFromStorage('rm_action_desk', []) as ActionDeskTask[]).map(coerceTask));
+  const [notifications, setNotifications] = useState<NotificationItem[]>(() => (loadFromStorage('rm_notifications', []) as NotificationItem[]).map(coerceNotification));
 
   useEffect(() => {
     if (apiLoading) return;
@@ -155,6 +168,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [apiLoading, apiError, apiProperties, apiTenants, apiVendors, apiActionDeskTasks, apiTickets, apiSuggestions]);
 
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const res = await authFetch('/api/notifications');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const payload = await res.json();
+      const mapped: NotificationItem[] = (payload ?? []).map((item: any) => ({
+        id: item.uid,
+        kind: item.kind,
+        channel: item.channel,
+        deliveryStatus: item.delivery_status,
+        title: item.title,
+        body: item.body ?? null,
+        taskId: item.task_id != null ? String(item.task_id) : null,
+        conversationId: item.conversation_id != null ? String(item.conversation_id) : null,
+        createdAt: new Date(item.created_at),
+        readAt: item.read_at ? new Date(item.read_at) : null,
+        archivedAt: item.archived_at ? new Date(item.archived_at) : null,
+        sentAt: item.sent_at ? new Date(item.sent_at) : null,
+        failedAt: item.failed_at ? new Date(item.failed_at) : null,
+        failureReason: item.failure_reason ?? null,
+        extra: item.extra ?? null,
+      }));
+      setNotifications(mapped);
+    } catch (err) {
+      console.warn('Failed to load notifications:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchNotifications();
+  }, [fetchNotifications]);
+
   const [documents, setDocuments] = useState<ManagedDocument[]>([]);
   const [actionPolicySettings, setActionPolicySettings] = useState<ActionPolicySettings>(() => loadFromStorage('rm_action_policy', defaultActionPolicySettings));
   const [chatPanel, setChatPanel] = useState<ChatPanelState>({ isOpen: false, suggestionId: null, taskId: null, conversationId: null, pageContext: null, reviewTrigger: null });
@@ -166,6 +211,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // the DB is the source of truth for those.
   useEffect(() => { localStorage.setItem('rm_action_policy', JSON.stringify(actionPolicySettings)); }, [actionPolicySettings]);
   useEffect(() => { localStorage.setItem('rm_entity_context', JSON.stringify(entityContext)); }, [entityContext]);
+  useEffect(() => { localStorage.setItem('rm_notifications', JSON.stringify(notifications)); }, [notifications]);
+
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return; }
+    refreshApiData();
+    void fetchNotifications();
+  }, [location.pathname, refreshApiData, fetchNotifications]);
 
   const getEntityContext = useCallback((entityId: string) => entityContext[entityId] || '', [entityContext]);
   const setEntityContext = useCallback((entityId: string, context: string) => {
@@ -355,13 +407,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   }, []);
 
+  const markNotificationRead = useCallback(async (id: string) => {
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, readAt: new Date() } : n));
+    const res = await authFetch(`/api/notifications/${id}/read`, { method: 'POST' });
+    if (!res.ok) {
+      await fetchNotifications();
+      throw new Error(`HTTP ${res.status}`);
+    }
+  }, [fetchNotifications]);
+
+  const markNotificationUnread = useCallback(async (id: string) => {
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, readAt: null } : n));
+    const res = await authFetch(`/api/notifications/${id}/unread`, { method: 'POST' });
+    if (!res.ok) {
+      await fetchNotifications();
+      throw new Error(`HTTP ${res.status}`);
+    }
+  }, [fetchNotifications]);
+
+  const archiveNotification = useCallback(async (id: string) => {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+    const res = await authFetch(`/api/notifications/${id}/archive`, { method: 'POST' });
+    if (!res.ok) {
+      await fetchNotifications();
+      throw new Error(`HTTP ${res.status}`);
+    }
+  }, [fetchNotifications]);
+
+  const refreshData = useCallback(() => {
+    refreshApiData();
+    void fetchNotifications();
+  }, [refreshApiData, fetchNotifications]);
+
+  const unreadNotificationCount = notifications.filter(n => !n.readAt && !n.archivedAt).length;
+
   return (
     <AppContext.Provider value={{
-      properties, tenants, vendors, suggestions, tickets, actionDeskTasks, isLoading: apiLoading && actionDeskTasks.length === 0 && properties.length === 0, documents, actionPolicySettings,
+      properties, tenants, vendors, suggestions, tickets, actionDeskTasks, notifications, unreadNotificationCount, isLoading: apiLoading && actionDeskTasks.length === 0 && properties.length === 0, documents, actionPolicySettings,
       chatPanel, entityContext, getEntityContext, setEntityContext,
       updateSuggestionStatus, updateSuggestion, addChatMessage, updateTaskMessage, setTaskMessages, updateTask,
       addTask, removeTask,
-      addProperty, updateProperty, removeProperty, addTenant, updateTenant, removeTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, setChatConversationId, triggerReviewStream, closeChat, setActionPolicySettings, refreshData,
+      addProperty, updateProperty, removeProperty, addTenant, updateTenant, removeTenant, addVendor, updateVendor, removeVendor, addDocument, updateDocument, replaceDocument, removeDocument, openChat, setChatConversationId, triggerReviewStream, closeChat, setActionPolicySettings, markNotificationRead, markNotificationUnread, archiveNotification, refreshData,
     }}>
       {children}
     </AppContext.Provider>

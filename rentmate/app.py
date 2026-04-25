@@ -24,6 +24,7 @@ from handlers import (
     data_portability,
     dev,
     documents,
+    notifications,
     settings,
 )
 from handlers.portals import tenant_invite, tenant_portal, vendor_invite, vendor_portal
@@ -339,6 +340,7 @@ def create_app(
     app.include_router(chat.router)
     app.include_router(routine_router, prefix="/api")
     app.include_router(task_review_router, prefix="/api")
+    app.include_router(notifications.router, prefix="/api")
     app.include_router(streams_router, prefix="/api")
     app.include_router(data_portability.router, prefix="/api")
     app.include_router(dev.router, prefix="/dev")

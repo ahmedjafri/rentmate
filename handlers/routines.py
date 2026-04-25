@@ -419,35 +419,42 @@ async def execute_routine(
             prompt=prompt,
             context=context,
         )
-        log_trace(
-            "llm_request",
-            trace_source,
-            f"Prepared {len(messages)} messages for model call",
-            task_id=str(task_id),
-            detail=trace_detail,
-        )
-        resp = await call_agent(
-            agent_id,
-            session_key=session_key,
-            messages=messages,
-            on_progress=on_progress,
-            trace_context=trace_detail,
-        )
-        log_trace(
-            "llm_reply",
-            trace_source,
-            (resp.reply or "")[:200],
-            task_id=str(task_id),
-            detail=_routine_trace_detail(
-                flow=trace_source,
+        from llm.runs import derive_run_metadata, start_run
+        with start_run(
+            **derive_run_metadata(
                 session_key=session_key,
                 task_id=str(task_id),
-                prompt=prompt,
-                context=context,
-                reply=resp.reply,
+                source_override=trace_source,
             ),
-        )
-        return resp.reply
+            trigger_input=prompt,
+        ):
+            log_trace(
+                "llm_request",
+                trace_source,
+                f"Prepared {len(messages)} messages for model call",
+                detail=trace_detail,
+            )
+            resp = await call_agent(
+                agent_id,
+                session_key=session_key,
+                messages=messages,
+                on_progress=on_progress,
+                trace_context=trace_detail,
+            )
+            log_trace(
+                "llm_reply",
+                trace_source,
+                (resp.reply or "")[:200],
+                detail=_routine_trace_detail(
+                    flow=trace_source,
+                    session_key=session_key,
+                    task_id=str(task_id),
+                    prompt=prompt,
+                    context=context,
+                    reply=resp.reply,
+                ),
+            )
+            return resp.reply
     finally:
         from backends.local_auth import reset_request_context
         reset_request_context(tokens)

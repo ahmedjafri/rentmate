@@ -254,6 +254,9 @@ type Mutation {
   """Update the ordered progress steps for a task"""
   updateTaskSteps(uid: Int!, steps: JSON!): TaskType!
 
+  """Mark a task as seen in the tasks view"""
+  markTaskSeen(uid: Int!): TaskType!
+
   """Archive (soft-delete) a conversation"""
   deleteConversation(uid: String!): Boolean!
 
@@ -515,6 +518,7 @@ type TaskType {
   lastReviewStatus: String
   lastReviewSummary: String
   lastReviewNextStep: String
+  unreadCount: Int!
 }
 
 type TenantType {

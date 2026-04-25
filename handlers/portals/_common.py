@@ -4,12 +4,13 @@ from __future__ import annotations
 import threading
 import time
 import traceback
+from datetime import UTC, datetime
 from typing import Iterable
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
 
-from db.models import Message, MessageType, Task
+from db.models import Conversation, Message, MessageType, Notification, Task
 
 
 class SendMessageBody(BaseModel):
@@ -61,6 +62,65 @@ def serialize_task_list_row(task: Task) -> dict:
         "category": task.category,
         "created_at": task.created_at.isoformat() + "Z",
     }
+
+
+def _latest_visible_message(conversation: Conversation) -> Message | None:
+    visible = [
+        message
+        for message in sorted(conversation.messages, key=lambda m: m.sent_at)
+        if message.message_type not in _HIDDEN_MESSAGE_TYPES
+    ]
+    return visible[-1] if visible else None
+
+
+def serialize_portal_conversation_row(conversation: Conversation, *, task: Task | None = None) -> dict:
+    latest = _latest_visible_message(conversation)
+    return {
+        "id": str(conversation.id),
+        "conversation_type": conversation.conversation_type,
+        "title": task.title if task and task.title else conversation.subject,
+        "updated_at": conversation.updated_at.isoformat() + "Z",
+        "last_message_at": latest.sent_at.isoformat() + "Z" if latest and latest.sent_at else None,
+        "last_message_body": latest.body if latest else None,
+        "last_message_sender_name": latest.sender_name if latest else None,
+        "typing": bool((conversation.extra or {}).get("ai_typing")),
+        "linked_task": {
+            "id": str(task.id),
+            "task_number": task.id,
+            "title": task.title,
+            "status": task.task_status,
+            "category": task.category,
+            "urgency": task.urgency,
+        } if task else None,
+    }
+
+
+def notify_task_owner_of_portal_message(
+    db,
+    *,
+    task: Task | None,
+    conversation: Conversation,
+    sender_label: str,
+    body: str,
+    actor_kind: str,
+) -> None:
+    if task is None or not task.creator_id:
+        return
+    db.add(
+        Notification(
+            org_id=task.org_id,
+            creator_id=task.creator_id,
+            recipient_user_id=task.creator_id,
+            task_id=task.id,
+            conversation_id=conversation.id,
+            kind="conversation_update",
+            channel="in_app",
+            delivery_status="recorded",
+            title=f"New {actor_kind} message",
+            body=f"{sender_label}: {body.strip()[:240]}",
+            created_at=datetime.now(UTC),
+        )
+    )
 
 
 def _run_autoreply(task_id: str, hint: str) -> None:

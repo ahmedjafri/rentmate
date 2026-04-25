@@ -133,7 +133,7 @@ describe('RoutineDetail simulation', () => {
     await screen.findByDisplayValue('Lease expiry review');
     fireEvent.click(screen.getByRole('button', { name: /simulate/i }));
 
-    await screen.findByText('Suggestions That Would Be Created');
+    await screen.findByText('Actions That Would Be Taken');
     expect(screen.getByText('Simulation Result')).toBeInTheDocument();
     expect(screen.getByText('Renewal follow-up for Alice Smith')).toBeInTheDocument();
     expect(screen.getByText('Lease expires on 2026-05-20 for Unit 2A at 123 Test St.')).toBeInTheDocument();

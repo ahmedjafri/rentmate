@@ -19,6 +19,8 @@ from db.models import MessageType
 
 logger = logging.getLogger("rentmate.llm.tools")
 
+_UNRESOLVED_PLACEHOLDER_RE = re.compile(r"\[[^\]\n]{2,100}\]")
+
 
 @contextmanager
 def tool_session():
@@ -321,6 +323,34 @@ def _sanitize_tenant_outbound_draft(db: Any, *, task_id: str, draft_message: str
     return sanitized
 
 
+def _find_unresolved_placeholders(*content_blocks: str | None) -> list[str]:
+    placeholders: list[str] = []
+    for block in content_blocks:
+        if not block:
+            continue
+        placeholders.extend(match.group(0) for match in _UNRESOLVED_PLACEHOLDER_RE.finditer(block))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in placeholders:
+        if item in seen:
+            continue
+        deduped.append(item)
+        seen.add(item)
+    return deduped
+
+
+def _placeholder_message_block_error(*content_blocks: str | None) -> str | None:
+    placeholders = _find_unresolved_placeholders(*content_blocks)
+    if not placeholders:
+        return None
+    formatted = ", ".join(placeholders)
+    return (
+        "Do not send or stage outbound messages with placeholders. "
+        f"The draft still contains unresolved placeholders: {formatted}. "
+        "If a required concrete detail is missing, ask the PM with `ask_manager` instead of guessing."
+    )
+
+
 def _action_card_field(label: str, value: Any) -> dict[str, str] | None:
     if value is None:
         return None
@@ -473,7 +503,6 @@ def _create_suggestion(
     from llm.tracing import log_trace
     log_trace(
         "suggestion_created", "agent", title,
-        task_id=task_id,
         suggestion_id=suggestion_id,
         detail=action_payload,
     )

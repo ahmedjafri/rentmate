@@ -255,9 +255,14 @@ class TestRoutineSimulation(unittest.TestCase):
             reply = asyncio.run(execute_routine(detached, session_prefix="simulate"))
 
         assert reply == "simulated run"
+        from db.models import AgentRun
         traces = (
             self.db.query(AgentTrace)
-            .filter(AgentTrace.task_id == str(self.task_id))
+            .join(
+                AgentRun,
+                (AgentTrace.org_id == AgentRun.org_id) & (AgentTrace.run_id == AgentRun.id),
+            )
+            .filter(AgentRun.task_id == str(self.task_id))
             .order_by(AgentTrace.timestamp.asc())
             .all()
         )

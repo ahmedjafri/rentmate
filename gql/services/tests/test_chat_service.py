@@ -125,11 +125,78 @@ def test_build_agent_message_history_omits_transient_tool_failure_replies(db):
     )
 
     assert history == [
-        {"role": "system", "content": "system context"},
+        {
+            "role": "system",
+            "content": (
+                "Active conversation: internal AI conversation with the PM/manager.\n"
+                "The latest user message is from the PM/manager.\n"
+                "Retrieved tasks, quotes, vendor threads, and prior coordination may be background from other issues. Do not merge those facts into the current request unless the PM explicitly indicates it is the same task, quote, approval, or thread.\n"
+                "For a fresh operational request in this PM chat, create or propose a task before starting vendor or tenant coordination unless the PM explicitly asked for direct one-off outreach or a direct draft.\n\n"
+                "system context"
+            ),
+        },
         {"role": "user", "content": "Create a brand new 14-day notice document"},
         {"role": "user", "content": "Try again and use the create_document tool normally."},
         {"role": "user", "content": "Create the notice again"},
     ]
+
+
+def test_build_agent_message_history_labels_task_ai_conversation_as_internal_pm_thread(db):
+    convo = _conversation(db, convo_type=ConversationType.TASK_AI)
+
+    history = chat_service.build_agent_message_history(
+        db,
+        conv_id=convo.id,
+        user_message="The payment URL should be available in TenantCloud.",
+        context="task context",
+    )
+
+    system = history[0]["content"]
+    assert "Active conversation: internal task AI conversation." in system
+    assert "The latest user message is from the PM/manager" in system
+    assert "Do not reply as though you are already talking to the tenant/vendor" in system
+
+
+def test_build_agent_message_history_warns_user_ai_chat_about_cross_issue_context_leakage(db):
+    convo = _conversation(db, convo_type=ConversationType.USER_AI)
+
+    history = chat_service.build_agent_message_history(
+        db,
+        conv_id=convo.id,
+        user_message="Schedule a gutter cleaning at Priya's house.",
+        context="account overview",
+    )
+
+    system = history[0]["content"]
+    assert "Retrieved tasks, quotes, vendor threads, and prior coordination may be background from other issues." in system
+    assert "Do not merge those facts into the current request unless the PM explicitly indicates it is the same task" in system
+    assert "create or propose a task before starting vendor or tenant coordination" in system
+
+
+def test_build_agent_message_history_labels_tenant_conversation_as_tenant_facing(db):
+    tenant_user = User(org_id=1, email="tenant-facing@example.com", active=True)
+    db.add(tenant_user)
+    db.flush()
+    tenant = Tenant(org_id=1, creator_id=1, user_id=tenant_user.id)
+    db.add(tenant)
+    db.flush()
+    convo = chat_service.get_or_create_external_conversation(
+        db,
+        conversation_type=ConversationType.TENANT,
+        subject="Tenant thread",
+        tenant_id=tenant.id,
+    )
+
+    history = chat_service.build_agent_message_history(
+        db,
+        conv_id=convo.id,
+        user_message="Can I pay through TenantCloud?",
+        context="task context",
+    )
+
+    system = history[0]["content"]
+    assert "Active conversation: tenant-facing conversation." in system
+    assert "The latest user message is from the tenant." in system
 
 
 def test_persist_and_send_message_helpers_update_conversation_state(db):
@@ -309,6 +376,28 @@ def test_message_and_conversation_json_payloads_are_typed():
         },
     }
     assert extra == {"assigned_vendor_id": 12, "assigned_vendor_name": "Pat Vendor"}
+
+
+def test_dump_message_meta_round_trips_question_action_card():
+    """The ChatActionCard.kind literal accepts "question" so the
+    ask_manager tool can write interactive question cards into the AI
+    conversation."""
+    meta = chat_service.dump_message_meta(
+        action_card={
+            "kind": "question",
+            "title": "Should I approve the $450 plumber quote?",
+        },
+    )
+    assert meta == {
+        "action_card": {
+            "kind": "question",
+            "title": "Should I approve the $450 plumber quote?",
+        },
+    }
+    parsed = chat_service.parse_message_meta(meta)
+    assert parsed.action_card is not None
+    assert parsed.action_card.kind == "question"
+    assert parsed.action_card.title.startswith("Should I approve")
 
 
 def test_parse_message_meta_ignores_legacy_extra_keys():

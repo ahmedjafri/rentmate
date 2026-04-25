@@ -82,6 +82,8 @@ def _register_rentmate_tools():
         CreateTenantTool,
         CreateVendorTool,
         EditMemoryTool,
+        HasHappenedTool,
+        LookupTenantsTool,
         LookupVendorsTool,
         MessageExternalPersonTool,
         ProposeTaskTool,
@@ -95,7 +97,8 @@ def _register_rentmate_tools():
 
     for tool_cls in (
         ProposeTaskTool, CloseTaskTool, UpdateTaskProgressTool, MessageExternalPersonTool,
-        LookupVendorsTool, CreateVendorTool,
+        LookupTenantsTool, LookupVendorsTool, CreateVendorTool,
+        HasHappenedTool,
         SaveMemoryTool, RecallMemoryTool, EditMemoryTool,
         CreatePropertyTool, CreateTenantTool, CreateSuggestionTool,
         CreateRoutineTool,

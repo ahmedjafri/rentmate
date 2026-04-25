@@ -45,6 +45,7 @@ def test_create_task_creates_backing_ai_conversation(db):
     convo = db.get(Conversation, task.ai_conversation_id)
     assert convo.conversation_type == ConversationType.TASK_AI
     assert convo.subject == "Fix sink"
+    assert task.last_seen_at is not None
 
 
 def test_create_task_normalizes_blank_optional_ids(db):
@@ -88,6 +89,17 @@ def test_update_task_status_sets_resolved_at_and_update_task_changes_mode(db):
     assert updated.task_status == TaskStatus.RESOLVED
     assert updated.resolved_at is not None
     assert changed.task_mode == TaskMode.AUTONOMOUS
+    assert changed.updated_at is not None
+
+
+def test_mark_task_seen_updates_last_seen_at(db):
+    task = _create_task(db)
+    previous_seen_at = task.last_seen_at
+
+    changed = TaskService.mark_task_seen(db, uid=task.id)
+
+    assert changed.last_seen_at is not None
+    assert previous_seen_at is None or changed.last_seen_at >= previous_seen_at
 
 
 def test_create_task_normalizes_lowercase_task_mode(db):

@@ -1,6 +1,6 @@
 import logging
 import typing
-from datetime import date
+from datetime import UTC, date, datetime
 
 import strawberry
 from graphql import GraphQLError
@@ -321,7 +321,7 @@ class Mutation(AuthMutation):
         _current_user(info)
         db = _session(info)
         from db.models import ConversationType, Task
-        from gql.services.notification_service import Notification, NotificationService
+        from gql.services.notification_service import NotificationRequest, NotificationService
         from gql.services.vendor_service import get_vendor_by_external_id
 
         vendor = get_vendor_by_external_id(db, vendor_id)
@@ -367,11 +367,13 @@ class Mutation(AuthMutation):
         # Deliver to the vendor.
         NotificationService.dispatch(
             db,
-            Notification(
+            NotificationRequest(
                 recipient_user_id=vendor.id,
                 conversation_id=conv.id,
-                blurb=f"New message from {vendor.name}'s property manager",
+                title=f"New message from {vendor.name}'s property manager",
                 messages=[body],
+                kind="conversation_update",
+                task_id=task.id if task else None,
             ),
         )
 
@@ -409,6 +411,16 @@ class Mutation(AuthMutation):
         task.steps = steps
         from sqlalchemy.orm.attributes import flag_modified
         flag_modified(task, "steps")
+        task.updated_at = datetime.now(UTC)
+        db.commit()
+        db.refresh(task)
+        return TaskType.from_sql(task)
+
+    @strawberry.mutation(description="Mark a task as seen in the tasks view")
+    def mark_task_seen(self, info: Info, uid: int) -> TaskType:
+        _current_user(info)
+        db = _session(info)
+        task = TaskService.mark_task_seen(db, uid=uid)
         db.commit()
         db.refresh(task)
         return TaskType.from_sql(task)

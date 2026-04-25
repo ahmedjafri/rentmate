@@ -2,7 +2,7 @@ import bcrypt
 from fastapi.testclient import TestClient
 
 from db.enums import TaskCategory, TaskSource, Urgency
-from db.models import User
+from db.models import Notification, User
 from gql.services import chat_service
 from gql.services.task_service import TaskService
 from gql.services.vendor_service import VendorService, get_vendor_login_email
@@ -74,6 +74,17 @@ def test_vendor_portal_lists_tasks_and_detail_messages(db):
     assert detail["id"] == str(task.id)
     assert detail["task_number"] == task.id
     assert detail["messages"][0]["body"] == "Can you come by tomorrow?"
+
+    conversations_response = client.get("/api/vendor/conversations", headers=headers)
+    assert conversations_response.status_code == 200
+    conversations = conversations_response.json()
+    assert len(conversations) == 1
+    assert conversations[0]["id"] == str(ext_convo.id)
+    assert conversations[0]["linked_task"]["id"] == str(task.id)
+
+    conversation_detail = client.get(f"/api/vendor/conversations/{ext_convo.id}", headers=headers)
+    assert conversation_detail.status_code == 200
+    assert conversation_detail.json()["messages"][0]["body"] == "Can you come by tomorrow?"
 
 
 def test_vendor_can_create_account_from_portal_session(db):
@@ -175,3 +186,23 @@ def test_vendor_login_reuses_existing_linked_account_without_portal_token(db):
     assert me.status_code == 200
     assert me.json()["id"] == str(vendor.external_id)
     assert me.json()["email"] == "linked-again@example.com"
+
+
+def test_vendor_portal_message_creates_pm_notification(db):
+    vendor, headers = _vendor_headers(db)
+    task, ext_convo = _assigned_task(db, vendor)
+    client = TestClient(app)
+
+    response = client.post(
+        f"/api/vendor/conversations/{ext_convo.id}/messages",
+        headers=headers,
+        json={"body": "Friday works for me."},
+    )
+
+    assert response.status_code == 200
+    notification = db.query(Notification).filter(Notification.task_id == task.id).order_by(Notification.id.desc()).first()
+    assert notification is not None
+    assert notification.recipient_user_id == task.creator_id
+    assert notification.kind == "conversation_update"
+    assert notification.title == "New vendor message"
+    assert "Friday works for me." in (notification.body or "")

@@ -138,9 +138,13 @@ def test_chat_with_agent_logs_tool_traces_with_conversation_id():
         assert reply == "ok"
         assert len(logged) == 2
         assert logged[0]["args"][0] == "tool_call"
-        assert logged[0]["kwargs"]["conversation_id"] == "21"
         assert logged[1]["args"][0] == "tool_result"
-        assert logged[1]["kwargs"]["conversation_id"] == "21"
+        # conversation_id is no longer a top-level log_trace kwarg — it lives on
+        # the parent agent_runs row. The trace_context inside the detail still
+        # carries the routing info for diagnostic detail.
+        for entry in logged:
+            trace_context = entry["kwargs"]["detail"].get("trace_context") or {}
+            assert trace_context.get("conversation_id") == "21"
     finally:
         sys.modules.pop("run_agent", None)
 

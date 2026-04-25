@@ -1,18 +1,30 @@
 """Persistent trace logging for agent operations.
 
-Call log_trace() from anywhere to record tool calls, LLM responses,
-suggestion creation/execution, and errors into the agent_traces table.
+Call ``log_trace()`` from anywhere inside an active ``start_run(...)`` context
+to record tool calls, LLM responses, suggestion creation/execution, and errors
+into the ``agent_traces`` table.
+
+**No run, no trace.** Calls outside an active run are dropped with a warning
+(deduped per ``(source, trace_type)`` pair). Every agent flow must enter
+``start_run`` first; see ``llm/runs.py``. Grouping keys (``task_id``,
+``conversation_id``) live on the parent ``agent_runs`` row.
 """
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from backends.local_auth import resolve_account_id
-from backends.local_auth import resolve_org_id
+from backends.local_auth import resolve_account_id, resolve_org_id
+
+from llm.runs import current_run_id, current_run_sequence
+
+logger = logging.getLogger(__name__)
 
 TRACE_ENVELOPE_VERSION = 1
 TRACE_TYPE_MAX_LENGTH = 30
+
+_orphan_warned: set[tuple[str, str]] = set()
 
 
 def make_trace_envelope(kind: str, **payload: Any) -> dict[str, Any]:
@@ -28,11 +40,12 @@ def log_trace(
     source: str,
     summary: str,
     *,
-    task_id: str | None = None,
-    conversation_id: str | None = None,
     tool_name: str | None = None,
     detail: str | dict | None = None,
     suggestion_id: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    model: str | None = None,
 ) -> None:
     """Persist a trace entry. Best-effort — never raises and never poisons the caller's session.
 
@@ -40,7 +53,25 @@ def log_trace(
     a failure (e.g., FK violation against an uncommitted user under test isolation)
     rolls back only the savepoint and leaves the caller's session usable. The trace
     rides along with whatever transaction the caller eventually commits.
+
+    If no ``current_run_id`` is set (no active ``start_run``), the call is
+    dropped with a deduped warning.
     """
+    run_id = current_run_id.get()
+    if run_id is None:
+        key = (source, trace_type)
+        if key not in _orphan_warned:
+            _orphan_warned.add(key)
+            logger.warning(
+                "log_trace called outside agent run; dropping trace_type=%s source=%s "
+                "(further occurrences silenced for this pair).",
+                trace_type, source,
+            )
+        return
+
+    seq_counter = current_run_sequence.get()
+    sequence_num = next(seq_counter) if seq_counter is not None else 0
+
     try:
         from db.models import AgentTrace
         from db.session import SessionLocal
@@ -57,12 +88,15 @@ def log_trace(
                 org_id=resolve_org_id(),
                 trace_type=trace_type[:TRACE_TYPE_MAX_LENGTH],
                 source=source,
-                task_id=task_id,
-                conversation_id=conversation_id,
+                run_id=run_id,
+                sequence_num=sequence_num,
                 tool_name=tool_name,
                 summary=summary[:500],
                 detail=detail,
                 suggestion_id=suggestion_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                model=model,
                 creator_id=resolve_account_id(),
             ))
             sess.flush()

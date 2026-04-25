@@ -37,7 +37,7 @@ from db.models import (
 )
 from db.session import SessionLocal
 from gql.services import chat_service
-from gql.services.notification_service import Notification, NotificationService
+from gql.services.notification_service import NotificationRequest, NotificationService
 from handlers.deps import get_db, require_user
 from llm.context import (
     build_task_context,
@@ -282,11 +282,13 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
     if sent_directly and tenant and tenant.user_id:
         await NotificationService.notify(
             db,
-            Notification(
+            NotificationRequest(
                 recipient_user_id=tenant.user_id,
                 conversation_id=conv.id,
-                blurb="RentMate replied",
+                title="RentMate replied",
                 messages=[agent_resp.reply],
+                kind="conversation_update",
+                task_id=conv.parent_task_id,
             ),
         )
     return True
@@ -408,7 +410,10 @@ async def chat_endpoint(
             if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)  # include legacy THREAD
         ]
         msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
-        messages_payload = [{"role": "system", "content": context}]
+        messages_payload = [{
+            "role": "system",
+            "content": chat_service.build_agent_system_context(conversation=conv, context=context),
+        }]
         messages_payload += chat_service.model_history_messages(msg_rows)
         messages_payload.append({"role": "user", "content": body.message})
     else:
@@ -486,8 +491,6 @@ async def chat_endpoint(
                     "llm_request",
                     "chat",
                     f"Prepared {len(messages_payload)} messages for model call",
-                    task_id=body.task_id,
-                    conversation_id=conv_id,
                     detail=_build_llm_trace_detail(
                         flow="chat",
                         session_key=session_key,
@@ -553,8 +556,6 @@ async def chat_endpoint(
                         "llm_reply",
                         "chat",
                         agent_resp.reply[:200],
-                        task_id=body.task_id,
-                        conversation_id=conv_id,
                         detail=_build_llm_trace_detail(
                             flow="chat",
                             session_key=session_key,
@@ -708,7 +709,7 @@ def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | 
         current_hash = _compute_autoreply_hash(task)
         if _autoreply_state.get(task_id) == current_hash:
             print(f"\033[33m[reply_scanner] Skipping task {task_id} — no changes since last run\033[0m")
-            log_trace("reply_scan", "reply_scanner", "Skipped — no context changes", task_id=task_id)
+            log_trace("reply_scan", "reply_scanner", "Skipped — no context changes")
             return None
 
         conv_id = conv.id
@@ -783,8 +784,7 @@ def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | 
             if ext_conv_id:
                 chat_service.clear_typing_indicator(db, ext_conv_id)
             _autoreply_state[task_id] = current_hash
-            log_trace("reply_scan", "reply_scanner", f"No response needed for task {task_id}",
-                      task_id=task_id)
+            log_trace("reply_scan", "reply_scanner", f"No response needed for task {task_id}")
             return None
 
         # Persist results
@@ -824,8 +824,7 @@ def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | 
                 pass
 
             log_trace("reply_scan", "reply_scanner",
-                      f"Agent replied ({len(resp.reply)} chars): {resp.reply[:100]}",
-                      task_id=task_id, conversation_id=conv_id)
+                      f"Agent replied ({len(resp.reply)} chars): {resp.reply[:100]}")
 
             return resp.reply
         except Exception as e:
@@ -844,7 +843,7 @@ def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | 
     except Exception as e:
         print(f"\033[31m[reply_scanner] Failed for task {task_id}: {e}\033[0m")
         traceback.print_exc()
-        log_trace("error", "reply_scanner", f"Reply scan failed: {e}", task_id=task_id)
+        log_trace("error", "reply_scanner", f"Reply scan failed: {e}")
         return None
     finally:
         db.close()
@@ -961,8 +960,6 @@ async def assess_task_endpoint(
                     "llm_request",
                     "assess",
                     f"Prepared {len(messages_payload)} messages for model call",
-                    task_id=body.task_id,
-                    conversation_id=conv_id,
                     detail=_build_llm_trace_detail(
                         flow="assess",
                         session_key=session_key,
@@ -1031,8 +1028,6 @@ async def assess_task_endpoint(
                         "llm_reply",
                         "assess",
                         agent_resp.reply[:200],
-                        task_id=body.task_id,
-                        conversation_id=conv_id,
                         detail=_build_llm_trace_detail(
                             flow="assess",
                             session_key=session_key,

@@ -7,7 +7,17 @@ from unittest.mock import patch
 from pypdf import PdfWriter
 
 from db.models import AgentTrace, Document
+from llm.runs import start_run
 from llm.tools import AnalyzeDocumentTool, ReadDocumentTool
+
+
+def _test_run():
+    return start_run(
+        source="chat",
+        agent_version="rentmate-test",
+        execution_path="local",
+        trigger_input="test",
+    )
 
 
 def _blank_pdf_bytes() -> bytes:
@@ -34,7 +44,7 @@ def test_read_document_returns_structured_failure_and_trace(db, caplog):
     db.add(doc)
     db.commit()
 
-    with caplog.at_level(logging.ERROR, logger="rentmate.llm.tools"):
+    with caplog.at_level(logging.ERROR, logger="rentmate.llm.tools"), _test_run():
         payload = json.loads(asyncio.run(ReadDocumentTool().execute(document_id=doc.id)))
 
     assert payload["status"] == "error"
@@ -63,7 +73,8 @@ def test_analyze_document_logs_exception_details(db, caplog):
     db.commit()
 
     with caplog.at_level(logging.ERROR, logger="rentmate.llm.tools"), \
-         patch("llm.document_processor.process_document", side_effect=RuntimeError("processor offline")):
+         patch("llm.document_processor.process_document", side_effect=RuntimeError("processor offline")), \
+         _test_run():
         payload = json.loads(asyncio.run(AnalyzeDocumentTool().execute(document_id=doc.id)))
 
     assert payload["status"] == "error"

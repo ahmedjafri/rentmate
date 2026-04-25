@@ -26,6 +26,47 @@ from llm.history_filters import is_transient_tool_failure_text
 logger = logging.getLogger("rentmate.chat_service")
 
 
+def build_agent_system_context(*, conversation: Conversation | None, context: str) -> str:
+    """Prefix prompt context with the role of the active conversation.
+
+    This prevents the model from confusing the PM's internal task AI thread
+    with a tenant/vendor-facing conversation when both transcript types are
+    present in the broader task context.
+    """
+    if conversation is None:
+        return context
+
+    convo_type = getattr(conversation, "conversation_type", None)
+    prefix_lines: list[str] = []
+    if convo_type == ConversationType.TASK_AI:
+        prefix_lines = [
+            "Active conversation: internal task AI conversation.",
+            "The latest user message is from the PM/manager, not from the tenant or vendor.",
+            "Do not reply as though you are already talking to the tenant/vendor unless you explicitly send them a separate message.",
+        ]
+    elif convo_type == ConversationType.USER_AI:
+        prefix_lines = [
+            "Active conversation: internal AI conversation with the PM/manager.",
+            "The latest user message is from the PM/manager.",
+            "Retrieved tasks, quotes, vendor threads, and prior coordination may be background from other issues. Do not merge those facts into the current request unless the PM explicitly indicates it is the same task, quote, approval, or thread.",
+            "For a fresh operational request in this PM chat, create or propose a task before starting vendor or tenant coordination unless the PM explicitly asked for direct one-off outreach or a direct draft.",
+        ]
+    elif convo_type == ConversationType.TENANT:
+        prefix_lines = [
+            "Active conversation: tenant-facing conversation.",
+            "The latest user message is from the tenant.",
+        ]
+    elif convo_type == ConversationType.VENDOR:
+        prefix_lines = [
+            "Active conversation: vendor-facing conversation.",
+            "The latest user message is from the vendor.",
+        ]
+
+    if not prefix_lines:
+        return context
+    return "\n".join(prefix_lines) + "\n\n" + context
+
+
 def model_history_messages(db_msgs: list[Message]) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     for m in db_msgs:
@@ -81,7 +122,7 @@ class MessageActionCardUnit(BaseModel):
 class MessageActionCard(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["suggestion", "property", "tenant", "document"]
+    kind: Literal["suggestion", "property", "tenant", "document", "question"]
     title: str
     summary: str | None = None
     fields: list[MessageActionCardField] | None = None
@@ -213,7 +254,7 @@ def build_agent_message_history(
     if exclude_last and db_msgs:
         db_msgs = db_msgs[:-1]
     db_msgs = db_msgs[-20:]
-    messages = [{"role": "system", "content": context}]
+    messages = [{"role": "system", "content": build_agent_system_context(conversation=full_conv, context=context)}]
     messages.extend(model_history_messages(db_msgs))
     messages.append({"role": "user", "content": user_message})
     return messages

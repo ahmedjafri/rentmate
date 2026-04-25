@@ -233,11 +233,17 @@ async def list_traces(
     await require_user(request)
     from sqlalchemy import select
 
-    from db.models import AgentTrace
+    from db.models import AgentRun, AgentTrace
 
+    needs_run_join = bool(task_id or conversation_id)
     q = select(AgentTrace).order_by(AgentTrace.timestamp.desc())
+    if needs_run_join:
+        q = q.join(
+            AgentRun,
+            (AgentTrace.org_id == AgentRun.org_id) & (AgentTrace.run_id == AgentRun.id),
+        )
     if task_id:
-        q = q.where(AgentTrace.task_id == task_id)
+        q = q.where(AgentRun.task_id == task_id)
         if task_scope == "routine":
             q = q.where(AgentTrace.source.in_(["routine", "simulate"]))
         elif task_scope == "task":
@@ -246,7 +252,7 @@ async def list_traces(
                 | (~AgentTrace.source.in_(["routine", "simulate"]))
             )
     if conversation_id:
-        q = q.where(AgentTrace.conversation_id == conversation_id)
+        q = q.where(AgentRun.conversation_id == conversation_id)
     if source:
         q = q.where(AgentTrace.source == source)
     if trace_type:
@@ -260,8 +266,10 @@ async def list_traces(
             "timestamp": t.timestamp.isoformat() + "Z",
             "trace_type": t.trace_type,
             "source": t.source,
-            "task_id": t.task_id,
-            "conversation_id": t.conversation_id,
+            "run_id": t.run_id,
+            "sequence_num": t.sequence_num,
+            "task_id": t.run.task_id if t.run else None,
+            "conversation_id": t.run.conversation_id if t.run else None,
             "tool_name": t.tool_name,
             "summary": t.summary,
             "detail": t.detail,
@@ -386,8 +394,10 @@ async def get_trace_detail(
         "timestamp": trace.timestamp.isoformat() + "Z",
         "trace_type": trace.trace_type,
         "source": trace.source,
-        "task_id": trace.task_id,
-        "conversation_id": trace.conversation_id,
+        "run_id": trace.run_id,
+        "sequence_num": trace.sequence_num,
+        "task_id": trace.run.task_id if trace.run else None,
+        "conversation_id": trace.run.conversation_id if trace.run else None,
         "tool_name": trace.tool_name,
         "summary": trace.summary,
         "detail": parsed_detail,

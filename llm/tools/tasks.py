@@ -1,8 +1,11 @@
 """Task-lifecycle tools: propose, close, generic suggestion, routine."""
 import json
+import logging
 import re
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from backends.local_auth import resolve_account_id, resolve_org_id
 from db.enums import RoutineState, SuggestionOption, TaskCategory, TaskStatus, Urgency
@@ -12,6 +15,7 @@ from llm.tools._common import (
     Tool,
     _create_suggestion,
     _load_vendor_by_public_id,
+    _placeholder_message_block_error,
     _queue_simulation_suggestion,
     _recent_user_messages,
     _resolve_task_id_from_active_conversation,
@@ -57,6 +61,31 @@ _SUGGESTION_CONFIRM_PATTERNS = [
         r"\baction desk\b",
         r"\bupload\b",
         r"\bnotice\b",
+    ]
+]
+
+_IN_TASK_PM_APPROVAL_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bapprove\b",
+        r"\bapproval\b",
+        r"\bowner approval\b",
+        r"\bmanager approval\b",
+        r"\bpm approval\b",
+        r"\brequest approval\b",
+        r"\bshould i proceed\b",
+        r"\bshould we proceed\b",
+        r"\bcan i proceed\b",
+        r"\bokay to proceed\b",
+        r"\bok to proceed\b",
+        r"\bproceed with\b",
+        r"\bbook\b",
+        r"\bbooking\b",
+        r"\bselect(?:ed|ing)? vendor\b",
+        r"\bchoose between\b",
+        r"\bwhich quote\b",
+        r"\bwhich vendor\b",
+        r"\bdecision\b",
     ]
 ]
 
@@ -204,6 +233,36 @@ def _sanitize_tenant_message_person_payload(
         db.close()
 
 
+def _is_in_task_manager_approval_request(
+    *,
+    task_id: str,
+    title: str,
+    body: str,
+    action_payload: dict[str, Any],
+) -> bool:
+    if not task_id:
+        return False
+    if action_payload.get("action") == "request_file_upload":
+        return False
+
+    combined = "\n".join(
+        part for part in [
+            str(title or ""),
+            str(body or ""),
+            json.dumps(action_payload or {}, sort_keys=True),
+        ]
+        if part
+    )
+    return any(pattern.search(combined) for pattern in _IN_TASK_PM_APPROVAL_PATTERNS)
+
+
+def _in_task_manager_approval_block_message() -> str:
+    return (
+        "This is a PM approval/decision blocker inside the current task. "
+        "Do not create a suggestion for that. Use `ask_manager` in the task AI conversation instead."
+    )
+
+
 def _mark_task_waiting_on_upload_request(
     *,
     task_id: str,
@@ -243,6 +302,7 @@ def _mark_task_waiting_on_upload_request(
         task.steps = dump_task_steps(steps)
         flag_modified(task, "steps")
         task.task_mode = TaskMode.WAITING_APPROVAL
+        task.updated_at = datetime.now(UTC)
 
         context_parts = [part for part in [task.context, f"Blocked on user deliverable: {instructions}"] if part]
         task.context = "\n\n".join(dict.fromkeys(context_parts))
@@ -314,14 +374,17 @@ class ProposeTaskTool(Tool):
             "Never use propose_task when the user asked you to draft a notice, letter, or document directly in chat. "
             "You MUST provide a vendor_id external UUID — use lookup_vendors first. "
             "You MUST provide a goal — one sentence stating what 'done' looks like, outcome-flavored and specific. "
-            "Include a draft_message and steps (3-6 steps)."
+            "You MUST provide steps — an ordered list of 3–6 progress steps "
+            "(each with key/label/status). Mark the first step `active`; the "
+            "rest start `pending`. Tasks without steps render with an empty "
+            "progress tracker and are rejected."
         )
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "required": ["title", "category", "vendor_id", "goal"],
+            "required": ["title", "category", "vendor_id", "goal", "steps"],
             "properties": {
                 "title": {"type": "string", "description": "Short task title"},
                 "goal": {
@@ -381,6 +444,28 @@ class ProposeTaskTool(Tool):
 
         vendor_id = str(kwargs["vendor_id"])
 
+        steps_raw = kwargs.get("steps")
+        if not isinstance(steps_raw, list) or not steps_raw:
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    "steps is required: provide 3–6 ordered progress steps "
+                    "(each {key, label, status}). Mark the first step "
+                    "`active`; the rest `pending`."
+                ),
+            })
+        if not all(
+            isinstance(step, dict) and step.get("label") and step.get("key")
+            for step in steps_raw
+        ):
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    "Each step must be an object with both `key` and `label` "
+                    "set; status defaults to `pending`."
+                ),
+            })
+
         from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
@@ -397,6 +482,9 @@ class ProposeTaskTool(Tool):
         if goal:
             action_payload["goal"] = goal
         draft_message = kwargs.get("draft_message")
+        placeholder_error = _placeholder_message_block_error(draft_message)
+        if placeholder_error:
+            return json.dumps({"status": "error", "message": placeholder_error})
         if draft_message:
             action_payload["draft_message"] = draft_message
         steps = kwargs.get("steps")
@@ -525,14 +613,35 @@ class UpdateTaskProgressTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        task_id = kwargs["task_id"]
+        agent_supplied_task_id = kwargs.get("task_id")
+        task_id = agent_supplied_task_id
         step_key = (kwargs.get("step_key") or "").strip()
         step_label = (kwargs.get("step_label") or "").strip()
         status = kwargs["status"]
         note = kwargs.get("note")
 
+        # Active conversation is ground truth: progress updates posted
+        # from inside a task's AI conversation belong to that task.
+        # Override any hallucinated task_id and rescue agents that
+        # omit it entirely.
+        active_task_id = _resolve_task_id_from_active_conversation()
+        if active_task_id is not None:
+            if (
+                agent_supplied_task_id is not None
+                and str(agent_supplied_task_id) != str(active_task_id)
+            ):
+                logger.warning(
+                    "update_task_progress task_id override: agent passed "
+                    "%s but active conversation belongs to task %s — "
+                    "using active task",
+                    agent_supplied_task_id, active_task_id,
+                )
+            task_id = active_task_id
+
         if not step_key and not step_label:
             return json.dumps({"status": "error", "message": "Provide step_key or step_label."})
+
+        from datetime import datetime
 
         from sqlalchemy.orm.attributes import flag_modified
 
@@ -597,6 +706,7 @@ class UpdateTaskProgressTool(Tool):
 
             task.steps = dump_task_steps(steps)
             flag_modified(task, "steps")
+            task.updated_at = datetime.now(UTC)
 
             return json.dumps({
                 "status": "ok",
@@ -618,6 +728,7 @@ class CreateSuggestionTool(Tool):
             "Create a suggestion for the property manager to review and approve. "
             "Use this for actions that benefit from human review — creating entities "
             "from documents, proposing lease changes, compliance actions, etc. "
+            "If the blocker is a PM approval or decision inside the current task, use `ask_manager` instead of create_suggestion. "
             "Never use create_suggestion when the user explicitly asked for the draft itself in chat instead of a suggestion or task. "
             "When the blocker is a user deliverable inside the current task, ask the user first "
             "whether they want a suggestion created. "
@@ -669,7 +780,6 @@ class CreateSuggestionTool(Tool):
                 "suggestion_blocked_direct_draft",
                 "policy",
                 message,
-                task_id=task_id or None,
                 detail={"title": kwargs["title"]},
             )
             return json.dumps({"status": "error", "message": message})
@@ -680,7 +790,6 @@ class CreateSuggestionTool(Tool):
                 "suggestion_blocked_same_task",
                 "policy",
                 _same_task_handoff_block_message(),
-                task_id=task_id,
                 detail={"title": kwargs["title"]},
             )
             return json.dumps({"status": "error", "message": _same_task_handoff_block_message()})
@@ -695,6 +804,25 @@ class CreateSuggestionTool(Tool):
                 task_id=task_id,
                 action_payload=action_payload,
             )
+        if _is_in_task_manager_approval_request(
+            task_id=task_id,
+            title=kwargs["title"],
+            body=kwargs["body"],
+            action_payload=action_payload,
+        ):
+            from llm.tracing import log_trace
+
+            message = _in_task_manager_approval_block_message()
+            log_trace(
+                "suggestion_blocked_in_task_manager_approval",
+                "policy",
+                message,
+                detail={
+                    "title": kwargs["title"],
+                    "action_payload": action_payload or None,
+                },
+            )
+            return json.dumps({"status": "error", "message": message})
         if action_payload.get("action") == "request_file_upload" and task_id:
             if not _has_user_confirmed_upload_request(task_id):
                 message = (
@@ -707,7 +835,6 @@ class CreateSuggestionTool(Tool):
                     "suggestion_deferred_pending_user_confirmation",
                     "policy",
                     message,
-                    task_id=task_id,
                     detail={"action_payload": action_payload},
                 )
                 return json.dumps({"status": "error", "message": message})

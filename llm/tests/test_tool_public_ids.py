@@ -13,6 +13,7 @@ from db.models import (
     EntityNote,
     Message,
     MessageType,
+    Notification,
     ParticipantType,
     Property,
     Suggestion,
@@ -29,6 +30,7 @@ from llm.tools import (
     CreateSuggestionTool,
     CreateTenantTool,
     CreateVendorTool,
+    LookupTenantsTool,
     LookupVendorsTool,
     MessageExternalPersonTool,
     ProposeTaskTool,
@@ -798,6 +800,12 @@ def test_propose_task_tool_uses_external_vendor_id_in_payload(db):
             title="Leak in unit",
             category="maintenance",
             vendor_id=vendor.external_id,
+            goal="Stop the leak in unit and document the repair.",
+            steps=[
+                {"key": "diagnose", "label": "Diagnose the source of the leak", "status": "active"},
+                {"key": "repair", "label": "Repair the leak", "status": "pending"},
+                {"key": "confirm", "label": "Confirm with tenant the leak is resolved", "status": "pending"},
+            ],
             draft_message="Can you take a look at this leak?",
         ))
 
@@ -834,6 +842,69 @@ def test_propose_task_tool_blocks_explicit_direct_draft_request(db):
 
     assert payload["status"] == "error"
     assert "Draft the requested notice or document directly in the chat response." in payload["message"]
+    assert db.query(Suggestion).count() == 0
+
+
+def test_propose_task_requires_steps(db):
+    """Tasks without steps render with an empty progress tracker —
+    propose_task must reject the call instead of producing a stepless
+    Suggestion the agent then has to retry to fix."""
+    vendor = User(
+        org_id=1,
+        creator_id=1,
+        user_type="vendor",
+        first_name="Vera",
+        last_name="Vendor",
+        role_label="Plumber",
+        phone="+15550006666",
+        active=True,
+    )
+    db.add(vendor)
+    db.flush()
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            ProposeTaskTool(),
+            title="Loud HVAC unit",
+            category="maintenance",
+            vendor_id=vendor.external_id,
+            goal="Diagnose and fix the noisy HVAC unit before tenant complains again.",
+            draft_message="Can you look at this HVAC noise?",
+        ))
+
+    assert payload["status"] == "error"
+    assert "steps is required" in payload["message"]
+    assert db.query(Suggestion).count() == 0
+
+
+def test_propose_task_rejects_steps_without_key_or_label(db):
+    vendor = User(
+        org_id=1,
+        creator_id=1,
+        user_type="vendor",
+        first_name="Vera",
+        last_name="Vendor",
+        role_label="Plumber",
+        phone="+15550006677",
+        active=True,
+    )
+    db.add(vendor)
+    db.flush()
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            ProposeTaskTool(),
+            title="Loud HVAC unit",
+            category="maintenance",
+            vendor_id=vendor.external_id,
+            goal="Diagnose and fix the noisy HVAC unit.",
+            steps=[{"label": "Diagnose"}],   # missing key
+        ))
+
+    assert payload["status"] == "error"
+    assert "key" in payload["message"]
     assert db.query(Suggestion).count() == 0
 
 
@@ -1194,6 +1265,55 @@ def test_create_suggestion_tool_creates_confirmed_upload_request_and_marks_task_
         "label": "Requested File",
         "value": "14-Day Pay or Vacate Notice",
     }
+
+
+def test_create_suggestion_tool_blocks_in_task_manager_approval_requests(db):
+    convo = Conversation(
+        org_id=1,
+        creator_id=1,
+        subject="Landscaping",
+        conversation_type=ConversationType.TASK_AI,
+        is_group=False,
+        is_archived=False,
+    )
+    db.add(convo)
+    db.flush()
+    task = Task(
+        id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
+        org_id=1,
+        creator_id=1,
+        title="Landscape spring cleanup — getting quotes",
+        ai_conversation_id=convo.id,
+    )
+    db.add(task)
+    db.flush()
+
+    conv_token = active_conversation_id.set(str(convo.id))
+    try:
+        with patch("db.session.SessionLocal.session_factory", return_value=db), \
+             patch.object(db, "close", lambda: None):
+            payload = json.loads(_run_tool(
+                CreateSuggestionTool(),
+                title="Approve landscaper Alex at $545 for spring cleanup at The Meadows",
+                body=(
+                    "Two quotes received. Alex is lower cost and tenant timing aligns. "
+                    "Request approval to book Alex at $545 for the first cleanup."
+                ),
+                suggestion_type="maintenance",
+                risk_score=4,
+                task_id=str(task.id),
+                action_payload={
+                    "selected_vendor": "Alex",
+                    "quote_amount": 545,
+                    "decision_needed": "approve_and_book",
+                },
+            ))
+    finally:
+        active_conversation_id.reset(conv_token)
+
+    assert payload["status"] == "error"
+    assert "ask_manager" in payload["message"]
+    assert db.query(Suggestion).count() == 0
 
 
 def test_create_suggestion_tool_normalizes_notice_draft_into_upload_request(db):
@@ -1836,6 +1956,30 @@ def test_message_person_allows_follow_up_after_tenant_reply(db):
     assert payload.get("code") != "recent_duplicate"
 
 
+def test_message_person_rejects_unresolved_placeholders(db):
+    task_id, tenant_id = _seed_message_person_task(db)
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None), \
+         patch("gql.services.settings_service.get_action_policy_settings", return_value={
+             "entity_changes": "balanced",
+             "outbound_messages": "balanced",
+             "suggestion_fallback": "balanced",
+         }):
+        payload = json.loads(_run_tool(
+            MessageExternalPersonTool(),
+            task_id=task_id,
+            entity_id=tenant_id,
+            entity_type="tenant",
+            draft_message="Hi Ryan, here is your updated payment portal link: [payment portal link]",
+            risk_level="low",
+        ))
+
+    assert payload["status"] == "error"
+    assert "placeholders" in payload["message"]
+    assert "ask_manager" in payload["message"]
+
+
 def test_message_person_allows_scheduling_follow_up_without_reply(db):
     """Scheduling updates are allowed even without an intervening reply."""
     from datetime import UTC, datetime
@@ -2095,6 +2239,110 @@ def test_message_person_strips_entity_prefix_from_id(db):
     assert suggestion.action_payload["entity_id"] == tenant_external_id
 
 
+def test_message_person_inherits_task_id_from_active_conversation(db):
+    """The active task's AI conversation is ground truth — when the agent
+    omits task_id, message_person uses the task whose AI conversation we're
+    chatting in. Prevents the "conversation orphaned outside the task" bug
+    where new tenant threads got created with parent_task_id=NULL."""
+    from db.models import Conversation, ConversationType
+    from llm.tools._common import active_conversation_id
+
+    task_id, tenant_id = _seed_message_person_task(db)
+    task = db.query(Task).filter_by(id=int(task_id)).one()
+    ai_convo = Conversation(
+        org_id=1,
+        creator_id=1,
+        subject="Task chat",
+        conversation_type=ConversationType.TASK_AI,
+        is_group=False,
+        is_archived=False,
+    )
+    db.add(ai_convo)
+    db.flush()
+    task.ai_conversation_id = ai_convo.id
+    db.flush()
+
+    token = active_conversation_id.set(str(ai_convo.id))
+    try:
+        with patch("db.session.SessionLocal.session_factory", return_value=db), \
+             patch.object(db, "close", lambda: None), \
+             patch("gql.services.settings_service.get_action_policy_settings", return_value={
+                 "entity_changes": "balanced",
+                 "outbound_messages": "balanced",
+                 "suggestion_fallback": "balanced",
+             }):
+            payload = json.loads(_run_tool(
+                MessageExternalPersonTool(),
+                # Note: NO task_id passed.
+                entity_id=tenant_id,
+                entity_type="tenant",
+                draft_message="Hi, quick check-in.",
+                risk_level="low",
+            ))
+    finally:
+        active_conversation_id.reset(token)
+
+    assert payload["status"] == "ok", payload
+    suggestion = db.query(Suggestion).filter_by(id=payload["suggestion_id"]).one()
+    assert str(suggestion.task_id) == task_id, (
+        "task_id should have been inferred from the active task AI conversation"
+    )
+
+
+def test_message_person_overrides_wrong_task_id_with_active_conversation(db):
+    """Stricter rule: the active conversation overrides an agent-supplied
+    task_id when they disagree. Blocks the hallucinated-task-id failure
+    mode that landed conversations on the wrong task in production."""
+    from db.models import Conversation, ConversationType
+    from llm.tools._common import active_conversation_id
+
+    # Two tasks with two AI conversations + one tenant.
+    task_id, tenant_id = _seed_message_person_task(db)
+    correct_task = db.query(Task).filter_by(id=int(task_id)).one()
+    correct_convo = Conversation(
+        org_id=1, creator_id=1, subject="Correct task",
+        conversation_type=ConversationType.TASK_AI, is_group=False, is_archived=False,
+    )
+    db.add(correct_convo)
+    db.flush()
+    correct_task.ai_conversation_id = correct_convo.id
+
+    other_task = Task(
+        id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
+        org_id=1, creator_id=1, title="Other task",
+    )
+    db.add(other_task)
+    db.flush()
+
+    token = active_conversation_id.set(str(correct_convo.id))
+    try:
+        with patch("db.session.SessionLocal.session_factory", return_value=db), \
+             patch.object(db, "close", lambda: None), \
+             patch("gql.services.settings_service.get_action_policy_settings", return_value={
+                 "entity_changes": "balanced",
+                 "outbound_messages": "balanced",
+                 "suggestion_fallback": "balanced",
+             }):
+            payload = json.loads(_run_tool(
+                MessageExternalPersonTool(),
+                # Agent passes the WRONG task id (hallucinated).
+                task_id=str(other_task.id),
+                entity_id=tenant_id,
+                entity_type="tenant",
+                draft_message="Hi.",
+                risk_level="low",
+            ))
+    finally:
+        active_conversation_id.reset(token)
+
+    assert payload["status"] == "ok", payload
+    suggestion = db.query(Suggestion).filter_by(id=payload["suggestion_id"]).one()
+    assert str(suggestion.task_id) == task_id, (
+        "active conversation's task should have overridden the agent's wrong task_id"
+    )
+    assert str(suggestion.task_id) != str(other_task.id)
+
+
 def test_accepting_standalone_message_suggestion_creates_conversation_and_sends(db):
     """The deferred conversation is materialised at approval time by
     MessagePersonSuggestionExecutor. After the manager approves, the
@@ -2193,7 +2441,8 @@ def test_record_task_review_writes_columns_and_trace(db):
     """The tool writes the four last_review_* columns on the target Task
     and logs a mirror AgentTrace row so the history is queryable.
     """
-    from db.models import AgentTrace
+    from db.models import AgentRun, AgentTrace
+    from llm.runs import start_run
     from llm.tools import RecordTaskReviewTool
 
     task = Task(
@@ -2207,13 +2456,20 @@ def test_record_task_review_writes_columns_and_trace(db):
 
     with patch("db.session.SessionLocal.session_factory", return_value=db), \
          patch.object(db, "close", lambda: None):
-        payload = json.loads(_run_tool(
-            RecordTaskReviewTool(),
+        with start_run(
+            source="task_review",
             task_id=str(task.id),
-            status="needs_action",
-            summary="Waiting on plumber quote; follow up in 24h.",
-            next_step="Ping vendor for quote status.",
-        ))
+            agent_version="rentmate-test",
+            execution_path="local",
+            trigger_input="review me",
+        ):
+            payload = json.loads(_run_tool(
+                RecordTaskReviewTool(),
+                task_id=str(task.id),
+                status="needs_action",
+                summary="Waiting on plumber quote; follow up in 24h.",
+                next_step="Ping vendor for quote status.",
+            ))
 
     assert payload["status"] == "ok"
     db.refresh(task)
@@ -2224,7 +2480,11 @@ def test_record_task_review_writes_columns_and_trace(db):
 
     traces = (
         db.query(AgentTrace)
-        .filter_by(task_id=str(task.id), trace_type="task_review")
+        .join(
+            AgentRun,
+            (AgentTrace.org_id == AgentRun.org_id) & (AgentTrace.run_id == AgentRun.id),
+        )
+        .filter(AgentRun.task_id == str(task.id), AgentTrace.trace_type == "task_review")
         .all()
     )
     assert len(traces) == 1
@@ -2267,10 +2527,26 @@ def test_ask_manager_posts_to_task_ai_conversation(db):
         ))
 
     assert payload["status"] == "ok"
+    assert payload["action_card_kind"] == "question"
     messages = db.query(Message).filter_by(conversation_id=convo.id).all()
     assert len(messages) == 1
-    assert messages[0].is_ai is True
-    assert "plumber quote" in messages[0].body
+    msg = messages[0]
+    assert msg.is_ai is True
+    assert "plumber quote" in msg.body
+    # Routes through ActionCardBubble: ACTION + meta.action_card.kind="question".
+    assert msg.message_type == MessageType.ACTION
+    assert msg.meta is not None
+    assert msg.meta["action_card"]["kind"] == "question"
+    assert msg.meta["action_card"]["title"] == "Should I approve the $450 plumber quote?"
+    notifications = db.query(Notification).filter_by(
+        recipient_user_id=task.creator_id,
+        conversation_id=convo.id,
+        task_id=task.id,
+        kind="manager_attention",
+    ).all()
+    assert len(notifications) == 1
+    assert notifications[0].title.startswith("Task needs your input")
+    assert notifications[0].body == "Should I approve the $450 plumber quote?"
 
 
 def test_ask_manager_errors_when_task_has_no_ai_conversation(db):
@@ -2322,3 +2598,181 @@ def test_record_task_review_rejects_unknown_status(db):
     assert "status" in payload["message"]
     db.refresh(task)
     assert task.last_reviewed_at is None
+
+
+# ── lookup_tenants tool ──────────────────────────────────────────────────────
+
+
+def test_lookup_tenants_returns_external_ids(db):
+    user = User(
+        org_id=1,
+        creator_id=1,
+        user_type="tenant",
+        first_name="Priya",
+        last_name="Patel",
+        email="priya@example.com",
+        phone="+15550009999",
+    )
+    db.add(user)
+    db.flush()
+    tenant = Tenant(org_id=1, creator_id=1, user_id=user.id)
+    db.add(tenant)
+    db.flush()
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(LookupTenantsTool(), active_only=False))
+
+    assert payload["count"] == 1
+    row = payload["tenants"][0]
+    assert row["tenant_id"] == tenant.external_id
+    assert row["name"] == "Priya Patel"
+    assert row["email"] == "priya@example.com"
+    assert row["phone"] == "+15550009999"
+    assert row["lease_active"] is False
+
+
+def test_lookup_tenants_filters_by_query(db):
+    for first, last, email in [
+        ("Priya", "Patel", "priya@example.com"),
+        ("Alex", "Nakamura", "alex@example.com"),
+    ]:
+        u = User(
+            org_id=1, creator_id=1, user_type="tenant",
+            first_name=first, last_name=last, email=email,
+        )
+        db.add(u)
+        db.flush()
+        db.add(Tenant(org_id=1, creator_id=1, user_id=u.id))
+    db.flush()
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            LookupTenantsTool(), query="priya", active_only=False,
+        ))
+
+    assert payload["count"] == 1
+    assert payload["tenants"][0]["name"] == "Priya Patel"
+
+
+# ── task_id active-conversation override ─────────────────────────────────────
+
+
+def _seed_task_with_ai_conversation(db, *, title: str = "Task") -> Task:
+    convo = Conversation(
+        org_id=1, creator_id=1, subject=title,
+        conversation_type=ConversationType.TASK_AI,
+        is_group=False, is_archived=False,
+    )
+    db.add(convo)
+    db.flush()
+    task = Task(
+        id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
+        org_id=1, creator_id=1, title=title,
+        ai_conversation_id=convo.id,
+    )
+    db.add(task)
+    db.flush()
+    return task
+
+
+def test_record_task_review_overrides_wrong_task_id_with_active_conversation(db):
+    """Active conversation wins over a hallucinated agent-supplied task_id —
+    the review lands on the correct task even when the agent passes the
+    wrong one."""
+    from llm.tools import RecordTaskReviewTool
+
+    correct_task = _seed_task_with_ai_conversation(db, title="Correct task")
+    other_task = Task(
+        id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
+        org_id=1, creator_id=1, title="Other task",
+    )
+    db.add(other_task)
+    db.flush()
+
+    token = active_conversation_id.set(str(correct_task.ai_conversation_id))
+    try:
+        with patch("db.session.SessionLocal.session_factory", return_value=db), \
+             patch.object(db, "close", lambda: None):
+            payload = json.loads(_run_tool(
+                RecordTaskReviewTool(),
+                task_id=str(other_task.id),  # WRONG — hallucinated
+                status="on_track",
+                summary="Looks good.",
+            ))
+    finally:
+        active_conversation_id.reset(token)
+
+    assert payload["status"] == "ok"
+    assert payload["task_id"] == str(correct_task.id)
+    db.refresh(correct_task)
+    db.refresh(other_task)
+    assert correct_task.last_review_status == "on_track"
+    assert other_task.last_review_status is None
+
+
+def test_update_task_progress_overrides_wrong_task_id_with_active_conversation(db):
+    correct_task = _seed_task_with_ai_conversation(db, title="Correct task")
+    correct_task.steps = [
+        {"key": "step_a", "label": "Step A", "status": "active"},
+    ]
+    other_task = Task(
+        id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
+        org_id=1, creator_id=1, title="Other task",
+        steps=[{"key": "step_a", "label": "Step A", "status": "active"}],
+    )
+    db.add(other_task)
+    db.flush()
+
+    token = active_conversation_id.set(str(correct_task.ai_conversation_id))
+    try:
+        with patch("db.session.SessionLocal.session_factory", return_value=db), \
+             patch.object(db, "close", lambda: None):
+            payload = json.loads(_run_tool(
+                UpdateTaskProgressTool(),
+                task_id=str(other_task.id),  # WRONG — hallucinated
+                step_key="step_a",
+                status="done",
+            ))
+    finally:
+        active_conversation_id.reset(token)
+
+    assert payload["status"] == "ok"
+    db.refresh(correct_task)
+    db.refresh(other_task)
+    assert correct_task.steps[0]["status"] == "done"
+    assert other_task.steps[0]["status"] == "active"
+
+
+def test_ask_manager_overrides_wrong_task_id_with_active_conversation(db):
+    from llm.tools import AskManagerTool
+
+    correct_task = _seed_task_with_ai_conversation(db, title="Correct task")
+    other_task = Task(
+        id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
+        org_id=1, creator_id=1, title="Other task",
+    )
+    db.add(other_task)
+    db.flush()
+
+    token = active_conversation_id.set(str(correct_task.ai_conversation_id))
+    try:
+        with patch("db.session.SessionLocal.session_factory", return_value=db), \
+             patch.object(db, "close", lambda: None):
+            payload = json.loads(_run_tool(
+                AskManagerTool(),
+                task_id=str(other_task.id),  # WRONG — hallucinated
+                question="What should I do?",
+            ))
+    finally:
+        active_conversation_id.reset(token)
+
+    assert payload["status"] == "ok"
+    assert payload["task_id"] == str(correct_task.id)
+    assert payload["conversation_id"] == str(correct_task.ai_conversation_id)
+    messages = db.query(Message).filter_by(
+        conversation_id=correct_task.ai_conversation_id
+    ).all()
+    assert len(messages) == 1
+    assert messages[0].meta["action_card"]["kind"] == "question"

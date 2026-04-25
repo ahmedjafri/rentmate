@@ -144,6 +144,21 @@ class TestDevMemoryEndpoints:
         )
         self.db.add(task)
         self.db.flush()
+        from db.models import AgentRun
+        run = AgentRun(
+            id="run-dev-1",
+            org_id=1,
+            creator_id=1,
+            started_at=datetime.now(UTC),
+            status="completed",
+            source="chat",
+            agent_version="rentmate-test",
+            execution_path="local",
+            task_id=str(task.id),
+            conversation_id=str(conv.id),
+        )
+        self.db.add(run)
+        self.db.flush()
         trace = AgentTrace(
             id="trace-dev-1",
             org_id=1,
@@ -151,8 +166,8 @@ class TestDevMemoryEndpoints:
             timestamp=datetime.now(UTC),
             trace_type="llm_reply",
             source="chat",
-            task_id=str(task.id),
-            conversation_id=str(conv.id),
+            run_id=run.id,
+            sequence_num=0,
             summary="Trace summary",
             detail='{"version":1,"kind":"llm_exchange","messages_payload":[{"role":"system","content":"ctx"},{"role":"user","content":"hi"}],"context":{"text":"ctx","sections":[{"section_type":"task_core","title":"Task core","content":"ctx"}]},"retrieval":{"request":{"query":"hi"},"items":[{"memory_item_id":"m1","title":"item","source_type":"tenant","final_score":1.2,"vector_score":0.4,"heuristic_score":0.6,"content":"hello","reasons":["match"]}]}}',
         )
@@ -217,4 +232,3 @@ class TestDevMemoryEndpoints:
             row["id"] == f"routine:{routine.id}" and row["raw_id"] == str(routine.id) and row["source"] == "routine"
             for row in rows
         )
-

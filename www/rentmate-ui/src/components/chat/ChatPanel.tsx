@@ -333,6 +333,29 @@ export function ChatPanel({
     return result;
   }, [messages]);
 
+  // For each question card, the next user message in the same thread
+  // counts as the answer — render it inline + flip the card to the
+  // "Answered" state. Computed once per messages-update so individual
+  // bubbles don't have to scan the list themselves.
+  const questionAnswers = useMemo(() => {
+    const answers = new Map<string, string>();
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (msg.messageType !== 'action' || msg.actionCard?.kind !== 'question') continue;
+      for (let j = i + 1; j < messages.length; j++) {
+        const candidate = messages[j];
+        const candidateSender = candidate.senderType ?? (candidate.role === 'assistant' ? 'ai' : 'manager');
+        if (candidateSender !== 'manager') continue;
+        if (candidate.messageType && candidate.messageType !== 'message') continue;
+        const body = (candidate.content ?? '').trim();
+        if (!body) continue;
+        answers.set(msg.id, body);
+        break;
+      }
+    }
+    return answers;
+  }, [messages]);
+
   const aiRenderedItems = useMemo(() =>
     renderedItems.filter(item =>
       item.kind === 'divider'
@@ -1136,6 +1159,8 @@ export function ChatPanel({
                       key={item.msg.id}
                       message={item.msg}
                       taskId={chatPanel.taskId}
+                      conversationId={activeTask?.aiConversationId ?? chatPanel.conversationId}
+                      questionAnsweredByContent={questionAnswers.get(item.msg.id) ?? null}
                       onSuggestionClick={(sid) => openChat({ suggestionId: sid })}
                     />
                   )
@@ -1275,7 +1300,12 @@ export function ChatPanel({
                     </div>
                   )}
                   {participantMessages.map(msg => (
-                    <ChatMessageBubble key={msg.id} message={msg} onSuggestionClick={(sid) => openChat({ suggestionId: sid })} />
+                    <ChatMessageBubble
+                      key={msg.id}
+                      message={msg}
+                      conversationId={chatPanel.conversationId}
+                      onSuggestionClick={(sid) => openChat({ suggestionId: sid })}
+                    />
                   ))}
                 </div>
               </ScrollArea>
@@ -1352,6 +1382,8 @@ export function ChatPanel({
                   <ChatMessageBubble
                     key={item.msg.id}
                     message={item.msg}
+                    conversationId={chatPanel.conversationId}
+                    questionAnsweredByContent={questionAnswers.get(item.msg.id) ?? null}
                     onSuggestionClick={(sid) => openChat({ suggestionId: sid })}
                   />
                 )

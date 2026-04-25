@@ -97,7 +97,7 @@ export interface ChatActionCardUnit {
 }
 
 export interface ChatActionCard {
-  kind: 'suggestion' | 'property' | 'tenant' | 'document';
+  kind: 'suggestion' | 'property' | 'tenant' | 'document' | 'question';
   title: string;
   summary?: string;
   fields?: ChatActionCardField[];
@@ -202,6 +202,24 @@ export interface ActionPolicySettings {
   entity_changes: ActionPolicyLevel;
   outbound_messages: ActionPolicyLevel;
   suggestion_fallback: ActionPolicyLevel;
+}
+
+export interface NotificationItem {
+  id: string;
+  kind: string;
+  channel: string;
+  deliveryStatus: string;
+  title: string;
+  body?: string | null;
+  taskId?: string | null;
+  conversationId?: string | null;
+  createdAt: Date;
+  readAt?: Date | null;
+  archivedAt?: Date | null;
+  sentAt?: Date | null;
+  failedAt?: Date | null;
+  failureReason?: string | null;
+  extra?: Record<string, unknown> | null;
 }
 
 export type DocumentStatus = 'uploading' | 'analyzing' | 'ready' | 'error';

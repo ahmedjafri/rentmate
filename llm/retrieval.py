@@ -918,7 +918,6 @@ def _llm_rerank(request: RetrievalRequest, ranked: list[RankedContextItem]) -> l
             "memory_rerank",
             request.surface,
             f"LLM reranked {len(shortlist)} items for {request.intent}",
-            task_id=request.task_id,
             detail={
                 "request": {
                     "surface": request.surface,
@@ -952,7 +951,6 @@ def _llm_rerank(request: RetrievalRequest, ranked: list[RankedContextItem]) -> l
             "error",
             "memory_rerank",
             f"LLM rerank failed: {type(exc).__name__}",
-            task_id=request.task_id,
             detail={
                 "request": {
                     "surface": request.surface,
@@ -985,7 +983,6 @@ def retrieve_context(db: Session, request: RetrievalRequest) -> RankedContextBun
             "warning",
             "memory_sync",
             "Memory index sync skipped during retrieval",
-            task_id=request.task_id,
             detail={"error": str(exc), "creator_id": creator},
         )
 
@@ -1002,7 +999,6 @@ def retrieve_context(db: Session, request: RetrievalRequest) -> RankedContextBun
                 "warning",
                 "memory_query",
                 "Vector memory query skipped during retrieval",
-                task_id=request.task_id,
                 detail={"error": str(exc), "creator_id": creator},
             )
 
@@ -1038,7 +1034,6 @@ def retrieve_context(db: Session, request: RetrievalRequest) -> RankedContextBun
         "memory_rank",
         request.surface,
         f"Retrieved {len(ranked)} items for {request.intent}",
-        task_id=request.task_id,
         detail={
             "request": {
                 "surface": request.surface,

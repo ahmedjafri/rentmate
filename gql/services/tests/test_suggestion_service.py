@@ -181,6 +181,30 @@ def test_action_payload_is_coerced_to_typed_shape(db):
     }
 
 
+def test_action_payload_accepts_goal_for_send_and_create_task(db):
+    suggestion = suggestion_service.create_suggestion(
+        db,
+        title="Schedule gutter cleaning",
+        ai_context="Need to coordinate vendor outreach",
+        source=AgentSource(),
+        action_payload={
+            "vendor_id": "vendor-ext-1",
+            "vendor_name": "Gutter Pros",
+            "draft_message": "Can you do next Thursday?",
+            "goal": "Schedule gutter cleaning at The Meadows",
+        },
+    )
+
+    payload = coerce_action_payload(suggestion.action_payload)
+    assert payload == {
+        "action": "send_and_create_task",
+        "vendor_id": "vendor-ext-1",
+        "vendor_name": "Gutter Pros",
+        "draft_message": "Can you do next Thursday?",
+        "goal": "Schedule gutter cleaning at The Meadows",
+    }
+
+
 def test_upload_request_payload_is_coerced_to_typed_shape(db):
     suggestion = suggestion_service.create_suggestion(
         db,

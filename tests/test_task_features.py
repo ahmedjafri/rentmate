@@ -17,7 +17,7 @@ Covers:
 - DocumentTag model (create)
 """
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -707,6 +707,40 @@ class TestCreateTaskMutation:
         task = task_result.data["task"]
         assert task["externalConversationIds"]
         assert task["externalConversationId"] == task["externalConversationIds"][0]
+
+    def test_task_conversation_ids_use_external_ids(self, db):
+        create_result = schema.execute_sync(
+            """
+            mutation CreateTask($input: CreateTaskInput!) {
+                createTask(input: $input) {
+                    uid
+                    aiConversationId
+                    externalConversationIds
+                }
+            }
+            """,
+            context_value=_gql_context(db),
+            variable_values={
+                "input": {
+                    "title": "Dismiss mapping regression",
+                    "goal": "Return task conversation identifiers in API-safe external-id form.",
+                    "source": "MANUAL",
+                }
+            },
+        )
+        assert create_result.errors is None
+        created = create_result.data["createTask"]
+
+        from sqlalchemy import select
+        from db.models import Conversation
+
+        db.expire_all()
+        db_task = db.execute(select(Task).where(Task.id == created["uid"])).scalar_one()
+        ai_convo = db.get(Conversation, db_task.ai_conversation_id)
+        assert ai_convo is not None
+        assert created["aiConversationId"] == str(ai_convo.external_id)
+        expected_external_ids = [str(conv.external_id) for conv in db_task.external_conversations]
+        assert created["externalConversationIds"] == expected_external_ids
 
     def test_create_task_unauthenticated_fails(self, db):
         result = schema.execute_sync(
@@ -1428,3 +1462,53 @@ class TestTaskNumberNeverReused:
         # All tasks gone — next task must still be 2, not 1
         t2 = TaskService.create_task(db, CreateTaskInput(title="T2", goal="Complete T2 successfully.", source=TaskSource.MANUAL))
         assert t2.id == 2
+
+
+class TestTaskUnreadState:
+    def test_task_query_exposes_unread_count_from_new_activity(self, db):
+        task = _mk_task(db, subject="Unread task")
+        task.last_seen_at = datetime(2026, 4, 24, 0, 0, tzinfo=UTC)
+        task.last_reviewed_at = datetime(2026, 4, 24, 1, 0, tzinfo=UTC)
+        db.flush()
+
+        result = schema.execute_sync(
+            """
+            query Task($uid: Int!) {
+              task(uid: $uid) {
+                uid
+                unreadCount
+              }
+            }
+            """,
+            context_value=_gql_context(db),
+            variable_values={"uid": task.id},
+        )
+
+        assert result.errors is None
+        assert result.data["task"]["unreadCount"] == 1
+
+    def test_mark_task_seen_clears_unread_count(self, db):
+        task = _mk_task(db, subject="Seen task")
+        task.last_seen_at = datetime(2026, 4, 24, 0, 0, tzinfo=UTC)
+        task.last_reviewed_at = datetime(2026, 4, 24, 1, 0, tzinfo=UTC)
+        db.flush()
+
+        result = schema.execute_sync(
+            """
+            mutation MarkTaskSeen($uid: Int!) {
+              markTaskSeen(uid: $uid) {
+                uid
+                unreadCount
+              }
+            }
+            """,
+            context_value=_gql_context(db),
+            variable_values={"uid": task.id},
+        )
+
+        assert result.errors is None
+        assert result.data["markTaskSeen"]["unreadCount"] == 0
+
+        db.expire_all()
+        refreshed = db.execute(select(Task).where(Task.id == task.id)).scalar_one()
+        assert refreshed.last_seen_at is not None

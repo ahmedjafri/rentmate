@@ -65,6 +65,7 @@ fragment TaskFields on TaskType {
   lastReviewStatus
   lastReviewSummary
   lastReviewNextStep
+  unreadCount
   linkedConversations {
     uid
     label
@@ -408,6 +409,13 @@ mutation UpdateTaskGoal($uid: Int!, $goal: String!) {
   updateTaskGoal(uid: $uid, goal: $goal) {
     uid
     goal
+  }
+}
+
+mutation MarkTaskSeen($uid: Int!) {
+  markTaskSeen(uid: $uid) {
+    uid
+    unreadCount
   }
 }
 

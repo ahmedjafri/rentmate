@@ -21,11 +21,12 @@ from llm.tools.documents import (
     CreateDocumentTool,
     ReadDocumentTool,
 )
-from llm.tools.entities import CreatePropertyTool, CreateTenantTool
+from llm.tools.entities import CreatePropertyTool, CreateTenantTool, LookupTenantsTool
 from llm.tools.memory import EditMemoryTool, RecallMemoryTool, SaveMemoryTool
 from llm.tools.messaging import MessageExternalPersonTool
 from llm.tools.onboarding import UpdateOnboardingTool
 from llm.tools.task_review import AskManagerTool, RecordTaskReviewTool
+from llm.tools.time_tools import HasHappenedTool
 from llm.tools.tasks import (
     CloseTaskTool,
     CreateRoutineTool,
@@ -51,6 +52,8 @@ __all__ = [
     "CreateTenantTool",
     "CreateVendorTool",
     "EditMemoryTool",
+    "HasHappenedTool",
+    "LookupTenantsTool",
     "LookupVendorsTool",
     "MessageExternalPersonTool",
     "ProposeTaskTool",

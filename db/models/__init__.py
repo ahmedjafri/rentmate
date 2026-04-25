@@ -25,6 +25,7 @@ from db.enums import (
 
 from .account import User
 from .agent_memory import AgentMemory
+from .agent_run import AgentRun, AgentRunFlag, AgentRunReview
 from .agent_trace import AgentTrace
 
 # AutomationRevision removed — replaced by Routine
@@ -41,6 +42,7 @@ from .messaging import (
     MessageType,
     ParticipantType,
 )
+from .notifications import Notification
 from .rental import Lease, Property, Tenant, Unit
 from .routine import Routine
 from .settings import AppSetting
@@ -67,9 +69,13 @@ __all__ = [
     "ConversationParticipant",
     "Message",
     "MessageReceipt",
+    "Notification",
     "Document",
     "DocumentTag",
     "AgentMemory",
+    "AgentRun",
+    "AgentRunFlag",
+    "AgentRunReview",
     "AgentTrace",
     "MemoryItem",
     "AppSetting",

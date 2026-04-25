@@ -23,6 +23,7 @@ import {
   GetDocumentDocument,
   HousesDocument,
   LoginDocument,
+  MarkTaskSeenDocument,
   MeDocument,
   RunRoutineDocument,
   SaveEntityNoteDocument,
@@ -361,6 +362,12 @@ export function updateTaskGoal(uid: string | number, goal: string) {
   return graphqlRequest(UpdateTaskGoalDocument, {
     uid: toIntId(uid),
     goal,
+  });
+}
+
+export function markTaskSeen(uid: string | number) {
+  return graphqlRequest(MarkTaskSeenDocument, {
+    uid: toIntId(uid),
   });
 }
 
