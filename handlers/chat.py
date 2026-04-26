@@ -13,7 +13,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -661,10 +661,18 @@ def _compute_autoreply_hash(task) -> str:
                 ), {"cid": conv_id}).scalar()
                 if ts:
                     parts.append(f"{conv_id}:{ts}")
-        # Pending suggestion count
-        count = db.execute(text(
-            "SELECT COUNT(*) FROM suggestions WHERE task_id = :tid AND status = 'pending'"
-        ), {"tid": task.id}).scalar()
+        # Pending suggestion count. Use the ORM so SQLAlchemy serializes
+        # SuggestionStatus.PENDING with the same casing as the DB enum
+        # (uppercase 'PENDING'); the previous raw SQL hard-coded the
+        # lowercase Python value and crashed on the real Postgres enum.
+        from db.enums import SuggestionStatus
+        from db.models import Suggestion
+        count = db.execute(
+            select(func.count()).select_from(Suggestion).where(
+                Suggestion.task_id == task.id,
+                Suggestion.status == SuggestionStatus.PENDING,
+            )
+        ).scalar()
         parts.append(f"suggestions:{count}")
         return hashlib.md5("|".join(parts).encode()).hexdigest()
     finally:
