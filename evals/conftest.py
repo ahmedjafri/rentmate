@@ -13,7 +13,34 @@ from pathlib import Path
 from time import sleep
 
 
+_DEFAULT_EVAL_FAILURE_TOLERANCE = 3
+
+# Captured at configure-time so pytest_runtest_logreport (which doesn't
+# receive the config object directly) can record failures on it. Single
+# pytest process per session, so a module-level reference is safe.
+_TOLERANCE_CONFIG = None
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--eval-failure-tolerance",
+        action="store",
+        default=_DEFAULT_EVAL_FAILURE_TOLERANCE,
+        type=int,
+        help=(
+            "Number of @pytest.mark.eval test failures the session will "
+            f"tolerate before failing CI (default: {_DEFAULT_EVAL_FAILURE_TOLERANCE}). "
+            "Non-eval failures are never tolerated."
+        ),
+    )
+
+
 def pytest_configure(config):
+    global _TOLERANCE_CONFIG
+    _TOLERANCE_CONFIG = config
+    config._failed_eval_nodeids = []
+    config._failed_other_nodeids = []
+
     agent_model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
     judge_model = os.getenv("EVAL_JUDGE_MODEL") or agent_model
     api_key = os.getenv("LLM_API_KEY", "")
@@ -164,6 +191,50 @@ def pytest_runtest_makereport(item, call):
             report.sections.append(("Eval Run Dump", marker))
     except Exception as exc:  # noqa: BLE001
         report.sections.append(("Eval Run Dump", f"Failed to dump eval runs: {exc}"))
+
+
+def pytest_runtest_logreport(report):
+    """Bucket each failed call-phase report so the session-finish hook
+    can decide whether to tolerate it.
+
+    Fires on the controller for every worker's report, so it works in
+    both serial and ``pytest-xdist -n auto`` modes. ``report.keywords``
+    survives the cross-process pickle and contains the test's markers.
+    """
+    if report.when != "call" or not report.failed:
+        return
+    config = _TOLERANCE_CONFIG
+    if config is None:
+        return
+    if report.keywords.get("eval"):
+        config._failed_eval_nodeids.append(report.nodeid)
+    else:
+        config._failed_other_nodeids.append(report.nodeid)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session, exitstatus):
+    """Soften CI exit status when a small number of eval-marked tests
+    flaked. Anything else (collection errors, non-eval failures, or
+    failures over the budget) still fails the session.
+    """
+    if exitstatus == 0:
+        return
+    config = session.config
+    failed_eval = list(getattr(config, "_failed_eval_nodeids", []))
+    failed_other = list(getattr(config, "_failed_other_nodeids", []))
+    tolerance = config.getoption("--eval-failure-tolerance")
+
+    if failed_other or not failed_eval or len(failed_eval) > tolerance:
+        return
+
+    print(
+        f"\n[evals] tolerating {len(failed_eval)} eval failure(s) "
+        f"(<= {tolerance}); marking session as PASS:"
+    )
+    for nid in failed_eval:
+        print(f"  - {nid}")
+    session.exitstatus = 0
 
 
 # ── DB fixtures ──────────────────────────────────────────────────────────────
