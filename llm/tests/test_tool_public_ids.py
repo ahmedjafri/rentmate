@@ -39,6 +39,7 @@ from llm.tools import (
     SaveMemoryTool,
     UpdateTaskProgressTool,
     active_conversation_id,
+    current_request_context,
     current_user_message,
     pending_suggestion_messages,
 )
@@ -817,6 +818,62 @@ def test_propose_task_tool_uses_external_vendor_id_in_payload(db):
     suggestion = db.query(Suggestion).filter_by(id=payload["proposal_id"]).one()
     assert suggestion.action_payload["vendor_id"] == vendor.external_id
     assert suggestion.action_payload["action"] == "send_and_create_task"
+
+
+def test_propose_task_infers_property_and_unit_from_retrieval_context(db):
+    prop = _seed_property(db, name="The Meadows", address_line1="1842 Meadow Lane")
+    unit = Unit(org_id=1, creator_id=1, property_id=prop.id, label="1B")
+    vendor = User(
+        org_id=1,
+        creator_id=1,
+        user_type="vendor",
+        first_name="Sarah",
+        last_name="Chen",
+        role_label="Landscaper",
+        phone="+15550005555",
+        active=True,
+    )
+    db.add_all([unit, vendor])
+    db.flush()
+
+    context_token = current_request_context.set({
+        "retrieval": {
+            "items": [
+                {
+                    "source_type": "lease",
+                    "metadata": {
+                        "property_id": prop.id,
+                        "unit_id": unit.id,
+                    },
+                },
+            ],
+        },
+    })
+    try:
+        with patch("db.session.SessionLocal.session_factory", return_value=db), \
+             patch.object(db, "close", lambda: None):
+            payload = json.loads(_run_tool(
+                ProposeTaskTool(),
+                title="Schedule gutter cleaning for Priya Patel's unit",
+                category="maintenance",
+                vendor_id=vendor.external_id,
+                goal="Schedule gutter cleaning at The Meadows Unit 1B and confirm access with Priya.",
+                steps=[
+                    {"key": "confirm_vendor", "label": "Confirm vendor availability", "status": "active"},
+                    {"key": "coordinate_access", "label": "Coordinate tenant access", "status": "pending"},
+                    {"key": "complete_cleaning", "label": "Complete gutter cleaning", "status": "pending"},
+                ],
+            ))
+    finally:
+        current_request_context.reset(context_token)
+
+    assert payload["status"] == "pending_approval"
+    suggestion = db.query(Suggestion).filter_by(id=payload["proposal_id"]).one()
+    convo = db.query(Conversation).filter_by(id=suggestion.ai_conversation_id).one()
+    assert suggestion.property_id == prop.id
+    assert suggestion.unit_id == unit.id
+    assert convo.property_id == prop.id
+    assert convo.unit_id == unit.id
 
 
 def test_propose_task_tool_rejects_unknown_vendor_id(db):
