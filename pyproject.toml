@@ -44,15 +44,15 @@ pyjwt = "^2.9"
 sqlalchemy = "^2.0"
 pgvector = "^0.4.1"
 psycopg2-binary = "^2.9"
-memray = "^1.19.2"
 croniter = "^6.2.2"
 bcrypt = "^5.0.0"
 weasyprint = "^66.0"
 grpcio = "^1.76.0"
+alembic = "^1.17.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.0"
-alembic = "^1.17.1"
+memray = "^1.19.2"
 testcontainers = {extras = ["postgres"], version = "^4.14.2"}
 ruff = "^0.15.9"
 pytest-cov = "^7.1.0"

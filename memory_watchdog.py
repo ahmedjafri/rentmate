@@ -11,8 +11,12 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
-import memray
+try:
+    import memray
+except ImportError:  # pragma: no cover - exercised only in slim runtime images
+    memray = None
 
 _logger = logging.getLogger("rentmate.memory_watchdog")
 
@@ -59,7 +63,7 @@ def _monitor_loop(
 ) -> None:
     """Blocking loop — meant to run in a daemon thread."""
     warning_threshold = int(rss_limit_bytes * _WARNING_RATIO)
-    tracker: memray.Tracker | None = None
+    tracker: Any | None = None
     tracker_path: Path | None = None
     check_count = 0
 
@@ -97,7 +101,7 @@ def _monitor_loop(
                 os._exit(1)
 
             # --- warning phase: start tracking ---
-            if rss > warning_threshold and tracker is None:
+            if rss > warning_threshold and tracker is None and memray is not None:
                 ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
                 tracker_path = Path(data_dir) / f"heap_{ts}.bin"
                 try:
