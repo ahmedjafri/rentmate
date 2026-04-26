@@ -6,6 +6,7 @@ external replies in between.
 
 import pytest
 
+from db.enums import TaskStepStatus
 from db.models import (
     ConversationType,
     ParticipantType,
@@ -15,6 +16,7 @@ from evals.conftest import (
     get_suggestions,
     run_turn_sync,
 )
+from gql.services.task_service import TaskProgressStep, dump_task_steps
 
 
 @pytest.mark.eval
@@ -42,8 +44,8 @@ class TestVendorNegotiation:
             db, conversation_type=ConversationType.VENDOR,
             subject="Water heater", vendor_id=str(vendor.id),
             property_id=s["property"].id,
+            parent_task_id=task.id,
         )
-        task.external_conversation_id = vendor_conv.id
         db.flush()
 
         add_message(db, vendor_conv.id, "RentMate",
@@ -93,10 +95,10 @@ class TestRepeatReports:
 
         # Add previous context
         task.context = "[2026-04-05] Tenant first reported sink leak. Vendor contacted."
-        task.steps = [
-            {"key": "vendor_assess", "label": "Vendor assessment", "status": "active"},
-            {"key": "repair", "label": "Complete repair", "status": "pending"},
-        ]
+        task.steps = dump_task_steps([
+            TaskProgressStep(key="vendor_assess", label="Vendor assessment", status=TaskStepStatus.ACTIVE),
+            TaskProgressStep(key="repair", label="Complete repair", status=TaskStepStatus.PENDING),
+        ])
         db.flush()
 
         result = run_turn_sync(
@@ -134,10 +136,10 @@ class TestTenantFollowUp:
         s = sb.build()
 
         task.context = "[2026-04-05] AC Pro assigned. Scheduled for Monday."
-        task.steps = [
-            {"key": "schedule", "label": "Schedule HVAC tech", "status": "done", "note": "Monday appointment"},
-            {"key": "repair", "label": "Complete AC repair", "status": "pending"},
-        ]
+        task.steps = dump_task_steps([
+            TaskProgressStep(key="schedule", label="Schedule HVAC tech", status=TaskStepStatus.DONE, note="Monday appointment"),
+            TaskProgressStep(key="repair", label="Complete AC repair", status=TaskStepStatus.PENDING),
+        ])
         db.flush()
 
         result = run_turn_sync(

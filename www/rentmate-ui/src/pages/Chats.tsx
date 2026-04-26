@@ -1,79 +1,92 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+
+import { ChatFilterDropdown, type ChatFilter } from '@/components/chat/ChatFilterDropdown';
+import { ChatWorkspaceLayout } from '@/components/chat/ChatWorkspaceLayout';
+import { ConversationListPane } from '@/components/chat/ConversationListPane';
 import { useApp } from '@/context/AppContext';
-import { Button } from '@/components/ui/button';
-import { MessageCircle, Plus } from 'lucide-react';
 import { deleteConversation } from '@/graphql/client';
-import { toast } from 'sonner';
-import { ConvRow, TAB_CONFIG } from '@/components/chat/ConvRow';
-import type { TabKey } from '@/components/chat/ConvRow';
 import { useConversations } from '@/hooks/useConversations';
 
 const Chats = () => {
-  const { openChat, chatPanel } = useApp();
-  const [activeTab, setActiveTab] = useState<TabKey>('user_ai');
-  const { conversations, loading, refresh, removeConversation } = useConversations(activeTab);
+  const { openChat, suggestions } = useApp();
+  const [searchParams] = useSearchParams();
+  const [filter, setFilter] = useState<ChatFilter>('all');
+  const suggestionId = searchParams.get('suggestion');
 
-  return (
-    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-4">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-2xl font-bold">Chats</h1>
-        {activeTab === 'user_ai' && (
-          <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={() => {
-            openChat({ lazy: true });
-          }}>
-            <Plus className="h-3.5 w-3.5" />
-            New Chat
-          </Button>
-        )}
-      </div>
+  useEffect(() => {
+    if (!suggestionId) return;
+    const suggestion = suggestions.find(item => item.id === suggestionId);
+    if (!suggestion) return;
+    if (suggestion.targetConversationId) {
+      openChat({ conversationId: suggestion.targetConversationId, suggestionId });
+      return;
+    }
+    openChat({ suggestionId });
+  }, [openChat, suggestionId, suggestions]);
 
-      {/* Tabs */}
-      <div className="flex gap-1 border-b">
-        {TAB_CONFIG.map(tab => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              activeTab === tab.key
-                ? 'border-primary text-primary'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            <tab.icon className="h-3.5 w-3.5" />
-            {tab.label}
-          </button>
-        ))}
-      </div>
+  // Always fetch all three buckets so flipping the filter is instant —
+  // the cost is one extra round-trip up front and lets us merge for the
+  // "All" view without re-querying.
+  const ai = useConversations('user_ai');
+  const tenants = useConversations('tenant');
+  const vendors = useConversations('vendor');
 
-      {/* Conversation list */}
-      <div className="space-y-2">
-        {loading && <p className="text-sm text-muted-foreground py-8 text-center">Loading…</p>}
-        {!loading && conversations.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-            <MessageCircle className="h-12 w-12 mb-3 opacity-40" />
-            <p className="font-medium">No conversations yet</p>
-          </div>
-        )}
-        {conversations.map(conv => (
-          <ConvRow
-            key={conv.uid}
-            conv={conv}
-            isActive={chatPanel.isOpen && chatPanel.conversationId === conv.uid}
-            onClick={() => openChat({ conversationId: conv.uid })}
-            onDelete={async () => {
-              try {
-                await deleteConversation(conv.uid);
-                removeConversation(conv.uid);
-                toast.success('Conversation deleted');
-              } catch {
-                toast.error('Failed to delete conversation');
-              }
-            }}
-          />
-        ))}
-      </div>
-    </div>
+  const sources: Record<ChatFilter, ReturnType<typeof useConversations>> = {
+    all: ai, // placeholder, overridden below
+    user_ai: ai,
+    tenant: tenants,
+    vendor: vendors,
+  };
+
+  const conversations = useMemo(() => {
+    if (filter === 'all') {
+      return [...ai.conversations, ...tenants.conversations, ...vendors.conversations].sort(
+        (a, b) => {
+          const at = a.lastMessageAt ?? a.updatedAt;
+          const bt = b.lastMessageAt ?? b.updatedAt;
+          return new Date(bt).getTime() - new Date(at).getTime();
+        },
+      );
+    }
+    return sources[filter].conversations;
+  }, [filter, ai.conversations, tenants.conversations, vendors.conversations, sources]);
+
+  const loading =
+    filter === 'all'
+      ? ai.loading || tenants.loading || vendors.loading
+      : sources[filter].loading;
+
+  // Removing a conversation needs to drop it from whichever list owns it.
+  const removeFromAll = (uid: string) => {
+    ai.removeConversation(uid);
+    tenants.removeConversation(uid);
+    vendors.removeConversation(uid);
+  };
+
+  const leftRail = (
+    <ConversationListPane
+      title="Chats"
+      conversations={conversations}
+      loading={loading}
+      onNewChat={
+        // Only the RentMate / All filter view exposes "+", since New Chat
+        // means a new RentMate (user_ai) conversation.
+        filter === 'all' || filter === 'user_ai'
+          ? () => openChat({ lazy: true })
+          : undefined
+      }
+      onDelete={async (uid) => {
+        await deleteConversation(uid);
+        removeFromAll(uid);
+      }}
+      headerActions={<ChatFilterDropdown value={filter} onChange={setFilter} />}
+    />
   );
+
+  // No rightRail — the embedded ChatPanel fills the rest of the width
+  // (this is the "2 columns wide" layout the chats page wants).
+  return <ChatWorkspaceLayout leftRail={leftRail} />;
 };
 
 export default Chats;

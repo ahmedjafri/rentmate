@@ -1,5 +1,6 @@
 import { useRef, useEffect, useMemo, useState } from 'react';
-import { X, Bot, Sparkles, Users, Lock, MessageSquare, RotateCcw, Loader2, Trash2, Link as LinkIcon } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { X, Bot, Sparkles, Users, Lock, MessageSquare, RotateCcw, Loader2, Trash2, Link as LinkIcon, User, Wrench, ClipboardList } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -12,6 +13,8 @@ import { authFetch } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { SuggestionOptions } from './SuggestionOptions';
+import { MessageSuggestionCard } from './MessageSuggestionCard';
+import { getMessageSuggestionSendAction, isMessageSuggestion } from './messageSuggestion';
 import { ProgressSteps } from './ProgressSteps';
 import { OnboardingChips, OnboardingChoice } from './OnboardingChips';
 import { OnboardingProgress } from './OnboardingProgress';
@@ -21,27 +24,58 @@ import {
   actOnSuggestion,
   deleteTask,
   fromGraphqlEnum,
+  getConversation,
   getConversationMessages,
   getTask,
   sendMessage,
+  triggerTaskReview,
   updateTaskStatus,
 } from '@/graphql/client';
 
-export function getDefaultTaskTab(task: ActionDeskTask | null | undefined): string {
-  if (!task) return 'ai';
+export type EmbeddedTaskThreadSelection =
+  | { kind: 'ai' }
+  | { kind: 'conversation'; id: string };
 
-  const linkedChats = (task.linkedConversations ?? []).filter(
-    lc => lc.conversationType !== 'task_ai' && lc.conversationType !== 'suggestion_ai',
+export function getLinkedConversationTabLabel(
+  conversation: Pick<LinkedConversation, 'conversationType' | 'label' | 'participants'>,
+  allConversations: Array<Pick<LinkedConversation, 'conversationType' | 'label' | 'participants'>> = [],
+): string {
+  const isVendor = conversation.conversationType === 'vendor';
+  const isTenant = conversation.conversationType === 'tenant';
+  if (!isVendor && !isTenant) return conversation.label;
+
+  const roleTitle = isVendor ? 'Vendor' : 'Tenant';
+  const sameTypeCount = allConversations.filter(c => c.conversationType === conversation.conversationType).length;
+  const participantType = isVendor ? 'vendor' : 'tenant';
+  const namedParticipants = (conversation.participants ?? []).filter(
+    p => p.participantType === participantType && p.name?.trim(),
   );
-  if (linkedChats.length === 0) return 'ai';
+  const preferredName =
+    sameTypeCount === 1 && namedParticipants.length === 1 && conversation.label.trim().toLowerCase() === roleTitle.toLowerCase()
+      ? namedParticipants[0].name.trim()
+      : conversation.label;
 
-  const preferredConversationId = task.externalConversationId || task.parentConversationId;
-  if (preferredConversationId) {
-    const preferred = linkedChats.find(lc => lc.uid === preferredConversationId);
-    if (preferred) return preferred.uid;
-  }
+  return `${roleTitle}: ${preferredName}`;
+}
 
-  return linkedChats[0].uid;
+export function getDefaultTaskTab(_task: ActionDeskTask | null | undefined): string {
+  // Always default to the AI thread when landing on a task — that's the
+  // manager's primary agent-facing surface. External conversations are
+  // one click away in the left rail.
+  return 'ai';
+}
+
+function isAiConversationType(conversationType: string | null | undefined): boolean {
+  return conversationType === 'task_ai' || conversationType === 'suggestion_ai' || conversationType === 'user_ai';
+}
+
+function getTaskAiConversationId(task: ActionDeskTask | null | undefined): string | null {
+  if (!task) return null;
+  if (task.aiConversationId) return task.aiConversationId;
+  const linkedAiConversation = (task.linkedConversations ?? []).find(
+    lc => isAiConversationType(lc.conversationType),
+  );
+  return linkedAiConversation?.uid ?? null;
 }
 
 function backendStatusToFrontend(status: string): ManagedDocument['status'] {
@@ -125,7 +159,13 @@ export async function performTaskDismiss(args: {
   refreshData();
 }
 
-export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
+export function ChatPanel({
+  embedded = false,
+  embeddedTaskSelection,
+}: {
+  embedded?: boolean;
+  embeddedTaskSelection?: EmbeddedTaskThreadSelection | null;
+} = {}) {
   const { chatPanel, closeChat, openChat, setChatConversationId, suggestions, actionDeskTasks, addChatMessage, updateTaskMessage, setTaskMessages, updateTask, removeTask, updateSuggestionStatus, addDocument, replaceDocument, removeDocument, refreshData } = useApp();
   const [dismissConfirm, setDismissConfirm] = useState(false);
   const [dismissing, setDismissing] = useState(false);
@@ -204,18 +244,62 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
     chatPanel.suggestionId ? suggestions.find(s => s.id === chatPanel.suggestionId) : null,
     [chatPanel.suggestionId, suggestions]
   );
+  const activeMessageSuggestion = useMemo(
+    () => (isMessageSuggestion(activeSuggestion) ? activeSuggestion : null),
+    [activeSuggestion],
+  );
+  const activeMessageSuggestionSendAction = useMemo(
+    () => getMessageSuggestionSendAction(activeMessageSuggestion),
+    [activeMessageSuggestion],
+  );
 
   const activeTask = useMemo(() =>
     chatPanel.taskId ? actionDeskTasks.find(t => t.id === chatPanel.taskId) : null,
     [chatPanel.taskId, actionDeskTasks]
   );
+  const effectiveTaskTab =
+    embedded && embeddedTaskSelection
+      ? embeddedTaskSelection.kind === 'ai'
+        ? 'ai'
+        : embeddedTaskSelection.id
+      : activeTaskTab;
+  const activeTaskSuggestionTargetTab = activeSuggestion?.targetConversationId ?? 'ai';
+  const shouldShowActiveTaskSuggestion = Boolean(
+    activeTask && activeSuggestion && effectiveTaskTab === activeTaskSuggestionTargetTab,
+  );
 
   // DB-backed conversation messages (for conversationId-based chats)
   const [convMessages, setConvMessages] = useState<ChatMessage[]>([]);
+  const [convTaskLink, setConvTaskLink] = useState<{ taskId: string; taskTitle: string | null } | null>(null);
   const activeConversationId = chatPanel.conversationId;
 
+  // Fetch the conversation's task linkage so the middle pane can show a
+  // "Task #N — <title>" header when the loaded conversation belongs to a
+  // task. Cleared when no conversation is open.
   useEffect(() => {
-    if (activeTask || activeSuggestion) { setConvMessages([]); return; }
+    if (!activeConversationId || activeTask) {
+      setConvTaskLink(null);
+      return;
+    }
+    let cancelled = false;
+    getConversation(activeConversationId)
+      .then((res) => {
+        if (cancelled) return;
+        const conv = res.conversation;
+        if (conv?.taskId) {
+          setConvTaskLink({ taskId: conv.taskId, taskTitle: conv.taskTitle ?? null });
+        } else {
+          setConvTaskLink(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setConvTaskLink(null);
+      });
+    return () => { cancelled = true; };
+  }, [activeConversationId, activeTask]);
+
+  useEffect(() => {
+    if (activeTask || (activeSuggestion && !activeConversationId)) { setConvMessages([]); return; }
     if (!activeConversationId) { setConvMessages([]); onboardingStartedRef.current = false; return; }
     getConversationMessages(activeConversationId).then(result => {
       setConvMessages((result.conversationMessages ?? []).map(m => ({
@@ -251,9 +335,11 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
 
   const messages = activeTask
     ? activeTask.chatThread
-    : activeSuggestion
-      ? activeSuggestion.chatThread
-      : convMessages;
+    : activeConversationId
+      ? convMessages
+      : activeSuggestion
+        ? activeSuggestion.chatThread
+        : convMessages;
 
   const isAutonomous = activeTask?.mode === 'autonomous';
 
@@ -279,6 +365,29 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
       result.push({ kind: 'msg', msg });
     }
     return result;
+  }, [messages]);
+
+  // For each question card, the next user message in the same thread
+  // counts as the answer — render it inline + flip the card to the
+  // "Answered" state. Computed once per messages-update so individual
+  // bubbles don't have to scan the list themselves.
+  const questionAnswers = useMemo(() => {
+    const answers = new Map<string, string>();
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (msg.messageType !== 'action' || msg.actionCard?.kind !== 'question') continue;
+      for (let j = i + 1; j < messages.length; j++) {
+        const candidate = messages[j];
+        const candidateSender = candidate.senderType ?? (candidate.role === 'assistant' ? 'ai' : 'manager');
+        if (candidateSender !== 'manager') continue;
+        if (candidate.messageType && candidate.messageType !== 'message') continue;
+        const body = (candidate.content ?? '').trim();
+        if (!body) continue;
+        answers.set(msg.id, body);
+        break;
+      }
+    }
+    return answers;
   }, [messages]);
 
   const aiRenderedItems = useMemo(() =>
@@ -395,11 +504,12 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
 
   // Determine the non-AI linked conversations
   const linkedChats: LinkedConversation[] = (activeTask?.linkedConversations ?? []).filter(
-    lc => lc.conversationType !== 'task_ai' && lc.conversationType !== 'suggestion_ai'
+    lc => !isAiConversationType(lc.conversationType)
   );
 
   const lastTaskIdRef = useRef<string | null>(null);
   useEffect(() => {
+    if (embedded && embeddedTaskSelection) return;
     const currentTaskId = activeTask?.id ?? null;
     const taskChanged = lastTaskIdRef.current !== currentTaskId;
     lastTaskIdRef.current = currentTaskId;
@@ -411,17 +521,98 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
       const stillExists = linkedChats.some(chat => chat.uid === prev);
       return stillExists ? prev : getDefaultTaskTab(activeTask);
     });
-  }, [activeTask?.id, linkedChats, activeTask]);
+  }, [activeTask?.id, linkedChats, activeTask, embedded, embeddedTaskSelection]);
+
+  // Sync the active tab with any external conversation selection (e.g. the
+  // left-rail ConvRow in TaskDetail calls setChatConversationId).
+  useEffect(() => {
+    if (embedded && embeddedTaskSelection) return;
+    if (!activeTask) return;
+    const convId = chatPanel.conversationId;
+    if (!convId) return;
+    if (convId === getTaskAiConversationId(activeTask)) {
+      setActiveTaskTab('ai');
+      return;
+    }
+    if (linkedChats.some(chat => chat.uid === convId)) {
+      setActiveTaskTab(convId);
+    }
+  }, [chatPanel.conversationId, activeTask, linkedChats, embedded, embeddedTaskSelection]);
 
   // Load participant messages when a linked conversation tab is active
   useEffect(() => {
-    if (activeTaskTab === 'ai' || !activeTaskTab) return;
+    if (effectiveTaskTab === 'ai' || !effectiveTaskTab) return;
     // activeTaskTab is a conversation UID
-    const convoId = activeTaskTab;
+    const convoId = effectiveTaskTab;
     loadParticipantMessages(convoId, true);
     const interval = setInterval(() => loadParticipantMessages(convoId), 5000);
     return () => clearInterval(interval);
-  }, [activeTaskTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [effectiveTaskTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // External trigger — the Trigger Agent button in TaskDetail bumps
+  // chatPanel.reviewTrigger.nonce to ask this panel to run an SSE review
+  // stream against the active task. Reuses the same isTyping/progressLog
+  // rendering the normal chat stream uses, so the agent-thinking UI is
+  // identical whether a review was triggered by the user or by the
+  // background loop.
+  const reviewTrigger = chatPanel.reviewTrigger;
+  useEffect(() => {
+    if (!reviewTrigger) return;
+    if (!activeTask || String(activeTask.id) !== String(reviewTrigger.taskId)) return;
+
+    const controller = new AbortController();
+    setIsTyping(true);
+    setProgressLog([]);
+    // Make sure the AI tab is on screen.
+    setActiveTaskTab('ai');
+
+    (async () => {
+      try {
+        const res = await triggerTaskReview(reviewTrigger.taskId);
+        if (!res.ok || !res.body) {
+          setIsTyping(false);
+          toast.error('Agent review failed to start');
+          return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const lines = buf.split('\n');
+          buf = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const event = JSON.parse(line.slice(6));
+              if (event.type === 'progress') {
+                setProgressLog(prev => [...prev, event.text as string]);
+              } else if (event.type === 'done') {
+                setIsTyping(false);
+                setProgressLog([]);
+                refreshData();
+                return;
+              } else if (event.type === 'error') {
+                setIsTyping(false);
+                toast.error(`Agent error: ${event.message}`);
+                return;
+              }
+            } catch { /* skip malformed */ }
+          }
+        }
+        setIsTyping(false);
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          setIsTyping(false);
+          toast.error(err instanceof Error ? err.message : 'Agent review failed');
+        }
+      }
+    })();
+
+    return () => controller.abort();
+  }, [reviewTrigger?.nonce, activeTask?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reconnect to an in-flight chat when the panel opens.
   // If the agent is still running, stream its remaining progress so the user
@@ -839,7 +1030,8 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
         ? "h-full w-full"
         : "fixed inset-0 z-50 md:static md:inset-auto md:z-auto md:w-[320px] lg:w-[380px] md:border-l md:shrink-0 md:h-full"
     )}>
-      {/* Header */}
+      {/* Header — hidden in embedded mode (e.g. TaskDetail provides its own) */}
+      {!embedded && (
       <div className="flex items-center justify-between p-4 border-b bg-card shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary shrink-0">
@@ -917,10 +1109,27 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
           )}
         </div>
       </div>
+      )}
 
       {/* Task Context */}
       {activeTask && (
         <div className="p-3 border-b bg-muted/30 space-y-2">
+          {shouldShowActiveTaskSuggestion && activeSuggestion && (
+            <div className="rounded-lg border bg-background px-3 py-2">
+              <div className="flex items-center gap-1.5 mb-1">
+                <Sparkles className="h-3 w-3 text-primary" />
+                <span className="text-[11px] font-medium text-primary">
+                  {activeSuggestion.targetConversationType === 'vendor'
+                    ? 'Suggestion for this vendor thread'
+                    : activeSuggestion.targetConversationType === 'tenant'
+                      ? 'Suggestion for this tenant thread'
+                      : 'Suggestion in this task'}
+                </span>
+              </div>
+              <p className="text-xs font-medium">{activeSuggestion.title}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">{activeSuggestion.body}</p>
+            </div>
+          )}
           {activeTask.confidential && (
             <div className="flex items-center gap-2 rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2">
               <Lock className="h-3.5 w-3.5 text-destructive shrink-0" />
@@ -952,22 +1161,29 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
 
       {activeTask ? (
         <Tabs
-          value={activeTaskTab}
+          value={effectiveTaskTab}
           onValueChange={v => setActiveTaskTab(v)}
           className="flex-1 flex flex-col min-h-0"
         >
+          {/* Tab strip — hidden in embedded mode (TaskDetail's left rail replaces it) */}
+          {!embedded && (
           <TabsList className="shrink-0 mx-3 mt-2 mb-0 h-8 self-start gap-1 bg-muted/50">
             <TabsTrigger value="ai" className="text-xs h-6 px-3">AI</TabsTrigger>
-            {linkedChats.map(lc => (
-              <TabsTrigger key={lc.uid} value={lc.uid} className="text-xs h-6 px-3">
-                {lc.label}
-                {lc.messageCount > 0 && (
-                  <span className="ml-1 text-[9px] text-muted-foreground">{lc.messageCount}</span>
-                )}
-              </TabsTrigger>
-            ))}
+            {linkedChats.map(lc => {
+              const isVendor = lc.conversationType === 'vendor';
+              const isTenant = lc.conversationType === 'tenant';
+              const Icon = isVendor ? Wrench : isTenant ? User : null;
+              const roleTitle = isVendor ? 'Vendor' : isTenant ? 'Tenant' : lc.conversationType;
+              return (
+                <TabsTrigger key={lc.uid} value={lc.uid} className="text-xs h-6 px-3 gap-1">
+                  {Icon && <Icon className="h-3 w-3" aria-label={roleTitle} />}
+                  <span>{getLinkedConversationTabLabel(lc, linkedChats)}</span>
+                </TabsTrigger>
+              );
+            })}
             <TabsTrigger value="progress" className="text-xs h-6 px-3">Progress</TabsTrigger>
           </TabsList>
+          )}
 
           {/* AI tab — internal RentMate thread */}
           <TabsContent value="ai" className="hidden data-[state=active]:flex flex-1 flex-col min-h-0 mt-0">
@@ -993,6 +1209,8 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
                       key={item.msg.id}
                       message={item.msg}
                       taskId={chatPanel.taskId}
+                      conversationId={activeTask?.aiConversationId ?? chatPanel.conversationId}
+                      questionAnsweredByContent={questionAnswers.get(item.msg.id) ?? null}
                       onSuggestionClick={(sid) => openChat({ suggestionId: sid })}
                     />
                   )
@@ -1061,6 +1279,53 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
               </div>
             ) : (
               <div className="border-t shrink-0">
+                {shouldShowActiveTaskSuggestion && activeSuggestion && activeSuggestion.status === 'pending' && (
+                  <div className="border-b bg-muted/20 p-3">
+                    {activeMessageSuggestion && activeMessageSuggestionSendAction ? (
+                      <MessageSuggestionCard
+                        suggestion={activeMessageSuggestion}
+                        sendActionLabel={
+                          activeMessageSuggestion.options?.find((item) => item.action === activeMessageSuggestionSendAction)?.label ??
+                          'Send'
+                        }
+                        disabled={isTyping}
+                        onAccept={async (action) => {
+                          const result = await actOnSuggestion(activeMessageSuggestion.id, action);
+                          const { status } = result.actOnSuggestion;
+                          updateSuggestionStatus(activeMessageSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                          refreshData();
+                        }}
+                        onSendEdited={async (body) => {
+                          const result = await actOnSuggestion(activeMessageSuggestion.id, 'edit_message', body);
+                          const { status } = result.actOnSuggestion;
+                          updateSuggestionStatus(activeMessageSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                          refreshData();
+                        }}
+                        onDismiss={async () => {
+                          const result = await actOnSuggestion(activeMessageSuggestion.id, 'reject_task');
+                          const { status } = result.actOnSuggestion;
+                          updateSuggestionStatus(activeMessageSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                          refreshData();
+                        }}
+                      />
+                    ) : (
+                      <SuggestionOptions
+                        options={activeSuggestion.options}
+                        onAction={async (action) => {
+                          if (action === 'request_file_upload') {
+                            chatInputRef.current?.triggerFileUpload();
+                            toast.info('Upload the requested file in this task chat.');
+                            return;
+                          }
+                          const result = await actOnSuggestion(activeSuggestion.id, action);
+                          const { status } = result.actOnSuggestion;
+                          updateSuggestionStatus(activeSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                          refreshData();
+                        }}
+                      />
+                    )}
+                  </div>
+                )}
                 <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} lastSentMessage={lastSentMessage} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
               </div>
             )}
@@ -1132,7 +1397,12 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
                     </div>
                   )}
                   {participantMessages.map(msg => (
-                    <ChatMessageBubble key={msg.id} message={msg} onSuggestionClick={(sid) => openChat({ suggestionId: sid })} />
+                    <ChatMessageBubble
+                      key={msg.id}
+                      message={msg}
+                      conversationId={chatPanel.conversationId}
+                      onSuggestionClick={(sid) => openChat({ suggestionId: sid })}
+                    />
                   ))}
                 </div>
               </ScrollArea>
@@ -1142,6 +1412,53 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
                 </div>
               ) : (
                 <div className="border-t shrink-0">
+                  {shouldShowActiveTaskSuggestion && activeSuggestion && activeSuggestion.status === 'pending' && (
+                    <div className="border-b bg-muted/20 p-3">
+                      {activeMessageSuggestion && activeMessageSuggestionSendAction ? (
+                        <MessageSuggestionCard
+                          suggestion={activeMessageSuggestion}
+                          sendActionLabel={
+                            activeMessageSuggestion.options?.find((item) => item.action === activeMessageSuggestionSendAction)?.label ??
+                            'Send'
+                          }
+                          disabled={isTyping}
+                          onAccept={async (action) => {
+                            const result = await actOnSuggestion(activeMessageSuggestion.id, action);
+                            const { status } = result.actOnSuggestion;
+                            updateSuggestionStatus(activeMessageSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                            refreshData();
+                          }}
+                          onSendEdited={async (body) => {
+                            const result = await actOnSuggestion(activeMessageSuggestion.id, 'edit_message', body);
+                            const { status } = result.actOnSuggestion;
+                            updateSuggestionStatus(activeMessageSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                            refreshData();
+                          }}
+                          onDismiss={async () => {
+                            const result = await actOnSuggestion(activeMessageSuggestion.id, 'reject_task');
+                            const { status } = result.actOnSuggestion;
+                            updateSuggestionStatus(activeMessageSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                            refreshData();
+                          }}
+                        />
+                      ) : (
+                        <SuggestionOptions
+                          options={activeSuggestion.options}
+                          onAction={async (action) => {
+                            if (action === 'request_file_upload') {
+                              chatInputRef.current?.triggerFileUpload();
+                              toast.info('Upload the requested file in this task chat.');
+                              return;
+                            }
+                            const result = await actOnSuggestion(activeSuggestion.id, action);
+                            const { status } = result.actOnSuggestion;
+                            updateSuggestionStatus(activeSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                            refreshData();
+                          }}
+                        />
+                      )}
+                    </div>
+                  )}
                   <ChatInput
                     onSend={async (content) => {
                       const taskId = chatPanel.taskId!;
@@ -1171,6 +1488,23 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
         </Tabs>
       ) : (
         <>
+          {/* Linked-task header — visible whenever the open conversation
+              belongs to a task, so the manager can jump back to the task
+              page from the embedded chat panel. */}
+          {convTaskLink && (
+            <Link
+              to={`/tasks/${convTaskLink.taskId}`}
+              className="flex items-center gap-2 px-3 py-1.5 border-b bg-muted/40 hover:bg-muted/60 transition-colors shrink-0"
+              title={convTaskLink.taskTitle ?? `Open task #${convTaskLink.taskId}`}
+            >
+              <ClipboardList className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <span className="text-[11px] font-medium text-foreground truncate">
+                Task #{convTaskLink.taskId}
+                {convTaskLink.taskTitle ? <span className="text-muted-foreground"> — {convTaskLink.taskTitle}</span> : null}
+              </span>
+              <LinkIcon className="h-3 w-3 text-muted-foreground ml-auto shrink-0" />
+            </Link>
+          )}
           {/* Onboarding progress strip */}
           {onboarding.isActive && onboarding.state && (
             <OnboardingProgress steps={onboarding.state.steps} onDismiss={onboarding.dismiss} />
@@ -1209,6 +1543,8 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
                   <ChatMessageBubble
                     key={item.msg.id}
                     message={item.msg}
+                    conversationId={chatPanel.conversationId}
+                    questionAnsweredByContent={questionAnswers.get(item.msg.id) ?? null}
                     onSuggestionClick={(sid) => openChat({ suggestionId: sid })}
                   />
                 )
@@ -1274,20 +1610,52 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean } = {}) {
             </div>
           </ScrollArea>
           {activeSuggestion && activeSuggestion.status === 'pending' ? (
-            <SuggestionOptions
-              options={activeSuggestion.options}
-              onAction={async (action) => {
-                if (action === 'request_file_upload') {
-                  chatInputRef.current?.triggerFileUpload();
-                  toast.info('Upload the requested file in this task chat.');
-                  return;
-                }
-                const result = await actOnSuggestion(activeSuggestion.id, action);
-                const { status } = result.actOnSuggestion;
-                updateSuggestionStatus(activeSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
-                closeChat();
-              }}
-            />
+            <>
+              {activeMessageSuggestion && activeMessageSuggestionSendAction ? (
+                <MessageSuggestionCard
+                  suggestion={activeMessageSuggestion}
+                  sendActionLabel={
+                    activeMessageSuggestion.options?.find((item) => item.action === activeMessageSuggestionSendAction)?.label ??
+                    'Send'
+                  }
+                  disabled={isTyping}
+                  onAccept={async (action) => {
+                    const result = await actOnSuggestion(activeMessageSuggestion.id, action);
+                    const { status } = result.actOnSuggestion;
+                    updateSuggestionStatus(activeMessageSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                    refreshData();
+                  }}
+                  onSendEdited={async (body) => {
+                    const result = await actOnSuggestion(activeMessageSuggestion.id, 'edit_message', body);
+                    const { status } = result.actOnSuggestion;
+                    updateSuggestionStatus(activeMessageSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                    refreshData();
+                  }}
+                  onDismiss={async () => {
+                    const result = await actOnSuggestion(activeMessageSuggestion.id, 'reject_task');
+                    const { status } = result.actOnSuggestion;
+                    updateSuggestionStatus(activeMessageSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                    refreshData();
+                  }}
+                />
+              ) : (
+                <SuggestionOptions
+                  options={activeSuggestion.options}
+                  onAction={async (action) => {
+                    if (action === 'request_file_upload') {
+                      chatInputRef.current?.triggerFileUpload();
+                      toast.info('Upload the requested file in this task chat.');
+                      return;
+                    }
+                    const result = await actOnSuggestion(activeSuggestion.id, action);
+                    const { status } = result.actOnSuggestion;
+                    updateSuggestionStatus(activeSuggestion.id, status.toLowerCase() as 'accepted' | 'dismissed');
+                    closeChat();
+                  }}
+                />
+              )}
+              <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} lastSentMessage={lastSentMessage} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
+            </>
           ) : (
             <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} lastSentMessage={lastSentMessage} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
           )}

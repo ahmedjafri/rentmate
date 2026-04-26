@@ -73,6 +73,9 @@ class Conversation(Base, OrgId, SmallPrimaryId, HasCreatorId):
     # Conversation type taxonomy
     conversation_type = Column(String(20), nullable=True, default="task_ai")
     parent_conversation_id = Column(Integer, nullable=True)
+    # Optional link to the task that owns this coordination thread. A task can
+    # own many conversations (e.g. tenant + multiple vendors).
+    parent_task_id = Column(Integer, nullable=True, index=True)
     ai_initiated = Column(Boolean, nullable=False, default=False)
 
     # Flexible metadata (vendor requirements, assignments, etc.)
@@ -85,6 +88,16 @@ class Conversation(Base, OrgId, SmallPrimaryId, HasCreatorId):
         "Conversation",
         foreign_keys=[parent_conversation_id],
         remote_side="Conversation.id",
+    )
+    # The owning task, if any. Composite-key match mirrors the FK on this row.
+    parent_task = relationship(
+        "Task",
+        primaryjoin=(
+            "and_(foreign(Conversation.org_id) == Task.org_id,"
+            " foreign(Conversation.parent_task_id) == Task.id)"
+        ),
+        uselist=False,
+        viewonly=True,
     )
 
     participants = relationship(
@@ -125,6 +138,11 @@ class Conversation(Base, OrgId, SmallPrimaryId, HasCreatorId):
         ForeignKeyConstraint(
             ["parent_conversation_id"],
             ["conversations.id"],
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "parent_task_id"],
+            ["tasks.org_id", "tasks.id"],
+            ondelete="SET NULL",
         ),
     )
 

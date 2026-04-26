@@ -21,7 +21,7 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 
-from db.enums import TaskCategory, TaskMode, TaskSource, TaskStatus, Urgency
+from db.enums import TaskCategory, TaskMode, TaskSource, TaskStatus, TaskStepStatus, Urgency
 from db.models import (
     Base,
     Conversation,
@@ -39,6 +39,8 @@ from db.models import (
 )
 from db.models.account import create_shadow_user
 from evals.conftest import _extract_latest_outbound_message
+from gql.services.number_allocator import NumberAllocator
+from gql.services.task_service import TaskProgressStep, dump_task_steps
 
 # ── constants ────────────────────────────────────────────────────────────────
 
@@ -198,6 +200,7 @@ def scenario(db):
 
     # Task
     task = Task(
+        id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
         org_id=1,
         creator_id=TEST_CREATOR_ID,
         title="Garage door is broken",
@@ -229,7 +232,10 @@ def scenario(db):
 @pytest.fixture
 def mock_sms():
     """Capture SMS calls without sending."""
-    with patch("gql.services.sms_service.send_sms_reply", new_callable=AsyncMock) as mock:
+    with patch(
+        "gql.services.notification_service.NotificationService._send_sms",
+        new_callable=AsyncMock,
+    ) as mock:
         yield mock
 
 
@@ -261,21 +267,21 @@ def _build_messages(db, task: Task, user_message: str) -> list[dict]:
 
     # Gather external conversation messages (vendor)
     ext_msgs_text = ""
-    if task.external_conversation_id:
-        ext_conv = db.get(Conversation, task.external_conversation_id)
-        if ext_conv:
-            ext_msgs = sorted(
-                [m for m in (ext_conv.messages or [])
-                 if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
-                key=lambda m: m.sent_at,
-            )[-20:]
-            if ext_msgs:
-                lines = [f"[{m.sender_name or 'Unknown'}]: {m.body}" for m in ext_msgs]
-                ext_msgs_text = "\n\nExternal conversation (with vendor/tenant):\n" + "\n".join(lines)
+    ext_conv_ids: set[int] = set()
+    for ext_conv in task.external_conversations:
+        ext_conv_ids.add(ext_conv.id)
+        ext_msgs = sorted(
+            [m for m in (ext_conv.messages or [])
+             if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
+            key=lambda m: m.sent_at,
+        )[-20:]
+        if ext_msgs:
+            lines = [f"[{m.sender_name or 'Unknown'}]: {m.body}" for m in ext_msgs]
+            ext_msgs_text += "\n\nExternal conversation (with vendor/tenant):\n" + "\n".join(lines)
 
     # Gather tenant conversation messages
     tenant_msgs_text = ""
-    if task.parent_conversation_id and task.parent_conversation_id != task.external_conversation_id:
+    if task.parent_conversation_id and task.parent_conversation_id not in ext_conv_ids:
         parent_conv = db.get(Conversation, task.parent_conversation_id)
         if parent_conv:
             t_msgs = sorted(
@@ -518,8 +524,8 @@ class TestGarageDoorLifecycle:
             subject="Garage door repair",
             vendor_id=str(vendor.id),
             property_id=scenario["property"].id,
+            parent_task_id=task.id,
         )
-        task.external_conversation_id = vendor_conv.id
         db.flush()
 
         # Add initial outreach message
@@ -593,8 +599,8 @@ class TestGarageDoorLifecycle:
             subject="Garage door repair",
             vendor_id=str(vendor.id),
             property_id=scenario["property"].id,
+            parent_task_id=task.id,
         )
-        task.external_conversation_id = vendor_conv.id
 
         # Setup: tenant conversation exists
         tenant_conv = chat_service.get_or_create_external_conversation(
@@ -603,6 +609,7 @@ class TestGarageDoorLifecycle:
             subject="Garage door repair - access",
             tenant_id=str(tenant.id),
             property_id=scenario["property"].id,
+            parent_task_id=task.id,
         )
         task.parent_conversation_id = tenant_conv.id
         db.flush()
@@ -678,23 +685,24 @@ class TestGarageDoorLifecycle:
             subject="Garage door repair",
             vendor_id=str(vendor.id),
             property_id=scenario["property"].id,
+            parent_task_id=task.id,
         )
-        task.external_conversation_id = vendor_conv.id
         tenant_conv = chat_service.get_or_create_external_conversation(
             db,
             conversation_type=ConversationType.TENANT,
             subject="Garage door repair - access",
             tenant_id=str(tenant.id),
             property_id=scenario["property"].id,
+            parent_task_id=task.id,
         )
         task.parent_conversation_id = tenant_conv.id
 
         # Set progress steps (simulating prior turns)
-        task.steps = [
-            {"label": "Assess garage door damage", "status": "completed"},
-            {"label": "Get repair quote", "status": "active"},
-            {"label": "Complete repair", "status": "pending"},
-        ]
+        task.steps = dump_task_steps([
+            TaskProgressStep(key="assess_damage", label="Assess garage door damage", status=TaskStepStatus.DONE),
+            TaskProgressStep(key="get_quote", label="Get repair quote", status=TaskStepStatus.ACTIVE),
+            TaskProgressStep(key="complete_repair", label="Complete repair", status=TaskStepStatus.PENDING),
+        ])
         db.flush()
 
         # Conversation history

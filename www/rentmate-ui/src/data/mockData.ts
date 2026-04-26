@@ -49,15 +49,20 @@ export interface ActionDeskTask {
   chatThread: ChatMessage[];
   confidential?: boolean;
   aiConversationId?: string | null;
-  externalConversationId?: string | null;
+  externalConversationIds?: string[];
   parentConversationId?: string | null;
   ancestorIds?: string[];
   requireVendorType?: string;
   assignedVendorId?: string;
   assignedVendorName?: string;
   steps?: { key: string; label: string; status: 'pending' | 'active' | 'done'; note?: string }[];
+  goal?: string | null;
   suggestionOptions?: { key: string; label: string; action: string; variant: string }[];
   linkedConversations?: LinkedConversation[];
+  lastReviewedAt?: string | null;
+  lastReviewStatus?: string | null;
+  lastReviewSummary?: string | null;
+  lastReviewNextStep?: string | null;
 }
 
 export type ChatMessageType = 'message' | 'internal' | 'approval' | 'context' | 'error' | 'action';
@@ -92,7 +97,7 @@ export interface ChatActionCardUnit {
 }
 
 export interface ChatActionCard {
-  kind: 'suggestion' | 'property' | 'tenant' | 'document';
+  kind: 'suggestion' | 'property' | 'tenant' | 'document' | 'question';
   title: string;
   summary?: string;
   fields?: ChatActionCardField[];
@@ -139,6 +144,8 @@ export interface Suggestion {
   taskId?: string;
   vendorName?: string;
   propertyName?: string;
+  targetConversationId?: string;
+  targetConversationType?: string;
   draftMessage?: string;
   createdAt: Date;
   chatThread: ChatMessage[];
@@ -197,6 +204,24 @@ export interface ActionPolicySettings {
   entity_changes: ActionPolicyLevel;
   outbound_messages: ActionPolicyLevel;
   suggestion_fallback: ActionPolicyLevel;
+}
+
+export interface NotificationItem {
+  id: string;
+  kind: string;
+  channel: string;
+  deliveryStatus: string;
+  title: string;
+  body?: string | null;
+  taskId?: string | null;
+  conversationId?: string | null;
+  createdAt: Date;
+  readAt?: Date | null;
+  archivedAt?: Date | null;
+  sentAt?: Date | null;
+  failedAt?: Date | null;
+  failureReason?: string | null;
+  extra?: Record<string, unknown> | null;
 }
 
 export type DocumentStatus = 'uploading' | 'analyzing' | 'ready' | 'error';

@@ -57,9 +57,15 @@ fragment TaskFields on TaskType {
   assignedVendorName
   aiConversationId
   parentConversationId
-  externalConversationId
+  externalConversationIds
   steps
+  goal
   suggestionOptions
+  lastReviewedAt
+  lastReviewStatus
+  lastReviewSummary
+  lastReviewNextStep
+  unreadCount
   linkedConversations {
     uid
     label
@@ -171,6 +177,8 @@ query Suggestions($status: SuggestionStatus) {
     taskId
     vendorName
     propertyName
+    targetConversationId
+    targetConversationType
     draftMessage
     createdAt
     messages {
@@ -190,6 +198,17 @@ query Suggestions($status: SuggestionStatus) {
 query ConversationMessages($uid: String!) {
   conversationMessages(uid: $uid) {
     ...TaskMessageFields
+  }
+}
+
+query GetConversation($uid: String!) {
+  conversation(uid: $uid) {
+    uid
+    conversationType
+    title
+    taskId
+    taskTitle
+    participantLabel
   }
 }
 
@@ -245,11 +264,14 @@ query GetConversations($conversationType: ConversationType!, $limit: Int) {
     propertyName
     participantCount
     unreadCount
+    participantLabel
+    taskId
+    taskTitle
   }
 }
 
-query ScheduledTasks {
-  scheduledTasks {
+query Routines {
+  routines {
     uid
     name
     prompt
@@ -267,8 +289,8 @@ query ScheduledTasks {
   }
 }
 
-query ScheduledTask($uid: String!) {
-  scheduledTask(uid: $uid) {
+query Routine($uid: Int!) {
+  routine(uid: $uid) {
     uid
     name
     prompt
@@ -385,8 +407,10 @@ mutation CreateTask($input: CreateTaskInput!) {
 mutation UpdateTask($input: UpdateTaskInput!) {
   updateTask(input: $input) {
     uid
+    category
     taskStatus
     taskMode
+    urgency
   }
 }
 
@@ -394,6 +418,20 @@ mutation UpdateTaskStatus($uid: Int!, $status: TaskStatus!) {
   updateTaskStatus(uid: $uid, status: $status) {
     uid
     taskStatus
+  }
+}
+
+mutation UpdateTaskGoal($uid: Int!, $goal: String!) {
+  updateTaskGoal(uid: $uid, goal: $goal) {
+    uid
+    goal
+  }
+}
+
+mutation MarkTaskSeen($uid: Int!) {
+  markTaskSeen(uid: $uid) {
+    uid
+    unreadCount
   }
 }
 
@@ -505,24 +543,24 @@ mutation SaveEntityNote($entityType: String!, $entityId: String!, $content: Stri
   saveEntityNote(entityType: $entityType, entityId: $entityId, content: $content)
 }
 
-mutation CreateScheduledTask($name: String!, $prompt: String!, $schedule: String!, $repeat: Int) {
-  createScheduledTask(name: $name, prompt: $prompt, schedule: $schedule, repeat: $repeat) {
+mutation CreateRoutine($name: String!, $prompt: String!, $schedule: String!, $repeat: Int) {
+  createRoutine(name: $name, prompt: $prompt, schedule: $schedule, repeat: $repeat) {
     uid
   }
 }
 
-mutation UpdateScheduledTask($uid: String!, $name: String, $prompt: String, $schedule: String, $enabled: Boolean) {
-  updateScheduledTask(uid: $uid, name: $name, prompt: $prompt, schedule: $schedule, enabled: $enabled) {
+mutation UpdateRoutine($uid: Int!, $name: String, $prompt: String, $schedule: String, $enabled: Boolean) {
+  updateRoutine(uid: $uid, name: $name, prompt: $prompt, schedule: $schedule, enabled: $enabled) {
     uid
   }
 }
 
-mutation DeleteScheduledTask($uid: String!) {
-  deleteScheduledTask(uid: $uid)
+mutation DeleteRoutine($uid: Int!) {
+  deleteRoutine(uid: $uid)
 }
 
-mutation RunScheduledTask($uid: String!) {
-  runScheduledTask(uid: $uid) {
+mutation RunRoutine($uid: Int!) {
+  runRoutine(uid: $uid) {
     uid
     lastStatus
     lastOutput

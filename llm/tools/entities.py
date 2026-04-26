@@ -3,10 +3,10 @@ import json
 import re
 from typing import Any
 
-from backends.local_auth import resolve_account_id
+from backends.local_auth import resolve_account_id, resolve_org_id
 from db.models import MessageType
 
-from llm.tools._common import Tool, _action_card_field, _queue_chat_message
+from llm.tools._common import Tool, ToolMode, _action_card_field, _queue_chat_message
 
 
 _PLACEHOLDER_NAME_TOKENS = {
@@ -103,6 +103,36 @@ class CreatePropertyTool(Tool):
         from llm.tools._common import tool_session
         try:
             with tool_session() as db:
+                from sqlalchemy import func
+
+                from db.models import Property as SqlProperty, Unit as SqlUnit
+
+                normalized_address = address.strip()
+                existing = (
+                    db.query(SqlProperty)
+                    .filter(
+                        SqlProperty.org_id == resolve_org_id(),
+                        SqlProperty.creator_id == resolve_account_id(),
+                        func.lower(func.trim(SqlProperty.address_line1)) == normalized_address.lower(),
+                    )
+                    .first()
+                )
+                if existing:
+                    existing_units = (
+                        db.query(SqlUnit)
+                        .filter(SqlUnit.property_id == existing.id)
+                        .order_by(SqlUnit.created_at)
+                        .all()
+                    )
+                    return json.dumps({
+                        "status": "already_exists",
+                        "property_id": str(existing.id),
+                        "address": existing.address_line1,
+                        "name": existing.name,
+                        "units": [{"id": str(u.id), "label": u.label} for u in existing_units],
+                        "message": f"Property at '{existing.address_line1}' already exists.",
+                    })
+
                 prop, units = PropertyService.create_property(
                     db,
                     address=address,
@@ -407,4 +437,202 @@ class CreateTenantTool(Tool):
             return json.dumps({"status": "error", "message": str(e)})
 
 
-__all__ = ["CreatePropertyTool", "CreateTenantTool"]
+class LookupTenantsTool(Tool):
+    """Look up tenants in the system, optionally filtered by query/property."""
+
+    mode = ToolMode.READ_ONLY
+
+    @property
+    def name(self) -> str:
+        return "lookup_tenants"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Search for tenants in the system. Returns a list of tenants "
+            "with their external UUID, name, email, phone, and current "
+            "unit/property. Use this whenever you need a tenant_id for "
+            "message_person or any other tool — never guess UUIDs from "
+            "lease/unit ids in the context. "
+            "Optionally filter by query (matches name/email, case-"
+            "insensitive partial) or by property_id."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Search by name or email (case-insensitive partial "
+                        "match). Omit to list all tenants."
+                    ),
+                },
+                "property_id": {
+                    "type": "string",
+                    "description": (
+                        "Filter to tenants who currently have a lease on "
+                        "this property. Omit to search across properties."
+                    ),
+                },
+                "active_only": {
+                    "type": "boolean",
+                    "description": (
+                        "When true (default), only tenants with an active "
+                        "lease are returned. Set to false to include past "
+                        "tenants too."
+                    ),
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        from datetime import date
+
+        from db.models import Lease, Tenant
+        from db.session import SessionLocal
+
+        query = (kwargs.get("query") or "").strip().lower()
+        property_id = (kwargs.get("property_id") or "").strip() or None
+        active_only = kwargs.get("active_only", True)
+
+        db = SessionLocal.session_factory()
+        try:
+            tenants = db.query(Tenant).all()
+            today = date.today()
+            results: list[dict] = []
+            for tenant in tenants:
+                user = getattr(tenant, "user", None)
+                if not user:
+                    continue
+                full_name = " ".join(filter(None, [user.first_name, user.last_name])).strip() or "Tenant"
+                email = (user.email or "")
+                if query and query not in full_name.lower() and query not in email.lower():
+                    continue
+
+                leases = db.query(Lease).filter_by(tenant_id=tenant.id).all()
+                if property_id and not any(str(l.property_id) == property_id for l in leases):
+                    continue
+                active_leases = [l for l in leases if l.end_date >= today]
+                if active_only and not active_leases:
+                    continue
+
+                lease = active_leases[0] if active_leases else (leases[0] if leases else None)
+                results.append({
+                    "tenant_id": str(tenant.external_id),
+                    "name": full_name,
+                    "email": email or None,
+                    "phone": user.phone or None,
+                    "unit_id": str(lease.unit_id) if lease and lease.unit_id else None,
+                    "property_id": str(lease.property_id) if lease and lease.property_id else None,
+                    "lease_id": str(lease.id) if lease else None,
+                    "lease_active": bool(active_leases),
+                })
+
+            if not results:
+                return json.dumps({"tenants": [], "message": "No tenants found matching the criteria."})
+            return json.dumps({"tenants": results, "count": len(results)})
+        finally:
+            db.close()
+
+
+class LookupPropertiesTool(Tool):
+    """Look up properties in the system, optionally filtered by query/property_id."""
+
+    mode = ToolMode.READ_ONLY
+
+    @property
+    def name(self) -> str:
+        return "lookup_properties"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Search for properties in the system. Returns a list with each "
+            "property's external UUID, name, address, city/state, "
+            "property_type, and unit_count. Use whenever the user references "
+            "a property by name, nickname, or vague locator (e.g. 'the "
+            "Bothell house', 'Pinecrest', 'Marcus's place') and you do not "
+            "already have its property_id in your task context. "
+            "Optionally filter by query (matches name/address/city, case-"
+            "insensitive partial) or property_id (exact UUID). "
+            "If no property matches the user's reference, ASK the manager "
+            "which property they mean — never invent property_ids and never "
+            "propose tasks or message anyone for a property you can't find."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Search by name / address_line1 / city (case-"
+                        "insensitive partial match). Omit to list all "
+                        "properties."
+                    ),
+                },
+                "property_id": {
+                    "type": "string",
+                    "description": "Exact external UUID lookup (optional).",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        from db.models import Property
+        from db.queries import format_address
+        from db.session import SessionLocal
+
+        query = (kwargs.get("query") or "").strip().lower()
+        property_id = (kwargs.get("property_id") or "").strip() or None
+
+        db = SessionLocal.session_factory()
+        try:
+            org_id = resolve_org_id()
+            base = db.query(Property).filter(Property.org_id == org_id)
+            if property_id:
+                base = base.filter(Property.id == property_id)
+            properties = base.all()
+
+            results: list[dict] = []
+            for prop in properties:
+                if query:
+                    haystack = " ".join(
+                        s for s in [prop.name, prop.address_line1, prop.city]
+                        if s
+                    ).lower()
+                    if query not in haystack:
+                        continue
+                results.append({
+                    "property_id": str(prop.id),
+                    "name": prop.name or None,
+                    "address": format_address(prop),
+                    "city": prop.city or None,
+                    "state": prop.state or None,
+                    "property_type": prop.property_type or None,
+                    "unit_count": len(prop.units or []),
+                })
+
+            if not results:
+                msg = (
+                    f"No properties match '{kwargs.get('query') or property_id}'. "
+                    "Ask the manager which property they mean — do not invent "
+                    "a property_id or propose work for a property you can't find."
+                )
+                return json.dumps({"properties": [], "message": msg})
+            return json.dumps({"properties": results, "count": len(results)})
+        finally:
+            db.close()
+
+
+__all__ = [
+    "CreatePropertyTool",
+    "CreateTenantTool",
+    "LookupPropertiesTool",
+    "LookupTenantsTool",
+]

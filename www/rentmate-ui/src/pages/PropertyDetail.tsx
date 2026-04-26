@@ -33,7 +33,7 @@ const PropertyDetail = () => {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { properties, tenants, actionDeskTasks, openChat, removeProperty, updateProperty, addTenant } = useApp();
+  const { properties, tenants, actionDeskTasks, removeProperty, updateProperty, addTenant } = useApp();
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -552,7 +552,7 @@ const PropertyDetail = () => {
               const ModeIcon = mode.icon;
 
               return (
-                <Card key={task.id} className="p-4 rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={() => openChat({ taskId: task.id })}>
+                <Card key={task.id} className="p-4 rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={() => navigate(`/tasks/${task.id}`)}>
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div className="flex items-center gap-2 flex-wrap">
                       <Badge variant="secondary" className={cn('text-[10px] rounded-lg gap-1', mode.className)}>

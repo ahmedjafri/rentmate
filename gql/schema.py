@@ -1,8 +1,9 @@
-# gql/schema.py
+import logging
 import typing
-from datetime import date
+from datetime import UTC, date, datetime
 
 import strawberry
+from graphql import GraphQLError
 from strawberry.schema.config import StrawberryConfig
 from strawberry.types import Info
 
@@ -23,7 +24,7 @@ from .auth_mutations import Mutation as AuthMutation
 from .services import chat_service
 from .services.document_service import DocumentService
 from .services.property_service import PropertyService
-from .services.task_service import TaskService
+from .services.task_service import TaskProgressStep, TaskService, dump_task_steps
 from .services.tenant_service import TenantService
 from .services.vendor_service import VendorService
 from .types import (
@@ -41,7 +42,7 @@ from .types import (
     DocumentType,
     HouseType,
     LeaseType,
-    ScheduledTaskType,
+    RoutineType,
     SendMessageInput,
     SpawnTaskInput,
     SuggestionStatusEnum,
@@ -62,6 +63,9 @@ from .types import (
 # Context helpers
 # ---------------------------
 
+_auth_logger = logging.getLogger("rentmate.auth")
+_UNAUTHENTICATED_CODE = "UNAUTHENTICATED"
+
 def _session(info: Info):
     sess = info.context.get("db_session")
     if not sess:
@@ -72,7 +76,7 @@ def _session(info: Info):
 def _current_user(info: Info):
     user = info.context.get("user")
     if not user:
-        raise ValueError("Not authenticated")
+        raise GraphQLError("Not authenticated", extensions={"code": _UNAUTHENTICATED_CODE})
     return user
 
 
@@ -99,29 +103,29 @@ class Query:
         doc = _session(info).query(Document).filter_by(id=uid, org_id=resolve_org_id()).first()
         return DocumentType.from_sql(doc) if doc else None
 
-    @strawberry.field(description="Returns all scheduled tasks")
-    def scheduled_tasks(self, info: Info, *, enabled: typing.Optional[bool] = None) -> typing.List[ScheduledTaskType]:
+    @strawberry.field(description="Returns all routines")
+    def routines(self, info: Info, *, enabled: typing.Optional[bool] = None) -> typing.List[RoutineType]:
         _current_user(info)
-        from db.models import ScheduledTask
+        from db.models import Routine
         db = _session(info)
-        q = db.query(ScheduledTask).filter_by(
+        q = db.query(Routine).filter_by(
             org_id=resolve_org_id(),
             creator_id=resolve_account_id(),
-        ).order_by(ScheduledTask.created_at.desc())
+        ).order_by(Routine.created_at.desc())
         if enabled is not None:
-            q = q.filter(ScheduledTask.enabled == enabled)
-        return [ScheduledTaskType.from_sql(st) for st in q.all()]
+            q = q.filter(Routine.enabled == enabled)
+        return [RoutineType.from_sql(st) for st in q.all()]
 
-    @strawberry.field(description="Returns a single scheduled task by ID")
-    def scheduled_task(self, info: Info, uid: str) -> typing.Optional[ScheduledTaskType]:
+    @strawberry.field(description="Returns a single routine by ID")
+    def routine(self, info: Info, uid: int) -> typing.Optional[RoutineType]:
         _current_user(info)
-        from db.models import ScheduledTask
-        st = _session(info).query(ScheduledTask).filter_by(
+        from db.models import Routine
+        st = _session(info).query(Routine).filter_by(
             id=uid,
             org_id=resolve_org_id(),
             creator_id=resolve_account_id(),
         ).first()
-        return ScheduledTaskType.from_sql(st) if st else None
+        return RoutineType.from_sql(st) if st else None
 
     @strawberry.field(description="Get private (per-account) notes for an entity")
     def entity_note(self, info: Info, *, entity_type: str, entity_id: str) -> typing.Optional[str]:
@@ -172,6 +176,25 @@ class Query:
         _current_user(info)
         return [ChatMessageType.from_sql(m) for m in fetch_messages(_session(info), uid)]
 
+    @strawberry.field(description="Returns metadata for a single conversation (task link, participants).")
+    def conversation(self, info: Info, uid: str) -> typing.Optional[ConversationSummaryType]:
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from db.models import Conversation, ConversationParticipant
+        _current_user(info)
+        db = _session(info)
+        conv = db.execute(
+            select(Conversation)
+            .where(Conversation.external_id == uid)
+            .options(
+                selectinload(Conversation.participants).selectinload(ConversationParticipant.user),
+                selectinload(Conversation.messages),
+                selectinload(Conversation.property),
+                selectinload(Conversation.parent_task),
+            )
+        ).scalar_one_or_none()
+        return ConversationSummaryType.from_sql(conv) if conv else None
+
     @strawberry.field(description="Returns all vendors")
     def vendors(self, info: Info) -> typing.List[VendorType]:
         _current_user(info)
@@ -194,11 +217,17 @@ class Query:
         from sqlalchemy import select as sa_select
         from sqlalchemy.orm import joinedload
 
-        from db.models import Conversation, Suggestion
+        from db.models import Conversation, Suggestion, Task
         db = _session(info)
         q = sa_select(Suggestion).options(
             joinedload(Suggestion.ai_conversation).selectinload(Conversation.messages),
             joinedload(Suggestion.property),
+            joinedload(Suggestion.task)
+            .selectinload(Task.external_conversations)
+            .selectinload(Conversation.participants),
+            joinedload(Suggestion.task)
+            .joinedload(Task.parent_conversation)
+            .selectinload(Conversation.participants),
         ).where(
             Suggestion.org_id == resolve_org_id(),
             Suggestion.creator_id == resolve_account_id(),
@@ -240,14 +269,14 @@ class Mutation(AuthMutation):
         db = _session(info)
         from db.models import ConversationType
         task = TaskService.create_task(db, input)
-        ext_convo = chat_service.get_or_create_external_conversation(
+        chat_service.get_or_create_external_conversation(
             db,
             conversation_type=ConversationType.TENANT,
             subject=input.title,
             property_id=input.property_id,
             unit_id=input.unit_id,
+            parent_task_id=task.id,
         )
-        task.external_conversation_id = ext_convo.id
         db.commit()
         db.refresh(task)
         return TaskType.from_sql(task)
@@ -257,6 +286,15 @@ class Mutation(AuthMutation):
         _current_user(info)
         db = _session(info)
         task = TaskService.update_task_status(db, uid=uid, status=status)
+        db.commit()
+        db.refresh(task)
+        return TaskType.from_sql(task)
+
+    @strawberry.mutation(description="Set the manager-authored goal (intent) for a task")
+    def update_task_goal(self, info: Info, *, uid: int, goal: str) -> TaskType:
+        _current_user(info)
+        db = _session(info)
+        task = TaskService.update_task_goal(db, uid=uid, goal=goal)
         db.commit()
         db.refresh(task)
         return TaskType.from_sql(task)
@@ -293,7 +331,7 @@ class Mutation(AuthMutation):
         task = db.execute(
             _sel(Task).where(or_(
                 Task.ai_conversation_id == conv.id,
-                Task.external_conversation_id == conv.id,
+                Task.id == conv.parent_task_id,
             ))
         ).scalar_one_or_none()
         if task:
@@ -303,11 +341,12 @@ class Mutation(AuthMutation):
         db.refresh(msg)
         return ChatMessageType.from_sql(msg)
 
-    @strawberry.mutation(description="Send an SMS message to a vendor via Quo")
+    @strawberry.mutation(description="Send a message to a vendor via their notification channel (SMS)")
     def send_sms(self, info: Info, *, vendor_id: str, body: str, task_id: typing.Optional[int] = None) -> ChatMessageType:
         _current_user(info)
         db = _session(info)
-        from db.models import Conversation, ConversationType, Task
+        from db.models import ConversationType, Task
+        from gql.services.notification_service import NotificationRequest, NotificationService
         from gql.services.vendor_service import get_vendor_by_external_id
 
         vendor = get_vendor_by_external_id(db, vendor_id)
@@ -316,31 +355,29 @@ class Mutation(AuthMutation):
         if not vendor.phone:
             raise ValueError(f"Vendor {vendor.name} has no phone number")
 
-        # Find or create the vendor conversation
+        # Find or create the vendor conversation for this task
         conv = None
+        task = None
         if task_id:
             task = db.query(Task).filter_by(
                 id=task_id,
                 org_id=resolve_org_id(),
                 creator_id=resolve_account_id(),
             ).first()
-            if task and task.external_conversation_id:
-                conv = db.get(Conversation, task.external_conversation_id)
+            if task:
+                conv = next(
+                    (c for c in task.external_conversations
+                     if c.conversation_type == ConversationType.VENDOR),
+                    None,
+                )
         if not conv:
             conv = chat_service.get_or_create_external_conversation(
                 db,
                 conversation_type=ConversationType.VENDOR,
                 subject=f"SMS with {vendor.name}",
                 vendor_id=vendor.id,
+                parent_task_id=task.id if task else None,
             )
-            if task_id:
-                task = db.query(Task).filter_by(
-                    id=task_id,
-                    org_id=resolve_org_id(),
-                    creator_id=resolve_account_id(),
-                ).first()
-                if task:
-                    task.external_conversation_id = conv.id
 
         # Persist the message
         msg = chat_service.send_message(
@@ -352,18 +389,18 @@ class Mutation(AuthMutation):
         db.commit()
         db.refresh(msg)
 
-        # Dispatch SMS via Quo
-        from gql.services.sms_service import get_quo_api_key, get_quo_from_number, send_sms_reply
-        api_key = get_quo_api_key()
-        from_num = get_quo_from_number()
-        if api_key:
-            import asyncio
-            try:
-                loop = asyncio.get_event_loop()
-                loop.create_task(send_sms_reply(from_num, vendor.phone, body, api_key))
-            except RuntimeError:
-                # No running event loop (shouldn't happen in FastAPI, but be safe)
-                pass
+        # Deliver to the vendor.
+        NotificationService.dispatch(
+            db,
+            NotificationRequest(
+                recipient_user_id=vendor.id,
+                conversation_id=conv.id,
+                title=f"New message from {vendor.name}'s property manager",
+                messages=[body],
+                kind="conversation_update",
+                task_id=task.id if task else None,
+            ),
+        )
 
         return ChatMessageType.from_sql(msg)
 
@@ -396,9 +433,20 @@ class Mutation(AuthMutation):
         ).first()
         if not task:
             raise ValueError(f"Task {uid} not found")
-        task.steps = steps
+        typed_steps = [TaskProgressStep.model_validate(s) for s in (steps or [])]
+        task.steps = dump_task_steps(typed_steps)
         from sqlalchemy.orm.attributes import flag_modified
         flag_modified(task, "steps")
+        task.updated_at = datetime.now(UTC)
+        db.commit()
+        db.refresh(task)
+        return TaskType.from_sql(task)
+
+    @strawberry.mutation(description="Mark a task as seen in the tasks view")
+    def mark_task_seen(self, info: Info, uid: int) -> TaskType:
+        _current_user(info)
+        db = _session(info)
+        task = TaskService.mark_task_seen(db, uid=uid)
         db.commit()
         db.refresh(task)
         return TaskType.from_sql(task)
@@ -500,27 +548,29 @@ class Mutation(AuthMutation):
         db.commit()
         return True
 
-    @strawberry.mutation(description="Create a scheduled task")
-    def create_scheduled_task(
+    @strawberry.mutation(description="Create a routine")
+    def create_routine(
         self, info: Info, *, name: str, prompt: str, schedule: str, repeat: typing.Optional[int] = None,
-    ) -> ScheduledTaskType:
+    ) -> RoutineType:
         _current_user(info)
-        import uuid
         from datetime import UTC, datetime
 
-        from db.models import ScheduledTask
-        from handlers.scheduler import human_schedule, next_run, parse_schedule
+        from db.enums import RoutineState
+        from db.models import Routine
+        from gql.services.number_allocator import NumberAllocator
+        from handlers.routines import human_schedule, next_run, parse_schedule
 
         db = _session(info)
         cron_expr = parse_schedule(schedule)
-        st = ScheduledTask(
-            id=str(uuid.uuid4()),
-            org_id=resolve_org_id(),
+        org_id = resolve_org_id()
+        st = Routine(
+            id=NumberAllocator.allocate_next(db, entity_type="routine", org_id=org_id),
+            org_id=org_id,
             creator_id=resolve_account_id(),
             name=name, prompt=prompt,
             schedule=cron_expr,
             schedule_display=human_schedule(cron_expr),
-            enabled=True, state="scheduled",
+            enabled=True, state=RoutineState.SCHEDULED,
             repeat=repeat,
             next_run_at=next_run(cron_expr),
             created_at=datetime.now(UTC),
@@ -528,30 +578,31 @@ class Mutation(AuthMutation):
         )
         db.add(st)
         db.commit()
-        return ScheduledTaskType.from_sql(st)
+        return RoutineType.from_sql(st)
 
-    @strawberry.mutation(description="Update a scheduled task")
-    def update_scheduled_task(
-        self, info: Info, uid: str, *,
+    @strawberry.mutation(description="Update a routine")
+    def update_routine(
+        self, info: Info, uid: int, *,
         name: typing.Optional[str] = None,
         prompt: typing.Optional[str] = None,
         schedule: typing.Optional[str] = None,
         enabled: typing.Optional[bool] = None,
-    ) -> ScheduledTaskType:
+    ) -> RoutineType:
         _current_user(info)
         from datetime import UTC, datetime
 
-        from db.models import ScheduledTask
-        from handlers.scheduler import human_schedule, next_run, parse_schedule
+        from db.enums import RoutineState
+        from db.models import Routine
+        from handlers.routines import human_schedule, next_run, parse_schedule
 
         db = _session(info)
-        st = db.query(ScheduledTask).filter_by(
+        st = db.query(Routine).filter_by(
             id=uid,
             org_id=resolve_org_id(),
             creator_id=resolve_account_id(),
         ).first()
         if not st:
-            raise ValueError("Scheduled task not found")
+            raise ValueError("Routine not found")
         if name is not None:
             st.name = name
         if prompt is not None:
@@ -562,45 +613,45 @@ class Mutation(AuthMutation):
             st.next_run_at = next_run(st.schedule)
         if enabled is not None:
             if enabled and not st.simulated_at:
-                raise ValueError("Cannot enable a scheduled task that hasn't been simulated yet. Run a simulation first.")
+                raise ValueError("Cannot enable a routine that hasn't been simulated yet. Run a simulation first.")
             st.enabled = enabled
-            st.state = "scheduled" if enabled else "paused"
+            st.state = RoutineState.SCHEDULED if enabled else RoutineState.PAUSED
         st.updated_at = datetime.now(UTC)
         db.commit()
-        return ScheduledTaskType.from_sql(st)
+        return RoutineType.from_sql(st)
 
-    @strawberry.mutation(description="Delete a scheduled task")
-    def delete_scheduled_task(self, info: Info, uid: str) -> bool:
+    @strawberry.mutation(description="Delete a routine")
+    def delete_routine(self, info: Info, uid: int) -> bool:
         _current_user(info)
-        from db.models import ScheduledTask
+        from db.models import Routine
         db = _session(info)
-        st = db.query(ScheduledTask).filter_by(
+        st = db.query(Routine).filter_by(
             id=uid,
             org_id=resolve_org_id(),
             creator_id=resolve_account_id(),
         ).first()
         if not st:
-            raise ValueError("Scheduled task not found")
+            raise ValueError("Routine not found")
         db.delete(st)
         db.commit()
         return True
 
-    @strawberry.mutation(description="Run a scheduled task immediately and return its output")
-    async def run_scheduled_task(self, info: Info, uid: str) -> ScheduledTaskType:
+    @strawberry.mutation(description="Run a routine immediately and return its output")
+    async def run_routine(self, info: Info, uid: int) -> RoutineType:
         _current_user(info)
-        from db.models import ScheduledTask
-        from handlers.scheduler import _execute_task
+        from db.models import Routine
+        from handlers.routines import execute_routine
         db = _session(info)
-        st = db.query(ScheduledTask).filter_by(
+        st = db.query(Routine).filter_by(
             id=uid,
             org_id=resolve_org_id(),
             creator_id=resolve_account_id(),
         ).first()
         if not st:
-            raise ValueError("Scheduled task not found")
+            raise ValueError("Routine not found")
         from datetime import UTC, datetime
         try:
-            output = await _execute_task(st)
+            output = await execute_routine(st)
             st.last_status = "ok"
             st.last_output = output[:5000] if output else ""
         except Exception as exc:
@@ -609,35 +660,31 @@ class Mutation(AuthMutation):
         st.last_run_at = datetime.now(UTC)
         st.updated_at = datetime.now(UTC)
         db.commit()
-        return ScheduledTaskType.from_sql(st)
+        return RoutineType.from_sql(st)
 
-    @strawberry.mutation(description="Simulate a scheduled task — dry run that returns what the agent would do")
-    async def simulate_scheduled_task(self, info: Info, uid: str) -> str:
-        """Run the task's prompt through the agent but prefix with [SIMULATION] so the
+    @strawberry.mutation(description="Simulate a routine — dry run that returns what the agent would do")
+    async def simulate_routine(self, info: Info, uid: int) -> str:
+        """Run the routine prompt through the agent but prefix with [SIMULATION] so the
         agent creates suggestions instead of taking direct action."""
         _current_user(info)
-        from db.models import ScheduledTask
-        from handlers.scheduler import _execute_task
+        from db.models import Routine
+        from handlers.routines import execute_routine
         db = _session(info)
-        st = db.query(ScheduledTask).filter_by(
+        st = db.query(Routine).filter_by(
             id=uid,
             org_id=resolve_org_id(),
             creator_id=resolve_account_id(),
         ).first()
         if not st:
-            raise ValueError("Scheduled task not found")
+            raise ValueError("Routine not found")
 
-        class _SimTask:
-            def __init__(self, orig):
-                self.creator_id = orig.creator_id
-                self.id = orig.id
-                self.prompt = (
-                    "[SIMULATION — do NOT take direct action. Instead of creating entities "
-                    "or sending messages, describe what you WOULD do and create suggestions "
-                    "for each action.]\n\n" + orig.prompt
-                )
+        sim_prompt = (
+            "[SIMULATION — do NOT take direct action. Instead of creating entities "
+            "or sending messages, describe what you WOULD do and create suggestions "
+            "for each action.]\n\n" + st.prompt
+        )
         try:
-            output = await _execute_task(_SimTask(st))
+            output = await execute_routine(st, prompt_override=sim_prompt)
             from datetime import UTC, datetime
             st.simulated_at = datetime.now(UTC)
             db.commit()
@@ -685,15 +732,15 @@ class Mutation(AuthMutation):
         vendor = get_vendor_by_external_id(db, vendor_id)
         if not vendor:
             raise ValueError(f"Vendor {vendor_id} not found")
-        ext_convo = chat_service.get_or_create_external_conversation(
+        chat_service.get_or_create_external_conversation(
             db,
             conversation_type=ConversationType.VENDOR,
             subject=task.title,
             property_id=task.property_id,
             unit_id=task.unit_id,
             vendor_id=vendor.id,
+            parent_task_id=task.id,
         )
-        task.external_conversation_id = ext_convo.id
         task = TaskService.assign_vendor_to_task(db, task_id=task_id, vendor_id=vendor.id)
         db.commit()
         db.refresh(task)
@@ -761,4 +808,14 @@ class Mutation(AuthMutation):
 # Schema
 # ---------------------------
 
-schema = strawberry.Schema(query=Query, mutation=Mutation, config=StrawberryConfig(auto_camel_case=True))
+
+class RentmateSchema(strawberry.Schema):
+    def process_errors(self, errors, execution_context=None) -> None:
+        for error in errors:
+            if (error.extensions or {}).get("code") == _UNAUTHENTICATED_CODE:
+                _auth_logger.info("GraphQL unauthenticated request: %s", error.message)
+                continue
+            super().process_errors([error], execution_context)
+
+
+schema = RentmateSchema(query=Query, mutation=Mutation, config=StrawberryConfig(auto_camel_case=True))

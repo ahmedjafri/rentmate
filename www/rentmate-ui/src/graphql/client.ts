@@ -8,13 +8,14 @@ import {
   AssignVendorToTaskDocument,
   ConversationMessagesDocument,
   CreatePropertyDocument,
-  CreateScheduledTaskDocument,
+  GetConversationDocument,
+  CreateRoutineDocument,
   CreateTaskDocument,
   CreateTenantWithLeaseDocument,
   CreateVendorDocument,
   DeleteConversationDocument,
   DeletePropertyDocument,
-  DeleteScheduledTaskDocument,
+  DeleteRoutineDocument,
   DeleteTaskDocument,
   DeleteTenantDocument,
   DeleteVendorDocument,
@@ -23,11 +24,12 @@ import {
   GetDocumentDocument,
   HousesDocument,
   LoginDocument,
+  MarkTaskSeenDocument,
   MeDocument,
-  RunScheduledTaskDocument,
+  RunRoutineDocument,
   SaveEntityNoteDocument,
-  ScheduledTaskDocument,
-  ScheduledTasksDocument,
+  RoutineDocument,
+  RoutinesDocument,
   SendMessageDocument,
   SendSmsDocument,
   SuggestionsDocument,
@@ -36,8 +38,9 @@ import {
   TenantsDocument,
   UpdateEntityContextDocument,
   UpdatePropertyDocument,
-  UpdateScheduledTaskDocument,
+  UpdateRoutineDocument,
   UpdateTaskDocument,
+  UpdateTaskGoalDocument,
   UpdateTaskStatusDocument,
   UpdateVendorDocument,
   VendorTypesDocument,
@@ -208,6 +211,10 @@ export function getConversationMessages(uid: string) {
   return graphqlRequest(ConversationMessagesDocument, { uid });
 }
 
+export function getConversation(uid: string) {
+  return graphqlRequest(GetConversationDocument, { uid });
+}
+
 export function getConversations(conversationType: string, limit = 50) {
   return graphqlRequest(GetConversationsDocument, {
     conversationType: toGraphqlConversationType(conversationType),
@@ -333,11 +340,15 @@ export function createTask(input: Omit<CreateTaskInput, 'category' | 'source' | 
 
 export function updateTask(input: Omit<UpdateTaskInput, 'taskMode' | 'taskStatus' | 'uid'> & {
   uid: string | number;
+  category?: string | null;
   taskMode?: string | null;
   taskStatus?: string | null;
+  urgency?: string | null;
 }) {
   return graphqlRequest(UpdateTaskDocument, {
     input: {
+      category: toGraphqlTaskCategory(input.category),
+      urgency: toGraphqlUrgency(input.urgency),
       uid: toIntId(input.uid),
       taskMode: toGraphqlTaskMode(input.taskMode),
       taskStatus: toGraphqlTaskStatus(input.taskStatus),
@@ -352,8 +363,31 @@ export function updateTaskStatus(uid: string | number, status: string) {
   });
 }
 
+export function updateTaskGoal(uid: string | number, goal: string) {
+  return graphqlRequest(UpdateTaskGoalDocument, {
+    uid: toIntId(uid),
+    goal,
+  });
+}
+
+export function markTaskSeen(uid: string | number) {
+  return graphqlRequest(MarkTaskSeenDocument, {
+    uid: toIntId(uid),
+  });
+}
+
 export function deleteTask(uid: string | number) {
   return graphqlRequest(DeleteTaskDocument, { uid: toIntId(uid) });
+}
+
+export async function triggerTaskReview(uid: string | number): Promise<Response> {
+  const id = toIntId(uid);
+  const res = await authFetch(`/api/tasks/${id}/review`, { method: 'POST' });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+  return res;
 }
 
 export function assignVendorToTask(taskId: string | number, vendorId: string) {
@@ -363,16 +397,16 @@ export function assignVendorToTask(taskId: string | number, vendorId: string) {
   });
 }
 
-export function listScheduledTasks() {
-  return graphqlRequest(ScheduledTasksDocument, {});
+export function listRoutines() {
+  return graphqlRequest(RoutinesDocument, {});
 }
 
-export function getScheduledTask(uid: string) {
-  return graphqlRequest(ScheduledTaskDocument, { uid });
+export function getRoutine(uid: string | number) {
+  return graphqlRequest(RoutineDocument, { uid: toIntId(uid) });
 }
 
-export function createScheduledTask(name: string, prompt: string, schedule: string, repeat?: number | null) {
-  return graphqlRequest(CreateScheduledTaskDocument, {
+export function createRoutine(name: string, prompt: string, schedule: string, repeat?: number | null) {
+  return graphqlRequest(CreateRoutineDocument, {
     name,
     prompt,
     schedule,
@@ -380,14 +414,14 @@ export function createScheduledTask(name: string, prompt: string, schedule: stri
   });
 }
 
-export function updateScheduledTask(uid: string, updates: {
+export function updateRoutine(uid: string | number, updates: {
   name?: string;
   prompt?: string;
   schedule?: string;
   enabled?: boolean;
 }) {
-  return graphqlRequest(UpdateScheduledTaskDocument, {
-    uid,
+  return graphqlRequest(UpdateRoutineDocument, {
+    uid: toIntId(uid),
     name: updates.name,
     prompt: updates.prompt,
     schedule: updates.schedule,
@@ -395,10 +429,10 @@ export function updateScheduledTask(uid: string, updates: {
   });
 }
 
-export function deleteScheduledTask(uid: string) {
-  return graphqlRequest(DeleteScheduledTaskDocument, { uid });
+export function deleteRoutine(uid: string | number) {
+  return graphqlRequest(DeleteRoutineDocument, { uid: toIntId(uid) });
 }
 
-export function runScheduledTask(uid: string) {
-  return graphqlRequest(RunScheduledTaskDocument, { uid });
+export function runRoutine(uid: string | number) {
+  return graphqlRequest(RunRoutineDocument, { uid: toIntId(uid) });
 }

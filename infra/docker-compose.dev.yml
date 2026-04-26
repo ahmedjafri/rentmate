@@ -30,6 +30,7 @@ services:
       - ../:/app
       - ../data:/app/data
     environment:
+      HOME: /app/data/home
       RENTMATE_ENV: development
       RENTMATE_DB_URI: postgresql+psycopg2://postgres:postgres@postgres:5432/rentmate
       RENTMATE_DEPLOYMENT_MODE: single-machine

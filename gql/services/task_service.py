@@ -1,65 +1,61 @@
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from backends.local_auth import resolve_account_id, resolve_org_id
 from db.id_utils import normalize_optional_id
-from db.enums import TaskStatus, parse_task_mode
+from db.enums import TaskStatus, TaskStepStatus, parse_task_mode
 from db.models import (
     Conversation,
     ConversationType,
     Suggestion,
     Task,
-    TaskNumberSequence,
     User,
 )
+from gql.services.number_allocator import NumberAllocator
 from gql.types import CreateTaskInput, UpdateTaskInput
 
 
 class TaskProgressStep(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, use_enum_values=True)
 
     key: str
     label: str
-    status: str
+    status: TaskStepStatus
     note: str | None = None
 
 
-def parse_task_steps(steps: list[dict] | list[TaskProgressStep] | None) -> list[TaskProgressStep]:
-    return [step if isinstance(step, TaskProgressStep) else TaskProgressStep.model_validate(step) for step in (steps or [])]
-
-
-def dump_task_steps(steps: list[dict] | list[TaskProgressStep] | None) -> list[dict] | None:
-    parsed = parse_task_steps(steps)
-    return [step.model_dump(exclude_none=True) for step in parsed] if parsed else None
+def dump_task_steps(steps: list[TaskProgressStep]) -> list[dict] | None:
+    if not steps:
+        return None
+    return [step.model_dump(exclude_none=True) for step in steps]
 
 
 class TaskService:
+    @staticmethod
+    def touch_task(task: Task) -> Task:
+        task.updated_at = datetime.now(UTC)
+        return task
+
     @staticmethod
     def create_task(sess: Session, input: CreateTaskInput) -> Task:
         creator_id = resolve_account_id()
         org_id = resolve_org_id()
         property_id = normalize_optional_id(input.property_id)
         unit_id = normalize_optional_id(input.unit_id)
-        seq = sess.get(TaskNumberSequence, org_id)
-        current_max_id = sess.execute(
-            select(func.coalesce(func.max(Task.id), 0)).where(Task.org_id == org_id)
-        ).scalar_one()
-        if seq is None:
-            seq = TaskNumberSequence(org_id=org_id, last_number=current_max_id)
-            sess.add(seq)
-            sess.flush()
-        elif seq.last_number < current_max_id:
-            seq.last_number = current_max_id
-        seq.last_number += 1
+        goal = (input.goal or "").strip()
+        if not goal:
+            raise ValueError("Task goal is required")
+        next_id = NumberAllocator.allocate_next(sess, entity_type="task", org_id=org_id)
         task = Task(
-            id=seq.last_number,
+            id=next_id,
             org_id=org_id,
             creator_id=creator_id,
             title=input.title,
+            goal=goal,
             task_status=input.task_status,
             task_mode=parse_task_mode(input.task_mode),
             source=input.source,
@@ -71,6 +67,7 @@ class TaskService:
             unit_id=unit_id,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
+            last_seen_at=datetime.now(UTC),
         )
         sess.add(task)
         sess.flush()
@@ -107,6 +104,26 @@ class TaskService:
         task.task_status = status
         if status == TaskStatus.RESOLVED and not task.resolved_at:
             task.resolved_at = datetime.now(UTC)
+        TaskService.touch_task(task)
+        sess.flush()
+        return task
+
+    @staticmethod
+    def update_task_goal(sess: Session, *, uid: int, goal: str) -> Task:
+        task = sess.execute(
+            select(Task).where(
+                Task.id == uid,
+                Task.org_id == resolve_org_id(),
+                Task.creator_id == resolve_account_id(),
+            )
+        ).scalar_one_or_none()
+        if not task:
+            raise ValueError(f"Task {uid} not found")
+        cleaned = (goal or "").strip()
+        if not cleaned:
+            raise ValueError("Task goal is required")
+        task.goal = cleaned
+        TaskService.touch_task(task)
         sess.flush()
         return task
 
@@ -127,6 +144,26 @@ class TaskService:
             task.task_status = input.task_status
             if input.task_status == TaskStatus.RESOLVED and not task.resolved_at:
                 task.resolved_at = datetime.now(UTC)
+        TaskService.touch_task(task)
+        if input.category is not None:
+            task.category = input.category
+        if input.urgency is not None:
+            task.urgency = input.urgency
+        sess.flush()
+        return task
+
+    @staticmethod
+    def mark_task_seen(sess: Session, *, uid: int) -> Task:
+        task = sess.execute(
+            select(Task).where(
+                Task.id == uid,
+                Task.org_id == resolve_org_id(),
+                Task.creator_id == resolve_account_id(),
+            )
+        ).scalar_one_or_none()
+        if not task:
+            raise ValueError(f"Task {uid} not found")
+        task.last_seen_at = datetime.now(UTC)
         sess.flush()
         return task
 
@@ -165,7 +202,7 @@ class TaskService:
         """Link a vendor to a task and record the assignment in the AI conversation.
 
         The caller (handler layer) is responsible for creating or finding the
-        external conversation and setting task.external_conversation_id before
+        vendor's external conversation (with `parent_task_id` set) before
         calling this method.
         """
         task = sess.execute(
@@ -197,5 +234,6 @@ class TaskService:
                 vendor_name=vendor.name,
             )
             flag_modified(ai_convo, "extra")
+        TaskService.touch_task(task)
         sess.flush()
         return task

@@ -28,10 +28,10 @@ from db.models import (
     Message,
     MessageReceipt,
     Property,
-    ScheduledTask,
+    Routine,
+    IdSequence,
     Suggestion,
     Task,
-    TaskNumberSequence,
     Tenant,
     Unit,
 )
@@ -51,7 +51,7 @@ TABLE_ORDER = [
     ("conversations", Conversation, True, "parent_conversation_id"),
     ("documents", Document, True, None),
     ("tasks", Task, True, None),
-    ("task_number_sequences", TaskNumberSequence, False, None),
+    ("id_sequences", IdSequence, False, None),
     ("document_tags", DocumentTag, False, None),
     ("suggestions", Suggestion, True, None),
     ("conversation_participants", ConversationParticipant, False, None),
@@ -59,12 +59,12 @@ TABLE_ORDER = [
     ("message_receipts", MessageReceipt, False, None),
     ("agent_memory", AgentMemory, True, None),
     ("agent_traces", AgentTrace, True, None),
-    ("scheduled_tasks", ScheduledTask, True, None),
+    ("routines", Routine, True, None),
     ("entity_notes", EntityNote, False, None),
 ]
 
 # entity_notes has creator_id but not via mixin — handle explicitly
-_EXTRA_CREATOR_ID_TABLES = {"entity_notes", "task_number_sequences"}
+_EXTRA_CREATOR_ID_TABLES = {"entity_notes", "id_sequences"}
 
 
 # ─── Serialization ───────────────────────────────────────────────────────────

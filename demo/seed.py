@@ -20,7 +20,6 @@ from db.models import (
     MessageType,
     ParticipantType,
     Task,
-    TaskNumberSequence,
     User,
 )
 from db.models.rental import Lease, Property, Tenant, Unit
@@ -67,6 +66,7 @@ VENDORS = [
     {"first_name": "James", "last_name": "Park", "role_label": "HVAC", "company": "Park Climate Systems", "phone": "+14255550203"},
     {"first_name": "Luis", "last_name": "Gomez", "role_label": "Handyman", "company": None, "phone": "+14255550204"},
     {"first_name": "Sarah", "last_name": "Chen", "role_label": "Landscaper", "company": "Green Thumb Landscaping", "phone": "+14255550205"},
+    {"first_name": "Alex", "last_name": "Nakamura", "role_label": "Landscaper", "company": "Evergreen Yard Care", "phone": "+14255550206"},
 ]
 
 # (prop_idx, unit_idx, tenant_idx, start, end, rent)
@@ -83,66 +83,158 @@ LEASES = [
 
 # ── task definitions with baked conversation messages ───────────────────
 
+# Each task may declare 0+ "conversations" threads. A thread is either with a
+# tenant (entity_idx → TENANTS) or a vendor (vendor_idx → VENDORS). Multiple
+# threads on one task render as separate tabs in the task chat panel, so we
+# can exercise flows like "got two quotes from two landscapers".
 TASKS = [
     {
         "title": "Leaking kitchen faucet — Unit 1A",
+        "goal": "Fix the faucet drip with a trusted plumber this week and confirm the repair with Marcus.",
+        "steps": [
+            {"key": "triage", "label": "Review the faucet issue details", "status": "done"},
+            {"key": "schedule_vendor", "label": "Schedule Rivera Plumbing", "status": "done"},
+            {"key": "confirm_tenant", "label": "Confirm access window with Marcus", "status": "active"},
+        ],
         "category": "MAINTENANCE", "urgency": "MEDIUM", "status": "ACTIVE",
         "prop_idx": 0, "unit_idx": 0,
-        "external_type": "tenant", "entity_idx": 0,
-        "messages": [
-            ("tenant", "Hi, the kitchen faucet has been dripping for a couple days now. It's getting worse."),
-            ("ai", "Thanks for letting me know, Marcus. I'll get a plumber scheduled to take a look. Is there a day that works best for you?"),
-            ("tenant", "I work from home Tuesdays and Thursdays, either of those would be fine."),
-            ("ai", "Great, I'll aim for this Thursday. I'll confirm the time once the plumber gets back to me."),
+        "conversations": [
+            {
+                "type": "tenant", "entity_idx": 0,
+                "messages": [
+                    ("tenant", "Hi, the kitchen faucet has been dripping for a couple days now. It's getting worse."),
+                    ("ai", "Thanks for letting me know, Marcus. I'll get a plumber scheduled to take a look. Is there a day that works best for you?"),
+                    ("tenant", "I work from home Tuesdays and Thursdays, either of those would be fine."),
+                    ("ai", "Great, I'll aim for this Thursday. I'll confirm the time once the plumber gets back to me."),
+                ],
+            },
+            {
+                "type": "vendor", "vendor_idx": 0,
+                "messages": [
+                    ("ai", "Hi Mike — tenant at 1842 Meadow Lane Unit 1A reports the kitchen faucet is dripping and getting worse. Any chance you could swing by this Thursday?"),
+                    ("vendor", "Thursday works. I'd estimate 45 min. $95 flat for the diagnosis + washer replacement if that's all it is. Cartridge swap would add parts."),
+                    ("ai", "Sounds good — tenant Marcus is WFH Thursday. What time works?"),
+                    ("vendor", "Let's say 10:30am. I'll text when I'm en route."),
+                    ("ai", "Confirmed 10:30am Thursday. Tenant is expecting you. Thanks Mike."),
+                ],
+            },
         ],
     },
     {
         "title": "Rent payment question — Unit 102",
-        "category": "FINANCIAL", "urgency": "LOW", "status": "ACTIVE",
+        "goal": "Get Ryan's new payment portal link to him and confirm next month's rent will clear without issue.",
+        "steps": [
+            {"key": "review_request", "label": "Review Ryan's portal-link request", "status": "done"},
+            {"key": "share_link", "label": "Send the updated payment portal link", "status": "active"},
+            {"key": "confirm_payment", "label": "Confirm next month's payment plan", "status": "pending"},
+        ],
+        "category": "RENT", "urgency": "LOW", "status": "ACTIVE",
         "prop_idx": 1, "unit_idx": 1,
-        "external_type": "tenant", "entity_idx": 4,
-        "messages": [
-            ("tenant", "Hey, I switched banks last month. Can I get the new payment portal link?"),
-            ("ai", "Hi Ryan! Sure thing — I'll send you the updated payment link shortly."),
-            ("tenant", "Thanks, no rush. Just want to make sure next month's payment goes through."),
+        "conversations": [
+            {
+                "type": "tenant", "entity_idx": 4,
+                "messages": [
+                    ("tenant", "Hey, I switched banks last month. Can I get the new payment portal link?"),
+                    ("ai", "Hi Ryan! Sure thing — I'll send you the updated payment link shortly."),
+                    ("tenant", "Thanks, no rush. Just want to make sure next month's payment goes through."),
+                ],
+            },
         ],
     },
     {
         "title": "Fix garbage disposal — Unit 2A",
+        "goal": "Repair or replace the garbage disposal in Unit 2A and close the loop with Devon once it's working.",
+        "steps": [
+            {"key": "review_issue", "label": "Review Devon's disposal issue", "status": "done"},
+            {"key": "schedule_plumber", "label": "Schedule Rivera Plumbing visit", "status": "done"},
+            {"key": "complete_repair", "label": "Confirm the disposal works after repair", "status": "active"},
+        ],
         "category": "MAINTENANCE", "urgency": "MEDIUM", "status": "ACTIVE",
         "prop_idx": 0, "unit_idx": 2,
-        "external_type": "vendor", "vendor_idx": 0,
-        "messages": [
-            ("ai", "Hi Mike, we have a broken garbage disposal at 1842 Meadow Lane, Unit 2A. Are you available this week?"),
-            ("vendor", "I can come by Wednesday afternoon, does 2pm work?"),
-            ("ai", "That works. The tenant Devon will be home. Thanks!"),
+        "conversations": [
+            {
+                "type": "tenant", "entity_idx": 2,
+                "messages": [
+                    ("tenant", "The garbage disposal is making a grinding sound and won't spin — think something's stuck or burned out."),
+                    ("ai", "Got it Devon, thanks for the report. I'll line up a plumber to take a look. Any time you're usually out so they can access the unit?"),
+                    ("tenant", "I WFH Weds, so afternoon works best."),
+                    ("ai", "Perfect — I'll target Wednesday afternoon and confirm the window once the vendor responds."),
+                    ("ai", "Mike (Rivera Plumbing) confirmed Wednesday 2pm. Plan to be home?"),
+                    ("tenant", "Yep, I'll be here. Thanks!"),
+                ],
+            },
+            {
+                "type": "vendor", "vendor_idx": 0,
+                "messages": [
+                    ("ai", "Hi Mike, we have a broken garbage disposal at 1842 Meadow Lane, Unit 2A. Are you available this week?"),
+                    ("vendor", "I can come by Wednesday afternoon, does 2pm work?"),
+                    ("ai", "That works. The tenant Devon will be home. Thanks!"),
+                ],
+            },
         ],
     },
     {
         "title": "Annual HVAC inspection — Pinecrest",
+        "goal": "Get all 5 units inspected before the end of the month and file the report.",
+        "steps": [
+            {"key": "schedule_inspection", "label": "Schedule HVAC inspection with Park Climate Systems", "status": "active"},
+            {"key": "coordinate_access", "label": "Coordinate access for all Pinecrest units", "status": "pending"},
+            {"key": "file_report", "label": "File the inspection report", "status": "pending"},
+        ],
         "category": "MAINTENANCE", "urgency": "LOW", "status": "ACTIVE",
         "prop_idx": 1, "unit_idx": None,
-        "external_type": "vendor", "vendor_idx": 2,
-        "messages": [
-            ("ai", "Hi James, it's time for the annual HVAC inspection at Pinecrest Apartments (3310 Pine Street). Can we schedule for next week?"),
-            ("vendor", "Sure, I can do Monday or Tuesday. I'll need access to all 5 units."),
+        "conversations": [
+            {
+                "type": "vendor", "vendor_idx": 2,
+                "messages": [
+                    ("ai", "Hi James, it's time for the annual HVAC inspection at Pinecrest Apartments (3310 Pine Street). Can we schedule for next week?"),
+                    ("vendor", "Sure, I can do Monday or Tuesday. I'll need access to all 5 units."),
+                ],
+            },
         ],
     },
     {
         "title": "Repaired bathroom fan — Studio B",
+        "goal": "Confirm the bathroom fan works before the next tenant moves in.",
+        "steps": [
+            {"key": "repair_fan", "label": "Repair the bathroom fan", "status": "done"},
+            {"key": "test_fan", "label": "Test fan operation", "status": "done"},
+            {"key": "close_task", "label": "Document completion for turnover", "status": "done"},
+        ],
         "category": "MAINTENANCE", "urgency": "LOW", "status": "RESOLVED",
         "prop_idx": 2, "unit_idx": 1,
-        "external_type": "tenant", "entity_idx": None,
-        "messages": [
-            ("ai", "Hi, just confirming the bathroom fan in Studio B has been repaired. Let us know if you notice any issues."),
-        ],
+        "conversations": [],
     },
     {
-        "title": "Landscape spring cleanup",
+        # Multi-vendor scenario — two landscapers bidding. Exercises the
+        # "multiple external chats on one task" UI path.
+        "title": "Landscape spring cleanup — getting quotes",
+        "goal": "Get at least two landscaper quotes and pick one to do a spring cleanup at The Meadows by end of month.",
+        "steps": [
+            {"key": "collect_quotes", "label": "Collect landscaper quotes", "status": "done"},
+            {"key": "compare_vendors", "label": "Compare bids and timing", "status": "active"},
+            {"key": "book_cleanup", "label": "Book the selected landscaper", "status": "pending"},
+        ],
         "category": "MAINTENANCE", "urgency": "LOW", "status": "ACTIVE",
-        "prop_idx": None, "unit_idx": None,
-        "external_type": None,
-        "messages": [],
+        "prop_idx": 0, "unit_idx": None,
+        "conversations": [
+            {
+                "type": "vendor", "vendor_idx": 4,
+                "messages": [
+                    ("ai", "Hi Sarah, can you quote spring cleanup at The Meadows (1842 Meadow Lane)? 4 units, common front + back lawn, shrub trim, and bed weeding."),
+                    ("vendor", "Sure — for that scope I'd quote $680. Could do it the last week of this month."),
+                    ("ai", "Thanks — I'm collecting one more quote and will circle back on scheduling."),
+                ],
+            },
+            {
+                "type": "vendor", "vendor_idx": 5,
+                "messages": [
+                    ("ai", "Hi Alex, looking for a quote on spring cleanup at The Meadows (1842 Meadow Lane). Front/back lawn mow, shrub trim, bed weeding — common areas only, 4-unit building."),
+                    ("vendor", "$545 for the first cleanup, $60/visit if you want biweekly through summer. I have next Thursday open."),
+                    ("ai", "Appreciate it. Holding the Thursday slot while I confirm with the owner."),
+                ],
+            },
+        ],
     },
 ]
 
@@ -223,17 +315,15 @@ def _create_task_with_conversation(db, creator_id, org_id, task_def, props, tena
     if task_def.get("prop_idx") is not None and task_def.get("unit_idx") is not None:
         unit_id = props[task_def["prop_idx"]][1][task_def["unit_idx"]].id
 
-    seq = db.get(TaskNumberSequence, org_id)
-    if seq is None:
-        seq = TaskNumberSequence(org_id=org_id, last_number=0)
-        db.add(seq)
-        db.flush()
-    seq.last_number += 1
+    from gql.services.number_allocator import NumberAllocator
+    next_id = NumberAllocator.allocate_next(db, entity_type="task", org_id=org_id)
 
     task = Task(
-        id=seq.last_number,
+        id=next_id,
         org_id=org_id, creator_id=creator_id,
         title=task_def["title"],
+        goal=task_def.get("goal"),
+        steps=task_def.get("steps"),
         task_status=task_def["status"],
         source="MANUAL",
         category=task_def.get("category", "OTHER"),
@@ -257,65 +347,67 @@ def _create_task_with_conversation(db, creator_id, org_id, task_def, props, tena
     db.flush()
     task.ai_conversation_id = ai_convo.id
 
-    ext_type = task_def.get("external_type")
-    if not ext_type or not task_def.get("messages"):
-        db.flush()
-        return task
-
-    if ext_type == "tenant" and task_def.get("entity_idx") is not None:
-        tenant, tenant_user = tenants[task_def["entity_idx"]]
-        ext_convo = Conversation(
-            org_id=org_id, creator_id=creator_id,
-            subject=f"Chat with {tenant_user.first_name} {tenant_user.last_name}",
-            property_id=prop_id, unit_id=unit_id,
-            conversation_type=ConversationType.TENANT,
-            is_group=False, is_archived=False,
-            created_at=now, updated_at=now,
+    for convo_def in task_def.get("conversations") or []:
+        _create_external_conversation(
+            db, creator_id=creator_id, org_id=org_id,
+            task=task, prop_id=prop_id, unit_id=unit_id,
+            convo_def=convo_def, tenants=tenants, vendors=vendors,
+            now=now,
         )
-        db.add(ext_convo)
-        db.flush()
-        participant = ConversationParticipant(
-            org_id=org_id, creator_id=creator_id,
-            conversation_id=ext_convo.id,
-            user_id=tenant_user.id,
-            participant_type=ParticipantType.TENANT,
-            is_active=True,
-        )
-        db.add(participant)
-        db.flush()
-        task.external_conversation_id = ext_convo.id
-        _add_messages(db, org_id, ext_convo.id, participant.id, task_def["messages"],
-                      person_name=tenant_user.first_name,
-                      person_type=ParticipantType.TENANT)
-
-    elif ext_type == "vendor" and task_def.get("vendor_idx") is not None:
-        vendor_user = vendors[task_def["vendor_idx"]]
-        ext_convo = Conversation(
-            org_id=org_id, creator_id=creator_id,
-            subject=f"Chat with {vendor_user.first_name} {vendor_user.last_name}",
-            property_id=prop_id, unit_id=unit_id,
-            conversation_type=ConversationType.VENDOR,
-            is_group=False, is_archived=False,
-            created_at=now, updated_at=now,
-        )
-        db.add(ext_convo)
-        db.flush()
-        participant = ConversationParticipant(
-            org_id=org_id, creator_id=creator_id,
-            conversation_id=ext_convo.id,
-            user_id=vendor_user.id,
-            participant_type=ParticipantType.EXTERNAL_CONTACT,
-            is_active=True,
-        )
-        db.add(participant)
-        db.flush()
-        task.external_conversation_id = ext_convo.id
-        _add_messages(db, org_id, ext_convo.id, participant.id, task_def["messages"],
-                      person_name=vendor_user.first_name,
-                      person_type=ParticipantType.EXTERNAL_CONTACT)
 
     db.flush()
     return task
+
+
+def _create_external_conversation(
+    db, *, creator_id, org_id, task, prop_id, unit_id, convo_def,
+    tenants, vendors, now,
+):
+    ctype = convo_def.get("type")
+    if ctype == "tenant":
+        idx = convo_def.get("entity_idx")
+        if idx is None:
+            return
+        _, contact_user = tenants[idx]
+        conversation_type = ConversationType.TENANT
+        participant_type = ParticipantType.TENANT
+    elif ctype == "vendor":
+        idx = convo_def.get("vendor_idx")
+        if idx is None:
+            return
+        contact_user = vendors[idx]
+        conversation_type = ConversationType.VENDOR
+        participant_type = ParticipantType.EXTERNAL_CONTACT
+    else:
+        return
+
+    ext_convo = Conversation(
+        org_id=org_id, creator_id=creator_id,
+        subject=f"Chat with {contact_user.first_name} {contact_user.last_name}".strip(),
+        property_id=prop_id, unit_id=unit_id,
+        conversation_type=conversation_type,
+        is_group=False, is_archived=False,
+        parent_task_id=task.id,
+        created_at=now, updated_at=now,
+    )
+    db.add(ext_convo)
+    db.flush()
+    participant = ConversationParticipant(
+        org_id=org_id, creator_id=creator_id,
+        conversation_id=ext_convo.id,
+        user_id=contact_user.id,
+        participant_type=participant_type,
+        is_active=True,
+    )
+    db.add(participant)
+    db.flush()
+    messages = convo_def.get("messages") or []
+    if messages:
+        _add_messages(
+            db, org_id, ext_convo.id, participant.id, messages,
+            person_name=contact_user.first_name,
+            person_type=participant_type,
+        )
 
 
 def _add_messages(db, org_id, convo_id, participant_id, messages, *, person_name, person_type):

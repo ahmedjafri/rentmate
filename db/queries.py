@@ -113,7 +113,7 @@ def fetch_tasks(
     q = q.options(
         selectinload(Task.ai_conversation).selectinload(Conversation.messages),
         selectinload(Task.parent_conversation).selectinload(Conversation.messages),
-        selectinload(Task.external_conversation).selectinload(Conversation.messages),
+        selectinload(Task.external_conversations).selectinload(Conversation.messages),
         selectinload(Task.unit),
         selectinload(Task.lease).selectinload(Lease.tenant).selectinload(Tenant.user),
         selectinload(Task.lease).selectinload(Lease.unit),
@@ -129,7 +129,7 @@ def fetch_task(db: Session, task_id: int) -> Optional[Task]:
         .options(
             selectinload(Task.ai_conversation).selectinload(Conversation.messages),
             selectinload(Task.parent_conversation).selectinload(Conversation.messages),
-            selectinload(Task.external_conversation).selectinload(Conversation.messages),
+            selectinload(Task.external_conversations).selectinload(Conversation.messages),
             selectinload(Task.unit),
             selectinload(Task.lease).selectinload(Lease.tenant).selectinload(Tenant.user),
             selectinload(Task.lease).selectinload(Lease.unit),
@@ -154,6 +154,7 @@ def fetch_conversations(
             .selectinload(ConversationParticipant.user),
             selectinload(Conversation.messages),
             selectinload(Conversation.property),
+            selectinload(Conversation.parent_task),
         )
         .order_by(Conversation.updated_at.desc())
         .offset(offset)

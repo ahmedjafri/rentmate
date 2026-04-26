@@ -4,6 +4,7 @@ from backends.local_auth import reset_request_context, set_request_context
 from db.enums import AgentSource, AutomationSource, SuggestionOption, Urgency
 from db.models import Conversation, Message, Suggestion, Task, User
 from gql.services import suggestion_service
+from gql.services.number_allocator import NumberAllocator
 from gql.services.suggestion_service import coerce_action_payload
 from gql.services.task_suggestions import SuggestionExecutor
 
@@ -74,7 +75,8 @@ def test_act_on_suggestion_tracks_action_and_rejects_repeat_or_unknown_action(db
         ai_context="Needs plumber",
         source=AgentSource(),
     )
-    task = Task(org_id=1, creator_id=1, title="Follow up task")
+    task_id = NumberAllocator.allocate_next(db, entity_type="task", org_id=1)
+    task = Task(id=task_id, org_id=1, creator_id=1, title="Follow up task")
     db.add(task)
     db.flush()
 
@@ -119,7 +121,8 @@ def test_get_suggestions_excludes_other_org_rows(db):
     foreign_creator = User(id=2, org_id=2, email="org2-admin@example.com", active=True)
     db.add(foreign_creator)
     db.flush()
-    db.add(Suggestion(org_id=2, creator_id=2, title="Hidden", status="pending"))
+    foreign_id = NumberAllocator.allocate_next(db, entity_type="suggestion", org_id=2)
+    db.add(Suggestion(id=foreign_id, org_id=2, creator_id=2, title="Hidden", status="pending"))
     db.flush()
 
     visible_ids = [item.id for item in suggestion_service.get_suggestions(db)]
@@ -131,7 +134,8 @@ def test_act_on_suggestion_rejects_other_org_row(db):
     foreign_creator = User(id=2, org_id=2, email="org2-admin@example.com", active=True)
     db.add(foreign_creator)
     db.flush()
-    foreign = Suggestion(org_id=2, creator_id=2, title="Hidden", status="pending")
+    foreign_id = NumberAllocator.allocate_next(db, entity_type="suggestion", org_id=2)
+    foreign = Suggestion(id=foreign_id, org_id=2, creator_id=2, title="Hidden", status="pending")
     db.add(foreign)
     db.flush()
 
@@ -174,6 +178,30 @@ def test_action_payload_is_coerced_to_typed_shape(db):
         "vendor_id": "vendor-ext-1",
         "vendor_name": "Bob",
         "draft_message": "hello",
+    }
+
+
+def test_action_payload_accepts_goal_for_send_and_create_task(db):
+    suggestion = suggestion_service.create_suggestion(
+        db,
+        title="Schedule gutter cleaning",
+        ai_context="Need to coordinate vendor outreach",
+        source=AgentSource(),
+        action_payload={
+            "vendor_id": "vendor-ext-1",
+            "vendor_name": "Gutter Pros",
+            "draft_message": "Can you do next Thursday?",
+            "goal": "Schedule gutter cleaning at The Meadows",
+        },
+    )
+
+    payload = coerce_action_payload(suggestion.action_payload)
+    assert payload == {
+        "action": "send_and_create_task",
+        "vendor_id": "vendor-ext-1",
+        "vendor_name": "Gutter Pros",
+        "draft_message": "Can you do next Thursday?",
+        "goal": "Schedule gutter cleaning at The Meadows",
     }
 
 

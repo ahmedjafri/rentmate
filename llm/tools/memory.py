@@ -4,7 +4,7 @@ from typing import Any
 
 from backends.local_auth import resolve_account_id
 
-from llm.tools._common import Tool, _load_entity_by_public_id, _public_entity_id
+from llm.tools._common import Tool, ToolMode, _load_entity_by_public_id, _public_entity_id
 
 
 class SaveMemoryTool(Tool):
@@ -158,6 +158,8 @@ class SaveMemoryTool(Tool):
 
 class RecallMemoryTool(Tool):
     """Read back stored context notes, optionally filtered by entity."""
+
+    mode = ToolMode.READ_ONLY
 
     @property
     def name(self) -> str:

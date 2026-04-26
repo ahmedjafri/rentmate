@@ -12,6 +12,7 @@ from db.models import MessageType
 
 from llm.tools._common import (
     Tool,
+    ToolMode,
     _action_card_field,
     _load_entity_by_public_id,
     _load_tenant_by_public_id,
@@ -528,6 +529,8 @@ class CreateDocumentTool(Tool):
 class ReadDocumentTool(Tool):
     """Read uploaded document content, search document text, or list recent documents."""
 
+    mode = ToolMode.READ_ONLY
+
     @property
     def name(self) -> str:
         return "read_document"
@@ -594,16 +597,39 @@ class ReadDocumentTool(Tool):
                         "detail": detail,
                         "hint": "Retry analyze_document after fixing the processing issue.",
                     })
-                # Hint when document hasn't been analyzed yet
+                # Auto-analyze when the document hasn't been processed yet.
+                # Previously this branch returned a hint ("call analyze_document
+                # next"), but agents (notably Qwen) often dropped that follow-up
+                # step and replied to the user without ever extracting the
+                # contents. Triggering the same processing pipeline inline makes
+                # read_document a single self-sufficient call.
                 if doc.status == "pending" and not doc.raw_text:
+                    try:
+                        from llm.document_processor import process_document
+                        await process_document(doc.id)
+                    except Exception as e:
+                        detail = {
+                            "document_id": doc.id,
+                            "filename": doc.filename,
+                            "phase": "auto_analyze",
+                            "error_type": type(e).__name__,
+                        }
+                        _log_tool_error("read_document", f"auto-analyze failed: {e}", detail=detail)
+                        return json.dumps({
+                            "status": "error",
+                            "message": f"Document analysis failed: {e}",
+                            "detail": detail,
+                        })
+                    db.refresh(doc)
+                elif doc.status == "processing":
+                    # Background processor is mid-run; tell the agent to retry.
                     return json.dumps({
-                        "status": "ok",
+                        "status": "in_progress",
+                        "message": "Document is currently being analyzed — retry read_document shortly.",
                         "document": {
                             "id": doc.id,
                             "filename": doc.filename,
-                            "document_type": doc.document_type,
                             "status": doc.status,
-                            "hint": "This document has not been analyzed yet. Use analyze_document to extract its contents.",
                         },
                     })
                 raw_preview = (doc.raw_text or "")[:3000]
@@ -678,6 +704,8 @@ class ReadDocumentTool(Tool):
 
 class AnalyzeDocumentTool(Tool):
     """Trigger text extraction and AI analysis on an unprocessed document."""
+
+    mode = ToolMode.READ_ONLY
 
     @property
     def name(self) -> str:

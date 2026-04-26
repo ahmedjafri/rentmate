@@ -1,22 +1,27 @@
-"""Task-lifecycle tools: propose, close, generic suggestion, scheduled task."""
+"""Task-lifecycle tools: propose, close, generic suggestion, routine."""
 import json
+import logging
 import re
+from datetime import UTC, datetime
 from typing import Any
 
-from backends.local_auth import resolve_account_id
-from db.enums import SuggestionOption, TaskCategory, TaskStatus, Urgency
-from gql.services.task_service import dump_task_steps
-
+from backends.local_auth import resolve_account_id, resolve_org_id
+from db.enums import RoutineState, SuggestionOption, TaskCategory, TaskStatus, TaskStepStatus, Urgency
+from gql.services.task_service import TaskProgressStep, dump_task_steps
 from llm.tools._common import (
     Tool,
+    ToolMode,
     _create_suggestion,
     _load_vendor_by_public_id,
+    _placeholder_message_block_error,
     _queue_simulation_suggestion,
     _recent_user_messages,
     _resolve_task_id_from_active_conversation,
     _sanitize_tenant_outbound_draft,
     current_user_message,
 )
+
+logger = logging.getLogger(__name__)
 
 
 _DIRECT_DRAFT_NEGATIVE_PATTERNS = [
@@ -59,6 +64,95 @@ _SUGGESTION_CONFIRM_PATTERNS = [
     ]
 ]
 
+_DRAFT_SALUTATION_RE = re.compile(
+    r"^\s*(?:hi|hello|hey|dear)\s+([A-Za-z][A-Za-z' -]{0,60}?)(?:[,!.\n]|$)",
+    re.I,
+)
+
+
+def _salutation_name(draft: str | None) -> str:
+    match = _DRAFT_SALUTATION_RE.search(str(draft or ""))
+    if not match:
+        return ""
+    return " ".join(match.group(1).strip().lower().split())
+
+
+def _vendor_address_names(vendor: Any) -> set[str]:
+    names: set[str] = set()
+    for raw in (
+        getattr(vendor, "first_name", None),
+        getattr(vendor, "last_name", None),
+        getattr(vendor, "name", None),
+        getattr(vendor, "company", None),
+    ):
+        value = " ".join(str(raw or "").strip().lower().split())
+        if value:
+            names.add(value)
+    return names
+
+
+def _vendor_draft_recipient_error(*, draft_message: str | None, vendor: Any, vendor_name: str) -> str | None:
+    addressed_to = _salutation_name(draft_message)
+    if not addressed_to:
+        return None
+
+    allowed_names = _vendor_address_names(vendor)
+    if addressed_to in allowed_names:
+        return None
+
+    return (
+        f"draft_message appears addressed to '{addressed_to}', but propose_task sends "
+        f"draft_message to the assigned vendor ({vendor_name}). Use a vendor-addressed "
+        "draft here, or omit draft_message and create a separate message_person "
+        "suggestion for tenant outreach."
+    )
+
+_IN_TASK_PM_APPROVAL_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bapprove\b",
+        r"\bapproval\b",
+        r"\bowner approval\b",
+        r"\bmanager approval\b",
+        r"\bpm approval\b",
+        r"\brequest approval\b",
+        r"\bshould i proceed\b",
+        r"\bshould we proceed\b",
+        r"\bcan i proceed\b",
+        r"\bokay to proceed\b",
+        r"\bok to proceed\b",
+        r"\bproceed with\b",
+        r"\bbook\b",
+        r"\bbooking\b",
+        r"\bselect(?:ed|ing)? vendor\b",
+        r"\bchoose between\b",
+        r"\bwhich quote\b",
+        r"\bwhich vendor\b",
+        r"\bdecision\b",
+    ]
+]
+
+_OUTCOME_CONFIRM_STEP_RE = re.compile(
+    r"("
+    r"\bconfirm\b.*\b(works?|working|worked|fixed|resolved|repair|repaired|completed)\b"
+    r"|"
+    r"\bverify\b.*\b(works?|working|worked|fixed|resolved|repair|repaired|completed)\b"
+    r"|"
+    r"\bcheck\b.*\b(works?|working|worked|fixed|resolved|repair|repaired|completed)\b"
+    r"|"
+    r"\bmake sure\b.*\b(works?|working|worked|fixed|resolved)\b"
+    r")",
+    re.I,
+)
+_AFFIRMATIVE_CONFIRM_RE = re.compile(
+    r"\b(yes|works|working|fixed|resolved|all good|good now|looks good|confirmed|done|complete|completed)\b",
+    re.I,
+)
+_NEGATIVE_CONFIRM_RE = re.compile(
+    r"\b(still|not|isn't|isnt|doesn't|doesnt|won't|wont|broken|issue|problem|noise|leak|error|wrong|bad)\b",
+    re.I,
+)
+
 
 def _has_user_confirmed_upload_request(task_id: str) -> bool:
     current_message = current_user_message.get()
@@ -68,6 +162,49 @@ def _has_user_confirmed_upload_request(task_id: str) -> bool:
         if any(pattern.search(message) for pattern in _SUGGESTION_CONFIRM_PATTERNS):
             return True
     return False
+
+
+def _is_confirmation_style_step(step: TaskProgressStep) -> bool:
+    text = " ".join(s for s in (step.key, step.label, step.note or "") if s)
+    return bool(_OUTCOME_CONFIRM_STEP_RE.search(text))
+
+
+def _task_external_confirmation_received(db: Any, *, task_id: str) -> bool:
+    from db.models import Message, ParticipantType, Task
+
+    task = db.query(Task).filter_by(id=task_id).first()
+    if not task:
+        return False
+
+    convo_ids: list[int] = []
+    if getattr(task, "parent_conversation_id", None):
+        convo_ids.append(int(task.parent_conversation_id))
+    convo_ids.extend(
+        int(convo.id)
+        for convo in (getattr(task, "external_conversations", []) or [])
+        if getattr(convo, "id", None) is not None and int(convo.id) not in convo_ids
+    )
+    if not convo_ids:
+        return False
+
+    inbound = (
+        db.query(Message)
+        .filter(
+            Message.conversation_id.in_(convo_ids),
+            Message.sender_type.in_([ParticipantType.TENANT, ParticipantType.EXTERNAL_CONTACT]),
+        )
+        .order_by(Message.sent_at.desc())
+        .first()
+    )
+    if inbound is None:
+        return False
+
+    body = (inbound.body or "").strip()
+    if not body:
+        return False
+    if _NEGATIVE_CONFIRM_RE.search(body):
+        return False
+    return bool(_AFFIRMATIVE_CONFIRM_RE.search(body))
 
 
 def _normalize_current_task_suggestion_payload(
@@ -136,6 +273,36 @@ def _sanitize_tenant_message_person_payload(
         db.close()
 
 
+def _is_in_task_manager_approval_request(
+    *,
+    task_id: str,
+    title: str,
+    body: str,
+    action_payload: dict[str, Any],
+) -> bool:
+    if not task_id:
+        return False
+    if action_payload.get("action") == "request_file_upload":
+        return False
+
+    combined = "\n".join(
+        part for part in [
+            str(title or ""),
+            str(body or ""),
+            json.dumps(action_payload or {}, sort_keys=True),
+        ]
+        if part
+    )
+    return any(pattern.search(combined) for pattern in _IN_TASK_PM_APPROVAL_PATTERNS)
+
+
+def _in_task_manager_approval_block_message() -> str:
+    return (
+        "This is a PM approval/decision blocker inside the current task. "
+        "Do not create a suggestion for that. Use `ask_manager` in the task AI conversation instead."
+    )
+
+
 def _mark_task_waiting_on_upload_request(
     *,
     task_id: str,
@@ -153,28 +320,27 @@ def _mark_task_waiting_on_upload_request(
         if not task:
             return
 
-        steps = list(task.steps or [])
+        steps = [TaskProgressStep.model_validate(s) for s in (task.steps or [])]
         blocked_note = f"Blocked until {requested_file_label} is uploaded."
         updated = False
         for step in steps:
-            key = str(step.get("key") or "")
-            label = str(step.get("label") or "")
-            if key == "upload_requested_file" or requested_file_label.lower() in label.lower():
-                step["status"] = "pending"
-                step["note"] = blocked_note
+            if step.key == "upload_requested_file" or requested_file_label.lower() in step.label.lower():
+                step.status = TaskStepStatus.PENDING
+                step.note = blocked_note
                 updated = True
                 break
         if not updated:
-            steps.append({
-                "key": "upload_requested_file",
-                "label": f"Upload {requested_file_label}",
-                "status": "pending",
-                "note": blocked_note,
-            })
+            steps.append(TaskProgressStep(
+                key="upload_requested_file",
+                label=f"Upload {requested_file_label}",
+                status=TaskStepStatus.PENDING,
+                note=blocked_note,
+            ))
 
         task.steps = dump_task_steps(steps)
         flag_modified(task, "steps")
         task.task_mode = TaskMode.WAITING_APPROVAL
+        task.updated_at = datetime.now(UTC)
 
         context_parts = [part for part in [task.context, f"Blocked on user deliverable: {instructions}"] if part]
         task.context = "\n\n".join(dict.fromkeys(context_parts))
@@ -231,6 +397,157 @@ def _direct_draft_block_message() -> str:
     )
 
 
+_VALID_LIST_TASKS_STATUS = {"active", "resolved", "all"}
+_DEFAULT_LIST_TASKS_LIMIT = 50
+_MAX_LIST_TASKS_LIMIT = 200
+
+
+def _enum_value(value: Any) -> Any:
+    if value is None:
+        return None
+    return getattr(value, "name", None) or getattr(value, "value", None) or str(value)
+
+
+class ListTasksTool(Tool):
+    """List/search existing tasks scoped to the current account."""
+
+    mode = ToolMode.READ_ONLY
+
+    @property
+    def name(self) -> str:
+        return "list_tasks"
+
+    @property
+    def description(self) -> str:
+        return (
+            "List existing tasks for the current account. Use before creating a "
+            "new task to avoid duplicates, or to answer 'what's open right now?' "
+            "questions. Returns each task's id, title, status, mode, urgency, "
+            "priority, category, property/unit ids, goal, and timestamps. "
+            "Defaults to active tasks, sorted by most recent activity."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "resolved", "all"],
+                    "description": (
+                        "Which tasks to include. 'active' (default) returns "
+                        "tasks that are not resolved/dismissed; 'resolved' "
+                        "returns finished tasks; 'all' returns everything."
+                    ),
+                },
+                "property_id": {
+                    "type": "string",
+                    "description": "Filter to tasks attached to this property's UUID.",
+                },
+                "urgency": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"],
+                    "description": "Filter by urgency level.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Case-insensitive partial match against task title and goal.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        f"Max tasks to return (default {_DEFAULT_LIST_TASKS_LIMIT}, "
+                        f"hard cap {_MAX_LIST_TASKS_LIMIT})."
+                    ),
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        from db.models import Task
+        from db.session import SessionLocal
+
+        status_filter = (kwargs.get("status") or "active").strip().lower()
+        if status_filter not in _VALID_LIST_TASKS_STATUS:
+            return json.dumps({
+                "status": "error",
+                "error": f"invalid status {status_filter!r}; expected one of {sorted(_VALID_LIST_TASKS_STATUS)}",
+            })
+
+        property_id = (kwargs.get("property_id") or "").strip() or None
+        urgency_raw = (kwargs.get("urgency") or "").strip().lower() or None
+        urgency_filter: Urgency | None = None
+        if urgency_raw:
+            try:
+                urgency_filter = Urgency[urgency_raw.upper()]
+            except KeyError:
+                return json.dumps({
+                    "status": "error",
+                    "error": f"invalid urgency {urgency_raw!r}",
+                })
+        query = (kwargs.get("query") or "").strip().lower() or None
+
+        limit_raw = kwargs.get("limit")
+        try:
+            limit = int(limit_raw) if limit_raw is not None else _DEFAULT_LIST_TASKS_LIMIT
+        except (TypeError, ValueError):
+            limit = _DEFAULT_LIST_TASKS_LIMIT
+        if limit <= 0:
+            limit = _DEFAULT_LIST_TASKS_LIMIT
+        limit = min(limit, _MAX_LIST_TASKS_LIMIT)
+
+        account_id = resolve_account_id()
+        org_id = resolve_org_id()
+
+        db = SessionLocal.session_factory()
+        try:
+            q = db.query(Task).filter(
+                Task.creator_id == account_id,
+                Task.org_id == org_id,
+            )
+            if status_filter == "active":
+                q = q.filter(Task.task_status.in_([TaskStatus.SUGGESTED, TaskStatus.ACTIVE, TaskStatus.PAUSED]))
+            elif status_filter == "resolved":
+                q = q.filter(Task.task_status.in_([TaskStatus.RESOLVED, TaskStatus.DISMISSED]))
+            if property_id:
+                q = q.filter(Task.property_id == property_id)
+            if urgency_filter is not None:
+                q = q.filter(Task.urgency == urgency_filter)
+
+            tasks = q.order_by(Task.updated_at.desc()).all()
+
+            results: list[dict[str, Any]] = []
+            for task in tasks:
+                if query:
+                    title_lc = (task.title or "").lower()
+                    goal_lc = (task.goal or "").lower()
+                    if query not in title_lc and query not in goal_lc:
+                        continue
+                results.append({
+                    "id": task.id,
+                    "title": task.title,
+                    "status": _enum_value(task.task_status),
+                    "mode": _enum_value(task.task_mode),
+                    "urgency": _enum_value(task.urgency),
+                    "priority": _enum_value(task.priority),
+                    "category": _enum_value(task.category),
+                    "property_id": task.property_id,
+                    "unit_id": task.unit_id,
+                    "lease_id": task.lease_id,
+                    "goal": task.goal,
+                    "last_message_at": task.last_message_at.isoformat() if task.last_message_at else None,
+                    "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+                    "created_at": task.created_at.isoformat() if task.created_at else None,
+                })
+                if len(results) >= limit:
+                    break
+
+            return json.dumps({"tasks": results, "count": len(results)})
+        finally:
+            db.close()
+
+
 class ProposeTaskTool(Tool):
     """Create a task proposal for manager review."""
 
@@ -239,22 +556,39 @@ class ProposeTaskTool(Tool):
         return "propose_task"
 
     @property
+    def category(self):
+        from llm.tools._common import ToolCategory
+        return ToolCategory.REVIEW
+
+    @property
     def description(self) -> str:
         return (
             "Propose a new task for a genuinely separate issue. "
             "Only use propose_task for a genuinely separate issue that needs its own task. "
             "Never use propose_task when the user asked you to draft a notice, letter, or document directly in chat. "
             "You MUST provide a vendor_id external UUID — use lookup_vendors first. "
-            "Include a draft_message and steps (3-6 steps)."
+            "You MUST provide a goal — one sentence stating what 'done' looks like, outcome-flavored and specific. "
+            "You MUST provide steps — an ordered list of 3–6 progress steps "
+            "(each with key/label/status). Mark the first step `active`; the "
+            "rest start `pending`. Tasks without steps render with an empty "
+            "progress tracker and are rejected."
         )
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "required": ["title", "category", "vendor_id"],
+            "required": ["title", "category", "vendor_id", "goal", "steps"],
             "properties": {
                 "title": {"type": "string", "description": "Short task title"},
+                "goal": {
+                    "type": "string",
+                    "description": (
+                        "One-sentence manager-facing intent statement — what 'done' looks like. "
+                        "Outcome-flavored and concrete. Example: \"Fix the kitchen leak with a trusted plumber "
+                        "this week and confirm the repair with Marcus.\" Do NOT restate the title."
+                    ),
+                },
                 "category": {
                     "type": "string",
                     "enum": [c.value for c in TaskCategory],
@@ -285,7 +619,7 @@ class ProposeTaskTool(Tool):
                             "label": {"type": "string", "description": "Human-readable step label"},
                             "status": {
                                 "type": "string",
-                                "enum": ["pending", "active", "done"],
+                                "enum": [s.value for s in TaskStepStatus],
                                 "description": "Step status",
                             },
                             "note": {"type": "string", "description": "Optional context note"},
@@ -304,22 +638,99 @@ class ProposeTaskTool(Tool):
 
         vendor_id = str(kwargs["vendor_id"])
 
+        steps_raw = kwargs.get("steps")
+        if not isinstance(steps_raw, list) or not steps_raw:
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    "steps is required: provide 3–6 ordered progress steps "
+                    "(each {key, label, status}). Mark the first step "
+                    "`active`; the rest `pending`."
+                ),
+            })
+        if not all(
+            isinstance(step, dict) and step.get("label") and step.get("key")
+            for step in steps_raw
+        ):
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    "Each step must be an object with both `key` and `label` "
+                    "set; status defaults to `pending`."
+                ),
+            })
+
+        from db.models import Property
         from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
             vendor = _load_vendor_by_public_id(db, vendor_id)
-            vendor_name = vendor.name if vendor else "Vendor"
+            if not vendor:
+                return json.dumps({
+                    "status": "error",
+                    "message": (
+                        f"Vendor {vendor_id} not found. Use lookup_vendors first and pass "
+                        "the returned vendor id; do not use placeholder vendor ids."
+                    ),
+                })
+            vendor_name = vendor.name or vendor.company or "Vendor"
+            recipient_error = _vendor_draft_recipient_error(
+                draft_message=kwargs.get("draft_message"),
+                vendor=vendor,
+                vendor_name=vendor_name,
+            )
+            if recipient_error:
+                return json.dumps({"status": "error", "message": recipient_error})
+
+            # Reject fabricated property references — agents that fall back to
+            # plausible-sounding property_ids ("the bothell house") would
+            # otherwise create suggestions for properties that don't exist.
+            property_id = (kwargs.get("property_id") or "").strip() or None
+            if property_id:
+                prop = db.query(Property).filter(
+                    Property.id == property_id,
+                    Property.org_id == resolve_org_id(),
+                ).first()
+                if not prop:
+                    return json.dumps({
+                        "status": "error",
+                        "message": (
+                            f"Property {property_id} not found. Call "
+                            "`lookup_properties` with the user's reference "
+                            "(name, nickname, or address) and use the returned "
+                            "property_id — never invent one."
+                        ),
+                    })
         finally:
             db.close()
 
         action_payload: dict = {
+            "action": "send_and_create_task",
             "vendor_id": vendor_id,
             "vendor_name": vendor_name,
         }
+        goal = (kwargs.get("goal") or "").strip()
+        if goal:
+            action_payload["goal"] = goal
         draft_message = kwargs.get("draft_message")
+        placeholder_error = _placeholder_message_block_error(draft_message)
+        if placeholder_error:
+            return json.dumps({"status": "error", "message": placeholder_error})
         if draft_message:
             action_payload["draft_message"] = draft_message
-        steps = kwargs.get("steps")
+        try:
+            steps = [TaskProgressStep.model_validate(s) for s in (kwargs.get("steps") or [])]
+        except Exception as exc:
+            valid_statuses = sorted({s.value for s in TaskStepStatus})
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    f"Step validation failed: {exc}. Each step must have key, "
+                    f"label, and status — valid step statuses are {valid_statuses}. "
+                    "Track waiting/blocked/needs-action state via record_task_review, "
+                    "not step status."
+                ),
+            })
         if steps:
             action_payload["steps"] = dump_task_steps(steps)
 
@@ -352,7 +763,18 @@ class ProposeTaskTool(Tool):
             risk_score=risk,
             suggestion_type=kwargs["category"],
         )
-        return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Task proposal '{kwargs['title']}' with {vendor_name} created for manager review."})
+        return json.dumps({
+            "status": "pending_approval",
+            "task_id": None,
+            "proposal_id": sid,
+            "message": (
+                f"Task proposal '{kwargs['title']}' with {vendor_name} is queued for manager review. "
+                "The task does NOT exist yet — there is no task_id to act on. "
+                "STOP this turn now: do not call message_person, update_task_progress, close_task, "
+                "or any tool that takes a task_id. The manager will approve the proposal in a "
+                "separate step; only then can dependent actions run."
+            ),
+        })
 
 
 class CloseTaskTool(Tool):
@@ -411,6 +833,170 @@ class CloseTaskTool(Tool):
             return json.dumps({"status": "ok", "message": "Task resolved."})
 
 
+class UpdateTaskProgressTool(Tool):
+    """Update progress steps on an existing task."""
+
+    @property
+    def name(self) -> str:
+        return "update_task_progress"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Update one progress step on a task by marking it pending, active, or done. "
+            "Use this whenever work advances so the task can be closed once all steps are done. "
+            "Provide either step_key or step_label to identify the step."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["task_id", "status"],
+            "properties": {
+                "task_id": {"type": "string", "description": "ID of the task to update"},
+                "step_key": {"type": "string", "description": "Unique step key to update"},
+                "step_label": {"type": "string", "description": "Step label to update when key is unknown"},
+                "status": {
+                    "type": "string",
+                    "enum": [s.value for s in TaskStepStatus],
+                    "description": "New step status",
+                },
+                "note": {"type": "string", "description": "Optional step note to store"},
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        agent_supplied_task_id = kwargs.get("task_id")
+        task_id = agent_supplied_task_id
+        step_key = (kwargs.get("step_key") or "").strip()
+        step_label = (kwargs.get("step_label") or "").strip()
+        status = kwargs["status"]
+        note = kwargs.get("note")
+
+        # Reject unknown statuses up front with a tool-friendly error.
+        # The JSON-schema enum is just a hint; agents sometimes pass review-
+        # vocabulary words like "waiting" that aren't valid step statuses.
+        valid_statuses = {s.value for s in TaskStepStatus}
+        if status not in valid_statuses:
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    f"Invalid step status {status!r}. Valid step statuses are: "
+                    f"{sorted(valid_statuses)}. Use 'pending' for steps not yet "
+                    "started, 'active' for the in-progress step, and 'done' "
+                    "for completed steps. Track waiting/blocked/needs-action "
+                    "state via record_task_review, not step status."
+                ),
+            })
+
+        # Active conversation is ground truth: progress updates posted
+        # from inside a task's AI conversation belong to that task.
+        # Override any hallucinated task_id and rescue agents that
+        # omit it entirely.
+        active_task_id = _resolve_task_id_from_active_conversation()
+        if active_task_id is not None:
+            if (
+                agent_supplied_task_id is not None
+                and str(agent_supplied_task_id) != str(active_task_id)
+            ):
+                logger.warning(
+                    "update_task_progress task_id override: agent passed "
+                    "%s but active conversation belongs to task %s — "
+                    "using active task",
+                    agent_supplied_task_id, active_task_id,
+                )
+            task_id = active_task_id
+
+        if not step_key and not step_label:
+            return json.dumps({"status": "error", "message": "Provide step_key or step_label."})
+
+        from datetime import datetime
+
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from db.models import Task as TaskModel
+        from llm.tools._common import tool_session
+
+        with tool_session() as db:
+            task = db.query(TaskModel).filter_by(id=task_id).first()
+            if not task:
+                return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
+
+            # Tolerate stored steps with statuses outside the current enum
+            # (e.g. legacy 'waiting' rows). Coerce unknowns to 'pending' and
+            # log so the operator can spot upstream bugs without locking the
+            # agent out of progress updates.
+            steps: list[TaskProgressStep] = []
+            for raw in (task.steps or []):
+                try:
+                    steps.append(TaskProgressStep.model_validate(raw))
+                except Exception:
+                    coerced = dict(raw or {})
+                    bad_status = coerced.get("status")
+                    if bad_status not in valid_statuses:
+                        logger.warning(
+                            "update_task_progress: coercing invalid stored step status %r → 'pending' on task %s step %r",
+                            bad_status, task_id, coerced.get("key"),
+                        )
+                        coerced["status"] = TaskStepStatus.PENDING.value
+                    steps.append(TaskProgressStep.model_validate(coerced))
+            if not steps:
+                return json.dumps({"status": "error", "message": f"Task {task_id} has no progress steps"})
+
+            updated_step: TaskProgressStep | None = None
+            for step in steps:
+                matches_key = step_key and step.key == step_key
+                matches_label = step_label and step.label.strip().lower() == step_label.lower()
+                if matches_key or matches_label:
+                    step.status = status
+                    if note is not None:
+                        step.note = note
+                    updated_step = step
+                    break
+
+            if updated_step is None:
+                identifier = step_key or step_label
+                return json.dumps({"status": "error", "message": f"Step '{identifier}' not found on task {task_id}"})
+
+            if status == TaskStepStatus.DONE and _is_confirmation_style_step(updated_step):
+                if not _task_external_confirmation_received(db, task_id=str(task_id)):
+                    return json.dumps({
+                        "status": "error",
+                        "message": (
+                            f"Cannot mark step '{updated_step.label or updated_step.key}' done "
+                            "until an external tenant/vendor confirmation has actually been received."
+                        ),
+                    })
+
+            # Keep only one active step. If a step was just completed, advance the next pending step.
+            if status == TaskStepStatus.ACTIVE:
+                for step in steps:
+                    if step is updated_step:
+                        continue
+                    if step.status == TaskStepStatus.ACTIVE:
+                        step.status = TaskStepStatus.PENDING
+            elif status == TaskStepStatus.DONE:
+                for step in steps:
+                    if step is updated_step:
+                        continue
+                    if step.status == TaskStepStatus.ACTIVE:
+                        step.status = TaskStepStatus.PENDING
+                next_pending = next((s for s in steps if s.status == TaskStepStatus.PENDING), None)
+                if next_pending is not None:
+                    next_pending.status = TaskStepStatus.ACTIVE
+
+            task.steps = dump_task_steps(steps)
+            flag_modified(task, "steps")
+            task.updated_at = datetime.now(UTC)
+
+            return json.dumps({
+                "status": "ok",
+                "message": f"Updated step '{updated_step.label or updated_step.key}' to {status}.",
+                "steps": task.steps,
+            })
+
+
 class CreateSuggestionTool(Tool):
     """Create a suggestion for the property manager to review."""
 
@@ -424,6 +1010,7 @@ class CreateSuggestionTool(Tool):
             "Create a suggestion for the property manager to review and approve. "
             "Use this for actions that benefit from human review — creating entities "
             "from documents, proposing lease changes, compliance actions, etc. "
+            "If the blocker is a PM approval or decision inside the current task, use `ask_manager` instead of create_suggestion. "
             "Never use create_suggestion when the user explicitly asked for the draft itself in chat instead of a suggestion or task. "
             "When the blocker is a user deliverable inside the current task, ask the user first "
             "whether they want a suggestion created. "
@@ -475,7 +1062,6 @@ class CreateSuggestionTool(Tool):
                 "suggestion_blocked_direct_draft",
                 "policy",
                 message,
-                task_id=task_id or None,
                 detail={"title": kwargs["title"]},
             )
             return json.dumps({"status": "error", "message": message})
@@ -486,7 +1072,6 @@ class CreateSuggestionTool(Tool):
                 "suggestion_blocked_same_task",
                 "policy",
                 _same_task_handoff_block_message(),
-                task_id=task_id,
                 detail={"title": kwargs["title"]},
             )
             return json.dumps({"status": "error", "message": _same_task_handoff_block_message()})
@@ -501,6 +1086,25 @@ class CreateSuggestionTool(Tool):
                 task_id=task_id,
                 action_payload=action_payload,
             )
+        if _is_in_task_manager_approval_request(
+            task_id=task_id,
+            title=kwargs["title"],
+            body=kwargs["body"],
+            action_payload=action_payload,
+        ):
+            from llm.tracing import log_trace
+
+            message = _in_task_manager_approval_block_message()
+            log_trace(
+                "suggestion_blocked_in_task_manager_approval",
+                "policy",
+                message,
+                detail={
+                    "title": kwargs["title"],
+                    "action_payload": action_payload or None,
+                },
+            )
+            return json.dumps({"status": "error", "message": message})
         if action_payload.get("action") == "request_file_upload" and task_id:
             if not _has_user_confirmed_upload_request(task_id):
                 message = (
@@ -513,7 +1117,6 @@ class CreateSuggestionTool(Tool):
                     "suggestion_deferred_pending_user_confirmation",
                     "policy",
                     message,
-                    task_id=task_id,
                     detail={"action_payload": action_payload},
                 )
                 return json.dumps({"status": "error", "message": message})
@@ -576,17 +1179,17 @@ class CreateSuggestionTool(Tool):
             return json.dumps({"status": "error", "message": str(e)})
 
 
-class CreateScheduledTaskTool(Tool):
-    """Create a recurring or one-shot scheduled task."""
+class CreateRoutineTool(Tool):
+    """Create a recurring or one-shot routine."""
 
     @property
     def name(self) -> str:
-        return "create_scheduled_task"
+        return "create_routine"
 
     @property
     def description(self) -> str:
         return (
-            "Create a scheduled task that runs the AI agent on a recurring schedule. "
+            "Create a routine that runs the AI agent on a recurring schedule. "
             "Use for recurring checks (lease expiry, rent reminders, maintenance schedules). "
             "Schedule can be: cron expression ('0 9 * * 1'), interval ('every 4h'), "
             "or named ('daily', 'weekly', 'monthly'). The prompt describes what the "
@@ -599,7 +1202,7 @@ class CreateScheduledTaskTool(Tool):
             "type": "object",
             "required": ["name", "prompt", "schedule"],
             "properties": {
-                "name": {"type": "string", "description": "Human-friendly name for this scheduled task"},
+                "name": {"type": "string", "description": "Human-friendly name for this routine"},
                 "prompt": {"type": "string", "description": "What the agent should do each run (natural language)"},
                 "schedule": {
                     "type": "string",
@@ -613,8 +1216,8 @@ class CreateScheduledTaskTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        from db.models import ScheduledTask
-        from handlers.scheduler import human_schedule, next_run, parse_schedule
+        from db.models import Routine
+        from handlers.routines import human_schedule, next_run, parse_schedule
         from llm.tools._common import tool_session
 
         name = kwargs["name"]
@@ -627,18 +1230,21 @@ class CreateScheduledTaskTool(Tool):
 
         try:
             with tool_session() as db:
-                import uuid
                 from datetime import UTC, datetime
 
-                task = ScheduledTask(
-                    id=str(uuid.uuid4()),
+                from gql.services.number_allocator import NumberAllocator
+
+                org_id = resolve_org_id()
+                task = Routine(
+                    id=NumberAllocator.allocate_next(db, entity_type="routine", org_id=org_id),
+                    org_id=org_id,
                     creator_id=resolve_account_id(),
                     name=name,
                     prompt=prompt,
                     schedule=cron_expr,
                     schedule_display=display,
                     enabled=True,
-                    state="scheduled",
+                    state=RoutineState.SCHEDULED,
                     repeat=kwargs.get("repeat"),
                     next_run_at=nxt,
                     created_at=datetime.now(UTC),
@@ -649,10 +1255,10 @@ class CreateScheduledTaskTool(Tool):
 
             return json.dumps({
                 "status": "ok",
-                "scheduled_task_id": task_id,
+                "routine_id": task_id,
                 "schedule": display,
                 "next_run": nxt.isoformat(),
-                "message": f"Scheduled task '{name}' created — {display}, next run {nxt.strftime('%b %d at %H:%M')}.",
+                "message": f"Routine '{name}' created — {display}, next run {nxt.strftime('%b %d at %H:%M')}.",
             })
         except Exception as e:
             return json.dumps({"status": "error", "message": str(e)})
@@ -661,6 +1267,7 @@ class CreateScheduledTaskTool(Tool):
 __all__ = [
     "ProposeTaskTool",
     "CloseTaskTool",
+    "UpdateTaskProgressTool",
     "CreateSuggestionTool",
-    "CreateScheduledTaskTool",
+    "CreateRoutineTool",
 ]

@@ -1,14 +1,11 @@
 """Unit tests for llm/registry.py — AgentRegistry."""
 
-import tempfile
 import threading
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-# DEFAULT_USER_ID removed — tests use local constant
 DEFAULT_USER_ID = "1"
 
 
@@ -21,7 +18,6 @@ class TestAgentRegistry(unittest.TestCase):
         registry = AgentRegistry.__new__(AgentRegistry)
         registry._lock = threading.Lock()
         registry._ready = {}
-        registry._tools_registered = False
         return registry
 
     # ------------------------------------------------------------------
@@ -30,15 +26,13 @@ class TestAgentRegistry(unittest.TestCase):
 
     def test_ensure_agent_returns_creator_id(self):
         registry = self._make_registry()
-        with patch.object(registry, "start_gateway"), \
-             patch.object(registry, "_write_workspace"):
+        with patch.object(registry, "start_gateway"):
             agent_id = registry.ensure_agent(DEFAULT_USER_ID, self.db)
         self.assertEqual(agent_id, DEFAULT_USER_ID)
 
     def test_ensure_agent_starts_gateway_when_not_ready(self):
         registry = self._make_registry()
-        with patch.object(registry, "start_gateway") as mock_start, \
-             patch.object(registry, "_write_workspace"):
+        with patch.object(registry, "start_gateway") as mock_start:
             registry.ensure_agent(DEFAULT_USER_ID, self.db)
         mock_start.assert_called_once_with(DEFAULT_USER_ID)
 
@@ -69,41 +63,29 @@ class TestAgentRegistry(unittest.TestCase):
         self.assertFalse(registry.is_healthy(DEFAULT_USER_ID))
 
     # ------------------------------------------------------------------
-    # populate_all_agents — workspace files
+    # build_system_prompt_bundle reads SOUL.md from the template dir
     # ------------------------------------------------------------------
 
-    def test_populate_all_agents_writes_core_workspace_files(self):
-        from llm.registry import AgentRegistry
+    def test_build_system_prompt_bundle_includes_soul_md(self):
+        registry = self._make_registry()
+        bundle = registry.build_system_prompt_bundle(DEFAULT_USER_ID)
+        names = [p["name"] for p in bundle["parts"]]
+        self.assertIn("SOUL.md", names)
+        # SOUL.md content should be present in the assembled prompt.
+        self.assertIn("RentMate", bundle["system_prompt"])
 
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            data_dir = tmp_path / "agent"
-            data_dir.mkdir(parents=True)
-
-            with patch("llm.registry.get_agent_data_dir", return_value=data_dir), patch(
-                "llm.registry._lookup_account_id", return_value=int(DEFAULT_USER_ID)
-            ):
-                registry = AgentRegistry()
-                registry.populate_all_agents(self.db)
-
-            soul_md = data_dir / DEFAULT_USER_ID / "SOUL.md"
-            self.assertTrue(soul_md.exists(), "SOUL.md should be created")
-            self.assertFalse(
-                (data_dir / DEFAULT_USER_ID / "USER.md").exists(),
-                "USER.md should not be created",
-            )
-
-    def test_ensure_agent_runtime_dirs_creates_hermes_profile_dirs(self):
-        from llm.registry import ensure_agent_runtime_dirs
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            data_dir = tmp_path / "agent"
-            with patch("llm.registry.get_agent_data_dir", return_value=data_dir):
-                runtime_dirs = ensure_agent_runtime_dirs(DEFAULT_USER_ID)
-
-            self.assertTrue(runtime_dirs["workspace"].is_dir())
-            self.assertTrue(runtime_dirs["hermes_home"].is_dir())
-            self.assertEqual(runtime_dirs["hermes_home"], runtime_dirs["workspace"])
-            self.assertTrue(runtime_dirs["working_dir"].is_dir())
-            self.assertEqual(runtime_dirs["working_dir"], runtime_dirs["workspace"] / "home")
+    def test_build_system_prompt_substitutes_tools_placeholder(self):
+        """The ``{{tools}}`` placeholder in SOUL.md should be replaced
+        with the auto-generated tool list before the prompt ships."""
+        registry = self._make_registry()
+        bundle = registry.build_system_prompt_bundle(DEFAULT_USER_ID)
+        prompt = bundle["system_prompt"]
+        assert "{{tools}}" not in prompt
+        # Auto-generated section headers must show up.
+        assert "**Read tools**" in prompt
+        assert "**Immediate tools**" in prompt
+        assert "**Write tools**" in prompt
+        # A few representative tool names from each category.
+        assert "`lookup_vendors`" in prompt
+        assert "`save_memory`" in prompt
+        assert "`message_person`" in prompt

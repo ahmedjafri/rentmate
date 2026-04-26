@@ -2,11 +2,13 @@
 import json
 from typing import Any
 
-from llm.tools._common import Tool
+from llm.tools._common import Tool, ToolMode
 
 
 class LookupVendorsTool(Tool):
     """Look up vendors in the system, optionally filtered by type."""
+
+    mode = ToolMode.READ_ONLY
 
     @property
     def name(self) -> str:

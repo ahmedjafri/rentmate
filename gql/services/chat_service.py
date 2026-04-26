@@ -26,6 +26,47 @@ from llm.history_filters import is_transient_tool_failure_text
 logger = logging.getLogger("rentmate.chat_service")
 
 
+def build_agent_system_context(*, conversation: Conversation | None, context: str) -> str:
+    """Prefix prompt context with the role of the active conversation.
+
+    This prevents the model from confusing the PM's internal task AI thread
+    with a tenant/vendor-facing conversation when both transcript types are
+    present in the broader task context.
+    """
+    if conversation is None:
+        return context
+
+    convo_type = getattr(conversation, "conversation_type", None)
+    prefix_lines: list[str] = []
+    if convo_type == ConversationType.TASK_AI:
+        prefix_lines = [
+            "Active conversation: internal task AI conversation.",
+            "The latest user message is from the PM/manager, not from the tenant or vendor.",
+            "Do not reply as though you are already talking to the tenant/vendor unless you explicitly send them a separate message.",
+        ]
+    elif convo_type == ConversationType.USER_AI:
+        prefix_lines = [
+            "Active conversation: internal AI conversation with the PM/manager.",
+            "The latest user message is from the PM/manager.",
+            "Retrieved tasks, quotes, vendor threads, and prior coordination may be background from other issues. Do not merge those facts into the current request unless the PM explicitly indicates it is the same task, quote, approval, or thread.",
+            "For a fresh operational request in this PM chat, create or propose a task before starting vendor or tenant coordination unless the PM explicitly asked for direct one-off outreach or a direct draft.",
+        ]
+    elif convo_type == ConversationType.TENANT:
+        prefix_lines = [
+            "Active conversation: tenant-facing conversation.",
+            "The latest user message is from the tenant.",
+        ]
+    elif convo_type == ConversationType.VENDOR:
+        prefix_lines = [
+            "Active conversation: vendor-facing conversation.",
+            "The latest user message is from the vendor.",
+        ]
+
+    if not prefix_lines:
+        return context
+    return "\n".join(prefix_lines) + "\n\n" + context
+
+
 def model_history_messages(db_msgs: list[Message]) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     for m in db_msgs:
@@ -81,7 +122,7 @@ class MessageActionCardUnit(BaseModel):
 class MessageActionCard(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["suggestion", "property", "tenant", "document"]
+    kind: Literal["suggestion", "property", "tenant", "document", "question"]
     title: str
     summary: str | None = None
     fields: list[MessageActionCardField] | None = None
@@ -90,7 +131,7 @@ class MessageActionCard(BaseModel):
 
 
 class MessageMeta(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     source: str | None = None
     direction: Literal["inbound", "outbound"] | None = None
@@ -213,7 +254,7 @@ def build_agent_message_history(
     if exclude_last and db_msgs:
         db_msgs = db_msgs[:-1]
     db_msgs = db_msgs[-20:]
-    messages = [{"role": "system", "content": context}]
+    messages = [{"role": "system", "content": build_agent_system_context(conversation=full_conv, context=context)}]
     messages.extend(model_history_messages(db_msgs))
     messages.append({"role": "user", "content": user_message})
     return messages
@@ -297,10 +338,12 @@ def get_or_create_external_conversation(
     vendor_id: int | None = None,
     tenant_id: int | None = None,
     ai_typing: bool = False,
+    parent_task_id: int | None = None,
 ) -> Conversation:
     """Create a new conversation for a vendor or tenant.
 
     Always creates a fresh conversation so each task gets its own thread.
+    Passing `parent_task_id` links this coordination thread to its owning task.
     """
     now = datetime.now(UTC)
     creator_id = resolve_account_id()
@@ -317,6 +360,7 @@ def get_or_create_external_conversation(
         is_group=False,
         is_archived=False,
         extra=set_conversation_ai_typing(None, ai_typing=True) if ai_typing else None,
+        parent_task_id=parent_task_id,
         created_at=now,
         updated_at=now,
     )
@@ -358,6 +402,7 @@ def send_autonomous_message(
     *, conversation_id: int,
     body: str,
     task_id: int | None = None,
+    bump_task_activity: bool = True,
 ) -> Message:
     """Send an AI-generated message to a conversation and clear the typing indicator."""
     now = datetime.now(UTC)
@@ -386,7 +431,7 @@ def send_autonomous_message(
     convo.extra = set_conversation_ai_typing(convo.extra, ai_typing=None)
     flag_modified(convo, "extra")
 
-    if task_id:
+    if task_id and bump_task_activity:
         task = db.execute(
             select(Task).where(
                 Task.id == task_id,
@@ -400,6 +445,93 @@ def send_autonomous_message(
     db.commit()
     db.refresh(msg)
     return msg
+
+
+def persist_policy_gated_tenant_reply(
+    db: Session,
+    *,
+    conversation_id: int,
+    tenant: Tenant,
+    reply: str,
+    tenant_name: str | None = None,
+    entity_phone: str | None = None,
+    side_effects: list[dict] | None = None,
+    risk_level: str = "medium",
+    sent_at: datetime | None = None,
+) -> tuple[bool, Message]:
+    """Persist an inbound-tenant reply according to outbound message policy.
+
+    Returns ``(sent_directly, message)`` where ``message`` is either the direct
+    assistant reply or the created suggestion/approval message.
+    """
+    from db.enums import AgentSource, SuggestionOption
+    from gql.services import suggestion_service
+    from llm.action_policy import ActionCandidate, evaluate_action_candidate
+    from llm.side_effects import process_side_effects
+
+    now = sent_at or datetime.now(UTC)
+    side_effects = side_effects or []
+    tenant_name = tenant_name or "Tenant"
+    decision = evaluate_action_candidate(ActionCandidate(
+        action_class="outbound_message",
+        action_name="message_person_send",
+        risk_level=risk_level,
+    ))
+
+    if decision.allowed:
+        msg = send_autonomous_message(
+            db,
+            conversation_id=conversation_id,
+            body=reply,
+        )
+        process_side_effects(db, side_effects=side_effects, conversation_id=conversation_id, base_time=now)
+        return True, msg
+
+    convo = db.query(Conversation).filter_by(
+        id=conversation_id,
+        org_id=resolve_org_id(),
+        creator_id=resolve_account_id(),
+    ).first()
+    if not convo:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    options = [
+        SuggestionOption(key="send", label=f"Send to {tenant_name}", action="message_person_send", variant="default"),
+        SuggestionOption(key="edit", label="Edit Message", action="edit_message", variant="outline"),
+        SuggestionOption(key="reject", label="Dismiss", action="reject_task", variant="ghost"),
+    ]
+    action_payload = {
+        "action": "message_person",
+        "entity_id": str(tenant.external_id),
+        "entity_type": "tenant",
+        "entity_name": tenant_name,
+        "entity_phone": entity_phone,
+        "draft_message": reply,
+    }
+    suggestion = suggestion_service.create_suggestion(
+        db,
+        title=f"Reply to {tenant_name}",
+        ai_context=f"The agent drafted a reply to {tenant_name}.\n\nDraft message:\n{reply}",
+        source=AgentSource(),
+        options=options,
+        action_payload=action_payload,
+        property_id=str(convo.property_id) if convo.property_id else None,
+        unit_id=str(convo.unit_id) if convo.unit_id else None,
+    )
+    msg = send_message(
+        db,
+        conversation_id=conversation_id,
+        body=f"Suggested reply for {tenant_name}.",
+        message_type=MessageType.SUGGESTION,
+        sender_name="RentMate",
+        is_ai=True,
+        draft_reply=reply,
+        related_task_ids={"suggestion_id": suggestion.id},
+        sent_at=now,
+    )
+    convo.updated_at = now
+    process_side_effects(db, side_effects=side_effects, conversation_id=conversation_id, base_time=now)
+    return False, msg
 
 
 def send_message(

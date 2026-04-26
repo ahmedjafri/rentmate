@@ -81,6 +81,9 @@ type ConversationSummaryType {
   propertyName: String
   participantCount: Int!
   unreadCount: Int!
+  participantLabel: String
+  taskId: String
+  taskTitle: String
 }
 
 enum ConversationType {
@@ -103,6 +106,7 @@ input CreatePropertyInput {
 
 input CreateTaskInput {
   title: String!
+  goal: String!
   source: TaskSource!
   taskStatus: TaskStatus! = ACTIVE
   category: TaskCategory = null
@@ -232,13 +236,16 @@ type Mutation {
   """Transition task_status (e.g. suggested→active, active→resolved)"""
   updateTaskStatus(uid: Int!, status: TaskStatus!): TaskType!
 
+  """Set the manager-authored goal (intent) for a task"""
+  updateTaskGoal(uid: Int!, goal: String!): TaskType!
+
   """Tag a document to a property, unit, or tenant"""
   addDocumentTag(input: AddDocumentTagInput!): DocumentTagType!
 
   """Add a message to any conversation"""
   sendMessage(input: SendMessageInput!): ChatMessageType!
 
-  """Send an SMS message to a vendor via Quo"""
+  """Send a message to a vendor via their notification channel (SMS)"""
   sendSms(vendorId: String!, body: String!, taskId: Int = null): ChatMessageType!
 
   """Permanently delete a task and all its messages"""
@@ -249,6 +256,9 @@ type Mutation {
 
   """Update the ordered progress steps for a task"""
   updateTaskSteps(uid: Int!, steps: JSON!): TaskType!
+
+  """Mark a task as seen in the tasks view"""
+  markTaskSeen(uid: Int!): TaskType!
 
   """Archive (soft-delete) a conversation"""
   deleteConversation(uid: String!): Boolean!
@@ -267,22 +277,20 @@ type Mutation {
   """Save private (per-account) notes for an entity"""
   saveEntityNote(entityType: String!, entityId: String!, content: String!): Boolean!
 
-  """Create a scheduled task"""
-  createScheduledTask(name: String!, prompt: String!, schedule: String!, repeat: Int = null): ScheduledTaskType!
+  """Create a routine"""
+  createRoutine(name: String!, prompt: String!, schedule: String!, repeat: Int = null): RoutineType!
 
-  """Update a scheduled task"""
-  updateScheduledTask(uid: String!, name: String = null, prompt: String = null, schedule: String = null, enabled: Boolean = null): ScheduledTaskType!
+  """Update a routine"""
+  updateRoutine(uid: Int!, name: String = null, prompt: String = null, schedule: String = null, enabled: Boolean = null): RoutineType!
 
-  """Delete a scheduled task"""
-  deleteScheduledTask(uid: String!): Boolean!
+  """Delete a routine"""
+  deleteRoutine(uid: Int!): Boolean!
 
-  """Run a scheduled task immediately and return its output"""
-  runScheduledTask(uid: String!): ScheduledTaskType!
+  """Run a routine immediately and return its output"""
+  runRoutine(uid: Int!): RoutineType!
 
-  """
-  Simulate a scheduled task — dry run that returns what the agent would do
-  """
-  simulateScheduledTask(uid: String!): String!
+  """Simulate a routine — dry run that returns what the agent would do"""
+  simulateRoutine(uid: Int!): String!
 
   """Delete a property and all its units/leases (cascade)"""
   deleteProperty(uid: String!): Boolean!
@@ -322,11 +330,11 @@ type Query {
   """Returns a single document by ID"""
   document(uid: String!): DocumentType
 
-  """Returns all scheduled tasks"""
-  scheduledTasks(enabled: Boolean = null): [ScheduledTaskType!]!
+  """Returns all routines"""
+  routines(enabled: Boolean = null): [RoutineType!]!
 
-  """Returns a single scheduled task by ID"""
-  scheduledTask(uid: String!): ScheduledTaskType
+  """Returns a single routine by ID"""
+  routine(uid: Int!): RoutineType
 
   """Get private (per-account) notes for an entity"""
   entityNote(entityType: String!, entityId: String!): String
@@ -349,6 +357,9 @@ type Query {
   """Returns messages for a conversation by uid"""
   conversationMessages(uid: String!): [ChatMessageType!]!
 
+  """Returns metadata for a single conversation (task link, participants)."""
+  conversation(uid: String!): ConversationSummaryType
+
   """Returns all vendors"""
   vendors: [VendorType!]!
 
@@ -362,15 +373,21 @@ type Query {
   conversations(conversationType: ConversationType!, limit: Int! = 50, offset: Int! = 0): [ConversationSummaryType!]!
 }
 
-type ScheduledTaskType {
-  uid: String!
+enum RoutineState {
+  SCHEDULED
+  PAUSED
+  COMPLETED
+}
+
+type RoutineType {
+  uid: Int!
   name: String!
   prompt: String!
   schedule: String!
   scheduleDisplay: String
   isDefault: Boolean!
   enabled: Boolean!
-  state: String!
+  state: RoutineState!
   repeat: Int
   completedCount: Int!
   nextRunAt: String
@@ -429,6 +446,8 @@ type SuggestionType {
   taskId: String
   vendorName: String
   propertyName: String
+  targetConversationId: String
+  targetConversationType: String
   draftMessage: String
   messages: [ChatMessageType!]!
   createdAt: String!
@@ -497,10 +516,17 @@ type TaskType {
   requireVendorType: String
   assignedVendorId: String
   assignedVendorName: String
-  externalConversationId: String
+  externalConversationIds: [String!]!
+  externalConversationId: String @deprecated(reason: "Use externalConversationIds instead.")
   steps: JSON
+  goal: String
   suggestionOptions: JSON
   linkedConversations: [LinkedConversationType!]!
+  lastReviewedAt: String
+  lastReviewStatus: String
+  lastReviewSummary: String
+  lastReviewNextStep: String
+  unreadCount: Int!
 }
 
 type TenantType {
@@ -537,6 +563,8 @@ input UpdateTaskInput {
   uid: Int!
   taskMode: TaskMode = null
   taskStatus: TaskStatus = null
+  category: TaskCategory = null
+  urgency: Urgency = null
 }
 
 input UpdateVendorInput {

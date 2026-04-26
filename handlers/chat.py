@@ -37,13 +37,7 @@ from db.models import (
 )
 from db.session import SessionLocal
 from gql.services import chat_service
-from gql.services.sms_service import (  # noqa: F401 — re-exported for backward compat
-    get_quo_api_key,
-    get_quo_from_number,
-    send_email_reply,
-    send_sms_reply,
-    send_via_channel,
-)
+from gql.services.notification_service import NotificationRequest, NotificationService
 from handlers.deps import get_db, require_user
 from llm.context import (
     build_task_context,
@@ -56,6 +50,10 @@ from llm.tools import active_conversation_id, pending_suggestion_messages
 from llm.tracing import log_trace, make_trace_envelope
 
 router = APIRouter()
+
+
+def _hosted_mode() -> bool:
+    return os.getenv("HOSTED_MODE", "").lower() in {"1", "true", "yes"}
 
 
 def _split_messages_for_trace(messages_payload: list[dict]) -> dict:
@@ -172,10 +170,6 @@ PHONE_WHITELIST = [p.strip() for p in os.getenv("PHONE_WHITELIST", "").split(","
 def is_in_whitelist(number: str) -> bool:
     return any(allowed in number for allowed in PHONE_WHITELIST)
 
-# Backward compat aliases
-_get_quo_api_key = get_quo_api_key
-_get_quo_from_number = get_quo_from_number
-
 # ─── Pydantic models ──────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
@@ -274,20 +268,29 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
     agent_resp = await call_agent(agent_id, session_key=session_key, messages=messages)
 
     now = datetime.now(UTC)
-    ai_msg = Message(
+    sent_directly, _ = chat_service.persist_policy_gated_tenant_reply(
+        db,
         conversation_id=conv.id,
-        sender_type=ParticipantType.ACCOUNT_USER,
-        body=agent_resp.reply,
-        message_type=MessageType.MESSAGE,
-        sender_name="RentMate",
-        is_ai=True,
+        tenant=tenant,
+        reply=agent_resp.reply,
+        side_effects=agent_resp.side_effects,
+        risk_level="medium",
         sent_at=now,
     )
-    db.add(ai_msg)
-    process_side_effects(db, side_effects=agent_resp.side_effects, conversation_id=conv.id, base_time=now)
     db.commit()
 
-    await send_via_channel(conv, agent_resp.reply, inbound_meta=sender_meta)
+    if sent_directly and tenant and tenant.user_id:
+        await NotificationService.notify(
+            db,
+            NotificationRequest(
+                recipient_user_id=tenant.user_id,
+                conversation_id=conv.id,
+                title="RentMate replied",
+                messages=[agent_resp.reply],
+                kind="conversation_update",
+                task_id=conv.parent_task_id,
+            ),
+        )
     return True
 
 @router.post("/quo-webhook")
@@ -407,7 +410,10 @@ async def chat_endpoint(
             if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)  # include legacy THREAD
         ]
         msg_rows = sorted(all_msgs, key=lambda m: m.sent_at)[-20:]
-        messages_payload = [{"role": "system", "content": context}]
+        messages_payload = [{
+            "role": "system",
+            "content": chat_service.build_agent_system_context(conversation=conv, context=context),
+        }]
         messages_payload += chat_service.model_history_messages(msg_rows)
         messages_payload.append({"role": "user", "content": body.message})
     else:
@@ -416,10 +422,16 @@ async def chat_endpoint(
     # ── Guard: LLM must be configured ───────────────────────────────────
     from gql.services.settings_service import is_llm_configured
     if not is_llm_configured():
-        no_llm_reply = (
-            "I'm not connected to an AI model yet, so I can't respond. "
-            "Head to **Settings → AI Model** to add your API key and choose a model."
-        )
+        if _hosted_mode():
+            no_llm_reply = (
+                "AI is currently unavailable for this hosted workspace. "
+                "Model configuration is managed globally, so there is nothing you need to set in Settings."
+            )
+        else:
+            no_llm_reply = (
+                "I'm not connected to an AI model yet, so I can't respond. "
+                "Head to **Settings → AI Model** to add your API key and choose a model."
+            )
 
         async def _no_llm():
             yield f"data: {json.dumps({'type': 'done', 'reply': no_llm_reply, 'conversation_id': public_conv_id})}\n\n"
@@ -479,8 +491,6 @@ async def chat_endpoint(
                     "llm_request",
                     "chat",
                     f"Prepared {len(messages_payload)} messages for model call",
-                    task_id=body.task_id,
-                    conversation_id=conv_id,
                     detail=_build_llm_trace_detail(
                         flow="chat",
                         session_key=session_key,
@@ -546,8 +556,6 @@ async def chat_endpoint(
                         "llm_reply",
                         "chat",
                         agent_resp.reply[:200],
-                        task_id=body.task_id,
-                        conversation_id=conv_id,
                         detail=_build_llm_trace_detail(
                             flow="chat",
                             session_key=session_key,
@@ -625,13 +633,13 @@ async def chat_endpoint(
 
 NO_RESPONSE_SENTINEL = "[NO_RESPONSE]"
 
-# ─── Agent heartbeat ─────────────────────────────────────────────────────────
+# ─── Agent autoreply ─────────────────────────────────────────────────────────
 
-_heartbeat_locks: dict[str, threading.Lock] = {}
-_heartbeat_locks_lock = threading.Lock()
-_heartbeat_state: dict[str, str] = {}  # task_id → context hash from last run
+_autoreply_locks: dict[str, threading.Lock] = {}
+_autoreply_locks_lock = threading.Lock()
+_autoreply_state: dict[str, str] = {}  # task_id → context hash from last run
 
-def _compute_heartbeat_hash(task) -> str:
+def _compute_autoreply_hash(task) -> str:
     """Hash task state + latest message timestamps using a short-lived session."""
 
     db = SessionLocal.session_factory()
@@ -644,7 +652,9 @@ def _compute_heartbeat_hash(task) -> str:
         if row:
             parts.append(f"{row[0]}|{row[1]}|{row[2] or ''}|{row[3] or ''}")
         # Latest message timestamp from each linked conversation
-        for conv_id in [task.ai_conversation_id, task.external_conversation_id, task.parent_conversation_id]:
+        conv_ids: list[int] = [task.ai_conversation_id, task.parent_conversation_id]
+        conv_ids.extend(c.id for c in task.external_conversations)
+        for conv_id in conv_ids:
             if conv_id:
                 ts = db.execute(text(
                     "SELECT MAX(sent_at) FROM messages WHERE conversation_id = :cid"
@@ -660,29 +670,29 @@ def _compute_heartbeat_hash(task) -> str:
     finally:
         db.close()
 
-def agent_task_heartbeat(task_id: str, hint: str | None = None) -> str | None:
+def agent_task_autoreply(task_id: str, hint: str | None = None) -> str | None:
     """Run the agent against a task and let it respond/act.
 
     This is the core primitive for driving autonomous tasks forward.
-    Called when external messages arrive or periodically by the heartbeat loop.
+    Called when external messages arrive or periodically by the reply scanner.
 
     Returns the agent reply text, or None if no response was needed.
     """
-    # Per-task lock prevents concurrent heartbeats for the same task
-    with _heartbeat_locks_lock:
-        if task_id not in _heartbeat_locks:
-            _heartbeat_locks[task_id] = threading.Lock()
-        lock = _heartbeat_locks[task_id]
+    # Per-task lock prevents concurrent autoreplies for the same task
+    with _autoreply_locks_lock:
+        if task_id not in _autoreply_locks:
+            _autoreply_locks[task_id] = threading.Lock()
+        lock = _autoreply_locks[task_id]
 
     if not lock.acquire(blocking=False):
-        return None  # another heartbeat is already running for this task
+        return None  # another autoreply is already running for this task
 
     try:
-        return _agent_task_heartbeat_inner(task_id, hint)
+        return _agent_task_autoreply_inner(task_id, hint)
     finally:
         lock.release()
 
-def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | None:
+def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | None:
 
     from llm.client import call_agent
 
@@ -695,16 +705,16 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
         if not conv:
             return None
 
-        # Change detection: skip if nothing changed since last heartbeat
-        current_hash = _compute_heartbeat_hash(task)
-        if _heartbeat_state.get(task_id) == current_hash:
-            print(f"\033[33m[heartbeat] Skipping task {task_id} — no changes since last run\033[0m")
-            log_trace("heartbeat", "heartbeat", "Skipped — no context changes", task_id=task_id)
+        # Change detection: skip if nothing changed since the last reply scan
+        current_hash = _compute_autoreply_hash(task)
+        if _autoreply_state.get(task_id) == current_hash:
+            print(f"\033[33m[reply_scanner] Skipping task {task_id} — no changes since last run\033[0m")
+            log_trace("reply_scan", "reply_scanner", "Skipped — no context changes")
             return None
 
         conv_id = conv.id
-        ext_conv_id = task.external_conversation_id
-        parent_conv_id = task.parent_conversation_id
+        ext_conv = task.latest_external_conversation
+        ext_conv_id = ext_conv.id if ext_conv else None
 
         # Set typing indicator on external conversation
         if ext_conv_id:
@@ -714,40 +724,13 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
                 flag_modified(ext_conv, "extra")
 
         # Build context + message history
-        context = build_task_context(db, task_id, query=body.message)
+        default_hint = "Check this task for anything that needs attention."
+        context = build_task_context(db, task_id, query=hint or default_hint)
 
         # Gather progress steps
         steps_text = ""
         if task.steps:
             steps_text = "\n\nTask progress steps:\n" + _hbjson.dumps(task.steps, indent=2)
-
-        # Gather external conversation messages
-        ext_msgs_text = ""
-        if ext_conv_id:
-            ext_conv_obj = db.query(Conversation).filter_by(id=ext_conv_id).first()
-            if ext_conv_obj:
-                ext_msgs = sorted(
-                    [m for m in (ext_conv_obj.messages or [])
-                     if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
-                    key=lambda m: m.sent_at,
-                )[-20:]
-                if ext_msgs:
-                    lines = [f"[{m.sender_name or 'Unknown'}]: {m.body}" for m in ext_msgs]
-                    ext_msgs_text = "\n\nExternal conversation (with vendor/tenant):\n" + "\n".join(lines)
-
-        # Gather tenant conversation messages
-        tenant_msgs_text = ""
-        if task.parent_conversation_id and task.parent_conversation_id != ext_conv_id:
-            parent_conv = db.query(Conversation).filter_by(id=task.parent_conversation_id).first()
-            if parent_conv:
-                t_msgs = sorted(
-                    [m for m in (parent_conv.messages or [])
-                     if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
-                    key=lambda m: m.sent_at,
-                )[-20:]
-                if t_msgs:
-                    lines = [f"[{m.sender_name or 'Unknown'}]: {m.body}" for m in t_msgs]
-                    tenant_msgs_text = "\n\nTenant conversation:\n" + "\n".join(lines)
 
         # Build AI conversation history
         all_msgs = [
@@ -759,8 +742,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
         messages_payload += chat_service.model_history_messages(msg_rows)
 
         # The hint (or default) is the "user" message that triggers the agent
-        default_hint = "Check this task for anything that needs attention."
-        user_msg = (hint or default_hint) + steps_text + ext_msgs_text + tenant_msgs_text
+        user_msg = (hint or default_hint) + steps_text
         messages_payload.append({"role": "user", "content": user_msg})
 
         db.commit()  # flush typing indicator + detach ORM objects
@@ -770,7 +752,7 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
         session_key = f"task:{task_id}"
 
         # Run agent in a dedicated thread with its own event loop so we
-        # don't conflict with the main uvloop (heartbeat_loop calls us from
+        # don't conflict with the main uvloop (reply_scanner_loop calls us from
         # within the running async loop).
         _agent_result = [None, None]  # [resp, pending]
 
@@ -801,9 +783,8 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
             # Clear typing indicator
             if ext_conv_id:
                 chat_service.clear_typing_indicator(db, ext_conv_id)
-            _heartbeat_state[task_id] = current_hash
-            log_trace("heartbeat", "heartbeat", f"No response needed for task {task_id}",
-                      task_id=task_id)
+            _autoreply_state[task_id] = current_hash
+            log_trace("reply_scan", "reply_scanner", f"No response needed for task {task_id}")
             return None
 
         # Persist results
@@ -834,25 +815,21 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
                 db_conv.updated_at = now
             write_db.commit()
 
-            # Recompute hash after agent run so next heartbeat knows the state
+            # Recompute hash after agent run so next autoreply knows the state
             try:
-                class _Ref:
-                    pass
-                _ref = _Ref()
-                _ref.id, _ref.ai_conversation_id = task_id, conv_id
-                _ref.external_conversation_id, _ref.parent_conversation_id = ext_conv_id, parent_conv_id
-                _heartbeat_state[task_id] = _compute_heartbeat_hash(_ref)
+                fresh = write_db.query(Task).filter_by(id=task_id).first()
+                if fresh:
+                    _autoreply_state[task_id] = _compute_autoreply_hash(fresh)
             except Exception:
                 pass
 
-            log_trace("heartbeat", "heartbeat",
-                      f"Agent replied ({len(resp.reply)} chars): {resp.reply[:100]}",
-                      task_id=task_id, conversation_id=conv_id)
+            log_trace("reply_scan", "reply_scanner",
+                      f"Agent replied ({len(resp.reply)} chars): {resp.reply[:100]}")
 
             return resp.reply
         except Exception as e:
             write_db.rollback()
-            print(f"\033[31m[heartbeat] DB write failed for task {task_id}: {e}\033[0m")
+            print(f"\033[31m[reply_scanner] DB write failed for task {task_id}: {e}\033[0m")
             traceback.print_exc()
             return resp.reply
         finally:
@@ -864,9 +841,9 @@ def _agent_task_heartbeat_inner(task_id: str, hint: str | None = None) -> str | 
                 except Exception:
                     pass
     except Exception as e:
-        print(f"\033[31m[heartbeat] Failed for task {task_id}: {e}\033[0m")
+        print(f"\033[31m[reply_scanner] Failed for task {task_id}: {e}\033[0m")
         traceback.print_exc()
-        log_trace("error", "heartbeat", f"Heartbeat failed: {e}", task_id=task_id)
+        log_trace("error", "reply_scanner", f"Reply scan failed: {e}")
         return None
     finally:
         db.close()
@@ -908,15 +885,14 @@ async def assess_task_endpoint(
     context_data = build_task_context_data(db, body.task_id, query=body.message)
     context = context_data["text"]
     conv_id = conv.id
-    ext_conv_id = task_obj.external_conversation_id
+    ext_conv = task_obj.latest_external_conversation
+    ext_conv_id = ext_conv.id if ext_conv else None
 
     # Set typing indicator on the external conversation so the vendor portal
     # can show it while the agent is thinking.
-    if ext_conv_id:
-        ext_conv = db.query(Conversation).filter_by(id=ext_conv_id).first()
-        if ext_conv:
-            ext_conv.extra = chat_service.set_conversation_ai_typing(ext_conv.extra, ai_typing=True)
-            flag_modified(ext_conv, "extra")
+    if ext_conv:
+        ext_conv.extra = chat_service.set_conversation_ai_typing(ext_conv.extra, ai_typing=True)
+        flag_modified(ext_conv, "extra")
     # Gather progress steps and external conversation for the assess prompt
     steps_text = ""
     if task_obj.steps:
@@ -984,8 +960,6 @@ async def assess_task_endpoint(
                     "llm_request",
                     "assess",
                     f"Prepared {len(messages_payload)} messages for model call",
-                    task_id=body.task_id,
-                    conversation_id=conv_id,
                     detail=_build_llm_trace_detail(
                         flow="assess",
                         session_key=session_key,
@@ -1054,8 +1028,6 @@ async def assess_task_endpoint(
                         "llm_reply",
                         "assess",
                         agent_resp.reply[:200],
-                        task_id=body.task_id,
-                        conversation_id=conv_id,
                         detail=_build_llm_trace_detail(
                             flow="assess",
                             session_key=session_key,
@@ -1206,22 +1178,27 @@ async def get_onboarding_state_endpoint(request: Request, db: Session = Depends(
     from db.models import Document, Property, Tenant
     from gql.services.settings_service import get_onboarding_state, init_onboarding, is_llm_configured
 
+    llm_configured = True if _hosted_mode() else is_llm_configured()
     state = get_onboarding_state(db)
     if state is not None:
         # Backfill configure_llm step for existing onboarding states
         if "configure_llm" not in state.get("steps", {}):
-            state["steps"]["configure_llm"] = "done" if is_llm_configured() else "pending"
-        return {"onboarding": state, "llm_configured": is_llm_configured()}
+            state["steps"]["configure_llm"] = "done" if llm_configured else "pending"
+        elif _hosted_mode():
+            state["steps"]["configure_llm"] = "done"
+        return {"onboarding": state, "llm_configured": llm_configured}
     # No state yet — initialize only if the account is truly empty
     prop_count = db.query(Property).count()
     tenant_count = db.query(Tenant).count()
     doc_count = db.query(Document).count()
     if prop_count == 0 and tenant_count == 0 and doc_count == 0:
         state = init_onboarding(db)
+        if _hosted_mode():
+            state["steps"]["configure_llm"] = "done"
         db.commit()
         log_trace("onboarding", "chat", "Onboarding initialized")
-        return {"onboarding": state, "llm_configured": is_llm_configured()}
-    return {"onboarding": None, "llm_configured": is_llm_configured()}
+        return {"onboarding": state, "llm_configured": llm_configured}
+    return {"onboarding": None, "llm_configured": llm_configured}
 
 
 @router.post("/onboarding/dismiss")

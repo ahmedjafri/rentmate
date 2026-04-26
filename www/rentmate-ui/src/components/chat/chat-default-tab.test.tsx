@@ -23,9 +23,9 @@ function makeTask(overrides: Partial<ActionDeskTask> = {}): ActionDeskTask {
 }
 
 describe('getDefaultTaskTab', () => {
-  it('prefers the external conversation over the AI tab', () => {
+  it('prefers the AI tab even when external conversations exist', () => {
     const task = makeTask({
-      externalConversationId: 'conv-vendor',
+      externalConversationIds: ['conv-vendor'],
       aiConversationId: 'conv-ai',
       linkedConversations: [
         { uid: 'conv-ai', label: 'AI', conversationType: 'task_ai', messageCount: 0, participants: [] },
@@ -33,18 +33,7 @@ describe('getDefaultTaskTab', () => {
       ],
     });
 
-    expect(getDefaultTaskTab(task)).toBe('conv-vendor');
-  });
-
-  it('falls back to the parent conversation when no external conversation is linked', () => {
-    const task = makeTask({
-      parentConversationId: 'conv-tenant',
-      linkedConversations: [
-        { uid: 'conv-tenant', label: 'Tenant', conversationType: 'tenant', messageCount: 2, participants: [] },
-      ],
-    });
-
-    expect(getDefaultTaskTab(task)).toBe('conv-tenant');
+    expect(getDefaultTaskTab(task)).toBe('ai');
   });
 
   it('falls back to the AI tab when there is no linked tenant/vendor conversation', () => {

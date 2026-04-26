@@ -1,14 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
-import { Home, LogOut, ArrowLeft } from 'lucide-react';
-import { ChatMessageBubble } from '@/components/chat/ChatMessage';
-import { ChatInput } from '@/components/chat/ChatInput';
+import { useEffect, useMemo, useState } from 'react';
+
 import { ChatMessage, ChatSenderType } from '@/data/mockData';
 import { getTenantToken, isTenantAuthenticated, tenantLogout } from '@/lib/tenantAuth';
-
-// ─── types ────────────────────────────────────────────────────────────────────
+import { PortalConversationList } from '@/components/portal/PortalConversationList';
+import { PortalConversationPanel } from '@/components/portal/PortalConversationPanel';
+import { PortalDashboardShell } from '@/components/portal/PortalDashboardShell';
+import type { PortalConversationDetail, PortalConversationSummary, PortalTaskMessage } from '@/components/portal/types';
+import { Button } from '@/components/ui/button';
 
 interface TenantMe {
   id: string;
@@ -16,31 +14,6 @@ interface TenantMe {
   email?: string;
   phone?: string;
 }
-
-interface TenantTask {
-  id: string;
-  task_number?: number;
-  title: string;
-  status?: string;
-  category?: string;
-  created_at: string;
-}
-
-interface TaskMessage {
-  id: string;
-  body: string;
-  sender_name: string;
-  sender_type: string;
-  is_ai: boolean;
-  sent_at: string;
-}
-
-interface TaskDetail extends TenantTask {
-  messages: TaskMessage[];
-  typing?: boolean;
-}
-
-// ─── helpers ──────────────────────────────────────────────────────────────────
 
 function authHeaders() {
   return { Authorization: `Bearer ${getTenantToken()}` };
@@ -50,142 +23,67 @@ function jsonHeaders() {
   return { ...authHeaders(), 'Content-Type': 'application/json' };
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  active: 'bg-blue-100 text-blue-800',
-  suggested: 'bg-yellow-100 text-yellow-800',
-  resolved: 'bg-green-100 text-green-800',
-  cancelled: 'bg-gray-100 text-gray-700',
-};
-
-function taskMessageToChat(m: TaskMessage): ChatMessage {
+function tenantMessageToChat(message: PortalTaskMessage): ChatMessage {
   let senderType: ChatSenderType;
-  if (m.sender_type === 'tenant') {
-    senderType = 'manager'; // right-aligned, primary — tenant's own messages
-  } else if (m.is_ai) {
+  if (message.sender_type === 'tenant') {
+    senderType = 'manager';
+  } else if (message.is_ai) {
     senderType = 'ai';
   } else {
-    senderType = 'tenant'; // left-aligned muted — property manager messages
+    senderType = 'tenant';
   }
   return {
-    id: m.id,
-    role: m.sender_type === 'tenant' ? 'user' : 'assistant',
-    content: m.body,
-    senderName: m.sender_type === 'tenant' ? 'You' : m.sender_name,
+    id: message.id,
+    role: message.sender_type === 'tenant' ? 'user' : 'assistant',
+    content: message.body,
+    senderName: message.sender_type === 'tenant' ? 'You' : message.sender_name,
     senderType,
-    timestamp: new Date(m.sent_at),
+    timestamp: new Date(message.sent_at),
     messageType: 'message',
   };
 }
 
-// ─── chat panel ───────────────────────────────────────────────────────────────
-
-function ChatPanel({ task, onBack }: { task: TaskDetail; onBack: () => void }) {
-  const [messages, setMessages] = useState<TaskMessage[]>(task.messages);
+const TenantPortal = () => {
+  const [me, setMe] = useState<TenantMe | null>(null);
+  const [conversations, setConversations] = useState<PortalConversationSummary[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [activeConversation, setActiveConversation] = useState<PortalConversationDetail | null>(null);
+  const [loadingConversationId, setLoadingConversationId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const [typing, setTyping] = useState(task.typing ?? false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, typing]);
+  const activeConversationKey = useMemo(() => activeConversationId, [activeConversationId]);
 
-  // Poll for new messages every 5s
-  useEffect(() => {
-    const id = setInterval(async () => {
-      try {
-        const r = await fetch(`/api/tenant/tasks/${task.id}`, { headers: authHeaders() });
-        if (r.ok) {
-          const data: TaskDetail = await r.json();
-          setMessages(data.messages);
-          setTyping(data.typing ?? false);
-        }
-      } catch { /* silent */ }
-    }, 5000);
-    return () => clearInterval(id);
-  }, [task.id]);
-
-  const handleSend = async (text: string) => {
-    if (sending) return;
-    setSending(true);
+  const loadConversation = async (conversationId: string) => {
+    setLoadingConversationId(conversationId);
     try {
-      const r = await fetch(`/api/tenant/tasks/${task.id}/messages`, {
-        method: 'POST',
-        headers: jsonHeaders(),
-        body: JSON.stringify({ body: text }),
-      });
-      if (!r.ok) throw new Error();
-      const msg: TaskMessage = await r.json();
-      setMessages(prev => [...prev, msg]);
-    } catch { /* ignore */ } finally {
-      setSending(false);
+      const response = await fetch(`/api/tenant/conversations/${conversationId}`, { headers: authHeaders() });
+      if (!response.ok) {
+        throw new Error('Failed to load conversation');
+      }
+      const detail: PortalConversationDetail = await response.json();
+      setActiveConversation(detail);
+      setActiveConversationId(detail.id);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoadingConversationId(null);
     }
   };
 
-  return (
-    <div className="flex flex-col h-full">
-      {/* Chat header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b bg-background shrink-0">
-        <button onClick={onBack} className="md:hidden p-1 rounded hover:bg-muted">
-          <ArrowLeft className="h-4 w-4" />
-        </button>
-        <div className="flex-1 min-w-0">
-          <p className="font-semibold text-sm leading-tight truncate">
-            {task.task_number != null && <span className="text-muted-foreground font-normal">#{task.task_number} </span>}
-            {task.title}
-          </p>
-          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-            {task.category && (
-              <span className="text-xs text-muted-foreground capitalize">{task.category}</span>
-            )}
-            {task.status && (
-              <Badge className={`text-xs h-4 px-1.5 ${STATUS_COLORS[task.status] ?? 'bg-gray-100 text-gray-700'}`}>
-                {task.status}
-              </Badge>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Message list */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-        {messages.length === 0 && (
-          <p className="text-sm text-muted-foreground text-center pt-8">No messages yet.</p>
-        )}
-        {messages.map((m) => (
-          <ChatMessageBubble key={m.id} message={taskMessageToChat(m)} />
-        ))}
-        {typing && (
-          <div className="flex items-start gap-2 text-muted-foreground">
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-muted shrink-0 mt-0.5">
-              <Home className="h-3.5 w-3.5" />
-            </div>
-            <div className="py-2 px-3 rounded-2xl bg-muted">
-              <div className="flex gap-1 py-0.5">
-                <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:0ms]" />
-                <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:150ms]" />
-                <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:300ms]" />
-              </div>
-            </div>
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      <ChatInput onSend={handleSend} disabled={sending} />
-    </div>
-  );
-}
-
-// ─── main page ────────────────────────────────────────────────────────────────
-
-const TenantPortal = () => {
-  const navigate = useNavigate();
-  const [me, setMe] = useState<TenantMe | null>(null);
-  const [tasks, setTasks] = useState<TenantTask[]>([]);
-  const [activeTask, setActiveTask] = useState<TaskDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadingTask, setLoadingTask] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const refreshList = async () => {
+    const response = await fetch('/api/tenant/conversations', { headers: authHeaders() });
+    if (!response.ok) {
+      throw new Error('Failed to load conversations');
+    }
+    const rows: PortalConversationSummary[] = await response.json();
+    setConversations(rows);
+    if (!activeConversationId && rows.length > 0) {
+      setActiveConversationId(rows[0].id);
+    }
+    return rows;
+  };
 
   useEffect(() => {
     if (!isTenantAuthenticated()) {
@@ -195,31 +93,51 @@ const TenantPortal = () => {
     }
 
     Promise.all([
-      fetch('/api/tenant/me', { headers: authHeaders() }).then((r) => {
-        if (!r.ok) throw new Error('Failed to load profile');
-        return r.json();
+      fetch('/api/tenant/me', { headers: authHeaders() }).then((response) => {
+        if (!response.ok) throw new Error('Failed to load profile');
+        return response.json();
       }),
-      fetch('/api/tenant/tasks', { headers: authHeaders() }).then((r) => {
-        if (!r.ok) throw new Error('Failed to load requests');
-        return r.json();
-      }),
+      refreshList(),
     ])
-      .then(([meData, tasksData]) => {
+      .then(([meData]) => {
         setMe(meData);
-        setTasks(tasksData);
       })
-      .catch((e) => setError((e as Error).message))
+      .catch((err) => setError((err as Error).message))
       .finally(() => setLoading(false));
-  }, [navigate]);
+  }, []);
 
-  const openTask = async (taskId: string) => {
-    setLoadingTask(taskId);
+  useEffect(() => {
+    if (!activeConversationKey) {
+      setActiveConversation(null);
+      return;
+    }
+    loadConversation(activeConversationKey);
+  }, [activeConversationKey]);
+
+  useEffect(() => {
+    if (!activeConversationId) return undefined;
+    const intervalId = window.setInterval(() => {
+      loadConversation(activeConversationId);
+      refreshList().catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [activeConversationId]);
+
+  const handleSend = async (body: string) => {
+    if (!activeConversationId || sending) return;
+    setSending(true);
     try {
-      const r = await fetch(`/api/tenant/tasks/${taskId}`, { headers: authHeaders() });
-      if (!r.ok) throw new Error('Failed to load request');
-      setActiveTask(await r.json());
-    } catch { /* ignore */ } finally {
-      setLoadingTask(null);
+      const response = await fetch(`/api/tenant/conversations/${activeConversationId}/messages`, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ body }),
+      });
+      if (!response.ok) throw new Error('Failed to send message');
+      await Promise.all([loadConversation(activeConversationId), refreshList()]);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSending(false);
     }
   };
 
@@ -227,8 +145,9 @@ const TenantPortal = () => {
     tenantLogout();
     setError('You have been logged out. Use your portal link to sign back in.');
     setMe(null);
-    setTasks([]);
-    setActiveTask(null);
+    setConversations([]);
+    setActiveConversationId(null);
+    setActiveConversation(null);
   };
 
   if (loading) {
@@ -251,79 +170,34 @@ const TenantPortal = () => {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-muted/30">
-      {/* Top bar */}
-      <header className="bg-background border-b px-4 py-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2.5">
-          <div className="bg-primary/10 rounded-full p-1.5">
-            <Home className="h-4 w-4 text-primary" />
-          </div>
-          <span className="font-semibold text-sm">{me?.name}</span>
-        </div>
-        <Button variant="ghost" size="sm" onClick={handleLogout} className="gap-1.5 text-muted-foreground">
-          <LogOut className="h-3.5 w-3.5" />
-          Sign out
-        </Button>
-      </header>
-
-      {/* Body */}
+    <PortalDashboardShell
+      title="Tenant Portal"
+      subtitle="RentMate"
+      dashboardPath="/tenant-portal"
+      identity={me?.name ?? 'Tenant'}
+      onLogout={handleLogout}
+    >
       <div className="flex flex-1 overflow-hidden">
-        {/* Request list */}
-        <div className={`${activeTask ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-72 lg:w-80 border-r bg-background shrink-0`}>
-          <div className="px-4 py-3 border-b">
-            <h2 className="font-semibold text-sm">Your Requests</h2>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {tasks.length === 0 ? (
-              <p className="text-sm text-muted-foreground p-4">No active requests.</p>
-            ) : (
-              tasks.map((t) => {
-                const isActive = activeTask?.id === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    onClick={() => openTask(t.id)}
-                    disabled={loadingTask === t.id}
-                    className={`w-full text-left px-4 py-3 border-b transition-colors hover:bg-muted/50 ${
-                      isActive ? 'bg-muted' : ''
-                    } ${loadingTask === t.id ? 'opacity-60' : ''}`}
-                  >
-                    <p className="text-sm font-medium leading-snug">
-                      {t.task_number != null && <span className="text-muted-foreground">#{t.task_number} </span>}
-                      {t.title}
-                    </p>
-                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                      {t.category && (
-                        <span className="text-xs text-muted-foreground capitalize">{t.category}</span>
-                      )}
-                      {t.status && (
-                        <Badge className={`text-xs h-4 px-1.5 ${STATUS_COLORS[t.status] ?? 'bg-gray-100 text-gray-700'}`}>
-                          {t.status}
-                        </Badge>
-                      )}
-                    </div>
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </div>
-
-        {/* Chat panel */}
-        <div className={`${activeTask ? 'flex' : 'hidden md:flex'} flex-col flex-1 overflow-hidden`}>
-          {activeTask ? (
-            <ChatPanel task={activeTask} onBack={() => setActiveTask(null)} />
-          ) : (
-            <div className="flex-1 flex items-center justify-center text-muted-foreground">
-              <div className="text-center">
-                <Home className="h-8 w-8 mx-auto mb-2 opacity-40" />
-                <p className="text-sm">Select a request to view the conversation</p>
-              </div>
-            </div>
-          )}
-        </div>
+        <PortalConversationList
+          title="Your Conversations"
+          emptyText="No active conversations."
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          loadingConversationId={loadingConversationId}
+          onSelectConversation={(conversationId) => {
+            setActiveConversationId(conversationId);
+          }}
+        />
+        <PortalConversationPanel
+          emptyText="Select a conversation to view messages"
+          conversation={activeConversation}
+          sending={sending}
+          onBack={() => setActiveConversationId(null)}
+          onSend={handleSend}
+          mapMessage={tenantMessageToChat}
+        />
       </div>
-    </div>
+    </PortalDashboardShell>
   );
 };
 

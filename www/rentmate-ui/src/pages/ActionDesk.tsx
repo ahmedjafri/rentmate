@@ -8,8 +8,10 @@ import { Textarea } from '@/components/ui/textarea';
 import { Lightbulb, CheckCircle2, XCircle, Loader2, MessageCircle, Send, X, Building2, Wrench } from 'lucide-react';
 import { formatMessageTime } from '@/components/chat/ChatMessage';
 import { PageLoader } from '@/components/ui/page-loader';
+import { useNavigate } from 'react-router-dom';
 
 import { actOnSuggestion } from '@/graphql/client';
+import { openSuggestionInContext } from '@/lib/suggestionNavigation';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -24,16 +26,20 @@ const urgencyColors: Record<string, string> = {
 
 // ─── SuggestionCard ──────────────────────────────────────────────────────────
 
-export function SuggestionCard({ suggestion, onAction, isActive, compact }: {
+export function SuggestionCard({ suggestion, onAction, isActive, compact, onOpen }: {
   suggestion: Suggestion;
   onAction: (id: string, action: string, editedBody?: string) => Promise<void>;
   isActive?: boolean;
   /** Stack action buttons vertically for narrow containers */
   compact?: boolean;
+  /** Override the default open behavior (which navigates). Used by the dashboard
+   *  to keep the suggestion conversation inline in the embedded ChatPanel. */
+  onOpen?: (suggestion: Suggestion) => void;
 }) {
   const [loading, setLoading] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const { openChat } = useApp();
+  const navigate = useNavigate();
 
   const draftText = suggestion.draftMessage ?? '';
   const [editedDraft, setEditedDraft] = useState(draftText);
@@ -54,8 +60,19 @@ export function SuggestionCard({ suggestion, onAction, isActive, compact }: {
     }
   };
 
+  const handleOpen = () => {
+    if (onOpen) {
+      onOpen(suggestion);
+      return;
+    }
+    openSuggestionInContext(suggestion, navigate, openChat);
+  };
+
   return (
-    <Card className={cn("px-4 py-3 rounded-xl hover:shadow-md transition-shadow space-y-2", isActive && "ring-2 ring-primary/40")}>
+    <Card
+      className={cn("px-4 py-3 rounded-xl hover:shadow-md transition-shadow space-y-2 cursor-pointer", isActive && "ring-2 ring-primary/40")}
+      onClick={handleOpen}
+    >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 flex-wrap min-w-0">
           <Badge variant="secondary" className={cn('text-[10px] rounded-lg shrink-0', categoryColors[suggestion.category])}>
@@ -74,7 +91,6 @@ export function SuggestionCard({ suggestion, onAction, isActive, compact }: {
         <div className="min-w-0">
           <h3
             className="font-medium text-sm cursor-pointer hover:underline"
-            onClick={() => openChat({ suggestionId: suggestion.id })}
           >
             {suggestion.title}
           </h3>
@@ -99,7 +115,7 @@ export function SuggestionCard({ suggestion, onAction, isActive, compact }: {
 
       {/* Draft: read-only preview or editable textarea */}
       {editing ? (
-        <div className="space-y-2">
+        <div className="space-y-2" onClick={event => event.stopPropagation()}>
           <Textarea
             value={editedDraft}
             onChange={e => setEditedDraft(e.target.value)}
@@ -112,7 +128,10 @@ export function SuggestionCard({ suggestion, onAction, isActive, compact }: {
               variant="default"
               className="h-7 text-xs rounded-lg gap-1"
               disabled={!editedDraft.trim() || loading !== null}
-              onClick={() => handleAction(sendAction, editedDraft.trim())}
+              onClick={(event) => {
+                event.stopPropagation();
+                handleAction(sendAction, editedDraft.trim());
+              }}
             >
               {loading === sendAction ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
               Send
@@ -122,7 +141,11 @@ export function SuggestionCard({ suggestion, onAction, isActive, compact }: {
               variant="ghost"
               className="h-7 text-xs rounded-lg gap-1"
               disabled={loading !== null}
-              onClick={() => { setEditing(false); setEditedDraft(draftText); }}
+              onClick={(event) => {
+                event.stopPropagation();
+                setEditing(false);
+                setEditedDraft(draftText);
+              }}
             >
               <X className="h-3 w-3" />
               Cancel
@@ -149,7 +172,8 @@ export function SuggestionCard({ suggestion, onAction, isActive, compact }: {
               variant={opt.variant as 'default' | 'outline' | 'ghost'}
               className={cn("h-7 text-xs rounded-lg", compact && "w-full")}
               disabled={loading !== null}
-              onClick={() => {
+              onClick={(event) => {
+                event.stopPropagation();
                 if (opt.action === 'edit_message') {
                   setEditing(true);
                 } else {

@@ -25,7 +25,7 @@ The difference matters in practice. When AI is a layer on top, every new capabil
 - **Document Processing** — Upload lease PDFs and automatically extract tenant, property, unit, and lease data
 - **Onboarding** — Guided first-run setup walks you through AI configuration and property setup
 - **Suggestions** — Agent-generated action items with risk scoring and approval workflows
-- **Scheduled Tasks** — Cron-based background tasks with natural language prompts (replaces YAML automation DSL)
+- **Routines** — Cron-based background runs with natural language prompts (replaces YAML automation DSL)
 - **SMS Integration** — Auto-reply to tenant texts via Quo/OpenPhone webhook
 - **Multi-tenancy** — Per-account data isolation with request-scoped context
 - **GraphQL API** — Full data access via Strawberry GraphQL
@@ -146,9 +146,9 @@ llm/
   └── document_processor.py — PDF extraction + LLM parsing
 
 handlers/
-  ├── chat.py             — Chat endpoint, SSE streaming, heartbeat
+  ├── chat.py             — Chat endpoint, SSE streaming, routine
   ├── settings.py         — LLM and integration settings
-  ├── scheduler.py        — Scheduled task execution (cron)
+  ├── routines.py  — Routine execution (cron)
   └── documents.py        — Document upload and processing
 
 www/rentmate-ui/          — React 18 SPA (Vite + TypeScript + shadcn/ui)

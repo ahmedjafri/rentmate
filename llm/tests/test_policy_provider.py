@@ -18,6 +18,7 @@ def test_prefetch_returns_policy_text(tmp_path):
     text = provider.prefetch("Coordinate with the vendor and tenant about the appointment time.")
     assert "Coordination Policy" in text
     assert "the next action is to contact the tenant for access confirmation" in text
+    assert "Do not call `close_task` while a coordination handshake is still incomplete." in text
 
 
 def test_select_policy_keys_for_document_upload_query():

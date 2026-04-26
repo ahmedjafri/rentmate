@@ -50,12 +50,14 @@ def test_repair_enum_rows_normalizes_lowercase_urgency(isolated_engine):
 
     from db.enums import SuggestionStatus, TaskMode, TaskSource, TaskStatus, Urgency
     from db.models import Suggestion, Task, User
+    from gql.services.number_allocator import NumberAllocator
 
     Session = sessionmaker(bind=eng)
     db = Session()
     db.add(User(id=1, org_id=1, email="owner@example.com", active=True))
     db.flush()
     db.add(Task(
+        id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
         org_id=1,
         creator_id=1,
         title="Test task",
@@ -65,6 +67,7 @@ def test_repair_enum_rows_normalizes_lowercase_urgency(isolated_engine):
         urgency=Urgency.HIGH,
     ))
     db.add(Suggestion(
+        id=NumberAllocator.allocate_next(db, entity_type="suggestion", org_id=1),
         org_id=1,
         creator_id=1,
         title="Test suggestion",
@@ -158,8 +161,8 @@ def test_postgres_prod_can_skip_startup_check_on_drift(isolated_engine):
 # ---------------------------------------------------------------------------
 
 
-def test_fresh_startup_seeds_account_and_scheduled_tasks(isolated_engine):
-    """On a fresh DB, startup seeds default account and scheduled tasks."""
+def test_fresh_startup_seeds_account_and_routines(isolated_engine):
+    """On a fresh DB, startup seeds default account and routines."""
     eng = isolated_engine
     _init(eng)
 
@@ -174,8 +177,63 @@ def test_fresh_startup_seeds_account_and_scheduled_tasks(isolated_engine):
     # but the tables must exist
     inspector = inspect(eng)
     assert "users" in inspector.get_table_names()
-    assert "scheduled_tasks" in inspector.get_table_names()
+    assert "routines" in inspector.get_table_names()
     db.close()
+
+
+def test_dev_bootstrap_account_has_expected_credentials_and_seed_data(isolated_engine):
+    """Fresh dev startup creates the default login and enables demo seeding."""
+    import asyncio
+
+    import db.session as db_session
+    import handlers.deps as deps
+    import main as _main
+    from backends.local_auth import _check_password
+    from db.models import Property, Task, User
+
+    eng = isolated_engine
+    test_session_local = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=eng))
+
+    def _discard_task(coro):
+        if hasattr(coro, "close"):
+            coro.close()
+        return MagicMock()
+
+    with (
+        patch.object(_main, "engine", eng),
+        patch.object(_main, "SessionLocal", test_session_local),
+        patch.object(deps, "engine", eng),
+        patch.object(deps, "SessionLocal", test_session_local),
+        patch.object(db_session, "engine", eng),
+        patch.object(db_session, "SessionLocal", test_session_local),
+        patch.dict(os.environ, {"RENTMATE_ENV": "development", "STARTUP_CHECK": ""}, clear=False),
+        patch("gql.services.settings_service.load_llm_into_env"),
+        patch("gql.services.settings_service.load_agent_integrations_into_env"),
+        patch.object(_main._app, "load_integrations", return_value={}),
+        patch.object(_main, "set_memory_backstop"),
+        patch.object(_main, "start_memory_monitor"),
+        patch.object(_main.agent_registry, "start_gateway"),
+        patch.object(_main.agent_registry, "restart_channels_async", new_callable=AsyncMock),
+        patch.object(_main.agent_registry, "stop_gateway"),
+        patch.object(_main.asyncio, "create_task", side_effect=_discard_task),
+    ):
+        asyncio.run(_run_lifespan(_main))
+
+    Session = sessionmaker(bind=eng)
+    db = Session()
+    try:
+        acct = db.query(User).filter_by(email="test@test.com").first()
+        assert acct is not None
+        assert acct.password_hash
+        assert _check_password("test", hashed=acct.password_hash)
+        assert db.query(Property).count() > 0
+        assert db.query(Task).count() > 0
+        seeded_task = db.query(Task).filter(Task.creator_id == acct.id).first()
+        assert seeded_task is not None
+        assert seeded_task.goal
+        assert seeded_task.steps
+    finally:
+        db.close()
 
 
 def test_startup_with_existing_data_no_crash(isolated_engine):
@@ -300,6 +358,7 @@ def test_startup_agent_memory_writes_with_explicit_creator(isolated_engine):
     import uuid
     mem = AgentMemory(
         id=str(uuid.uuid4()),
+        agent_id="1",
         org_id=1,
         creator_id=1,
         memory_type="file:TEST.md",
@@ -313,22 +372,22 @@ def test_startup_agent_memory_writes_with_explicit_creator(isolated_engine):
     db.close()
 
 
-def test_startup_scheduled_task_creation_with_explicit_creator(isolated_engine):
-    """Scheduled tasks can be seeded with explicit creator_id."""
+def test_startup_routine_creation_with_explicit_creator(isolated_engine):
+    """Routines can be seeded with explicit creator_id."""
     eng = isolated_engine
     _init(eng)
 
     from sqlalchemy.orm import sessionmaker
 
-    from db.models import ScheduledTask, User
+    from db.models import Routine, User
+    from gql.services.number_allocator import NumberAllocator
     Session = sessionmaker(bind=eng)
     db = Session()
     db.add(User(id=1, org_id=1, email="owner@example.com", active=True))
     db.flush()
 
-    import uuid
-    task = ScheduledTask(
-        id=str(uuid.uuid4()),
+    routine = Routine(
+        id=NumberAllocator.allocate_next(db, entity_type="routine", org_id=1),
         org_id=1,
         creator_id=1,
         name="Test task",
@@ -338,10 +397,10 @@ def test_startup_scheduled_task_creation_with_explicit_creator(isolated_engine):
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
-    db.add(task)
+    db.add(routine)
     db.commit()  # Must not raise "No creator context set"
 
-    assert db.query(ScheduledTask).count() >= 1
+    assert db.query(Routine).count() >= 1
     db.close()
 
 
@@ -365,4 +424,47 @@ def test_dev_non_tty_auto_recreates(isolated_engine):
     # After auto-recreate, all model columns should be present
     assert "creator_id" in _column_names(eng, "properties")
     assert "address_line1" in _column_names(eng, "properties")
-    assert "scheduled_tasks" in inspect(eng).get_table_names()
+    assert "routines" in inspect(eng).get_table_names()
+
+
+def test_dev_non_tty_auto_recreates_with_legacy_scheduled_tasks_table(isolated_engine):
+    """Dev auto-reset drops legacy pre-rename tables that are no longer in metadata."""
+    eng = isolated_engine
+    with eng.connect() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY,
+                    org_id INTEGER NOT NULL,
+                    email TEXT
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE scheduled_tasks (
+                    id TEXT PRIMARY KEY,
+                    org_id INTEGER NOT NULL,
+                    creator_id INTEGER NOT NULL REFERENCES users(id),
+                    name TEXT NOT NULL
+                )
+                """
+            )
+        )
+        conn.commit()
+
+    import main as _main
+    with (
+        patch.object(_main, "engine", eng),
+        patch.dict(os.environ, {"RENTMATE_ENV": "development"}),
+        patch("sys.stdin") as mock_stdin,
+    ):
+        mock_stdin.isatty.return_value = False
+        _main._ensure_schema()
+
+    tables = set(inspect(eng).get_table_names())
+    assert "routines" in tables
+    assert "scheduled_tasks" not in tables

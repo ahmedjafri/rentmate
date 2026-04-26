@@ -1,10 +1,13 @@
 import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
-import { Bot, User, Eye, Lightbulb, Check, X, Send, Pencil, ChevronDown, ChevronUp, CheckCircle2, XCircle, Zap, Building2, Wrench, BookOpen, ArrowUpRight, Loader2, Expand, FileText } from 'lucide-react';
+import { Bot, User, Eye, Lightbulb, Check, X, Send, Pencil, ChevronDown, ChevronUp, CheckCircle2, XCircle, Zap, Building2, Wrench, BookOpen, ArrowUpRight, Loader2, Expand, FileText, HelpCircle } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Textarea } from '@/components/ui/textarea';
 import { authFetch } from '@/lib/auth';
+import { sendMessage } from '@/graphql/client';
+import { toast } from 'sonner';
 
 function ThinkingChain({ steps, isChain }: { steps: string[]; isChain: boolean }) {
   const [expanded, setExpanded] = useState(false);
@@ -165,7 +168,15 @@ function ContextBubble({ message, taskId }: { message: ChatMessageType; taskId?:
   );
 }
 
-function ActionCardBubble({ message }: { message: ChatMessageType }) {
+function ActionCardBubble({
+  message,
+  conversationId,
+  answeredByContent,
+}: {
+  message: ChatMessageType;
+  conversationId?: string | null;
+  answeredByContent?: string | null;
+}) {
   const navigate = useNavigate();
   const card = message.actionCard;
 
@@ -176,11 +187,14 @@ function ActionCardBubble({ message }: { message: ChatMessageType }) {
     property: { icon: Building2, label: 'Property created', className: 'text-blue-700 dark:text-blue-400', badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-800' },
     tenant: { icon: User, label: 'Tenant created', className: 'text-emerald-700 dark:text-emerald-400', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800' },
     document: { icon: FileText, label: 'Document created', className: 'text-amber-700 dark:text-amber-400', badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-amber-200 dark:border-amber-800' },
+    question: { icon: HelpCircle, label: 'Agent needs your input', className: 'text-violet-700 dark:text-violet-400', badge: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 border-violet-200 dark:border-violet-800' },
   } as const;
 
   const cfg = kindConfig[card.kind];
   const Icon = cfg.icon;
   const summary = card.summary?.trim();
+  const isQuestion = card.kind === 'question';
+  const isAnswered = isQuestion && Boolean(answeredByContent);
 
   const downloadDocument = async (documentId: string, fallbackName: string) => {
     const res = await authFetch(`/api/document/${documentId}/download`);
@@ -278,6 +292,81 @@ function ActionCardBubble({ message }: { message: ChatMessageType }) {
           </button>
         ))}
       </div>
+
+      {isQuestion && (
+        <div className="mt-2 border-t border-violet-200/60 dark:border-violet-900/40 pt-2">
+          {isAnswered ? (
+            <div className="flex items-start gap-1.5 text-[11px]">
+              <CheckCircle2 className="h-3.5 w-3.5 text-accent mt-0.5 shrink-0" />
+              <div className="min-w-0 space-y-0.5">
+                <span className="font-semibold text-accent">Answered</span>
+                <p className="text-foreground/90 whitespace-pre-wrap break-words">
+                  {answeredByContent}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <QuestionReplyForm
+              conversationId={conversationId}
+              question={card.title}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuestionReplyForm({
+  conversationId,
+  question,
+}: {
+  conversationId?: string | null;
+  question: string;
+}) {
+  const [value, setValue] = useState('');
+  const [sending, setSending] = useState(false);
+  const handleSend = async () => {
+    const body = value.trim();
+    if (!body || !conversationId || sending) return;
+    setSending(true);
+    try {
+      await sendMessage({ conversationId, body });
+      setValue('');
+      // ChatPanel polls / re-fetches the active conversation, so the
+      // new message will appear without manual wiring.
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to send reply');
+    } finally {
+      setSending(false);
+    }
+  };
+  const disabled = sending || !value.trim() || !conversationId;
+  return (
+    <div className="space-y-1.5">
+      <Textarea
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            void handleSend();
+          }
+        }}
+        placeholder={conversationId ? 'Type your answer…' : 'Open the conversation to reply'}
+        rows={2}
+        className="text-xs resize-none min-h-[48px]"
+        disabled={!conversationId || sending}
+      />
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] text-muted-foreground italic truncate" title={question}>
+          Replying to: {question.length > 60 ? `${question.slice(0, 57)}…` : question}
+        </span>
+        <Button size="sm" className="h-7 px-2 text-[11px] gap-1" onClick={handleSend} disabled={disabled}>
+          {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+          Send
+        </Button>
+      </div>
     </div>
   );
 }
@@ -290,9 +379,26 @@ interface Props {
   onApprovalAction?: (messageId: string, action: string, editedBody?: string) => Promise<void> | void;
   onSuggestionClick?: (suggestionId: string) => void;
   taskId?: string | null;
+  /** Active conversation id — needed by interactive cards (e.g. the
+   *  question-card reply form) to know where to post the response. */
+  conversationId?: string | null;
+  /** When the message is a question card and a later user message
+   *  exists in the conversation, pass its body here to render the
+   *  "Answered" state inline. */
+  questionAnsweredByContent?: string | null;
 }
 
-export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onApprovalAction, onSuggestionClick, taskId }: Props) {
+export function ChatMessageBubble({
+  message,
+  onApprove,
+  onReject,
+  onEdit,
+  onApprovalAction,
+  onSuggestionClick,
+  taskId,
+  conversationId,
+  questionAnsweredByContent,
+}: Props) {
   const navigate = useNavigate();
   const isAssistant = message.role === 'assistant';
   const msgType = message.messageType || 'message';
@@ -317,7 +423,13 @@ export function ChatMessageBubble({ message, onApprove, onReject, onEdit, onAppr
   }
 
   if (isAssistant && msgType === 'action') {
-    return <ActionCardBubble message={message} />;
+    return (
+      <ActionCardBubble
+        message={message}
+        conversationId={conversationId}
+        answeredByContent={questionAnsweredByContent}
+      />
+    );
   }
 
   // Error message — red warning style, not a normal AI bubble

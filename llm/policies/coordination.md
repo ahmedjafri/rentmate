@@ -14,3 +14,5 @@
 - Do not discard known scheduling context when sending a follow-up. A status reply should preserve the current appointment details and then explain any additional check-in with the vendor.
 - If task context or steps already say the repair is scheduled for a specific day, the final reply should explicitly say that day, for example "AC Pro is scheduled for Monday."
 - Do not replace a known appointment with a generic "I've asked for an update" message. Mention the existing appointment first, then add any follow-up you are making.
+- Do not call `close_task` while a coordination handshake is still incomplete.
+- For vendor/tenant coordination, keep the task open until the relevant outcome has been communicated to all affected parties. Example: if a vendor proposes 10am, the tenant still needs to confirm access and the vendor still needs the final yes/no before the task can be considered complete.

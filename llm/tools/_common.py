@@ -9,6 +9,7 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
+from enum import Enum
 from typing import Any
 
 from backends.local_auth import resolve_account_id, resolve_org_id
@@ -17,6 +18,8 @@ from db.enums import AgentSource, SuggestionOption, Urgency
 from db.models import MessageType
 
 logger = logging.getLogger("rentmate.llm.tools")
+
+_UNRESOLVED_PLACEHOLDER_RE = re.compile(r"\[[^\]\n]{2,100}\]")
 
 
 @contextmanager
@@ -59,6 +62,35 @@ def tool_session():
         sess.close()
 
 
+class ToolMode(str, Enum):
+    """Read vs write classification used by the simulation dispatcher.
+
+    Read-only tools always run normally. Read-write tools have their
+    inputs recorded and ``execute`` is skipped when a simulation context
+    is active (see ``is_simulating``). Tools default to READ_WRITE — safe
+    fallback when a new tool is added without thinking about simulation.
+    """
+
+    READ_ONLY = "read_only"
+    READ_WRITE = "read_write"
+
+
+class ToolCategory(str, Enum):
+    """How the tool surfaces to the manager. Used to group tools in the
+    auto-generated SOUL.md tool list.
+
+    - ``READ``: pure lookups, safe to run without consent.
+    - ``IMMEDIATE``: writes that apply directly (saving notes, creating
+      vendors, closing tasks).
+    - ``REVIEW``: writes that go to the suggestion queue for manager
+      approval (proposing tasks, sending external messages).
+    """
+
+    READ = "read"
+    IMMEDIATE = "immediate"
+    REVIEW = "review"
+
+
 class Tool(ABC):
     """Base class for RentMate agent tools (standalone, no nanobot dependency)."""
 
@@ -73,6 +105,19 @@ class Tool(ABC):
     @property
     @abstractmethod
     def parameters(self) -> dict[str, Any]: ...
+
+    @property
+    def mode(self) -> ToolMode:
+        """Default classification. Override on subclasses that are read-only."""
+        return ToolMode.READ_WRITE
+
+    @property
+    def category(self) -> ToolCategory:
+        """SOUL.md grouping. Read-only tools default to READ; read-write
+        defaults to IMMEDIATE. Tools that queue for human approval should
+        override to REVIEW.
+        """
+        return ToolCategory.READ if self.mode == ToolMode.READ_ONLY else ToolCategory.IMMEDIATE
 
     @abstractmethod
     async def execute(self, **kwargs: Any) -> str: ...
@@ -95,11 +140,35 @@ current_user_message: contextvars.ContextVar[str | None] = contextvars.ContextVa
     "current_user_message", default=None,
 )
 
-# When set, suggestion-producing tools run in dry-run mode and append the
-# suggestion payloads here instead of writing Suggestion rows to the DB.
-simulation_suggestions: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
-    "simulation_suggestions", default=None,
+# When set, tools classified as read-write short-circuit inside the
+# dispatcher: the inputs are appended here and ``execute`` is skipped.
+# Read-only tools still run normally. See ``ToolMode`` + ``is_simulating``.
+simulation_actions: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
+    "simulation_actions", default=None,
 )
+
+# Back-compat alias — pre-existing callers (handlers/routines.py, tests)
+# imported this name. New code should prefer ``simulation_actions``.
+simulation_suggestions = simulation_actions
+
+
+def is_simulating() -> bool:
+    """Return True when the current request is running inside a simulation."""
+    return simulation_actions.get() is not None
+
+
+def record_simulated_action(tool_name: str, args: dict[str, Any]) -> str:
+    """Record a blackholed tool call during simulation. Returns the sim id.
+
+    No-op (returns "") when called outside a simulation context — callers
+    shouldn't rely on that path, but returning gracefully avoids surprises.
+    """
+    pending = simulation_actions.get()
+    if pending is None:
+        return ""
+    sim_id = f"sim-{tool_name}-{len(pending) + 1}"
+    pending.append({"id": sim_id, "tool": tool_name, "args": dict(args or {})})
+    return sim_id
 
 
 def _trace_tool_error(tool_name: str, summary: str, *, detail: dict[str, Any] | None = None) -> None:
@@ -118,15 +187,15 @@ def _log_tool_error(tool_name: str, summary: str, *, detail: dict[str, Any] | No
 
 
 def _queue_simulation_suggestion(payload: dict[str, Any]) -> str | None:
-    pending = simulation_suggestions.get()
-    if pending is None:
+    """Legacy shim — ``_create_suggestion`` records its simulation entry here
+    directly (rather than going through the dispatcher gate) so the
+    downstream suggestion-specific payload shape is preserved for the
+    formatter. New tools should not call this; they're handled by the
+    dispatcher via ``record_simulated_action``.
+    """
+    if not is_simulating():
         return None
-    suggestion_id = f"sim-{len(pending) + 1}"
-    pending.append({
-        "id": suggestion_id,
-        **payload,
-    })
-    return suggestion_id
+    return record_simulated_action("create_suggestion", payload)
 
 
 def _public_entity_id(entity: Any) -> str:
@@ -244,9 +313,9 @@ def _sanitize_tenant_outbound_draft(db: Any, *, task_id: str, draft_message: str
         return draft
 
     task = db.query(Task).filter_by(id=str(task_id)).first()
-    if not task or not task.external_conversation_id:
+    if not task:
         return draft
-    ext_conv = db.query(Conversation).filter_by(id=task.external_conversation_id).first()
+    ext_conv = task.latest_external_conversation
     if not ext_conv:
         return draft
 
@@ -276,6 +345,59 @@ def _sanitize_tenant_outbound_draft(db: Any, *, task_id: str, draft_message: str
     sanitized = re.sub(r"\s{2,}", " ", sanitized).strip()
     sanitized = re.sub(r"\ba contractor contractor\b", "a contractor", sanitized, flags=re.I)
     return sanitized
+
+
+def _sanitize_vendor_outbound_draft(db: Any, *, task_id: str, draft_message: str) -> str:
+    from db.models import Task
+
+    draft = str(draft_message or "")
+    if not draft:
+        return draft
+
+    tenant = _resolve_task_tenant(db, str(task_id))
+    if not tenant or not getattr(tenant, "user", None):
+        return draft
+
+    sanitized = draft
+    user = tenant.user
+    for value in (user.name, user.phone, user.email):
+        text = str(value or "").strip()
+        if text:
+            sanitized = re.sub(rf"\b{re.escape(text)}\b", "", sanitized, flags=re.I)
+    sanitized = re.sub(r"\bthe tenant is\s*[.!,;:]?", "", sanitized, flags=re.I)
+    sanitized = re.sub(r"\s+([.,;:!?])", r"\1", sanitized)
+    sanitized = re.sub(r"\s{2,}", " ", sanitized).strip()
+    if db.query(Task).filter_by(id=str(task_id)).first() is None:
+        return draft
+    return sanitized
+
+
+def _find_unresolved_placeholders(*content_blocks: str | None) -> list[str]:
+    placeholders: list[str] = []
+    for block in content_blocks:
+        if not block:
+            continue
+        placeholders.extend(match.group(0) for match in _UNRESOLVED_PLACEHOLDER_RE.finditer(block))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in placeholders:
+        if item in seen:
+            continue
+        deduped.append(item)
+        seen.add(item)
+    return deduped
+
+
+def _placeholder_message_block_error(*content_blocks: str | None) -> str | None:
+    placeholders = _find_unresolved_placeholders(*content_blocks)
+    if not placeholders:
+        return None
+    formatted = ", ".join(placeholders)
+    return (
+        "Do not send or stage outbound messages with placeholders. "
+        f"The draft still contains unresolved placeholders: {formatted}. "
+        "If a required concrete detail is missing, ask the PM with `ask_manager` instead of guessing."
+    )
 
 
 def _action_card_field(label: str, value: Any) -> dict[str, str] | None:
@@ -430,7 +552,6 @@ def _create_suggestion(
     from llm.tracing import log_trace
     log_trace(
         "suggestion_created", "agent", title,
-        task_id=task_id,
         suggestion_id=suggestion_id,
         detail=action_payload,
     )

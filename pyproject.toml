@@ -44,7 +44,6 @@ pyjwt = "^2.9"
 sqlalchemy = "^2.0"
 pgvector = "^0.4.1"
 psycopg2-binary = "^2.9"
-hermes-agent = {git = "https://github.com/ahmedjafri/hermes-agent.git", rev = "831f989d"}
 memray = "^1.19.2"
 croniter = "^6.2.2"
 bcrypt = "^5.0.0"

@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import MetaData
 from sqlalchemy import inspect as sa_inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 from strawberry.fastapi import GraphQLRouter
@@ -23,14 +24,14 @@ from handlers import (
     data_portability,
     dev,
     documents,
+    notifications,
     settings,
-    tenant_invite,
-    tenant_portal,
-    vendor_invite,
-    vendor_portal,
 )
+from handlers.portals import tenant_invite, tenant_portal, vendor_invite, vendor_portal
 from handlers.deps import SessionLocal, engine
-from handlers.scheduler import router as scheduler_router
+from handlers.routines import router as routine_router
+from handlers.streams import router as streams_router
+from handlers.task_review import router as task_review_router
 from handlers.settings import load_integrations
 from llm.registry import agent_registry
 from memory_watchdog import set_memory_backstop, start_memory_monitor
@@ -40,6 +41,8 @@ _DIST = _PACKAGE_ROOT / "www" / "rentmate-ui" / "dist"
 _DEFAULT_SCHEMA_MIGRATE_COMMAND = ["poetry", "run", "alembic", "upgrade", "head"]
 _SCHEMA_MIGRATE_COMMANDS = [_DEFAULT_SCHEMA_MIGRATE_COMMAND]
 _SCHEMA_MIGRATE_CWD = _PACKAGE_ROOT
+_DEV_BOOTSTRAP_EMAIL = "test@test.com"
+_DEV_BOOTSTRAP_PASSWORD = "test"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,6 +51,15 @@ logging.basicConfig(
     force=True,
 )
 _gql_logger = logging.getLogger("rentmate.gql")
+
+
+def _reset_dev_schema() -> None:
+    """Drop the live schema, including legacy tables missing from current metadata."""
+    live_metadata = MetaData()
+    live_metadata.reflect(bind=engine)
+    if live_metadata.tables:
+        live_metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
 
 
 def _ensure_schema():
@@ -99,8 +111,7 @@ def _ensure_schema():
             choice = "q"
         if choice == "w":
             print("   Wiping and recreating database...")
-            Base.metadata.drop_all(engine)
-            Base.metadata.create_all(engine)
+            _reset_dev_schema()
         elif choice == "m":
             import subprocess
 
@@ -115,8 +126,7 @@ def _ensure_schema():
             raise SystemExit(0)
     elif is_dev:
         print("   Schema drift detected — auto-recreating database (dev mode)...")
-        Base.metadata.drop_all(engine)
-        Base.metadata.create_all(engine)
+        _reset_dev_schema()
     else:
         print("ERROR: Database schema is out of date.")
         for command in _SCHEMA_MIGRATE_COMMANDS:
@@ -166,6 +176,29 @@ def _repair_enum_rows() -> None:
         print(f"Skipping enum row repair because database is unavailable: {exc}")
 
 
+def _ensure_dev_bootstrap_account(db) -> None:
+    """Create the default local-dev owner account if the database has no users."""
+    if os.getenv("RENTMATE_ENV") != "development":
+        return
+
+    from backends.local_auth import _hash_password
+    from db.models import User
+
+    if db.query(User).first():
+        return
+
+    acct = User(
+        email=_DEV_BOOTSTRAP_EMAIL,
+        password_hash=_hash_password(_DEV_BOOTSTRAP_PASSWORD),
+        active=True,
+        user_type="account",
+    )
+    db.add(acct)
+    db.flush()
+    db.commit()
+    print(f"Dev bootstrap account created: {_DEV_BOOTSTRAP_EMAIL}")
+
+
 async def get_context(request: Request):
     from backends.local_auth import set_request_context
     from backends.wire import auth_backend
@@ -181,7 +214,7 @@ async def get_context(request: Request):
             set_request_context(account_id=account_id, org_id=user.get("org_id"))
         return {"user": user, "db_session": request.state.db_session}
     except Exception as exc:
-        print(f"Invalid token, error: {exc}")
+        _gql_logger.info("Invalid token, error: %s", exc)
         return {"user": None, "db_session": request.state.db_session}
 
 
@@ -245,10 +278,10 @@ def create_app(
                 from backends.local_auth import set_request_context
                 from db.models import Document as DocModel, User
 
+                _ensure_dev_bootstrap_account(db)
                 acct = db.query(User).first()
                 if acct:
                     set_request_context(account_id=acct.id, org_id=acct.org_id)
-                    agent_registry.populate_all_agents(db)
                     if os.getenv("RENTMATE_ENV") == "development":
                         try:
                             from demo.seed import seed_if_needed
@@ -274,16 +307,18 @@ def create_app(
 
             await agent_registry.restart_channels_async(load_integrations())
 
-            from handlers.scheduler import scheduler_loop, seed_default_tasks
+            from handlers.routines import routine_loop, seed_default_routines
 
-            seed_default_tasks()
-            asyncio.create_task(scheduler_loop())
+            seed_default_routines()
+            asyncio.create_task(routine_loop())
 
-            from handlers.heartbeat import heartbeat_loop
+            from handlers.reply_scanner import reply_scanner_loop
             from handlers.quo_poller import quo_poll_loop
+            from handlers.task_review import task_review_loop
 
-            asyncio.create_task(heartbeat_loop())
+            asyncio.create_task(reply_scanner_loop())
             asyncio.create_task(quo_poll_loop())
+            asyncio.create_task(task_review_loop())
 
         data_dir = os.getenv("RENTMATE_DATA_DIR", "./data")
         from backends.local_storage import ensure_runtime_storage_contract
@@ -301,7 +336,10 @@ def create_app(
     app.include_router(settings.router)
     app.include_router(documents.router, prefix="/api")
     app.include_router(chat.router)
-    app.include_router(scheduler_router, prefix="/api")
+    app.include_router(routine_router, prefix="/api")
+    app.include_router(task_review_router, prefix="/api")
+    app.include_router(notifications.router, prefix="/api")
+    app.include_router(streams_router, prefix="/api")
     app.include_router(data_portability.router, prefix="/api")
     app.include_router(dev.router, prefix="/dev")
     app.include_router(vendor_invite.router)
@@ -427,6 +465,7 @@ lifespan = app.router.lifespan_context
 __all__ = [
     "SessionLocal",
     "_ensure_schema",
+    "_reset_dev_schema",
     "_repair_enum_rows",
     "agent_registry",
     "app",

@@ -10,7 +10,6 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -27,7 +26,7 @@ const navItems = [
   { title: 'Suggestions', url: '/action-desk', icon: Lightbulb },
   { title: 'Tasks', url: '/tasks', icon: ClipboardList },
   { title: 'Chats', url: '/chats', icon: MessageCircle },
-  { title: 'Scheduled Tasks', url: '/scheduled-tasks', icon: Zap },
+  { title: 'Routines', url: '/routines', icon: Zap },
   { title: 'Settings', url: '/settings', icon: Settings },
 ];
 
@@ -71,7 +70,6 @@ export function AppSidebar() {
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map((item) => (

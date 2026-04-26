@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, Link, useLocation } from 'react-router-dom';
+import { useParams, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -63,7 +63,8 @@ function TenantPortalLink({ url }: { url: string }) {
 const TenantDetail = () => {
   const { id } = useParams<{ id: string }>();
   const { state: navState } = useLocation();
-  const { tenants, properties, actionDeskTasks, openChat, updateTenant } = useApp();
+  const navigate = useNavigate();
+  const { tenants, properties, actionDeskTasks, updateTenant } = useApp();
 
   const tenant = tenants.find(t => t.id === id);
   const backTo = navState?.from === 'tenants'
@@ -175,7 +176,7 @@ const TenantDetail = () => {
               const ModeIcon = mode.icon;
 
               return (
-                <Card key={task.id} className="p-4 rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={() => openChat({ taskId: task.id })}>
+                <Card key={task.id} className="p-4 rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={() => navigate(`/tasks/${task.id}`)}>
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div className="flex items-center gap-2 flex-wrap">
                       <Badge variant="secondary" className={cn('text-[10px] rounded-lg gap-1', mode.className)}>

@@ -1,6 +1,6 @@
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Bot, MessageCircle, Building2, Trash2 } from 'lucide-react';
+import { Bot, MessageCircle, Building2, Trash2, ClipboardList } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
 export interface ConvSummary {
@@ -14,6 +14,9 @@ export interface ConvSummary {
   propertyName: string | null;
   participantCount: number;
   unreadCount: number;
+  participantLabel?: string | null;
+  taskId?: string | null;
+  taskTitle?: string | null;
 }
 
 export type TabKey = 'user_ai' | 'tenant' | 'vendor';
@@ -36,20 +39,30 @@ export const typeColors: Record<string, string> = {
   vendor: 'bg-orange-100 text-orange-700 dark:bg-orange-900/20 dark:text-orange-400',
 };
 
-export function ConvRow({ conv, onClick, onDelete, isActive }: { conv: ConvSummary; onClick: () => void; onDelete: () => void; isActive?: boolean }) {
+export function ConvRow({ conv, onClick, onDelete, isActive }: { conv: ConvSummary; onClick: () => void; onDelete?: () => void; isActive?: boolean }) {
   const TabIcon = TAB_CONFIG.find(t => t.key === conv.conversationType)?.icon ?? MessageCircle;
   const at = conv.lastMessageAt ?? conv.updatedAt;
   const relTime = at ? formatDistanceToNow(new Date(at), { addSuffix: true }) : null;
 
+  // For tenant/vendor threads the human contact's name is the canonical
+  // title; the stored ``subject`` varies (e.g. "Chat with X" vs
+  // "Message X: <task>") and is unreliable for display.
+  const isExternalConv = conv.conversationType === 'tenant' || conv.conversationType === 'vendor';
+  const displayTitle = isExternalConv
+    ? (conv.participantLabel ?? conv.title)
+    : conv.title;
+
   return (
     <Card className={`px-3 py-2.5 rounded-xl hover:shadow-md transition-shadow cursor-pointer relative group ${isActive ? 'ring-2 ring-primary/40 bg-primary/5' : ''}`} onClick={onClick}>
-      <button
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className="absolute top-2 right-2 h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors hidden group-hover:flex"
-        title="Delete conversation"
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </button>
+      {onDelete && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="absolute top-2 right-2 h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors hidden group-hover:flex"
+          title="Delete conversation"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      )}
 
       <div className="flex items-center justify-between gap-2 pr-6">
         <div className="flex items-center gap-1.5 flex-wrap min-w-0">
@@ -57,6 +70,16 @@ export function ConvRow({ conv, onClick, onDelete, isActive }: { conv: ConvSumma
             <TabIcon className="h-3 w-3" />
             {typeLabels[conv.conversationType] ?? conv.conversationType}
           </Badge>
+          {conv.taskId && (
+            <Badge
+              variant="secondary"
+              className="text-[10px] rounded-lg gap-1 shrink-0 bg-muted text-muted-foreground max-w-[160px]"
+              title={conv.taskTitle ? `Task #${conv.taskId} — ${conv.taskTitle}` : `Task #${conv.taskId}`}
+            >
+              <ClipboardList className="h-3 w-3 shrink-0" />
+              <span className="truncate">Task #{conv.taskId}</span>
+            </Badge>
+          )}
           {conv.unreadCount > 0 && (
             <Badge className="h-4 px-1.5 text-[10px] bg-primary text-primary-foreground shrink-0">
               {conv.unreadCount} new
@@ -68,9 +91,9 @@ export function ConvRow({ conv, onClick, onDelete, isActive }: { conv: ConvSumma
         )}
       </div>
 
-      {conv.title && conv.title !== 'Chat with RentMate' ? (
+      {displayTitle && displayTitle !== 'Chat with RentMate' ? (
         <>
-          <h3 className="font-medium text-sm truncate mt-1.5">{conv.title}</h3>
+          <h3 className="font-medium text-sm truncate mt-1.5">{displayTitle}</h3>
           {conv.lastMessageBody && (
             <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">
               {conv.lastMessageSenderName && <span className="font-medium">{conv.lastMessageSenderName}: </span>}

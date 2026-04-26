@@ -1,76 +1,35 @@
 # handlers/dev.py
-"""Developer / test-lab endpoints.
+"""Developer / test-lab endpoints for wiping state, memory debugging, and trace inspection.
 
-POST /dev/simulate-inbound  — simulate an inbound tenant message (SMS or email)
-  without sending any real SMS or email.  Writes a real task + messages to the DB
-  (source='dev_sim') so the DevTools page can restore them.  These tasks are
-  excluded from the normal Action Desk view.
-
-GET  /dev/history/{tenant_id} — returns the most recent dev_sim task messages
-  for a tenant, used by the DevTools chat panel to restore history on reload.
+Inbound-message simulation has been removed — use the tenant/vendor portals directly
+with a valid portal JWT to drive the real chat flow.
 """
 
-import asyncio
 import json
-from datetime import UTC, datetime
-from typing import Any, List
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backends.local_auth import resolve_account_id
-from db.enums import TaskMode, TaskStatus
-from db.lib import get_conversation_with_messages, route_inbound_to_task
 from db.models import (
     Conversation,
-    ConversationParticipant,
-    Message,
-    MessageType,
-    ParticipantType,
     Suggestion,
     Task,
-    Tenant,
 )
 from handlers.deps import get_db, require_user
-from llm.context import build_task_context_data
-from llm.registry import agent_registry
 from llm.retrieval import (
-    ChromaMemoryIndex,
+    PgVectorMemoryIndex,
     RetrievalRequest,
     list_memory_items,
     retrieve_context,
     sync_memory_index,
 )
-from llm.tracing import make_trace_envelope
 
 router = APIRouter()
 
 DEV_SIM_SOURCE = "dev_sim"
-
-
-class SimulateInboundRequest(BaseModel):
-    tenant_id: str
-    channel_type: str   # 'sms' | 'email'
-    message: str
-    force_new: bool = False  # if True, always create a new task
-
-
-class SimulateInboundResponse(BaseModel):
-    task_id: str
-    reply: str
-    task_created: bool
-
-
-class DevChatMessage(BaseModel):
-    role: str        # 'tenant' | 'agent'
-    text: str
-    task_id: str
-
-
-class DevHistoryResponse(BaseModel):
-    task_id: str | None
-    messages: List[DevChatMessage]
 
 
 class MemoryItemResponse(BaseModel):
@@ -107,218 +66,6 @@ def _parse_trace_detail(detail: str | None) -> Any:
         return detail
 
 
-@router.post("/simulate-inbound", response_model=SimulateInboundResponse)
-async def simulate_inbound(
-    body: SimulateInboundRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    await require_user(request)
-
-    tenant = db.query(Tenant).filter_by(id=body.tenant_id).first()
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
-    sender_meta = {"source": DEV_SIM_SOURCE, "simulated": True}
-    tenant_name = tenant.user.name if tenant.user else "Tenant"
-
-    if body.force_new:
-        now = datetime.now(UTC)
-        task = Task(
-            creator_id=tenant.creator_id,
-            title=f"Message from {tenant_name}",
-            task_status=TaskStatus.ACTIVE,
-            task_mode=TaskMode.AUTONOMOUS,
-            source=DEV_SIM_SOURCE,
-            created_at=now,
-            updated_at=now,
-        )
-        db.add(task)
-        db.flush()
-
-        conv = Conversation(
-            creator_id=tenant.creator_id,
-            subject=f"Message from {tenant_name}",
-            is_group=False,
-            is_archived=False,
-            created_at=now,
-            updated_at=now,
-        )
-        db.add(conv)
-        db.flush()
-
-        db.add(ConversationParticipant(
-            org_id=tenant.org_id,
-            creator_id=tenant.creator_id,
-            conversation_id=conv.id,
-            user_id=tenant.user_id,
-            participant_type=ParticipantType.TENANT,
-            is_active=True,
-        ))
-        db.flush()
-        db.refresh(conv)
-
-        from db.lib import add_message
-        add_message(
-            db=db,
-            conversation=conv,
-            sender_type=ParticipantType.TENANT,
-            body=body.message,
-            meta=sender_meta,
-            sender_tenant=tenant,
-        )
-        task_created = True
-    else:
-        # Count existing dev_sim tasks for this tenant to detect new creation
-        existing_count = (
-            db.query(Task)
-            .join(Conversation, Conversation.task_id == Task.id)
-            .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
-            .filter(
-                Task.source == DEV_SIM_SOURCE,
-                Task.task_status == TaskStatus.ACTIVE,
-                ConversationParticipant.user_id == tenant.user_id,
-                ConversationParticipant.is_active.is_(True),
-            )
-            .count()
-        )
-
-        conv, _ = await asyncio.to_thread(
-            route_inbound_to_task,
-            db,
-            tenant=tenant,
-            body=body.message,
-            channel_type=body.channel_type,
-            sender_meta=sender_meta,
-        )
-        # Stamp the task as dev_sim (route_inbound_to_task sets source=channel_type)
-        if conv.task_id:
-            linked_task = db.query(Task).filter(Task.id == conv.task_id).first()
-            if linked_task:
-                linked_task.source = DEV_SIM_SOURCE
-        db.flush()
-
-        after_count = (
-            db.query(Task)
-            .join(Conversation, Conversation.task_id == Task.id)
-            .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
-            .filter(
-                Task.source == DEV_SIM_SOURCE,
-                Task.task_status == TaskStatus.ACTIVE,
-                ConversationParticipant.user_id == tenant.user_id,
-                ConversationParticipant.is_active.is_(True),
-            )
-            .count()
-        )
-        task_created = after_count > existing_count
-
-    db.commit()
-
-    # Run agent — use the conversation id for context building
-    context_data = build_task_context_data(db, conv.id)
-    context = context_data["text"]
-    full_conv = get_conversation_with_messages(db=db, conversation_id=conv.id)
-    sorted_msgs = sorted(full_conv.messages, key=lambda m: m.sent_at)
-    history_msgs = sorted_msgs[:-1][-20:]
-    messages = [{"role": "system", "content": context}]
-    for m in history_msgs:
-        messages.append({"role": "assistant" if m.is_ai else "user", "content": m.body or ""})
-    messages.append({"role": "user", "content": body.message})
-
-    from llm.client import call_agent
-    from llm.side_effects import process_side_effects
-    agent_id = agent_registry.ensure_agent(str(resolve_account_id()), db)
-
-    try:
-        agent_resp = await call_agent(
-            agent_id,
-            session_key=f"sim:{conv.id}",
-            messages=messages,
-            trace_context=make_trace_envelope(
-                "llm_request",
-                flow="dev_sim",
-                session_key=f"sim:{conv.id}",
-                messages_payload=messages,
-                context=context_data,
-                retrieval=context_data.get("retrieval"),
-                reasoning={
-                    "available": False,
-                    "note": "No provider reasoning trace available for this response.",
-                },
-            ),
-        )
-        reply = agent_resp.reply
-    except Exception as e:
-        print(f"[dev/simulate-inbound] Agent failed: {e}")
-        reply = "[Agent unavailable]"
-        agent_resp = None
-
-    now = datetime.now(UTC)
-    db.add(Message(
-        org_id=tenant.org_id,
-        conversation_id=conv.id,
-        sender_type=ParticipantType.ACCOUNT_USER,
-        body=reply,
-        message_type=MessageType.MESSAGE,
-        sender_name="RentMate",
-        is_ai=True,
-        sent_at=now,
-    ))
-    if agent_resp and agent_resp.side_effects:
-        process_side_effects(db, side_effects=agent_resp.side_effects, conversation_id=conv.id, base_time=now)
-    db.commit()
-
-    task_id = conv.task_id if conv.task_id else conv.id
-    return SimulateInboundResponse(task_id=task_id, reply=reply, task_created=task_created)
-
-
-@router.get("/history/{tenant_id}", response_model=DevHistoryResponse)
-async def get_dev_history(
-    tenant_id: str,
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    await require_user(request)
-    tenant = db.query(Tenant).filter_by(id=tenant_id).first()
-    if not tenant:
-        return DevHistoryResponse(task_id=None, messages=[])
-
-    # Most recent active dev_sim task for this tenant
-    conv = (
-        db.query(Conversation)
-        .join(Task, Task.id == Conversation.task_id)
-        .join(ConversationParticipant, ConversationParticipant.conversation_id == Conversation.id)
-        .filter(
-            Task.source == DEV_SIM_SOURCE,
-            Task.task_status == TaskStatus.ACTIVE,
-            ConversationParticipant.user_id == tenant.user_id,
-            ConversationParticipant.is_active.is_(True),
-        )
-        .order_by(Conversation.updated_at.desc())
-        .first()
-    )
-
-    if not conv:
-        return DevHistoryResponse(task_id=None, messages=[])
-
-    task_id = conv.task_id if conv.task_id else conv.id
-    full = get_conversation_with_messages(db, conv.id)
-    sorted_msgs = sorted(full.messages, key=lambda m: m.sent_at)
-
-    return DevHistoryResponse(
-        task_id=task_id,
-        messages=[
-            DevChatMessage(
-                role="agent" if m.is_ai else "tenant",
-                text=m.body or "",
-                task_id=task_id,
-            )
-            for m in sorted_msgs
-            if m.body  # skip empty/system messages
-        ],
-    )
-
-
 @router.delete("/wipe-tasks")
 async def wipe_tasks(request: Request, db: Session = Depends(get_db)):
     """Delete ALL tasks, linked suggestions, and their conversations/messages."""
@@ -333,8 +80,8 @@ async def wipe_tasks(request: Request, db: Session = Depends(get_db)):
     for t in tasks:
         if t.ai_conversation_id:
             conv_ids.add(t.ai_conversation_id)
-        if t.external_conversation_id:
-            conv_ids.add(t.external_conversation_id)
+        for c in t.external_conversations:
+            conv_ids.add(c.id)
         db.delete(t)  # cascades to linked suggestions
     db.flush()
     for cid in conv_ids:
@@ -369,13 +116,12 @@ async def wipe_chats(request: Request, db: Session = Depends(get_db)):
     """Delete ALL conversations and their messages (also clears task conversation FKs)."""
     await require_user(request)
     # Unlink tasks from their conversations first
-    tasks = db.query(Task).filter(
-        (Task.ai_conversation_id.isnot(None)) | (Task.external_conversation_id.isnot(None))
-    ).all()
+    tasks = db.query(Task).filter(Task.ai_conversation_id.isnot(None)).all()
     for t in tasks:
         t.ai_conversation_id = None
-        t.external_conversation_id = None
     db.flush()
+    # Conversation.parent_task_id has ON DELETE SET NULL, so it'll be cleared
+    # automatically when the task rows are removed. No explicit unlink needed.
     convos = db.query(Conversation).all()
     for c in convos:
         db.delete(c)
@@ -467,7 +213,7 @@ async def reindex_memory(
 ):
     await require_user(request)
     if reset_index:
-        ChromaMemoryIndex(db).reset()
+        PgVectorMemoryIndex(db).reset()
     count = sync_memory_index(db)
     return {"count": count, "reset_index": reset_index}
 
@@ -476,23 +222,48 @@ async def reindex_memory(
 async def list_traces(
     request: Request,
     db: Session = Depends(get_db),
+    run_id: str | None = None,
     task_id: str | None = None,
+    task_scope: str | None = None,
     conversation_id: str | None = None,
     source: str | None = None,
     trace_type: str | None = None,
     limit: int = 100,
 ):
-    """Return recent agent traces for debugging."""
+    """Return recent agent traces for debugging.
+
+    When ``run_id`` is supplied, traces are returned in their
+    ``sequence_num`` order so the UI can render the run's timeline.
+    """
     await require_user(request)
     from sqlalchemy import select
 
-    from db.models import AgentTrace
+    from db.models import AgentRun, AgentTrace
 
-    q = select(AgentTrace).order_by(AgentTrace.timestamp.desc())
+    needs_run_join = bool(task_id or conversation_id)
+    if run_id:
+        order = (AgentTrace.sequence_num.asc(),)
+    else:
+        order = (AgentTrace.timestamp.desc(),)
+    q = select(AgentTrace).order_by(*order)
+    if needs_run_join:
+        q = q.join(
+            AgentRun,
+            (AgentTrace.org_id == AgentRun.org_id) & (AgentTrace.run_id == AgentRun.id),
+        )
+    if run_id:
+        q = q.where(AgentTrace.run_id == run_id)
     if task_id:
-        q = q.where(AgentTrace.task_id == task_id)
+        q = q.where(AgentRun.task_id == task_id)
+        if task_scope == "routine":
+            q = q.where(AgentTrace.source.in_(["routine", "simulate"]))
+        elif task_scope == "task":
+            q = q.where(
+                (AgentTrace.source.is_(None))
+                | (~AgentTrace.source.in_(["routine", "simulate"]))
+            )
     if conversation_id:
-        q = q.where(AgentTrace.conversation_id == conversation_id)
+        q = q.where(AgentRun.conversation_id == conversation_id)
     if source:
         q = q.where(AgentTrace.source == source)
     if trace_type:
@@ -506,8 +277,10 @@ async def list_traces(
             "timestamp": t.timestamp.isoformat() + "Z",
             "trace_type": t.trace_type,
             "source": t.source,
-            "task_id": t.task_id,
-            "conversation_id": t.conversation_id,
+            "run_id": t.run_id,
+            "sequence_num": t.sequence_num,
+            "task_id": t.run.task_id if t.run else None,
+            "conversation_id": t.run.conversation_id if t.run else None,
             "tool_name": t.tool_name,
             "summary": t.summary,
             "detail": t.detail,
@@ -517,6 +290,76 @@ async def list_traces(
     ]
 
 
+@router.get("/runs")
+async def list_runs(
+    request: Request,
+    db: Session = Depends(get_db),
+    task_id: str | None = None,
+    conversation_id: str | None = None,
+    source: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+):
+    """Return recent agent runs (newest first) with per-run trace counts.
+
+    The dev UI groups traces by run; this endpoint feeds the collapsed
+    run rows. Per-run traces come from ``GET /dev/traces?run_id=...``.
+    """
+    await require_user(request)
+    from sqlalchemy import func, select
+
+    from db.models import AgentRun, AgentTrace
+
+    trace_count_subq = (
+        select(AgentTrace.run_id, func.count().label("trace_count"))
+        .group_by(AgentTrace.run_id)
+        .subquery()
+    )
+    q = (
+        select(AgentRun, trace_count_subq.c.trace_count)
+        .outerjoin(trace_count_subq, trace_count_subq.c.run_id == AgentRun.id)
+        .order_by(AgentRun.started_at.desc())
+    )
+    if task_id:
+        q = q.where(AgentRun.task_id == task_id)
+    if conversation_id:
+        q = q.where(AgentRun.conversation_id == conversation_id)
+    if source:
+        q = q.where(AgentRun.source == source)
+    if status:
+        q = q.where(AgentRun.status == status)
+    q = q.limit(min(limit, 200))
+
+    rows = db.execute(q).all()
+    out: list[dict] = []
+    for run, trace_count in rows:
+        duration_ms: int | None = None
+        if run.ended_at and run.started_at:
+            duration_ms = int((run.ended_at - run.started_at).total_seconds() * 1000)
+        out.append({
+            "id": run.id,
+            "source": run.source,
+            "status": run.status,
+            "task_id": run.task_id,
+            "conversation_id": run.conversation_id,
+            "model": run.model,
+            "agent_version": run.agent_version,
+            "execution_path": run.execution_path,
+            "started_at": run.started_at.isoformat() + "Z" if run.started_at else None,
+            "ended_at": run.ended_at.isoformat() + "Z" if run.ended_at else None,
+            "duration_ms": duration_ms,
+            "iteration_count": run.iteration_count,
+            "total_input_tokens": run.total_input_tokens,
+            "total_output_tokens": run.total_output_tokens,
+            "total_cost_cents": str(run.total_cost_cents) if run.total_cost_cents is not None else "0",
+            "trigger_input": (run.trigger_input or "")[:240] or None,
+            "final_response": (run.final_response or "")[:240] or None,
+            "error_message": run.error_message,
+            "trace_count": int(trace_count or 0),
+        })
+    return out
+
+
 @router.get("/trace-filters/tasks")
 async def list_trace_tasks(
     request: Request,
@@ -524,29 +367,61 @@ async def list_trace_tasks(
     limit: int = 200,
 ):
     await require_user(request)
-    rows = (
-        db.query(Task)
-        .filter(
-            (Task.ai_conversation_id.isnot(None))
-            | (Task.external_conversation_id.isnot(None))
-            | (Task.parent_conversation_id.isnot(None))
-            | (Task.source == DEV_SIM_SOURCE)
-        )
-        .order_by(Task.updated_at.desc())
-        .limit(min(limit, 500))
-        .all()
-    )
-    return [
+    rows = [
         {
-            "id": str(task.id),
+            "id": f"task:{task.id}",
+            "raw_id": str(task.id),
+            "scope": "task",
             "title": task.title,
             "status": task.task_status,
             "mode": task.task_mode,
             "source": task.source,
             "updated_at": task.updated_at.isoformat() + "Z" if task.updated_at else None,
         }
-        for task in rows
+        for task in (
+            db.query(Task)
+            .filter(
+                (Task.ai_conversation_id.isnot(None))
+                | (Task.parent_conversation_id.isnot(None))
+                | (Task.id.in_(
+                    select(Conversation.parent_task_id)
+                    .where(Conversation.parent_task_id.isnot(None))
+                ))
+                | (Task.source == DEV_SIM_SOURCE)
+            )
+            .order_by(Task.updated_at.desc())
+            .limit(min(limit, 500))
+            .all()
+        )
     ]
+
+    from db.models import Routine
+
+    routine_rows = (
+        db.query(Routine)
+        .filter(
+            (Routine.last_run_at.isnot(None))
+            | (Routine.simulated_at.isnot(None))
+        )
+        .order_by(Routine.updated_at.desc())
+        .limit(min(limit, 500))
+        .all()
+    )
+    rows.extend(
+        {
+            "id": f"routine:{task.id}",
+            "raw_id": str(task.id),
+            "scope": "routine",
+            "title": task.name,
+            "status": task.last_status or task.state,
+            "mode": "routine",
+            "source": "routine",
+            "updated_at": task.updated_at.isoformat() + "Z" if task.updated_at else None,
+        }
+        for task in routine_rows
+    )
+    rows.sort(key=lambda item: item["updated_at"] or "", reverse=True)
+    return rows[: min(limit, 500)]
 
 
 @router.get("/trace-filters/chats")
@@ -567,7 +442,7 @@ async def list_trace_chats(
             db.query(Task.id)
             .filter(
                 (Task.ai_conversation_id == conv.id)
-                | (Task.external_conversation_id == conv.id)
+                | (Task.id == conv.parent_task_id)
                 | (Task.parent_conversation_id == conv.id)
             )
             .order_by(Task.id.asc())
@@ -600,8 +475,10 @@ async def get_trace_detail(
         "timestamp": trace.timestamp.isoformat() + "Z",
         "trace_type": trace.trace_type,
         "source": trace.source,
-        "task_id": trace.task_id,
-        "conversation_id": trace.conversation_id,
+        "run_id": trace.run_id,
+        "sequence_num": trace.sequence_num,
+        "task_id": trace.run.task_id if trace.run else None,
+        "conversation_id": trace.run.conversation_id if trace.run else None,
         "tool_name": trace.tool_name,
         "summary": trace.summary,
         "detail": parsed_detail,

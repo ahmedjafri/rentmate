@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Bell, ShieldCheck, Hand, Bot, MessageSquareHeart } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from './Sidebar';
 import { ChatPanel } from '@/components/chat/ChatPanel';
@@ -9,6 +10,7 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { categoryColors, categoryLabels } from '@/data/mockData';
+import { openSuggestionInContext } from '@/lib/suggestionNavigation';
 import { cn } from '@/lib/utils';
 
 
@@ -86,15 +88,30 @@ function usePageContext() {
 }
 
 export function AppLayout({ children }: {children: React.ReactNode;}) {
-  const { chatPanel, openChat, closeChat, actionDeskTasks, suggestions } = useApp();
+  const {
+    chatPanel,
+    openChat,
+    closeChat,
+    actionDeskTasks,
+    suggestions,
+    notifications,
+    unreadNotificationCount,
+    markNotificationRead,
+    archiveNotification,
+  } = useApp();
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const pageCtx = usePageContext();
 
   const location = useLocation();
   const isDashboard = location.pathname === '/';
+  // /tasks/:id and /chats also embed a ChatPanel in their layout; suppress
+  // the slide-out on those routes so we don't render the chat twice.
+  const isTaskDetail = /^\/tasks\/[^/]+$/.test(location.pathname);
+  const isChats = location.pathname === '/chats';
   const pendingSuggestions = suggestions.filter(s => s.status === 'pending');
-  const attentionCount = pendingSuggestions.length;
+  const attentionCount = unreadNotificationCount + pendingSuggestions.length;
+  const activeNotifications = notifications.filter(n => !n.archivedAt).slice(0, 8);
 
   const close = () => setOpen(false);
 
@@ -104,6 +121,27 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
       return;
     }
     openChat({ pageContext: pageCtx?.context ?? null });
+  };
+
+  const handleNotificationClick = async (notificationId: string, taskId?: string | null, conversationId?: string | null) => {
+    try {
+      await markNotificationRead(notificationId);
+    } catch {}
+    close();
+    if (taskId) {
+      navigate(`/tasks/${taskId}`);
+      return;
+    }
+    if (conversationId) {
+      openChat({ conversationId });
+    }
+  };
+
+  const handleArchiveNotification = async (e: MouseEvent, notificationId: string) => {
+    e.stopPropagation();
+    try {
+      await archiveNotification(notificationId);
+    } catch {}
   };
 
   return (
@@ -141,53 +179,108 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
               <span className="hidden sm:inline">Feedback</span>
             </a>
 
-            {attentionCount > 0 && (
-              <Popover open={open} onOpenChange={setOpen}>
-                <PopoverTrigger asChild>
-                  <button
-                    className="relative flex items-center justify-center h-7 w-7 rounded-md hover:bg-muted transition-colors"
-                    aria-label={`${attentionCount} pending suggestion${attentionCount === 1 ? '' : 's'}`}
-                  >
-                    <Bell className="h-4 w-4 text-muted-foreground" />
+            <Popover open={open} onOpenChange={setOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  className="relative flex items-center justify-center h-7 w-7 rounded-md hover:bg-muted transition-colors"
+                  aria-label={attentionCount > 0 ? `${attentionCount} items needing attention` : 'Notifications'}
+                >
+                  <Bell className="h-4 w-4 text-muted-foreground" />
+                  {attentionCount > 0 && (
                     <span className="absolute -top-0.5 -right-0.5 h-4 min-w-4 px-1 flex items-center justify-center rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold leading-none">
                       {attentionCount > 99 ? '99+' : attentionCount}
                     </span>
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent align="end" sideOffset={8} className="w-80 p-0">
-                  <div className="flex items-center justify-between px-3 py-2 border-b">
-                    <span className="text-sm font-semibold">Pending Suggestions</span>
-                    <button
-                      onClick={() => { close(); navigate('/action-desk'); }}
-                      className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      View all →
-                    </button>
-                  </div>
-                  <ul className="divide-y max-h-96 overflow-y-auto">
-                    {pendingSuggestions.map(s => (
-                      <li key={s.id}>
+                  )}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="end" sideOffset={8} className="w-96 p-0">
+                <div className="flex items-center justify-between px-3 py-2 border-b">
+                  <span className="text-sm font-semibold">Notifications</span>
+                  <span className="text-xs text-muted-foreground">
+                    {unreadNotificationCount} unread
+                  </span>
+                </div>
+                <div className="max-h-96 overflow-y-auto">
+                  {activeNotifications.length > 0 ? (
+                    <ul className="divide-y">
+                      {activeNotifications.map(notification => (
+                        <li key={notification.id}>
+                          <div className="flex items-start gap-2 px-3 py-2.5 hover:bg-muted/50 transition-colors">
+                            <button
+                              onClick={() => void handleNotificationClick(notification.id, notification.taskId, notification.conversationId)}
+                              className="flex min-w-0 flex-1 gap-2 text-left"
+                            >
+                              <div className="pt-1">
+                                {!notification.readAt && <span className="block h-2 w-2 rounded-full bg-primary" />}
+                              </div>
+                              <div className="min-w-0 flex-1 space-y-1">
+                                <div className="flex items-start justify-between gap-2">
+                                  <span className="text-sm font-medium leading-tight line-clamp-1">{notification.title}</span>
+                                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                                    {formatDistanceToNow(notification.createdAt, { addSuffix: true })}
+                                  </span>
+                                </div>
+                                {notification.body && (
+                                  <p className="text-xs text-muted-foreground line-clamp-2">{notification.body}</p>
+                                )}
+                              </div>
+                            </button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2 text-[10px]"
+                              onClick={(e) => void handleArchiveNotification(e, notification.id)}
+                            >
+                              Archive
+                            </Button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="px-3 py-6 text-sm text-muted-foreground">No notifications.</div>
+                  )}
+
+                  {pendingSuggestions.length > 0 && (
+                    <>
+                      <div className="flex items-center justify-between px-3 py-2 border-y bg-muted/20">
+                        <span className="text-sm font-semibold">Pending Suggestions</span>
                         <button
                           onClick={() => { close(); navigate('/action-desk'); }}
-                          className="w-full text-left flex flex-col gap-1 px-3 py-2.5 hover:bg-muted/50 transition-colors"
+                          className="text-xs text-muted-foreground hover:text-foreground transition-colors"
                         >
-                          <span className="text-sm font-medium leading-tight line-clamp-1">{s.title}</span>
-                          <Badge variant="secondary" className={cn('text-[10px] py-0 px-1.5 h-4 rounded', categoryColors[s.category])}>
-                            {categoryLabels[s.category]}
-                          </Badge>
+                          View all →
                         </button>
-                      </li>
-                    ))}
-                  </ul>
-                </PopoverContent>
-              </Popover>
-            )}
+                      </div>
+                      <ul className="divide-y">
+                        {pendingSuggestions.map(s => (
+                          <li key={s.id}>
+                            <button
+                              onClick={() => {
+                                close();
+                                openSuggestionInContext(s, navigate, openChat);
+                              }}
+                              className="w-full text-left flex flex-col gap-1 px-3 py-2.5 hover:bg-muted/50 transition-colors"
+                            >
+                              <span className="text-sm font-medium leading-tight line-clamp-1">{s.title}</span>
+                              <Badge variant="secondary" className={cn('text-[10px] py-0 px-1.5 h-4 rounded', categoryColors[s.category])}>
+                                {categoryLabels[s.category]}
+                              </Badge>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </div>
+              </PopoverContent>
+            </Popover>
           </header>
           <div className="flex flex-1 min-h-0">
             <main className="flex-1 overflow-auto">
               {children}
             </main>
-            {chatPanel.isOpen && !isDashboard && <ChatPanel />}
+            {chatPanel.isOpen && !isDashboard && !isTaskDetail && !isChats && <ChatPanel />}
           </div>
         </div>
       </div>

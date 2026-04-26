@@ -15,14 +15,15 @@ import Tenants from "./pages/Tenants";
 import TenantDetail from "./pages/TenantDetail";
 import ActionDesk from "./pages/ActionDesk";
 import Tasks from "./pages/Tasks";
+import TaskDetail from "./pages/TaskDetail";
 import Chats from "./pages/Chats";
 import Documents from "./pages/Documents";
 import Vendors from "./pages/Vendors";
 import DocumentPage from "./pages/DocumentPage";
 import Settings from "./pages/Settings";
 import DevTools from "./pages/DevTools";
-import ScheduledTasks from "./pages/ScheduledTasks";
-import ScheduledTaskDetail from "./pages/ScheduledTaskDetail";
+import Routines from "./pages/Routines";
+import RoutineDetail from "./pages/RoutineDetail";
 import NotFound from "./pages/NotFound";
 import PortalInvite from "./pages/VendorInvite";
 import VendorPortal from "./pages/VendorPortal";
@@ -46,14 +47,15 @@ export type AppComponentOverrides = Partial<{
   TenantDetail: typeof TenantDetail;
   ActionDesk: typeof ActionDesk;
   Tasks: typeof Tasks;
+  TaskDetail: typeof TaskDetail;
   Chats: typeof Chats;
   Documents: typeof Documents;
   DocumentPage: typeof DocumentPage;
   Vendors: typeof Vendors;
   Settings: typeof Settings;
   DevTools: typeof DevTools;
-  ScheduledTasks: typeof ScheduledTasks;
-  ScheduledTaskDetail: typeof ScheduledTaskDetail;
+  Routines: typeof Routines;
+  RoutineDetail: typeof RoutineDetail;
   NotFound: typeof NotFound;
   PortalInvite: typeof PortalInvite;
   VendorPortal: typeof VendorPortal;
@@ -101,16 +103,17 @@ export function BaseApp({
   const TenantDetailComponent = pickComponent(componentOverrides?.TenantDetail, TenantDetail);
   const ActionDeskComponent = pickComponent(componentOverrides?.ActionDesk, ActionDesk);
   const TasksComponent = pickComponent(componentOverrides?.Tasks, Tasks);
+  const TaskDetailComponent = pickComponent(componentOverrides?.TaskDetail, TaskDetail);
   const ChatsComponent = pickComponent(componentOverrides?.Chats, Chats);
   const DocumentsComponent = pickComponent(componentOverrides?.Documents, Documents);
   const DocumentPageComponent = pickComponent(componentOverrides?.DocumentPage, DocumentPage);
   const VendorsComponent = pickComponent(componentOverrides?.Vendors, Vendors);
   const SettingsComponent = pickComponent(componentOverrides?.Settings, Settings);
   const DevToolsComponent = pickComponent(componentOverrides?.DevTools, DevTools);
-  const ScheduledTasksComponent = pickComponent(componentOverrides?.ScheduledTasks, ScheduledTasks);
-  const ScheduledTaskDetailComponent = pickComponent(
-    componentOverrides?.ScheduledTaskDetail,
-    ScheduledTaskDetail,
+  const RoutinesComponent = pickComponent(componentOverrides?.Routines, Routines);
+  const RoutineDetailComponent = pickComponent(
+    componentOverrides?.RoutineDetail,
+    RoutineDetail,
   );
   const NotFoundComponent = pickComponent(componentOverrides?.NotFound, NotFound);
   const PortalInviteComponent = pickComponent(componentOverrides?.PortalInvite, PortalInvite);
@@ -148,11 +151,12 @@ export function BaseApp({
                         <Route path="/documents/:id" element={<DocumentPageComponent />} />
                         <Route path="/action-desk" element={<ActionDeskComponent />} />
                         <Route path="/tasks" element={<TasksComponent />} />
+                        <Route path="/tasks/:id" element={<TaskDetailComponent />} />
                         <Route path="/chats" element={<ChatsComponent />} />
-                        <Route path="/scheduled-tasks" element={<ScheduledTasksComponent />} />
+                        <Route path="/routines" element={<RoutinesComponent />} />
                         <Route
-                          path="/scheduled-tasks/:id"
-                          element={<ScheduledTaskDetailComponent />}
+                          path="/routines/:id"
+                          element={<RoutineDetailComponent />}
                         />
                         <Route path="/settings" element={<SettingsComponent />} />
                         <Route path="/dev" element={<DevToolsComponent />} />

@@ -29,6 +29,7 @@ class DbMemoryStore:
             note_id = str(uuid.uuid4())
             db.add(AgentMemory(
                 id=note_id,
+                agent_id=self.agent_id,
                 org_id=self.org_id,
                 creator_id=self.creator_id,
                 memory_type="note:general",
@@ -50,6 +51,7 @@ class DbMemoryStore:
                 db.query(AgentMemory)
                 .filter(
                     AgentMemory.org_id == self.org_id,
+                    AgentMemory.agent_id == self.agent_id,
                     AgentMemory.creator_id == self.creator_id,
                     AgentMemory.memory_type == "note:general",
                 )
@@ -62,14 +64,25 @@ class DbMemoryStore:
 
     # ── System prompt context ────────────────────────────────────────────
 
-    def get_memory_context(self) -> str:
-        """Build a memory block for the system prompt via ranked retrieval."""
+    def get_memory_context(self, query: str | None = None) -> str:
+        """Build a memory block for the system prompt via ranked retrieval.
+
+        ``query`` should be the user's current message so retrieval ranks
+        memories relevant to the immediate ask. Falls back to a generic
+        account-overview query when no message is available (e.g. during
+        agent warmup, migrations, or surfaces that build the prompt
+        outside a chat turn).
+        """
+        ranking_query = (query or "").strip() or (
+            "property management account overview memory notes "
+            "active leases vendors tasks"
+        )
         db = self._get_db()
         try:
             bundle = retrieve_context(db, RetrievalRequest(
                 surface="system_prompt",
                 intent="system_prompt",
-                query="property management account overview memory notes active leases vendors tasks",
+                query=ranking_query,
                 creator_id=self.creator_id,
                 org_id=self.org_id,
                 limit=12,
@@ -90,7 +103,7 @@ class DbMemoryStore:
         try:
             row = (
                 db.query(AgentMemory)
-                .filter_by(org_id=self.org_id, creator_id=self.creator_id, memory_type="long_term")
+                .filter_by(org_id=self.org_id, agent_id=self.agent_id, creator_id=self.creator_id, memory_type="long_term")
                 .first()
             )
             return row.content if row else ""
@@ -103,7 +116,7 @@ class DbMemoryStore:
         try:
             row = (
                 db.query(AgentMemory)
-                .filter_by(org_id=self.org_id, creator_id=self.creator_id, memory_type="long_term")
+                .filter_by(org_id=self.org_id, agent_id=self.agent_id, creator_id=self.creator_id, memory_type="long_term")
                 .first()
             )
             now = datetime.now(UTC)
@@ -113,6 +126,7 @@ class DbMemoryStore:
             else:
                 db.add(AgentMemory(
                     id=str(uuid.uuid4()),
+                    agent_id=self.agent_id,
                     org_id=self.org_id,
                     creator_id=self.creator_id,
                     memory_type="long_term",

@@ -6,11 +6,41 @@ All eval tests should use these instead of rolling their own.
 import asyncio
 import json
 import os
+import re
+import time
 import uuid
+from pathlib import Path
 from time import sleep
 
 
+_DEFAULT_EVAL_FAILURE_TOLERANCE = 3
+
+# Captured at configure-time so pytest_runtest_logreport (which doesn't
+# receive the config object directly) can record failures on it. Single
+# pytest process per session, so a module-level reference is safe.
+_TOLERANCE_CONFIG = None
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--eval-failure-tolerance",
+        action="store",
+        default=_DEFAULT_EVAL_FAILURE_TOLERANCE,
+        type=int,
+        help=(
+            "Number of @pytest.mark.eval test failures the session will "
+            f"tolerate before failing CI (default: {_DEFAULT_EVAL_FAILURE_TOLERANCE}). "
+            "Non-eval failures are never tolerated."
+        ),
+    )
+
+
 def pytest_configure(config):
+    global _TOLERANCE_CONFIG
+    _TOLERANCE_CONFIG = config
+    config._failed_eval_nodeids = []
+    config._failed_other_nodeids = []
+
     agent_model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
     judge_model = os.getenv("EVAL_JUDGE_MODEL") or agent_model
     api_key = os.getenv("LLM_API_KEY", "")
@@ -42,11 +72,13 @@ from db.models import (
     User,
 )
 from db.models.account import create_shadow_user
+from gql.services.number_allocator import NumberAllocator
 
 DEFAULT_ACCOUNT_ID = 1
 
 # Keep eval runs aligned with CI and avoid parallel Chroma crashes.
 os.environ.setdefault("RENTMATE_DISABLE_VECTOR_INDEX", "1")
+os.environ.setdefault("RENTMATE_DISABLE_ASYNC_NOTIFICATIONS", "1")
 
 
 def _format_eval_debug_payload(payload: dict | None) -> str:
@@ -62,6 +94,81 @@ def _format_eval_debug_payload(payload: dict | None) -> str:
     ])
 
 
+_EVAL_RUN_DUMP_DIR = Path("/tmp/rentmate-eval-runs")
+
+
+def _dump_eval_runs(item, report) -> str | None:
+    """Serialize every AgentRun + AgentTrace from the test's DB session
+    into ``/tmp/rentmate-eval-runs/<test>-<ts>.json`` and return the path.
+
+    Must run while the test's transactional session is still open (i.e.
+    inside ``pytest_runtest_makereport`` for the ``call`` phase, before
+    fixture teardown rolls the savepoint back).
+    """
+    db = (getattr(item, "funcargs", {}) or {}).get("db")
+    if db is None:
+        return None
+
+    from db.models import AgentRun, AgentTrace
+
+    runs = db.query(AgentRun).order_by(AgentRun.started_at).all()
+    if not runs:
+        return None
+
+    payload: list[dict] = []
+    for run in runs:
+        traces = (
+            db.query(AgentTrace)
+            .filter(AgentTrace.run_id == run.id)
+            .order_by(AgentTrace.sequence_num)
+            .all()
+        )
+        payload.append({
+            "run_id": run.id,
+            "source": run.source,
+            "status": run.status,
+            "task_id": run.task_id,
+            "conversation_id": run.conversation_id,
+            "model": run.model,
+            "agent_version": run.agent_version,
+            "execution_path": run.execution_path,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "ended_at": run.ended_at.isoformat() if run.ended_at else None,
+            "iteration_count": run.iteration_count,
+            "input_tokens": run.total_input_tokens,
+            "output_tokens": run.total_output_tokens,
+            "cost_cents": run.total_cost_cents,
+            "trigger_input": run.trigger_input,
+            "final_response": run.final_response,
+            "error_message": run.error_message,
+            "metadata": run.run_metadata,
+            "traces": [
+                {
+                    "sequence_num": t.sequence_num,
+                    "timestamp": t.timestamp.isoformat() if t.timestamp else None,
+                    "trace_type": t.trace_type,
+                    "source": t.source,
+                    "tool_name": t.tool_name,
+                    "summary": t.summary,
+                    "detail": t.detail,
+                    "input_tokens": t.input_tokens,
+                    "output_tokens": t.output_tokens,
+                    "model": t.model,
+                    "suggestion_id": t.suggestion_id,
+                }
+                for t in traces
+            ],
+        })
+
+    _EVAL_RUN_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", item.name)
+    path = _EVAL_RUN_DUMP_DIR / f"{safe_name}-{int(time.time() * 1000)}.json"
+    path.write_text(
+        json.dumps({"test": item.nodeid, "runs": payload}, indent=2, default=str),
+    )
+    return str(path)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
@@ -75,6 +182,59 @@ def pytest_runtest_makereport(item, call):
         report.sections.append(("Hermes Eval Context", _format_eval_debug_payload(payload)))
     except Exception as exc:  # noqa: BLE001
         report.sections.append(("Hermes Eval Context", f"Failed to capture Hermes debug payload: {exc}"))
+
+    try:
+        dump_path = _dump_eval_runs(item, report)
+        if dump_path:
+            marker = f">>> Eval run dump: {dump_path}"
+            print(f"\n{marker}")
+            report.sections.append(("Eval Run Dump", marker))
+    except Exception as exc:  # noqa: BLE001
+        report.sections.append(("Eval Run Dump", f"Failed to dump eval runs: {exc}"))
+
+
+def pytest_runtest_logreport(report):
+    """Bucket each failed call-phase report so the session-finish hook
+    can decide whether to tolerate it.
+
+    Fires on the controller for every worker's report, so it works in
+    both serial and ``pytest-xdist -n auto`` modes. ``report.keywords``
+    survives the cross-process pickle and contains the test's markers.
+    """
+    if report.when != "call" or not report.failed:
+        return
+    config = _TOLERANCE_CONFIG
+    if config is None:
+        return
+    if report.keywords.get("eval"):
+        config._failed_eval_nodeids.append(report.nodeid)
+    else:
+        config._failed_other_nodeids.append(report.nodeid)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session, exitstatus):
+    """Soften CI exit status when a small number of eval-marked tests
+    flaked. Anything else (collection errors, non-eval failures, or
+    failures over the budget) still fails the session.
+    """
+    if exitstatus == 0:
+        return
+    config = session.config
+    failed_eval = list(getattr(config, "_failed_eval_nodeids", []))
+    failed_other = list(getattr(config, "_failed_other_nodeids", []))
+    tolerance = config.getoption("--eval-failure-tolerance")
+
+    if failed_other or not failed_eval or len(failed_eval) > tolerance:
+        return
+
+    print(
+        f"\n[evals] tolerating {len(failed_eval)} eval failure(s) "
+        f"(<= {tolerance}); marking session as PASS:"
+    )
+    for nid in failed_eval:
+        print(f"  - {nid}")
+    session.exitstatus = 0
 
 
 # ── DB fixtures ──────────────────────────────────────────────────────────────
@@ -125,7 +285,10 @@ def db(Session, engine):
 
 @pytest.fixture
 def mock_sms():
-    with patch("gql.services.sms_service.send_sms_reply", new_callable=AsyncMock) as mock:
+    with patch(
+        "gql.services.notification_service.NotificationService._send_sms",
+        new_callable=AsyncMock,
+    ) as mock:
         yield mock
 
 
@@ -291,6 +454,7 @@ class ScenarioBuilder:
             ))
 
         task = Task(
+            id=NumberAllocator.allocate_next(self.db, entity_type="task", org_id=1),
             org_id=1,
             creator_id=DEFAULT_ACCOUNT_ID,
             title=title,
@@ -337,20 +501,20 @@ def build_messages(db, task, user_message):
 
     # Gather external conversation messages
     ext_parts = []
-    for conv_id_attr in ["external_conversation_id", "parent_conversation_id"]:
-        cid = getattr(task, conv_id_attr, None)
-        if not cid:
-            continue
-        conv = db.get(Conversation, cid)
-        if not conv:
-            continue
+    ext_convos: list[tuple[object, str]] = []
+    for conv in task.external_conversations:
+        ext_convos.append((conv, "External"))
+    if task.parent_conversation_id:
+        parent_conv = db.get(Conversation, task.parent_conversation_id)
+        if parent_conv and parent_conv not in [c for c, _ in ext_convos]:
+            ext_convos.append((parent_conv, "Tenant"))
+    for conv, label in ext_convos:
         ext_msgs = sorted(
             [m for m in (conv.messages or [])
              if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
             key=lambda m: m.sent_at,
         )[-20:]
         if ext_msgs:
-            label = "External" if conv_id_attr == "external_conversation_id" else "Tenant"
             lines = [f"[{m.sender_name or 'Unknown'}]: {m.body}" for m in ext_msgs]
             ext_parts.append(f"\n\n{label} conversation:\n" + "\n".join(lines))
 

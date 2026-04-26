@@ -7,10 +7,11 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from backends.local_auth import get_org_external_id, set_request_context
-from db.enums import TaskMode, TaskStatus
-from db.models import AgentMemory, AgentTrace, Conversation, Message, MessageType, ParticipantType, Property, Task
+from db.enums import RoutineState, TaskMode, TaskStatus
+from db.models import AgentMemory, AgentTrace, Conversation, Message, MessageType, ParticipantType, Property, Routine, Task
+from gql.services.number_allocator import NumberAllocator
 from handlers.deps import get_db
-from llm.retrieval import ChromaMemoryIndex
+from llm.retrieval import PgVectorMemoryIndex
 from main import app
 
 
@@ -49,8 +50,7 @@ class TestDevMemoryEndpoints:
         self.require_user_patcher.stop()
 
     def test_lists_memory_items_from_index(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("llm.retrieval.CHROMA_PATH", tmp_path / "chroma")
-        ChromaMemoryIndex().reset()
+        PgVectorMemoryIndex(self.db).reset()
 
         self.db.add(Property(
             id="prop-dev-1",
@@ -81,8 +81,7 @@ class TestDevMemoryEndpoints:
         assert "Boiler replacement" in items[0]["content"]
 
     def test_retrieve_context_returns_ranked_results_and_reindex_endpoint(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("llm.retrieval.CHROMA_PATH", tmp_path / "chroma")
-        ChromaMemoryIndex().reset()
+        PgVectorMemoryIndex(self.db).reset()
 
         self.db.add(Property(
             id="prop-dev-2",
@@ -131,6 +130,7 @@ class TestDevMemoryEndpoints:
         self.db.add(conv)
         self.db.flush()
         task = Task(
+            id=NumberAllocator.allocate_next(self.db, entity_type="task", org_id=1),
             org_id=1,
             creator_id=1,
             title="Trace Task",
@@ -142,6 +142,21 @@ class TestDevMemoryEndpoints:
         )
         self.db.add(task)
         self.db.flush()
+        from db.models import AgentRun
+        run = AgentRun(
+            id="run-dev-1",
+            org_id=1,
+            creator_id=1,
+            started_at=datetime.now(UTC),
+            status="completed",
+            source="chat",
+            agent_version="rentmate-test",
+            execution_path="local",
+            task_id=str(task.id),
+            conversation_id=str(conv.id),
+        )
+        self.db.add(run)
+        self.db.flush()
         trace = AgentTrace(
             id="trace-dev-1",
             org_id=1,
@@ -149,8 +164,8 @@ class TestDevMemoryEndpoints:
             timestamp=datetime.now(UTC),
             trace_type="llm_reply",
             source="chat",
-            task_id=str(task.id),
-            conversation_id=str(conv.id),
+            run_id=run.id,
+            sequence_num=0,
             summary="Trace summary",
             detail='{"version":1,"kind":"llm_exchange","messages_payload":[{"role":"system","content":"ctx"},{"role":"user","content":"hi"}],"context":{"text":"ctx","sections":[{"section_type":"task_core","title":"Task core","content":"ctx"}]},"retrieval":{"request":{"query":"hi"},"items":[{"memory_item_id":"m1","title":"item","source_type":"tenant","final_score":1.2,"vector_score":0.4,"heuristic_score":0.6,"content":"hello","reasons":["match"]}]}}',
         )
@@ -178,7 +193,7 @@ class TestDevMemoryEndpoints:
 
         tasks_response = self.client.get("/dev/trace-filters/tasks", headers=AUTH)
         assert tasks_response.status_code == 200
-        assert any(str(row["id"]) == str(task.id) for row in tasks_response.json())
+        assert any(row["id"] == f"task:{task.id}" and row["raw_id"] == str(task.id) for row in tasks_response.json())
 
         chats_response = self.client.get("/dev/trace-filters/chats", headers=AUTH)
         assert chats_response.status_code == 200
@@ -190,3 +205,28 @@ class TestDevMemoryEndpoints:
         assert detail_payload["id"] == trace.id
         assert detail_payload["detail"]["kind"] == "llm_exchange"
         assert detail_payload["detail"]["retrieval"]["request"]["query"] == "hi"
+
+    def test_trace_task_filters_include_routines_with_runs(self):
+        routine = Routine(
+            id=NumberAllocator.allocate_next(self.db, entity_type="routine", org_id=1),
+            org_id=1,
+            creator_id=1,
+            name="Scheduled lease review",
+            prompt="Review expiring leases.",
+            schedule="daily",
+            enabled=True,
+            state=RoutineState.SCHEDULED,
+            simulated_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        self.db.add(routine)
+        self.db.commit()
+
+        response = self.client.get("/dev/trace-filters/tasks", headers=AUTH)
+
+        assert response.status_code == 200
+        rows = response.json()
+        assert any(
+            row["id"] == f"routine:{routine.id}" and row["raw_id"] == str(routine.id) and row["source"] == "routine"
+            for row in rows
+        )

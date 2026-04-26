@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import httpx
-from agent.memory_manager import MemoryManager
 
 from backends.local_auth import (
     reset_fallback_request_context,
@@ -25,9 +24,11 @@ from backends.local_auth import (
     resolve_org_id,
     set_fallback_request_context,
 )
+from llm.loop import AgentLoop
 from llm.model_config import resolve_model_config
-from llm.registry import agent_registry, ensure_agent_runtime_dirs
+from llm.registry import agent_registry
 from llm.rentmate_policy_provider import RentmatePolicyProvider
+from llm.runs import accumulate_run_totals, derive_run_metadata, start_run
 from llm.tools import current_user_message
 from llm.tracing import log_trace, make_trace_envelope
 
@@ -57,20 +58,29 @@ def get_last_eval_debug_payload() -> dict[str, Any] | None:
     return _last_eval_debug_payload
 
 
-def _attach_rentmate_policy_provider(agent: Any) -> None:
-    manager = getattr(agent, "_memory_manager", None)
-    if manager is None:
-        manager = MemoryManager()
-        agent._memory_manager = manager
-    if manager.get_provider("rentmate_policy") is not None:
-        return
-    manager.add_provider(RentmatePolicyProvider())
-    manager.initialize_all(
-        session_id=str(getattr(agent, "session_id", "")),
-        platform=getattr(agent, "platform", "api") or "api",
-        hermes_home=str(getattr(agent, "hermes_home", "")),
-        agent_context="primary",
-    )
+def _augment_system_message_with_policies(
+    base: str,
+    *,
+    user_message: str,
+    session_id: str = "",
+) -> str:
+    """Inline RentMate policy text into the system prompt.
+
+    The constitution block always applies; ``prefetch(user_message)`` adds
+    keyword-matched policy excerpts for the current ask.
+    """
+    provider = RentmatePolicyProvider()
+    provider.initialize(session_id=session_id)
+    parts: list[str] = []
+    if base:
+        parts.append(base)
+    constitution = provider.system_prompt_block().strip()
+    if constitution:
+        parts.append(constitution)
+    dynamic = provider.prefetch(user_message or "").strip()
+    if dynamic:
+        parts.append(dynamic)
+    return "\n\n---\n\n".join(parts)
 
 
 _ONBOARDING_PROMPT_PATH = Path(__file__).parent / "policies" / "onboarding.md"
@@ -127,7 +137,7 @@ _TOOL_LABELS = {
     "create_property": "Creating property",
     "create_tenant": "Creating tenant",
     "create_suggestion": "Creating suggestion",
-    "create_scheduled_task": "Scheduling task",
+    "create_routine": "Creating routine",
     "create_document": "Creating document",
     "read_document": "Reading document",
     "analyze_document": "Analyzing document",
@@ -145,6 +155,26 @@ _DOCUMENT_CLAIM_PATTERNS = [
     ]
 ]
 
+_TENANT_ACCESS_REPLY_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bcheck (?:with )?(?:the )?tenant\b",
+        r"\bconfirm (?:access|availability) with (?:the )?tenant\b",
+        r"\bneed to (?:check|confirm).{0,80}\btenant\b",
+        r"\bneed to (?:check|confirm).{0,80}\baccess\b",
+        r"\bif (?:that|the proposed|this) time works\b",
+        r"\bwhether .* access\b",
+    ]
+]
+
+_VENDOR_APPOINTMENT_WINDOW_PATTERNS = [
+    re.compile(pattern, re.I | re.S)
+    for pattern in [
+        r"External conversation:.*\[[^\]]+\]:.*\b(?:i can come|i have|available|open|works on my end|works for me)\b.{0,120}\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next week|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b",
+        r"Vendor conversation:.*\[[^\]]+\]:.*\b(?:i can come|i have|available|open|works on my end|works for me)\b.{0,120}\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next week|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b",
+    ]
+]
+
 _MUTATING_TOOLS = {
     "propose_task",
     "close_task",
@@ -153,7 +183,7 @@ _MUTATING_TOOLS = {
     "create_property",
     "create_tenant",
     "create_suggestion",
-    "create_scheduled_task",
+    "create_routine",
     "create_document",
 }
 
@@ -178,6 +208,38 @@ def _has_document_side_effect(side_effects: list[dict]) -> bool:
         if action_card.get("kind") == "document":
             return True
     return False
+
+
+def _has_tenant_message_side_effect(side_effects: list[dict]) -> bool:
+    for effect in side_effects:
+        if not isinstance(effect, dict):
+            continue
+        payload = effect.get("action_payload") or {}
+        if (
+            payload.get("action") == "message_person"
+            and payload.get("entity_type") == "tenant"
+        ):
+            return True
+    return False
+
+
+def _reply_needs_tenant_access_message(
+    reply: str,
+    *,
+    latest_user_message: str,
+    side_effects: list[dict],
+) -> bool:
+    if _has_tenant_message_side_effect(side_effects):
+        return False
+    has_vendor_window = any(
+        pattern.search(latest_user_message or "")
+        for pattern in _VENDOR_APPOINTMENT_WINDOW_PATTERNS
+    )
+    if not has_vendor_window:
+        return False
+    if reply and any(pattern.search(reply) for pattern in _TENANT_ACCESS_REPLY_PATTERNS):
+        return True
+    return True
 
 
 def _summarize_non_document_side_effects(side_effects: list[dict]) -> str | None:
@@ -463,25 +525,18 @@ async def chat_with_agent(
     trace_context: dict[str, Any] | None = None,
 ) -> str:
     """Run the AI agent with the given messages and return its text reply."""
-    from run_agent import AIAgent  # noqa: F401 — optional dep
-
     model = os.getenv("LLM_MODEL", "anthropic/claude-haiku-4-5-20251001")
     api_key = os.getenv("LLM_API_KEY", "")
-    api_base = os.getenv("LLM_BASE_URL") or None
-    resolved_model = resolve_model_config(model=model, api_base=api_base)
-    actual_model = resolved_model.model
-    api_base = resolved_model.api_base
+    explicit_base = os.getenv("LLM_BASE_URL") or None
+    resolved_model = resolve_model_config(model=model, api_base=explicit_base)
+    # Use the litellm-prefixed name so litellm.acompletion can route correctly.
+    actual_model = resolved_model.litellm_model
+    # Only override LiteLLM's provider-default base URL if the user explicitly
+    # set LLM_BASE_URL. For known-provider prefixes (anthropic/, together_ai/,
+    # etc.) LiteLLM picks the right base — passing the resolver's fallback
+    # would mis-route those requests.
+    api_base = explicit_base
     provider = resolved_model.provider
-
-    # Extract system message and conversation history
-    prompt_bundle = agent_registry.build_system_prompt_bundle(agent_id)
-    system_message = str(prompt_bundle.get("system_prompt") or "")
-    onboarding_prompt = _load_onboarding_prompt(session_key=session_key)
-    if onboarding_prompt:
-        system_message = f"{system_message}\n\n---\n\n{onboarding_prompt}" if system_message else onboarding_prompt
-    sys_content = next((m["content"] for m in messages if m.get("role") == "system"), None)
-    if sys_content:
-        system_message = f"{system_message}\n\n---\n\n{sys_content}"
 
     conversation_history = [
         {"role": m["role"], "content": m["content"]}
@@ -495,6 +550,18 @@ async def chat_with_agent(
     if conversation_history and conversation_history[-1]["role"] == "user":
         user_message = conversation_history.pop()["content"]
     user_message_token = current_user_message.set(user_message)
+
+    # Extract system message and conversation history. Pass user_message
+    # into the bundle builder so persistent-memory retrieval is biased
+    # toward the current ask rather than a static account-overview query.
+    prompt_bundle = agent_registry.build_system_prompt_bundle(agent_id, query=user_message)
+    system_message = str(prompt_bundle.get("system_prompt") or "")
+    onboarding_prompt = _load_onboarding_prompt(session_key=session_key)
+    if onboarding_prompt:
+        system_message = f"{system_message}\n\n---\n\n{onboarding_prompt}" if system_message else onboarding_prompt
+    sys_content = next((m["content"] for m in messages if m.get("role") == "system"), None)
+    if sys_content:
+        system_message = f"{system_message}\n\n---\n\n{sys_content}"
 
     # Queue for bridging progress from the sync agent thread to async SSE
     progress_queue: queue.Queue[str] = queue.Queue()
@@ -570,8 +637,6 @@ async def chat_with_agent(
                 "tool_call",
                 _trace_source,
                 msg,
-                task_id=_trace_task_id,
-                conversation_id=trace_conversation_id,
                 tool_name=tool_name,
                 detail=make_trace_envelope(
                     "tool_call",
@@ -582,58 +647,101 @@ async def chat_with_agent(
                 ),
             )
         elif event_type == "tool.completed":
-            is_error = kwargs.get("is_error", False)
+            # All "tool.completed" bookkeeping (failed/completed contextvars,
+            # progress events, trace rows) happens in ``_tool_complete_cb``
+            # below — that callback is the only place where we can see the
+            # real ``function_result`` string. The upstream library's
+            # tool.completed event passes only ``is_error`` and ``duration``,
+            # so relying on it alone produces "Sending message: error" with
+            # no detail about *what* failed.
+            pass
+
+    def _tool_complete_cb(tool_call_id, function_name, function_args, function_result):
+        """Fires right after tool.completed with the real result string.
+
+        Parses the tool's return payload to extract success/error status and
+        any ``message`` / ``error`` field, then logs a trace row and pushes a
+        progress event that actually contains the detail the user needs to
+        diagnose a failure.
+        """
+        try:
+            label = _TOOL_LABELS.get(function_name, function_name)
+            trace_detail = current_trace_context.get() or trace_context or {}
+            trace_conversation_id = (
+                str(trace_detail.get("conversation_id") or "") if isinstance(trace_detail, dict) else ""
+            ) or _trace_conversation_id
+
+            result_text = function_result if isinstance(function_result, str) else str(function_result or "")
+            is_error = False
+            error_message: str | None = None
+            try:
+                parsed = json.loads(result_text) if result_text else None
+            except Exception:
+                parsed = None
+            if isinstance(parsed, dict):
+                status_val = str(parsed.get("status") or "").lower()
+                if status_val == "error" or parsed.get("error"):
+                    is_error = True
+                    error_message = str(
+                        parsed.get("message") or parsed.get("error") or ""
+                    ).strip() or None
+            if not is_error and result_text and "error" in result_text[:80].lower():
+                is_error = True
+                error_message = result_text
+
             if is_error:
-                failed = list(current_failed_tools.get())
-                failed.append({
-                    "tool_name": tool_name,
-                    "args": args or {},
-                    "error": kwargs.get("error") or kwargs.get("result") or "",
-                })
-                current_failed_tools.set(failed)
-                raw_error_detail = kwargs.get("error", "") or kwargs.get("result", "")
-                display_error = raw_error_detail
-                if isinstance(display_error, str) and len(display_error) > 220:
-                    display_error = display_error[:220] + "…"
+                display_error = error_message or result_text or ""
+                if isinstance(display_error, str) and len(display_error) > 400:
+                    display_error = display_error[:400] + "…"
                 msg = f"{label}: error" + (f" — {display_error}" if display_error else "")
                 progress_events.append(msg)
                 progress_queue.put(msg)
+                failed = list(current_failed_tools.get())
+                failed.append({
+                    "tool_name": function_name,
+                    "args": function_args or {},
+                    "error": error_message or result_text,
+                })
+                current_failed_tools.set(failed)
                 log_trace(
                     "error",
                     _trace_source,
                     msg,
-                    task_id=_trace_task_id,
-                    conversation_id=trace_conversation_id,
-                    tool_name=tool_name,
+                    tool_name=function_name,
                     detail=make_trace_envelope(
                         "tool_error",
-                        tool_name=tool_name,
-                        error=str(raw_error_detail),
-                        result=kwargs.get("result"),
+                        tool_name=function_name,
+                        args=function_args or {},
+                        error=error_message or result_text,
+                        result=result_text,
                         trace_context=trace_detail,
                     ),
                 )
-            else:
-                completed = list(current_completed_tools.get())
-                completed.append(tool_name)
-                current_completed_tools.set(completed)
-                result = kwargs.get("result", "")
-                if isinstance(result, str) and len(result) > 500:
-                    result = result[:500] + "…"
-                log_trace(
+                return
+
+            # Success path — record completion + log the (truncated) result.
+            completed = list(current_completed_tools.get())
+            completed.append(function_name)
+            current_completed_tools.set(completed)
+            trimmed = result_text
+            if len(trimmed) > 500:
+                trimmed = trimmed[:500] + "…"
+            log_trace(
+                "tool_result",
+                _trace_source,
+                f"{label} completed",
+                tool_name=function_name,
+                detail=make_trace_envelope(
                     "tool_result",
-                    _trace_source,
-                    f"{label} completed",
-                    task_id=_trace_task_id,
-                    conversation_id=trace_conversation_id,
-                    tool_name=tool_name,
-                    detail=make_trace_envelope(
-                        "tool_result",
-                        tool_name=tool_name,
-                        result=result,
-                        trace_context=trace_detail,
-                    ),
-                )
+                    tool_name=function_name,
+                    args=function_args or {},
+                    result=trimmed,
+                    trace_context=trace_detail,
+                ),
+            )
+        except Exception:
+            # Never let trace plumbing break tool execution.
+            pass
 
     def _step_callback(iteration: int, prev_tools: list | None, **kwargs):
         pass  # progress is emitted via _tool_progress
@@ -654,68 +762,61 @@ async def chat_with_agent(
             "conversation_history": conversation_history,
             "user_message": user_message,
         })
-    runtime_dirs = ensure_agent_runtime_dirs(agent_id)
-    hermes_home = runtime_dirs["hermes_home"]
-
-    agent = AIAgent(
-        base_url=api_base,
-        api_key=api_key,
-        provider=provider,
-        model=actual_model,
-        max_iterations=40,
-        enabled_toolsets=["rentmate"],
-        quiet_mode=True,
-        platform="api",
-        session_id=session_key,
-        skip_context_files=True,
-        skip_memory=True,
-        hermes_home=hermes_home,
-        tool_progress_callback=_tool_progress,
-        step_callback=_step_callback,
-        verbose_logging=bool(os.getenv("AGENT_VERBOSE")),
+    system_message = _augment_system_message_with_policies(
+        system_message,
+        user_message=user_message,
+        session_id=str(session_key),
     )
-    agent._tool_use_enforcement = True
-    _attach_rentmate_policy_provider(agent)
 
-    _orig_build = agent._build_api_kwargs
+    extra_completion_kwargs: dict[str, Any] = {}
+    if api_base:
+        extra_completion_kwargs["api_base"] = api_base
+    if api_key:
+        extra_completion_kwargs["api_key"] = api_key
+    if str(session_key).startswith("eval:"):
+        try:
+            extra_completion_kwargs["temperature"] = float(os.getenv("EVAL_AGENT_TEMPERATURE", "0"))
+        except ValueError:
+            extra_completion_kwargs["temperature"] = 0.0
+    extra_completion_kwargs["caching"] = False
+    extra_completion_kwargs["metadata"] = {
+        "account_id": str(resolve_account_id()),
+        "org_id": str(resolve_org_id() or ""),
+        "session_key": str(session_key),
+    }
 
-    def _patched_build_api_kwargs(messages):
-        kw = _orig_build(messages)
-        if agent.tools and "tools" in kw and "tool_choice" not in kw:
-            kw["tool_choice"] = "auto"
-        if str(session_key).startswith("eval:"):
-            try:
-                kw["temperature"] = float(os.getenv("EVAL_AGENT_TEMPERATURE", "0"))
-            except ValueError:
-                kw["temperature"] = 0.0
-        return kw
-    agent._build_api_kwargs = _patched_build_api_kwargs
+    loop_obj = AgentLoop(
+        model=actual_model,
+        system_message=system_message,
+        account_id=resolve_account_id(),
+        org_id=resolve_org_id(),
+        max_iterations=40,
+        tool_progress_callback=_tool_progress,
+        tool_complete_callback=_tool_complete_cb,
+        step_callback=_step_callback,
+        extra_completion_kwargs=extra_completion_kwargs,
+    )
 
     async def _run_with_progress():
-        loop = asyncio.get_event_loop()
-        executor_context = contextvars.copy_context()
-        task = loop.run_in_executor(
-            None,
-            lambda: executor_context.run(
-                agent.run_conversation,
+        run_task = asyncio.create_task(
+            loop_obj.run(
                 user_message=user_message,
-                system_message=system_message,
                 conversation_history=conversation_history if conversation_history else None,
-            ),
+            )
         )
-        while not task.done():
+        while not run_task.done():
             try:
                 msg = progress_queue.get_nowait()
                 if msg and on_progress:
                     await on_progress(msg)
             except queue.Empty:
                 pass
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
         while not progress_queue.empty():
             msg = progress_queue.get_nowait()
             if msg and on_progress:
                 await on_progress(msg)
-        return task.result()
+        return await run_task
 
     try:
         result = await _run_with_progress()
@@ -728,6 +829,11 @@ async def chat_with_agent(
               f"input_tokens={result.get('input_tokens', '?')} "
               f"output_tokens={result.get('output_tokens', '?')} "
               f"progress_events={len(progress_events)}")
+        accumulate_run_totals(
+            input_tokens=int(result.get("input_tokens", 0) or 0),
+            output_tokens=int(result.get("output_tokens", 0) or 0),
+            iteration_count=int(result.get("api_calls", 0) or 0),
+        )
         if progress_events:
             for evt in progress_events:
                 print(f"[agent]   progress: {evt}")
@@ -856,112 +962,163 @@ async def _local_fallback(
         )
     except RuntimeError:
         fallback_token = None
+
+    run_metadata = derive_run_metadata(
+        session_key=session_key,
+        conversation_id=str((trace_context or {}).get("conversation_id") or "") or None,
+    )
+
     try:
-        reply = await chat_with_agent(agent_id, session_key, messages, on_progress, trace_context=trace_context)
-        side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
-        failed_tools = list(current_failed_tools.get())
-        completed_tools = list(current_completed_tools.get())
-        if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
-            side_effect_reply = _summarize_non_document_side_effects(side_effects)
-            if side_effect_reply:
-                reply = side_effect_reply
-                return AgentResponse(reply=reply, side_effects=side_effects)
-            log_trace(
-                "error",
-                "chat",
-                "Assistant claimed document creation without create_document tool call",
-                conversation_id=str((trace_context or {}).get("conversation_id") or "") or None,
-                detail=make_trace_envelope(
-                    "tool_enforcement",
-                    expected_tool="create_document",
-                    reply=reply,
-                    trace_context=trace_context,
-                ),
-            )
-            pending_suggestion_messages.set([])
-            corrective_messages = [
-                *messages,
-                {"role": "assistant", "content": reply},
-                {
-                    "role": "user",
-                    "content": (
-                        "System correction: you claimed a document was created, but no create_document tool was called. "
-                        "If the user asked for a document, call create_document now. "
-                        "Do not claim a document exists unless the tool succeeds."
-                    ),
-                },
-            ]
-            reply = await chat_with_agent(
-                agent_id,
-                session_key,
-                corrective_messages,
-                on_progress,
-                trace_context=trace_context,
-            )
-            side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
-            if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
-                reply = (
-                    "I did not create the document. The document tool was not executed successfully, "
-                    "so there is no new file in Documents."
-                )
-        switched_mutating_tool = _failed_mutating_tool_switched(
-            failed_tools=failed_tools,
-            completed_tools=completed_tools,
-        )
-        if switched_mutating_tool:
-            failed_tool, replacement_tool = switched_mutating_tool
-            log_trace(
-                "error",
-                "chat",
-                "Assistant switched to a different mutating tool after tool failure",
-                conversation_id=str((trace_context or {}).get("conversation_id") or "") or None,
-                detail=make_trace_envelope(
-                    "tool_enforcement",
-                    failed_tool=failed_tool,
-                    replacement_tool=replacement_tool,
-                    reply=reply,
-                    trace_context=trace_context,
-                ),
-            )
-            pending_suggestion_messages.set([])
-            current_failed_tools.set([])
-            current_completed_tools.set([])
-            corrective_messages = [
-                *messages,
-                {"role": "assistant", "content": reply},
-                {
-                    "role": "user",
-                    "content": (
-                        "System correction: your last mutating tool failed. "
-                        f"Do not switch from {failed_tool} to a different mutating tool such as {replacement_tool} in the same turn. "
-                        "Either retry the same tool if appropriate, ask the user for missing input, or explain the failure without creating other side effects."
-                    ),
-                },
-            ]
-            reply = await chat_with_agent(
-                agent_id,
-                session_key,
-                corrective_messages,
-                on_progress,
-                trace_context=trace_context,
-            )
+        with start_run(
+            **run_metadata,
+            trigger_input=latest_user,
+        ) as run:
+            reply = await chat_with_agent(agent_id, session_key, messages, on_progress, trace_context=trace_context)
             side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
             failed_tools = list(current_failed_tools.get())
             completed_tools = list(current_completed_tools.get())
-            if _failed_mutating_tool_switched(
+            if _reply_needs_tenant_access_message(
+                reply,
+                latest_user_message=latest_user,
+                side_effects=side_effects,
+            ):
+                log_trace(
+                    "error",
+                    "chat",
+                    "Assistant said tenant access needed checking without message_person",
+                    detail=make_trace_envelope(
+                        "tool_enforcement",
+                        expected_tool="message_person",
+                        reply=reply,
+                        trace_context=trace_context,
+                    ),
+                )
+                pending_suggestion_messages.set([])
+                current_failed_tools.set([])
+                current_completed_tools.set([])
+                corrective_messages = [
+                    *messages,
+                    {"role": "assistant", "content": reply},
+                    {
+                        "role": "user",
+                        "content": (
+                            "System correction: you said tenant access or availability needs to be checked, "
+                            "but you did not call message_person. Call message_person for the task tenant now. "
+                            "Do not message the vendor again until the tenant actually confirms the proposed time works."
+                        ),
+                    },
+                ]
+                reply = await chat_with_agent(
+                    agent_id,
+                    session_key,
+                    corrective_messages,
+                    on_progress,
+                    trace_context=trace_context,
+                )
+                side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
+                failed_tools = list(current_failed_tools.get())
+                completed_tools = list(current_completed_tools.get())
+            if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
+                side_effect_reply = _summarize_non_document_side_effects(side_effects)
+                if side_effect_reply:
+                    reply = side_effect_reply
+                    run.complete(status="completed", final_response=reply)
+                    return AgentResponse(reply=reply, side_effects=side_effects)
+                log_trace(
+                    "error",
+                    "chat",
+                    "Assistant claimed document creation without create_document tool call",
+                    detail=make_trace_envelope(
+                        "tool_enforcement",
+                        expected_tool="create_document",
+                        reply=reply,
+                        trace_context=trace_context,
+                    ),
+                )
+                pending_suggestion_messages.set([])
+                corrective_messages = [
+                    *messages,
+                    {"role": "assistant", "content": reply},
+                    {
+                        "role": "user",
+                        "content": (
+                            "System correction: you claimed a document was created, but no create_document tool was called. "
+                            "If the user asked for a document, call create_document now. "
+                            "Do not claim a document exists unless the tool succeeds."
+                        ),
+                    },
+                ]
+                reply = await chat_with_agent(
+                    agent_id,
+                    session_key,
+                    corrective_messages,
+                    on_progress,
+                    trace_context=trace_context,
+                )
+                side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
+                if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
+                    reply = (
+                        "I did not create the document. The document tool was not executed successfully, "
+                        "so there is no new file in Documents."
+                    )
+            switched_mutating_tool = _failed_mutating_tool_switched(
                 failed_tools=failed_tools,
                 completed_tools=completed_tools,
-            ):
-                pending_suggestion_messages.set([])
-                side_effects = []
-                reply = (
-                    f"The requested action failed when attempting {failed_tool}. "
-                    "I did not perform a different side effect in its place."
+            )
+            if switched_mutating_tool:
+                failed_tool, replacement_tool = switched_mutating_tool
+                log_trace(
+                    "error",
+                    "chat",
+                    "Assistant switched to a different mutating tool after tool failure",
+                    detail=make_trace_envelope(
+                        "tool_enforcement",
+                        failed_tool=failed_tool,
+                        replacement_tool=replacement_tool,
+                        reply=reply,
+                        trace_context=trace_context,
+                    ),
                 )
-        synthesized_failure_reply = _synthesize_failed_tool_reply(failed_tools)
-        if synthesized_failure_reply and not side_effects and _reply_is_only_tool_progress(reply):
-            reply = synthesized_failure_reply
-        return AgentResponse(reply=reply, side_effects=side_effects)
+                pending_suggestion_messages.set([])
+                current_failed_tools.set([])
+                current_completed_tools.set([])
+                corrective_messages = [
+                    *messages,
+                    {"role": "assistant", "content": reply},
+                    {
+                        "role": "user",
+                        "content": (
+                            "System correction: your last mutating tool failed. "
+                            f"Do not switch from {failed_tool} to a different mutating tool such as {replacement_tool} in the same turn. "
+                            "Either retry the same tool if appropriate, ask the user for missing input, or explain the failure without creating other side effects."
+                        ),
+                    },
+                ]
+                reply = await chat_with_agent(
+                    agent_id,
+                    session_key,
+                    corrective_messages,
+                    on_progress,
+                    trace_context=trace_context,
+                )
+                side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
+                failed_tools = list(current_failed_tools.get())
+                completed_tools = list(current_completed_tools.get())
+                if _failed_mutating_tool_switched(
+                    failed_tools=failed_tools,
+                    completed_tools=completed_tools,
+                ):
+                    pending_suggestion_messages.set([])
+                    side_effects = []
+                    reply = (
+                        f"The requested action failed when attempting {failed_tool}. "
+                        "I did not perform a different side effect in its place."
+                    )
+            synthesized_failure_reply = _synthesize_failed_tool_reply(failed_tools)
+            if synthesized_failure_reply and not side_effects and _reply_is_only_tool_progress(reply):
+                reply = synthesized_failure_reply
+            run.complete(status="completed", final_response=reply)
+            return AgentResponse(reply=reply, side_effects=side_effects)
     finally:
         if fallback_token is not None:
             reset_fallback_request_context(fallback_token)

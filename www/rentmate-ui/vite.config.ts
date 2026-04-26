@@ -33,6 +33,17 @@ export default defineConfig(({ mode }) => {
       proxy: backendProxy,
       hmr: {
         overlay: false,
+        // Pin the HMR websocket port so the client reconnects correctly when
+        // the dev server is reached through OrbStack hostnames (where the
+        // inferred port would otherwise be 80/443).
+        clientPort: 8080,
+      },
+      // Polling is required because Vite runs inside a container and the
+      // source tree is a Docker bind-mount. inotify events don't propagate
+      // across bind mounts on Linux, so chokidar has to scan for changes.
+      watch: {
+        usePolling: true,
+        interval: 200,
       },
     },
     build: {
