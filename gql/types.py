@@ -31,6 +31,7 @@ from db.models import (
     Tenant,
     User,
 )
+from gql.services import chat_service
 
 TaskCategoryEnum = strawberry.enum(TaskCategory, name="TaskCategory")
 TaskModeEnum = strawberry.enum(TaskMode, name="TaskMode")
@@ -481,26 +482,27 @@ class LinkedConversationType:
     conversation_type: ConversationTypeEnum
     last_message_at: typing.Optional[str] = None
     message_count: int = 0
+    unread_count: int = 0
     participants: typing.List[ConversationParticipantType] = strawberry.field(default_factory=list)
 
     @classmethod
     def from_sql(cls, conv: typing.Any, label: str) -> "LinkedConversationType":
-
         msgs = getattr(conv, "messages", []) or []
         last_msg = max(msgs, key=lambda m: m.sent_at, default=None) if msgs else None
+        sess = object_session(conv)
+        unread_count = chat_service.conversation_unread_count(sess, conversation_id=conv.id) if sess else 0
 
         parts: list[ConversationParticipantType] = []
         for p in getattr(conv, "participants", []) or []:
             if not p.is_active:
                 continue
-            from db.models import ParticipantType as PT
-            if p.participant_type == PT.TENANT:
+            if p.participant_type == ParticipantType.TENANT:
                 name = f"{p.user.first_name} {p.user.last_name}".strip()
                 parts.append(ConversationParticipantType(
                     name=name, participant_type="tenant", entity_id=str(p.user_id),
                     portal_url="",
                 ))
-            elif p.participant_type == PT.EXTERNAL_CONTACT:
+            elif p.participant_type == ParticipantType.EXTERNAL_CONTACT:
                 name = f"{p.user.first_name or ''} {p.user.last_name or ''}".strip() or "Vendor"
                 parts.append(ConversationParticipantType(
                     name=name, participant_type="vendor",
@@ -514,6 +516,7 @@ class LinkedConversationType:
             conversation_type=conv.conversation_type or "task_ai",
             last_message_at=_utc_iso(last_msg.sent_at) if last_msg else None,
             message_count=len(msgs),
+            unread_count=unread_count,
             participants=parts,
         )
 
@@ -1126,11 +1129,11 @@ class ConversationSummaryType:
 
     @classmethod
     def from_sql(cls, c: typing.Any) -> "ConversationSummaryType":
-        from db.models import ParticipantType
-
         visible_msgs = [m for m in (c.messages or []) if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)]
         last_msg = max(visible_msgs, key=lambda m: m.sent_at, default=None) if visible_msgs else None
         active_participants = [p for p in c.participants if p.is_active] if c.participants else []
+        sess = object_session(c)
+        unread_count = chat_service.conversation_unread_count(sess, conversation_id=c.id) if sess else 0
         prop_name = None
         if c.property:
             prop_name = getattr(c.property, "name", None) or getattr(c.property, "address_line1", None)
@@ -1165,6 +1168,7 @@ class ConversationSummaryType:
             last_message_sender_name=last_msg.sender_name if last_msg else None,
             property_name=prop_name,
             participant_count=len(active_participants),
+            unread_count=unread_count,
             participant_label=participant_label,
             task_id=task_id,
             task_title=task_title,

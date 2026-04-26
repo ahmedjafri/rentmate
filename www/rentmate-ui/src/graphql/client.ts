@@ -24,6 +24,7 @@ import {
   GetDocumentDocument,
   HousesDocument,
   LoginDocument,
+  MarkConversationSeenDocument,
   MarkTaskSeenDocument,
   MeDocument,
   RunRoutineDocument,
@@ -374,6 +375,10 @@ export function markTaskSeen(uid: string | number) {
   return graphqlRequest(MarkTaskSeenDocument, {
     uid: toIntId(uid),
   });
+}
+
+export function markConversationSeen(uid: string) {
+  return graphqlRequest(MarkConversationSeenDocument, { uid });
 }
 
 export function deleteTask(uid: string | number) {

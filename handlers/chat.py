@@ -17,7 +17,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from backends.local_auth import resolve_account_id
+from backends.local_auth import reset_request_context, resolve_account_id, set_request_context
 from backends.wire import sms_router
 from db.enums import TaskSource
 from db.lib import (
@@ -705,10 +705,15 @@ def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | 
     from llm.client import call_agent
 
     db = SessionLocal.session_factory()
+    request_context_token = None
     try:
         task = db.query(Task).filter_by(id=task_id).first()
         if not task:
             return None
+        request_context_token = set_request_context(
+            account_id=task.creator_id,
+            org_id=getattr(task, "org_id", None),
+        )
         conv = task.ai_conversation
         if not conv:
             return None
@@ -765,6 +770,10 @@ def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | 
         _agent_result = [None, None]  # [resp, pending]
 
         def _run_in_thread():
+            _request_context_token = set_request_context(
+                account_id=task.creator_id,
+                org_id=getattr(task, "org_id", None),
+            )
             _conv_token = active_conversation_id.set(conv_id)
             _pending_token = pending_suggestion_messages.set([])
             _loop = asyncio.new_event_loop()
@@ -777,6 +786,7 @@ def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | 
                 _loop.close()
                 active_conversation_id.reset(_conv_token)
                 pending_suggestion_messages.reset(_pending_token)
+                reset_request_context(_request_context_token)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             pool.submit(_run_in_thread).result(timeout=300)
@@ -854,6 +864,8 @@ def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | 
         log_trace("error", "reply_scanner", f"Reply scan failed: {e}")
         return None
     finally:
+        if request_context_token is not None:
+            reset_request_context(request_context_token)
         db.close()
 
 ASSESS_PROMPT = (

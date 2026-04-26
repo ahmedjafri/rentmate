@@ -81,8 +81,12 @@ export function ConvRow({ conv, onClick, onDelete, isActive }: { conv: ConvSumma
             </Badge>
           )}
           {conv.unreadCount > 0 && (
-            <Badge className="h-4 px-1.5 text-[10px] bg-primary text-primary-foreground shrink-0">
-              {conv.unreadCount} new
+            <Badge
+              aria-label={`${conv.unreadCount} unread message${conv.unreadCount === 1 ? '' : 's'}`}
+              className="h-5 px-2 text-[10px] bg-primary text-primary-foreground shadow-sm shrink-0 gap-1"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-primary-foreground" />
+              {conv.unreadCount}
             </Badge>
           )}
         </div>

@@ -69,6 +69,7 @@ vi.mock('@/graphql/client', () => ({
         : [],
   })),
   sendMessage: vi.fn(async () => undefined),
+  markConversationSeen: vi.fn(async () => ({ markConversationSeen: { uid: 'conv-tenant', unreadCount: 0 } })),
   markTaskSeen: vi.fn(async () => ({ markTaskSeen: { uid: 1, unreadCount: 0 } })),
   updateTask: vi.fn(async () => undefined),
   updateTaskGoal: vi.fn(async () => undefined),
@@ -135,6 +136,7 @@ function makeTask(overrides: Partial<ActionDeskTask> = {}): ActionDeskTask {
         label: 'Tenant',
         conversationType: 'tenant',
         messageCount: 1,
+        unreadCount: 0,
         participants: [{ name: 'Alice Renter', participantType: 'tenant' }],
       },
     ],
@@ -293,6 +295,52 @@ describe('TaskDetail conversation switching', () => {
     });
 
     expect(appStore.getState().actionDeskTasks[0].unreadCount).toBe(0);
+  });
+
+  it('opens the linked conversation from the URL and scrolls to the target message', async () => {
+    const task = makeTask();
+    appStore.setState(makeAppState(task));
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1?conversation=conv-tenant&message=tenant-msg-1']} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Hi from tenant')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+    });
+  });
+
+  it('shows unread indicators on linked task conversations', async () => {
+    const task = makeTask({
+      linkedConversations: [
+        {
+          uid: 'conv-tenant',
+          label: 'Tenant',
+          conversationType: 'tenant',
+          messageCount: 1,
+          unreadCount: 2,
+          participants: [{ name: 'Alice Renter', participantType: 'tenant' }],
+        },
+      ],
+    });
+    appStore.setState(makeAppState(task));
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByLabelText('2 unread messages')).toBeInTheDocument();
   });
 
   it('lets the manager switch back to AI when the AI conversation is present in linkedConversations', async () => {

@@ -187,3 +187,5 @@ def test_tenant_portal_message_creates_pm_notification(db):
     assert notification.kind == "conversation_update"
     assert notification.title == "New tenant message"
     assert "plumber is still coming" in (notification.body or "")
+    assert notification.extra
+    assert notification.extra.get("message_id") == response.json()["id"]

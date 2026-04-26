@@ -6,11 +6,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from db.models import Conversation, ConversationParticipant, Lease, Message, MessageType, ParticipantType, Task, Tenant
+from gql.services import chat_service
 from gql.services.tenant_service import TenantService
 from handlers.deps import get_db
 from handlers.portals._common import (
-    notify_task_owner_of_portal_message,
     SendMessageBody,
+    notify_task_owner_of_portal_message,
     read_bearer_token,
     serialize_portal_conversation_row,
     serialize_task_list_row,
@@ -391,6 +392,8 @@ def tenant_send_message(task_id: str, msg: SendMessageBody, request: Request):
         sent_at=now,
     )
     db.add(message)
+    db.flush()
+    chat_service.create_unread_receipts_for_message(db, message=message)
     notify_task_owner_of_portal_message(
         db,
         task=task,
@@ -398,6 +401,7 @@ def tenant_send_message(task_id: str, msg: SendMessageBody, request: Request):
         sender_label=tenant_name,
         body=msg.body,
         actor_kind="tenant",
+        message_id=message.id,
     )
     db.commit()
     db.refresh(message)
@@ -441,6 +445,8 @@ def tenant_send_conversation_message(conversation_id: int, msg: SendMessageBody,
         sent_at=now,
     )
     db.add(message)
+    db.flush()
+    chat_service.create_unread_receipts_for_message(db, message=message)
     notify_task_owner_of_portal_message(
         db,
         task=task,
@@ -448,6 +454,7 @@ def tenant_send_conversation_message(conversation_id: int, msg: SendMessageBody,
         sender_label=tenant_name,
         body=msg.body,
         actor_kind="tenant",
+        message_id=message.id,
     )
     db.commit()
     db.refresh(message)

@@ -72,6 +72,7 @@ fragment TaskFields on TaskType {
     conversationType
     lastMessageAt
     messageCount
+    unreadCount
     participants {
       name
       participantType
@@ -430,6 +431,13 @@ mutation UpdateTaskGoal($uid: Int!, $goal: String!) {
 
 mutation MarkTaskSeen($uid: Int!) {
   markTaskSeen(uid: $uid) {
+    uid
+    unreadCount
+  }
+}
+
+mutation MarkConversationSeen($uid: String!) {
+  markConversationSeen(uid: $uid) {
     uid
     unreadCount
   }

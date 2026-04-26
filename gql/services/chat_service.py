@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -14,6 +14,7 @@ from db.models import (
     ConversationParticipant,
     ConversationType,
     Message,
+    MessageReceipt,
     MessageType,
     ParticipantType,
     Task,
@@ -199,6 +200,183 @@ def dump_message_meta(meta: MessageMeta | dict | None = None, **updates) -> dict
     return dumped or None
 
 
+VISIBLE_UNREAD_MESSAGE_TYPES = (MessageType.MESSAGE, MessageType.THREAD)
+
+
+def _current_manager_participant(db: Session, *, conversation_id: int) -> ConversationParticipant | None:
+    return db.execute(
+        select(ConversationParticipant).where(
+            ConversationParticipant.org_id == resolve_org_id(),
+            ConversationParticipant.conversation_id == conversation_id,
+            ConversationParticipant.user_id == resolve_account_id(),
+            ConversationParticipant.participant_type == ParticipantType.ACCOUNT_USER,
+            ConversationParticipant.is_active.is_(True),
+        )
+    ).scalar_one_or_none()
+
+
+def _ensure_manager_participant(db: Session, *, conversation: Conversation) -> ConversationParticipant:
+    participant = db.execute(
+        select(ConversationParticipant).where(
+            ConversationParticipant.org_id == conversation.org_id,
+            ConversationParticipant.conversation_id == conversation.id,
+            ConversationParticipant.user_id == conversation.creator_id,
+            ConversationParticipant.participant_type == ParticipantType.ACCOUNT_USER,
+            ConversationParticipant.is_active.is_(True),
+        )
+    ).scalar_one_or_none()
+    if participant is not None:
+        return participant
+
+    participant = ConversationParticipant(
+        org_id=conversation.org_id,
+        creator_id=conversation.creator_id,
+        conversation_id=conversation.id,
+        user_id=conversation.creator_id,
+        participant_type=ParticipantType.ACCOUNT_USER,
+        is_active=True,
+    )
+    db.add(participant)
+    db.flush()
+    return participant
+
+
+def conversation_unread_count(db: Session, *, conversation_id: int) -> int:
+    participant = _current_manager_participant(db, conversation_id=conversation_id)
+    if participant is None:
+        return db.query(Message).filter(
+            Message.org_id == resolve_org_id(),
+            Message.conversation_id == conversation_id,
+            Message.message_type.in_(VISIBLE_UNREAD_MESSAGE_TYPES),
+            Message.is_system.is_(False),
+            Message.sender_type != ParticipantType.ACCOUNT_USER,
+        ).count()
+
+    read_receipt_exists = exists().where(
+        MessageReceipt.org_id == Message.org_id,
+        MessageReceipt.conversation_id == Message.conversation_id,
+        MessageReceipt.message_id == Message.id,
+        MessageReceipt.conversation_participant_id == participant.id,
+        MessageReceipt.read_at.is_not(None),
+    )
+    return db.query(Message).filter(
+        Message.org_id == resolve_org_id(),
+        Message.conversation_id == conversation_id,
+        Message.message_type.in_(VISIBLE_UNREAD_MESSAGE_TYPES),
+        Message.is_system.is_(False),
+        Message.sender_type != ParticipantType.ACCOUNT_USER,
+        or_(Message.sender_id.is_(None), Message.sender_id != participant.id),
+        ~read_receipt_exists,
+    ).count()
+
+
+def mark_conversation_seen(db: Session, *, conversation_uid: str) -> Conversation:
+    conversation = db.execute(
+        select(Conversation).where(
+            Conversation.external_id == conversation_uid,
+            Conversation.org_id == resolve_org_id(),
+            Conversation.creator_id == resolve_account_id(),
+            Conversation.is_archived.is_(False),
+        )
+    ).scalar_one_or_none()
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_uid} not found")
+
+    participant = _ensure_manager_participant(db, conversation=conversation)
+
+    now = datetime.now(UTC)
+    unread_rows = db.query(Message, MessageReceipt).outerjoin(
+        MessageReceipt,
+        (MessageReceipt.org_id == Message.org_id)
+        & (MessageReceipt.conversation_id == Message.conversation_id)
+        & (MessageReceipt.message_id == Message.id)
+        & (MessageReceipt.conversation_participant_id == participant.id),
+    ).filter(
+        Message.org_id == resolve_org_id(),
+        Message.conversation_id == conversation.id,
+        Message.message_type.in_(VISIBLE_UNREAD_MESSAGE_TYPES),
+        Message.is_system.is_(False),
+        Message.sender_type != ParticipantType.ACCOUNT_USER,
+        or_(Message.sender_id.is_(None), Message.sender_id != participant.id),
+        or_(MessageReceipt.id.is_(None), MessageReceipt.read_at.is_(None)),
+    ).all()
+    for message, receipt in unread_rows:
+        if receipt is None:
+            db.add(MessageReceipt(
+                org_id=message.org_id,
+                conversation_id=message.conversation_id,
+                message_id=message.id,
+                conversation_participant_id=participant.id,
+                delivered_at=message.sent_at,
+                read_at=now,
+            ))
+        else:
+            receipt.read_at = now
+    return conversation
+
+
+def _existing_receipt(db: Session, *, message: Message, participant: ConversationParticipant) -> MessageReceipt | None:
+    return db.query(MessageReceipt).filter(
+        MessageReceipt.org_id == message.org_id,
+        MessageReceipt.message_id == message.id,
+        MessageReceipt.conversation_participant_id == participant.id,
+    ).first()
+
+
+def create_unread_receipts_for_message(db: Session, *, message: Message) -> None:
+    conversation = db.execute(
+        select(Conversation).where(
+            Conversation.org_id == message.org_id,
+            Conversation.id == message.conversation_id,
+        )
+    ).scalar_one_or_none()
+    if conversation is not None:
+        _ensure_manager_participant(db, conversation=conversation)
+
+    participants = db.execute(
+        select(ConversationParticipant).where(
+            ConversationParticipant.org_id == message.org_id,
+            ConversationParticipant.conversation_id == message.conversation_id,
+            ConversationParticipant.is_active.is_(True),
+        )
+    ).scalars().all()
+    for participant in participants:
+        if participant.id == message.sender_id:
+            continue
+        if _existing_receipt(db, message=message, participant=participant):
+            continue
+        db.add(MessageReceipt(
+            org_id=message.org_id,
+            conversation_id=message.conversation_id,
+            message_id=message.id,
+            conversation_participant_id=participant.id,
+            delivered_at=message.sent_at,
+            read_at=None,
+        ))
+
+
+def backfill_unread_receipts_for_conversation(db: Session, *, conversation: Conversation) -> None:
+    participant = _ensure_manager_participant(db, conversation=conversation)
+    messages = db.query(Message).filter(
+        Message.org_id == conversation.org_id,
+        Message.conversation_id == conversation.id,
+        Message.message_type.in_(VISIBLE_UNREAD_MESSAGE_TYPES),
+        Message.is_system.is_(False),
+        Message.sender_type != ParticipantType.ACCOUNT_USER,
+        or_(Message.sender_id.is_(None), Message.sender_id != participant.id),
+    ).all()
+    for message in messages:
+        if _existing_receipt(db, message=message, participant=participant):
+            continue
+        db.add(MessageReceipt(
+            org_id=message.org_id,
+            conversation_id=message.conversation_id,
+            message_id=message.id,
+            conversation_participant_id=participant.id,
+            delivered_at=message.sent_at,
+            read_at=None,
+        ))
+
 def get_or_create_conversation(
     db: Session,
     *, uid: str | None = None,
@@ -366,6 +544,7 @@ def get_or_create_external_conversation(
     )
     db.add(conv)
     db.flush()
+    _ensure_manager_participant(db, conversation=conv)
 
     # Resolve participant user_id and type
     if vendor_id is not None:

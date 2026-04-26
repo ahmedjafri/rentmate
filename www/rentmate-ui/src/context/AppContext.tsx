@@ -182,6 +182,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         body: item.body ?? null,
         taskId: item.task_id != null ? String(item.task_id) : null,
         conversationId: item.conversation_id != null ? String(item.conversation_id) : null,
+        conversationUid: item.conversation_uid != null ? String(item.conversation_uid) : null,
+        messageId: item.message_id != null ? String(item.message_id) : null,
         createdAt: new Date(item.created_at),
         readAt: item.read_at ? new Date(item.read_at) : null,
         archivedAt: item.archived_at ? new Date(item.archived_at) : null,

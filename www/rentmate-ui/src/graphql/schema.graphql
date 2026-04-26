@@ -204,6 +204,7 @@ type LinkedConversationType {
   conversationType: ConversationType!
   lastMessageAt: String
   messageCount: Int!
+  unreadCount: Int!
   participants: [ConversationParticipantType!]!
 }
 
@@ -259,6 +260,9 @@ type Mutation {
 
   """Mark a task as seen in the tasks view"""
   markTaskSeen(uid: Int!): TaskType!
+
+  """Mark a conversation as seen by the current manager"""
+  markConversationSeen(uid: String!): ConversationSummaryType!
 
   """Archive (soft-delete) a conversation"""
   deleteConversation(uid: String!): Boolean!

@@ -9,6 +9,22 @@ const openChatMock = vi.fn();
 const closeChatMock = vi.fn();
 const markNotificationReadMock = vi.fn(async () => undefined);
 const archiveNotificationMock = vi.fn(async () => undefined);
+const defaultNotification = {
+  id: 'n1',
+  kind: 'manager_attention',
+  channel: 'in_app',
+  deliveryStatus: 'recorded',
+  title: 'Task needs your input',
+  body: 'Approve the landscaping quote.',
+  taskId: '6',
+  conversationId: '12',
+  conversationUid: 'conv-vendor',
+  messageId: 'vendor-msg-1',
+  createdAt: new Date('2026-04-24T00:00:00Z'),
+  readAt: null,
+  archivedAt: null,
+};
+let mockNotifications = [defaultNotification];
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
@@ -47,22 +63,8 @@ vi.mock('@/context/AppContext', () => ({
         chatThread: [],
       },
     ],
-    notifications: [
-      {
-        id: 'n1',
-        kind: 'manager_attention',
-        channel: 'in_app',
-        deliveryStatus: 'recorded',
-        title: 'Task needs your input',
-        body: 'Approve the landscaping quote.',
-        taskId: '6',
-        conversationId: '12',
-        createdAt: new Date('2026-04-24T00:00:00Z'),
-        readAt: null,
-        archivedAt: null,
-      },
-    ],
-    unreadNotificationCount: 1,
+    notifications: mockNotifications,
+    unreadNotificationCount: mockNotifications.filter(n => !n.readAt && !n.archivedAt).length,
     chatPanel: {
       isOpen: false,
       suggestionId: null,
@@ -81,6 +83,7 @@ vi.mock('@/context/AppContext', () => ({
 describe('AppLayout notifications', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockNotifications = [defaultNotification];
   });
 
   it('renders persisted notifications in the bell popover and opens the linked task', async () => {
@@ -92,7 +95,7 @@ describe('AppLayout notifications', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByLabelText('2 items needing attention'));
+    fireEvent.click(screen.getByLabelText('1 unread notifications'));
 
     expect(screen.getByText('Notifications')).toBeInTheDocument();
     expect(screen.getByText('Task needs your input')).toBeInTheDocument();
@@ -103,11 +106,11 @@ describe('AppLayout notifications', () => {
 
     await waitFor(() => {
       expect(markNotificationReadMock).toHaveBeenCalledWith('n1');
-      expect(navigateMock).toHaveBeenCalledWith('/tasks/6');
+      expect(navigateMock).toHaveBeenCalledWith('/tasks/6?conversation=conv-vendor&message=vendor-msg-1');
     });
   });
 
-  it('archives a notification from the popover', async () => {
+  it('dismisses a notification from the popover with an icon button', async () => {
     render(
       <MemoryRouter initialEntries={['/properties']}>
         <AppLayout>
@@ -116,11 +119,31 @@ describe('AppLayout notifications', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByLabelText('2 items needing attention'));
-    fireEvent.click(screen.getByText('Archive'));
+    fireEvent.click(screen.getByLabelText('1 unread notifications'));
+
+    expect(screen.queryByText('Archive')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Dismiss notification'));
 
     await waitFor(() => {
       expect(archiveNotificationMock).toHaveBeenCalledWith('n1');
     });
+  });
+
+  it('does not show a badge when visible notifications are read', () => {
+    mockNotifications = [
+      { ...defaultNotification, readAt: new Date('2026-04-24T01:00:00Z') },
+      { ...defaultNotification, id: 'n2', readAt: new Date('2026-04-24T02:00:00Z') },
+    ];
+
+    render(
+      <MemoryRouter initialEntries={['/properties']}>
+        <AppLayout>
+          <div>content</div>
+        </AppLayout>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByLabelText('Notifications')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/unread notifications/)).not.toBeInTheDocument();
   });
 });
