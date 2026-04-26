@@ -320,6 +320,11 @@ def create_app(
             asyncio.create_task(quo_poll_loop())
             asyncio.create_task(task_review_loop())
 
+            if os.getenv("RENTMATE_DEMO_SIMULATOR") == "1":
+                from demo.simulator import simulator_loop
+                asyncio.create_task(simulator_loop())
+                print("[demo] tenant/vendor simulator enabled")
+
         data_dir = os.getenv("RENTMATE_DATA_DIR", "./data")
         from backends.local_storage import ensure_runtime_storage_contract
 

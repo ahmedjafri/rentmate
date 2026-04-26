@@ -34,6 +34,9 @@ services:
       RENTMATE_ENV: development
       RENTMATE_DB_URI: postgresql+psycopg2://postgres:postgres@postgres:5432/rentmate
       RENTMATE_DEPLOYMENT_MODE: single-machine
+      # Make seeded tenants & vendors auto-reply to manager messages so
+      # the dev portfolio behaves like a live one. See demo/simulator.py.
+      RENTMATE_DEMO_SIMULATOR: "1"
     env_file:
       - ../.env
     depends_on:
