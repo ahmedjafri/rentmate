@@ -1,47 +1,58 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.12-slim
+FROM python:3.12-slim AS python-base
 
-# System dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends curl build-essential git && rm -rf /var/lib/apt/lists/*
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    POETRY_NO_INTERACTION=1
 
-# Install Poetry
-ENV POETRY_VERSION=1.8.2
+FROM python-base AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV POETRY_VERSION=2.3.3
 RUN curl -sSL https://install.python-poetry.org | python3 -
 ENV PATH="/root/.local/bin:$PATH"
-ENV POETRY_VIRTUALENVS_CREATE=false
-ENV POETRY_NO_INTERACTION=1
-ENV PIP_NO_CACHE_DIR=1
 
-# Set workdir
 WORKDIR /app
 
-# Copy files
 COPY pyproject.toml poetry.lock* ./
 
-# Install dependencies
-RUN poetry install --no-root --only main
+RUN poetry install --no-root --only main \
+    && find /usr/local/lib/python3.12/site-packages -type d \( -name test -o -name tests \) -prune -exec rm -rf '{}' + \
+    && rm -rf /usr/local/bin/pip* /usr/local/lib/python3.12/site-packages/pip* /root/.cache
 
-# Install shared libraries for WeasyPrint HTML->PDF rendering
+FROM python-base AS runtime
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-dejavu-core \
     libcairo2 \
     libgdk-pixbuf-2.0-0 \
     libpango-1.0-0 \
     libpangoft2-1.0-0 \
     libpangocairo-1.0-0 \
     shared-mime-info \
-    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /usr/local /usr/local
 
 COPY alembic.ini ./
 COPY main.py ./
-COPY agents ./agents
+COPY memory_watchdog.py ./
 COPY backends ./backends
 COPY db ./db
 COPY gql ./gql
 COPY handlers ./handlers
 COPY llm ./llm
+COPY rentmate ./rentmate
 
-# Expose port and run uvicorn
 EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "debug"]

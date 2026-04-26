@@ -38,7 +38,7 @@ from memory_watchdog import set_memory_backstop, start_memory_monitor
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 _DIST = _PACKAGE_ROOT / "www" / "rentmate-ui" / "dist"
-_DEFAULT_SCHEMA_MIGRATE_COMMAND = ["poetry", "run", "alembic", "upgrade", "head"]
+_DEFAULT_SCHEMA_MIGRATE_COMMAND = ["python", "-m", "alembic", "upgrade", "head"]
 _SCHEMA_MIGRATE_COMMANDS = [_DEFAULT_SCHEMA_MIGRATE_COMMAND]
 _SCHEMA_MIGRATE_CWD = _PACKAGE_ROOT
 _DEV_BOOTSTRAP_EMAIL = "test@test.com"
