@@ -24,9 +24,6 @@ if _ENV_FILE.exists():
             _k, _, _v = _line.partition("=")
             os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
 
-os.environ.setdefault("HERMES_HOME", str((Path(__file__).parent / "data" / "test-hermes").resolve()))
-
-
 @pytest.fixture(autouse=True)
 def _set_creator_context():
     """Set a default creator context for tests so entity creation works."""

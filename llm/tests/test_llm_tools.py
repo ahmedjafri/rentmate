@@ -57,31 +57,43 @@ class TestValidateSql:
         assert _validate_sql("   SELECT 1") is None
 
 
-def test_chat_with_agent_propagates_simulation_context_into_executor_thread():
+def _fake_completion_response(content: str, tool_calls=None, prompt_tokens=10, completion_tokens=5):
+    return types.SimpleNamespace(
+        choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content=content, tool_calls=tool_calls),
+        )],
+        usage=types.SimpleNamespace(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        ),
+    )
+
+
+def test_chat_with_agent_propagates_simulation_context():
     from llm.client import chat_with_agent
     from llm.tools import simulation_suggestions
 
-    class FakeAIAgent:
-        def __init__(self, *args, **kwargs):
-            self.tools = []
+    captured_pending: list = []
 
-        def _build_api_kwargs(self, messages):
-            return {}
+    async def fake_acompletion(**kwargs):
+        # The contextvar set by the caller must be visible inside the loop.
+        pending = simulation_suggestions.get()
+        assert pending is not None
+        pending.append({"title": "simulated from loop"})
+        captured_pending.extend(pending)
+        return _fake_completion_response("ok")
 
-        def run_conversation(self, **kwargs):
-            pending = simulation_suggestions.get()
-            assert pending is not None
-            pending.append({"title": "simulated from thread"})
-            return {"final_response": "ok"}
-
-    fake_module = types.SimpleNamespace(AIAgent=FakeAIAgent)
     token = simulation_suggestions.set([])
     try:
-        with patch.dict(sys.modules, {"run_agent": fake_module}), \
-             patch("llm.client.agent_registry.build_system_prompt", return_value="system"):
+        with patch("llm.loop.litellm.acompletion", side_effect=fake_acompletion), \
+             patch("llm.client.agent_registry.build_system_prompt_bundle", return_value={
+                 "system_prompt": "system",
+                 "memory_context": "",
+                 "parts": [],
+             }):
             reply = asyncio.run(chat_with_agent("agent-1", "simulate:test", [{"role": "user", "content": "hi"}]))
         assert reply == "ok"
-        assert simulation_suggestions.get() == [{"title": "simulated from thread"}]
+        assert simulation_suggestions.get() == [{"title": "simulated from loop"}]
     finally:
         simulation_suggestions.reset(token)
 
@@ -91,96 +103,51 @@ def test_chat_with_agent_logs_tool_traces_with_conversation_id():
 
     logged: list[dict] = []
 
-    class FakeAIAgent:
-        def __init__(self, *args, **kwargs):
-            self.tools = []
-            self.tool_progress_callback = kwargs["tool_progress_callback"]
-            # Caller assigns tool_complete_callback after construction.
-            self.tool_complete_callback = None
+    # First completion: assistant returns a tool call
+    # Second completion: assistant returns final reply
+    completions = iter([
+        _fake_completion_response(
+            None,
+            tool_calls=[types.SimpleNamespace(
+                id="call-1",
+                function=types.SimpleNamespace(
+                    name="create_suggestion",
+                    arguments=json.dumps({"title": "Draft notice"}),
+                ),
+            )],
+        ),
+        _fake_completion_response("ok"),
+    ])
 
-        def _build_api_kwargs(self, messages):
-            return {}
+    async def fake_acompletion(**kwargs):
+        return next(completions)
 
-        def run_conversation(self, **kwargs):
-            self.tool_progress_callback(
-                "tool.started",
-                "create_suggestion",
-                None,
-                {"title": "Draft notice"},
-            )
-            self.tool_progress_callback(
-                "tool.completed",
-                "create_suggestion",
-                None,
-                {"title": "Draft notice"},
-                is_error=False,
-            )
-            if self.tool_complete_callback:
-                self.tool_complete_callback(
-                    "call-1",
-                    "create_suggestion",
-                    {"title": "Draft notice"},
-                    '{"status":"ok"}',
-                )
-            return {"final_response": "ok"}
+    async def fake_dispatch(name, args):
+        return '{"status":"ok"}'
 
-    fake_module = types.SimpleNamespace(AIAgent=FakeAIAgent)
-    try:
-        with patch.dict(sys.modules, {"run_agent": fake_module}), \
-             patch("llm.client.agent_registry.build_system_prompt", return_value="system"), \
-             patch("llm.client.log_trace", side_effect=lambda *args, **kwargs: logged.append({"args": args, "kwargs": kwargs})):
-            reply = asyncio.run(chat_with_agent(
-                "agent-1",
-                "chat:21",
-                [{"role": "user", "content": "hi"}],
-                trace_context={"conversation_id": "21"},
-            ))
-        assert reply == "ok"
-        assert len(logged) == 2
-        assert logged[0]["args"][0] == "tool_call"
-        assert logged[1]["args"][0] == "tool_result"
-        # conversation_id is no longer a top-level log_trace kwarg — it lives on
-        # the parent agent_runs row. The trace_context inside the detail still
-        # carries the routing info for diagnostic detail.
-        for entry in logged:
-            trace_context = entry["kwargs"]["detail"].get("trace_context") or {}
-            assert trace_context.get("conversation_id") == "21"
-    finally:
-        sys.modules.pop("run_agent", None)
-
-
-def test_chat_with_agent_passes_workspace_scoped_hermes_home(tmp_path):
-    from llm.client import chat_with_agent
-
-    captured: dict[str, object] = {}
-
-    class FakeAIAgent:
-        def __init__(self, *args, **kwargs):
-            self.tools = []
-            captured["hermes_home"] = kwargs.get("hermes_home")
-
-        def _build_api_kwargs(self, messages):
-            return {}
-
-        def run_conversation(self, **kwargs):
-            return {"final_response": "ok"}
-
-    fake_module = types.SimpleNamespace(AIAgent=FakeAIAgent)
     with (
-        patch.dict(sys.modules, {"run_agent": fake_module}),
-        patch("llm.client.agent_registry.build_system_prompt", return_value="system"),
-        patch("llm.client.ensure_agent_runtime_dirs") as mock_runtime_dirs,
+        patch("llm.loop.litellm.acompletion", side_effect=fake_acompletion),
+        patch("llm.loop.dispatch", side_effect=fake_dispatch),
+        patch("llm.client.agent_registry.build_system_prompt_bundle", return_value={
+            "system_prompt": "system",
+            "memory_context": "",
+            "parts": [],
+        }),
+        patch("llm.client.log_trace", side_effect=lambda *args, **kwargs: logged.append({"args": args, "kwargs": kwargs})),
     ):
-        hermes_home = tmp_path / "agent-1"
-        mock_runtime_dirs.return_value = {
-            "workspace": hermes_home,
-            "hermes_home": hermes_home,
-            "working_dir": tmp_path / "agent-1" / "home",
-        }
-        reply = asyncio.run(chat_with_agent("agent-1", "chat:21", [{"role": "user", "content": "hi"}]))
-
+        reply = asyncio.run(chat_with_agent(
+            "agent-1",
+            "chat:21",
+            [{"role": "user", "content": "hi"}],
+            trace_context={"conversation_id": "21"},
+        ))
     assert reply == "ok"
-    assert captured["hermes_home"] == hermes_home
+    assert len(logged) == 2
+    assert logged[0]["args"][0] == "tool_call"
+    assert logged[1]["args"][0] == "tool_result"
+    for entry in logged:
+        trace_context = entry["kwargs"]["detail"].get("trace_context") or {}
+        assert trace_context.get("conversation_id") == "21"
 
 
 def test_load_onboarding_prompt_only_for_active_chat_sessions():

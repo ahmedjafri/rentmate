@@ -105,6 +105,12 @@ class RoutineState(str, enum.Enum):
     COMPLETED = "completed"
 
 
+class TaskStepStatus(str, enum.Enum):
+    PENDING = "pending"
+    ACTIVE = "active"
+    DONE = "done"
+
+
 # ─── Suggestion source (union) ───────────────────────────────────────────────
 
 @dataclass(frozen=True)

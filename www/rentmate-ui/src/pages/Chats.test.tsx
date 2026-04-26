@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 import type { ConvSummary } from '@/components/chat/ConvRow';
 
@@ -69,6 +70,14 @@ vi.mock('@/graphql/client', () => ({
 
 import Chats from './Chats';
 
+function renderChats() {
+  return render(
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <Chats />
+    </MemoryRouter>,
+  );
+}
+
 function makeConv(uid: string, conversationType: ConvSummary['conversationType']): ConvSummary {
   return {
     uid,
@@ -97,7 +106,7 @@ beforeEach(() => {
 
 describe('Chats page', () => {
   it('renders the workspace with no right rail (2-column layout)', () => {
-    render(<Chats />);
+    renderChats();
 
     expect(screen.getByTestId('embedded-chat-panel')).toBeInTheDocument();
     // The dashboard's right-rail "Action Desk" must NOT appear.
@@ -105,7 +114,7 @@ describe('Chats page', () => {
   });
 
   it('queries all three conversation buckets so filter changes are instant', () => {
-    render(<Chats />);
+    renderChats();
     const types = useConversationsMock.mock.calls.map((args) => args[0]);
     expect(types).toContain('user_ai');
     expect(types).toContain('tenant');
@@ -113,13 +122,13 @@ describe('Chats page', () => {
   });
 
   it('mounts the filter dropdown in the header with All as the default value', () => {
-    render(<Chats />);
+    renderChats();
     expect(screen.getByTestId('filter-dropdown')).toBeInTheDocument();
     expect(screen.getByTestId('filter-value')).toHaveTextContent('all');
   });
 
   it('All view merges every bucket into one list', () => {
-    render(<Chats />);
+    renderChats();
 
     expect(screen.getByText(/Chat user_ai-1/)).toBeInTheDocument();
     expect(screen.getByText(/Chat tenant-1/)).toBeInTheDocument();
@@ -127,7 +136,7 @@ describe('Chats page', () => {
   });
 
   it('selecting a non-All filter narrows the list to that bucket', () => {
-    render(<Chats />);
+    renderChats();
 
     fireEvent.click(screen.getByTestId('filter-option-tenant'));
 
@@ -137,7 +146,7 @@ describe('Chats page', () => {
   });
 
   it('clicking a row opens it via openChat', () => {
-    render(<Chats />);
+    renderChats();
 
     const row = screen.getByText(/Chat user_ai-1/).closest('[class*="cursor-pointer"]');
     fireEvent.click(row!);

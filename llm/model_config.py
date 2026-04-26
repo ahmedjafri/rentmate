@@ -18,6 +18,14 @@ _PROVIDER_BASES: dict[str, tuple[str, str | None]] = {
 
 _OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
+# LiteLLM-recognized provider prefixes that we pass through unchanged.
+# (Non-exhaustive — only the ones we expect users to set explicitly.)
+_LITELLM_NATIVE_PREFIXES: frozenset[str] = frozenset({
+    "anthropic", "openai", "azure", "deepseek", "openrouter",
+    "together_ai", "fireworks_ai", "dashscope", "groq",
+    "gemini", "vertex_ai", "bedrock", "ollama", "huggingface",
+})
+
 
 def _is_openrouter_base(api_base: str | None) -> bool:
     return (api_base or "").rstrip("/") == _OPENROUTER_BASE
@@ -53,6 +61,18 @@ def resolve_model_config(
             litellm_model = model
             if not resolved_base:
                 resolved_base = inferred_base
+        elif (
+            provider is None
+            and provider_prefix not in _LITELLM_NATIVE_PREFIXES
+            and (api_base or resolved_base)
+        ):
+            # Unknown prefix + custom api_base → assume OpenAI-compatible
+            # endpoint (vLLM, Ollama, self-hosted Qwen, etc.). Re-prefix
+            # with ``openai/`` so LiteLLM routes through its generic
+            # OpenAI-compatible client against the user-supplied base URL.
+            actual_model = model_name
+            litellm_model = f"openai/{model_name}"
+            provider = "openai-compatible"
 
     if not resolved_base:
         resolved_base = default_base

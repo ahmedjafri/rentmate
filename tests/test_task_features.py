@@ -21,7 +21,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
 
-from db.enums import TaskCategory, TaskMode, TaskPriority, TaskSource, TaskStatus, Urgency
+from db.enums import SuggestionStatus, TaskCategory, TaskMode, TaskPriority, TaskSource, TaskStatus, Urgency
 from db.models import (
     Conversation,
     Document,
@@ -732,6 +732,7 @@ class TestCreateTaskMutation:
         created = create_result.data["createTask"]
 
         from sqlalchemy import select
+
         from db.models import Conversation
 
         db.expire_all()
@@ -1465,11 +1466,95 @@ class TestTaskNumberNeverReused:
 
 
 class TestTaskUnreadState:
-    def test_task_query_exposes_unread_count_from_new_activity(self, db):
+    def test_task_query_ignores_review_metadata_without_new_activity(self, db):
         task = _mk_task(db, subject="Unread task")
+        task.updated_at = datetime(2026, 4, 23, 0, 0, tzinfo=UTC)
         task.last_seen_at = datetime(2026, 4, 24, 0, 0, tzinfo=UTC)
         task.last_reviewed_at = datetime(2026, 4, 24, 1, 0, tzinfo=UTC)
+        _add_message(
+            db,
+            task,
+            body="Agent review (auto) — waiting",
+            sender_type=ParticipantType.ACCOUNT_USER,
+            sender_name="RentMate",
+            is_ai=True,
+        ).sent_at = datetime(2026, 4, 24, 1, 1, tzinfo=UTC)
+        _add_message(
+            db,
+            task,
+            body="Reading task context",
+            sender_type=ParticipantType.ACCOUNT_USER,
+            message_type=MessageType.INTERNAL,
+            sender_name="RentMate",
+            is_ai=True,
+        ).sent_at = datetime(2026, 4, 24, 1, 2, tzinfo=UTC)
         db.flush()
+
+        result = schema.execute_sync(
+            """
+            query Task($uid: Int!) {
+              task(uid: $uid) {
+                uid
+                unreadCount
+              }
+            }
+            """,
+            context_value=_gql_context(db),
+            variable_values={"uid": task.id},
+        )
+
+        assert result.errors is None
+        assert result.data["task"]["unreadCount"] == 0
+
+    def test_task_query_exposes_unread_count_from_external_message(self, db):
+        task = _mk_task(db, subject="Unread external message")
+        task.updated_at = datetime(2026, 4, 23, 0, 0, tzinfo=UTC)
+        task.last_seen_at = datetime(2026, 4, 24, 0, 0, tzinfo=UTC)
+        external = task.external_conversations[0]
+        _add_message(
+            db,
+            external,
+            body="Can the plumber come tomorrow?",
+            sender_type=ParticipantType.TENANT,
+            sender_name="Tenant",
+        ).sent_at = datetime(2026, 4, 24, 1, 0, tzinfo=UTC)
+        task.last_message_at = datetime(2026, 4, 24, 1, 0, tzinfo=UTC)
+        db.flush()
+        db.expire_all()
+
+        result = schema.execute_sync(
+            """
+            query Task($uid: Int!) {
+              task(uid: $uid) {
+                uid
+                unreadCount
+              }
+            }
+            """,
+            context_value=_gql_context(db),
+            variable_values={"uid": task.id},
+        )
+
+        assert result.errors is None
+        assert result.data["task"]["unreadCount"] == 1
+
+    def test_task_query_exposes_unread_count_from_pending_suggestion(self, db):
+        task = _mk_task(db, subject="Unread suggestion")
+        task.updated_at = datetime(2026, 4, 23, 0, 0, tzinfo=UTC)
+        task.last_seen_at = datetime(2026, 4, 24, 0, 0, tzinfo=UTC)
+        suggestion = Suggestion(
+            id=NumberAllocator.allocate_next(db, entity_type="suggestion", org_id=1),
+            creator_id=DEFAULT_ACCOUNT_ID,
+            task_id=task.id,
+            title="Approve message",
+            body="Review this outbound message.",
+            status=SuggestionStatus.PENDING,
+            created_at=datetime(2026, 4, 24, 1, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 4, 24, 1, 0, tzinfo=UTC),
+        )
+        db.add(suggestion)
+        db.flush()
+        db.expire_all()
 
         result = schema.execute_sync(
             """
@@ -1489,8 +1574,9 @@ class TestTaskUnreadState:
 
     def test_mark_task_seen_clears_unread_count(self, db):
         task = _mk_task(db, subject="Seen task")
+        task.updated_at = datetime(2026, 4, 23, 0, 0, tzinfo=UTC)
         task.last_seen_at = datetime(2026, 4, 24, 0, 0, tzinfo=UTC)
-        task.last_reviewed_at = datetime(2026, 4, 24, 1, 0, tzinfo=UTC)
+        task.last_message_at = datetime(2026, 4, 24, 1, 0, tzinfo=UTC)
         db.flush()
 
         result = schema.execute_sync(

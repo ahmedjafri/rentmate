@@ -6,7 +6,10 @@ All eval tests should use these instead of rolling their own.
 import asyncio
 import json
 import os
+import re
+import time
 import uuid
+from pathlib import Path
 from time import sleep
 
 
@@ -48,6 +51,7 @@ DEFAULT_ACCOUNT_ID = 1
 
 # Keep eval runs aligned with CI and avoid parallel Chroma crashes.
 os.environ.setdefault("RENTMATE_DISABLE_VECTOR_INDEX", "1")
+os.environ.setdefault("RENTMATE_DISABLE_ASYNC_NOTIFICATIONS", "1")
 
 
 def _format_eval_debug_payload(payload: dict | None) -> str:
@@ -63,6 +67,81 @@ def _format_eval_debug_payload(payload: dict | None) -> str:
     ])
 
 
+_EVAL_RUN_DUMP_DIR = Path("/tmp/rentmate-eval-runs")
+
+
+def _dump_eval_runs(item, report) -> str | None:
+    """Serialize every AgentRun + AgentTrace from the test's DB session
+    into ``/tmp/rentmate-eval-runs/<test>-<ts>.json`` and return the path.
+
+    Must run while the test's transactional session is still open (i.e.
+    inside ``pytest_runtest_makereport`` for the ``call`` phase, before
+    fixture teardown rolls the savepoint back).
+    """
+    db = (getattr(item, "funcargs", {}) or {}).get("db")
+    if db is None:
+        return None
+
+    from db.models import AgentRun, AgentTrace
+
+    runs = db.query(AgentRun).order_by(AgentRun.started_at).all()
+    if not runs:
+        return None
+
+    payload: list[dict] = []
+    for run in runs:
+        traces = (
+            db.query(AgentTrace)
+            .filter(AgentTrace.run_id == run.id)
+            .order_by(AgentTrace.sequence_num)
+            .all()
+        )
+        payload.append({
+            "run_id": run.id,
+            "source": run.source,
+            "status": run.status,
+            "task_id": run.task_id,
+            "conversation_id": run.conversation_id,
+            "model": run.model,
+            "agent_version": run.agent_version,
+            "execution_path": run.execution_path,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "ended_at": run.ended_at.isoformat() if run.ended_at else None,
+            "iteration_count": run.iteration_count,
+            "input_tokens": run.total_input_tokens,
+            "output_tokens": run.total_output_tokens,
+            "cost_cents": run.total_cost_cents,
+            "trigger_input": run.trigger_input,
+            "final_response": run.final_response,
+            "error_message": run.error_message,
+            "metadata": run.run_metadata,
+            "traces": [
+                {
+                    "sequence_num": t.sequence_num,
+                    "timestamp": t.timestamp.isoformat() if t.timestamp else None,
+                    "trace_type": t.trace_type,
+                    "source": t.source,
+                    "tool_name": t.tool_name,
+                    "summary": t.summary,
+                    "detail": t.detail,
+                    "input_tokens": t.input_tokens,
+                    "output_tokens": t.output_tokens,
+                    "model": t.model,
+                    "suggestion_id": t.suggestion_id,
+                }
+                for t in traces
+            ],
+        })
+
+    _EVAL_RUN_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", item.name)
+    path = _EVAL_RUN_DUMP_DIR / f"{safe_name}-{int(time.time() * 1000)}.json"
+    path.write_text(
+        json.dumps({"test": item.nodeid, "runs": payload}, indent=2, default=str),
+    )
+    return str(path)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
@@ -76,6 +155,15 @@ def pytest_runtest_makereport(item, call):
         report.sections.append(("Hermes Eval Context", _format_eval_debug_payload(payload)))
     except Exception as exc:  # noqa: BLE001
         report.sections.append(("Hermes Eval Context", f"Failed to capture Hermes debug payload: {exc}"))
+
+    try:
+        dump_path = _dump_eval_runs(item, report)
+        if dump_path:
+            marker = f">>> Eval run dump: {dump_path}"
+            print(f"\n{marker}")
+            report.sections.append(("Eval Run Dump", marker))
+    except Exception as exc:  # noqa: BLE001
+        report.sections.append(("Eval Run Dump", f"Failed to dump eval runs: {exc}"))
 
 
 # ── DB fixtures ──────────────────────────────────────────────────────────────

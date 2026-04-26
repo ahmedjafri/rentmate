@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import { ChatFilterDropdown, type ChatFilter } from '@/components/chat/ChatFilterDropdown';
 import { ChatWorkspaceLayout } from '@/components/chat/ChatWorkspaceLayout';
@@ -8,8 +9,21 @@ import { deleteConversation } from '@/graphql/client';
 import { useConversations } from '@/hooks/useConversations';
 
 const Chats = () => {
-  const { openChat } = useApp();
+  const { openChat, suggestions } = useApp();
+  const [searchParams] = useSearchParams();
   const [filter, setFilter] = useState<ChatFilter>('all');
+  const suggestionId = searchParams.get('suggestion');
+
+  useEffect(() => {
+    if (!suggestionId) return;
+    const suggestion = suggestions.find(item => item.id === suggestionId);
+    if (!suggestion) return;
+    if (suggestion.targetConversationId) {
+      openChat({ conversationId: suggestion.targetConversationId, suggestionId });
+      return;
+    }
+    openChat({ suggestionId });
+  }, [openChat, suggestionId, suggestions]);
 
   // Always fetch all three buckets so flipping the filter is instant —
   // the cost is one extra round-trip up front and lets us merge for the

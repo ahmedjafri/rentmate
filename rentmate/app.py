@@ -33,7 +33,7 @@ from handlers.routines import router as routine_router
 from handlers.streams import router as streams_router
 from handlers.task_review import router as task_review_router
 from handlers.settings import load_integrations
-from llm.registry import agent_registry, ensure_hermes_runtime_home
+from llm.registry import agent_registry
 from memory_watchdog import set_memory_backstop, start_memory_monitor
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent.parent
@@ -245,7 +245,6 @@ def create_app(
     async def lifespan(app: FastAPI):
         startup_check = os.getenv("STARTUP_CHECK", "").strip().lower()
         skip_db_bootstrap = startup_check in {"skip", "0", "false", "off"}
-        ensure_hermes_runtime_home()
 
         async def _init_db():
             await asyncio.to_thread(_ensure_schema)
@@ -283,7 +282,6 @@ def create_app(
                 acct = db.query(User).first()
                 if acct:
                     set_request_context(account_id=acct.id, org_id=acct.org_id)
-                    agent_registry.populate_all_agents(db)
                     if os.getenv("RENTMATE_ENV") == "development":
                         try:
                             from demo.seed import seed_if_needed

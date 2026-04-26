@@ -82,7 +82,7 @@ def test_local_storage_accepts_valid_required_paths(tmp_path):
     assert required_docs_dir.is_dir()
 
 
-def test_agent_runtime_dirs_reject_missing_required_runtime_path(tmp_path):
+def test_agent_data_dir_rejects_missing_required_runtime_path(tmp_path):
     required_data_dir = tmp_path / "mounted"
     required_docs_dir = required_data_dir / "documents"
     with patch.dict(
@@ -95,13 +95,13 @@ def test_agent_runtime_dirs_reject_missing_required_runtime_path(tmp_path):
         },
         clear=False,
     ):
-        from llm.registry import ensure_agent_runtime_dirs
+        from llm.registry import get_agent_data_dir
 
         with pytest.raises(RuntimeError, match="Runtime storage path is missing"):
-            ensure_agent_runtime_dirs("123")
+            get_agent_data_dir()
 
 
-def test_agent_runtime_dirs_use_valid_required_paths(tmp_path):
+def test_agent_data_dir_uses_valid_required_paths(tmp_path):
     required_data_dir = tmp_path / "mounted"
     required_docs_dir = required_data_dir / "documents"
     required_data_dir.mkdir(parents=True)
@@ -115,9 +115,10 @@ def test_agent_runtime_dirs_use_valid_required_paths(tmp_path):
         },
         clear=False,
     ):
-        from llm.registry import ensure_agent_runtime_dirs
+        from llm.registry import get_agent_data_dir, get_agent_workspace
 
-        runtime_dirs = ensure_agent_runtime_dirs("123")
+        data_dir = get_agent_data_dir()
+        workspace = get_agent_workspace("123")
 
-    assert runtime_dirs["workspace"] == Path(required_data_dir / "agent" / "123").resolve()
-    assert runtime_dirs["working_dir"].is_dir()
+    assert data_dir == required_data_dir / "agent"
+    assert workspace == Path(required_data_dir / "agent" / "123").resolve()

@@ -20,7 +20,7 @@ from db.models import (
 )
 from handlers.deps import get_db, require_user
 from llm.retrieval import (
-    ChromaMemoryIndex,
+    PgVectorMemoryIndex,
     RetrievalRequest,
     list_memory_items,
     retrieve_context,
@@ -213,7 +213,7 @@ async def reindex_memory(
 ):
     await require_user(request)
     if reset_index:
-        ChromaMemoryIndex(db).reset()
+        PgVectorMemoryIndex(db).reset()
     count = sync_memory_index(db)
     return {"count": count, "reset_index": reset_index}
 
@@ -222,6 +222,7 @@ async def reindex_memory(
 async def list_traces(
     request: Request,
     db: Session = Depends(get_db),
+    run_id: str | None = None,
     task_id: str | None = None,
     task_scope: str | None = None,
     conversation_id: str | None = None,
@@ -229,19 +230,29 @@ async def list_traces(
     trace_type: str | None = None,
     limit: int = 100,
 ):
-    """Return recent agent traces for debugging."""
+    """Return recent agent traces for debugging.
+
+    When ``run_id`` is supplied, traces are returned in their
+    ``sequence_num`` order so the UI can render the run's timeline.
+    """
     await require_user(request)
     from sqlalchemy import select
 
     from db.models import AgentRun, AgentTrace
 
     needs_run_join = bool(task_id or conversation_id)
-    q = select(AgentTrace).order_by(AgentTrace.timestamp.desc())
+    if run_id:
+        order = (AgentTrace.sequence_num.asc(),)
+    else:
+        order = (AgentTrace.timestamp.desc(),)
+    q = select(AgentTrace).order_by(*order)
     if needs_run_join:
         q = q.join(
             AgentRun,
             (AgentTrace.org_id == AgentRun.org_id) & (AgentTrace.run_id == AgentRun.id),
         )
+    if run_id:
+        q = q.where(AgentTrace.run_id == run_id)
     if task_id:
         q = q.where(AgentRun.task_id == task_id)
         if task_scope == "routine":
@@ -277,6 +288,76 @@ async def list_traces(
         }
         for t in traces
     ]
+
+
+@router.get("/runs")
+async def list_runs(
+    request: Request,
+    db: Session = Depends(get_db),
+    task_id: str | None = None,
+    conversation_id: str | None = None,
+    source: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+):
+    """Return recent agent runs (newest first) with per-run trace counts.
+
+    The dev UI groups traces by run; this endpoint feeds the collapsed
+    run rows. Per-run traces come from ``GET /dev/traces?run_id=...``.
+    """
+    await require_user(request)
+    from sqlalchemy import func, select
+
+    from db.models import AgentRun, AgentTrace
+
+    trace_count_subq = (
+        select(AgentTrace.run_id, func.count().label("trace_count"))
+        .group_by(AgentTrace.run_id)
+        .subquery()
+    )
+    q = (
+        select(AgentRun, trace_count_subq.c.trace_count)
+        .outerjoin(trace_count_subq, trace_count_subq.c.run_id == AgentRun.id)
+        .order_by(AgentRun.started_at.desc())
+    )
+    if task_id:
+        q = q.where(AgentRun.task_id == task_id)
+    if conversation_id:
+        q = q.where(AgentRun.conversation_id == conversation_id)
+    if source:
+        q = q.where(AgentRun.source == source)
+    if status:
+        q = q.where(AgentRun.status == status)
+    q = q.limit(min(limit, 200))
+
+    rows = db.execute(q).all()
+    out: list[dict] = []
+    for run, trace_count in rows:
+        duration_ms: int | None = None
+        if run.ended_at and run.started_at:
+            duration_ms = int((run.ended_at - run.started_at).total_seconds() * 1000)
+        out.append({
+            "id": run.id,
+            "source": run.source,
+            "status": run.status,
+            "task_id": run.task_id,
+            "conversation_id": run.conversation_id,
+            "model": run.model,
+            "agent_version": run.agent_version,
+            "execution_path": run.execution_path,
+            "started_at": run.started_at.isoformat() + "Z" if run.started_at else None,
+            "ended_at": run.ended_at.isoformat() + "Z" if run.ended_at else None,
+            "duration_ms": duration_ms,
+            "iteration_count": run.iteration_count,
+            "total_input_tokens": run.total_input_tokens,
+            "total_output_tokens": run.total_output_tokens,
+            "total_cost_cents": str(run.total_cost_cents) if run.total_cost_cents is not None else "0",
+            "trigger_input": (run.trigger_input or "")[:240] or None,
+            "final_response": (run.final_response or "")[:240] or None,
+            "error_message": run.error_message,
+            "trace_count": int(trace_count or 0),
+        })
+    return out
 
 
 @router.get("/trace-filters/tasks")

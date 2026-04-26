@@ -1,8 +1,10 @@
 # gql/types.py
 import typing
-from datetime import date as _date, datetime as _datetime
+from datetime import UTC, date as _date, datetime as _datetime
 
 import strawberry
+from sqlalchemy import func, select
+from sqlalchemy.orm import object_session
 
 from db.enums import (  # noqa: F401 — re-exported
     AgentSource,
@@ -19,7 +21,16 @@ from db.enums import (  # noqa: F401 — re-exported
     TaskStatus,
     Urgency,
 )
-from db.models import ConversationType, MessageType
+from db.models import (
+    Conversation,
+    ConversationParticipant,
+    ConversationType,
+    MessageType,
+    ParticipantType,
+    Suggestion,
+    Tenant,
+    User,
+)
 
 TaskCategoryEnum = strawberry.enum(TaskCategory, name="TaskCategory")
 TaskModeEnum = strawberry.enum(TaskMode, name="TaskMode")
@@ -553,6 +564,12 @@ class TaskType:
     def from_sql(cls, t: typing.Any) -> "TaskType":
         from db.models import ParticipantType as PT
         from gql.services.chat_service import parse_conversation_extra
+
+        def _cmp_dt(value: typing.Any) -> typing.Any:
+            if isinstance(value, _datetime) and value.tzinfo is not None:
+                return value.astimezone(UTC).replace(tzinfo=None)
+            return value
+
         def _latest_message_at(*conversations: typing.Any) -> typing.Optional[str]:
             latest = None
             for conv in conversations:
@@ -562,7 +579,7 @@ class TaskType:
                     sent_at = getattr(msg, "sent_at", None)
                     if sent_at is None:
                         continue
-                    if latest is None or sent_at > latest:
+                    if latest is None or _cmp_dt(sent_at) > _cmp_dt(latest):
                         latest = sent_at
             return _utc_iso(latest) if latest else None
 
@@ -571,9 +588,45 @@ class TaskType:
             for value in values:
                 if value is None:
                     continue
-                if latest is None or value > latest:
+                if latest is None or _cmp_dt(value) > _cmp_dt(latest):
                     latest = value
             return latest
+
+        def _latest_attention_message_at(*conversations: typing.Any) -> typing.Any:
+            latest = None
+            for conv in conversations:
+                if conv is None:
+                    continue
+                ctype = getattr(conv, "conversation_type", None)
+                for msg in getattr(conv, "messages", []) or []:
+                    sent_at = getattr(msg, "sent_at", None)
+                    if sent_at is None:
+                        continue
+                    sender_type = getattr(msg, "sender_type", None)
+                    message_type = getattr(msg, "message_type", None)
+                    if ctype == ConversationType.TASK_AI:
+                        # Quiet review summaries and internal traces live in
+                        # the AI thread but should not create task badges.
+                        if message_type != MessageType.ACTION:
+                            continue
+                    elif sender_type not in (PT.TENANT, PT.EXTERNAL_CONTACT):
+                        continue
+                    if latest is None or _cmp_dt(sent_at) > _cmp_dt(latest):
+                        latest = sent_at
+            return latest
+
+        def _latest_pending_suggestion_at() -> typing.Any:
+            sess = object_session(t)
+            if sess is None or getattr(t, "id", None) is None:
+                return None
+
+            return sess.execute(
+                select(func.max(Suggestion.created_at)).where(
+                    Suggestion.org_id == getattr(t, "org_id", None),
+                    Suggestion.task_id == getattr(t, "id", None),
+                    Suggestion.status == SuggestionStatus.PENDING,
+                )
+            ).scalar_one_or_none()
 
         def _first_active_participant_name(conv: typing.Any) -> typing.Optional[str]:
             """Return the first active non-account participant's first name, if any."""
@@ -658,20 +711,17 @@ class TaskType:
         last_message_at = _latest_message_at(ai_convo, parent_convo, *ext_convos)
         latest_activity_at = _latest_activity_at(
             getattr(t, "updated_at", None),
-            getattr(t, "last_reviewed_at", None),
             getattr(t, "last_message_at", None),
-            max(
-                (
-                    getattr(msg, "sent_at", None)
-                    for conv in [ai_convo, parent_convo, *ext_convos]
-                    for msg in (getattr(conv, "messages", []) or [])
-                    if getattr(msg, "sent_at", None) is not None
-                ),
-                default=None,
-            ),
+            _latest_attention_message_at(ai_convo, parent_convo, *ext_convos),
+            _latest_pending_suggestion_at(),
         )
         last_seen_at = getattr(t, "last_seen_at", None)
-        unread_count = 1 if latest_activity_at and (last_seen_at is None or latest_activity_at > last_seen_at) else 0
+        unread_count = (
+            1
+            if latest_activity_at
+            and (last_seen_at is None or _cmp_dt(latest_activity_at) > _cmp_dt(last_seen_at))
+            else 0
+        )
 
         return cls(
             uid=t.id,
@@ -732,6 +782,8 @@ class SuggestionType:
     task_id: typing.Optional[str] = None
     vendor_name: typing.Optional[str] = None
     property_name: typing.Optional[str] = None
+    target_conversation_id: typing.Optional[str] = None
+    target_conversation_type: typing.Optional[str] = None
     draft_message: typing.Optional[str] = None
     messages: typing.List[ChatMessageType] = strawberry.field(default_factory=list)
     created_at: str = ""
@@ -747,6 +799,125 @@ class SuggestionType:
         prop_name = None
         if s.property_id and hasattr(s, "property") and s.property:
             prop_name = getattr(s.property, "name", None) or getattr(s.property, "address_line1", None)
+
+        def _conversation_public_id(conversation_id: typing.Any) -> tuple[str | None, str | None]:
+            if conversation_id is None:
+                return None, None
+            db = object_session(s)
+            if db is None:
+                return None, None
+            try:
+                conv = db.get(Conversation, int(conversation_id))
+            except (TypeError, ValueError):
+                return None, None
+            if conv is None or getattr(conv, "external_id", None) is None:
+                return None, None
+            return str(conv.external_id), str(conv.conversation_type) if conv.conversation_type else None
+
+        def _resolve_entity_target() -> tuple[str | None, str | None]:
+            """Find the tenant/vendor conversation a ``message_person``
+            suggestion should open into.
+
+            Preference order:
+              1. A conversation already linked to the suggestion's task
+                 (parent_conversation or one of task.external_conversations)
+                 that has the right participant.
+              2. Any active conversation with that entity (latest first).
+                 This catches the case where the agent forgot to thread
+                 ``task_id`` through the ``message_person`` call, or where
+                 the suggestion is chat-side and never had a task.
+            """
+            db = object_session(s)
+            entity_id = payload.get("entity_id")
+            entity_type = payload.get("entity_type")
+            if db is None or not entity_id or not entity_type:
+                return None, None
+
+            participant_type = (
+                ParticipantType.TENANT if entity_type == "tenant"
+                else ParticipantType.EXTERNAL_CONTACT if entity_type == "vendor"
+                else None
+            )
+            conversation_type = (
+                ConversationType.TENANT if entity_type == "tenant"
+                else ConversationType.VENDOR if entity_type == "vendor"
+                else None
+            )
+            if participant_type is None or conversation_type is None:
+                return None, None
+
+            entity_user_id: int | None = None
+            if entity_type == "tenant":
+                tenant = db.execute(
+                    select(Tenant).where(Tenant.external_id == str(entity_id))
+                ).scalar_one_or_none()
+                entity_user_id = tenant.user_id if tenant else None
+            else:
+                vendor = db.execute(
+                    select(User).where(User.external_id == str(entity_id), User.user_type == "vendor")
+                ).scalar_one_or_none()
+                entity_user_id = vendor.id if vendor else None
+            if entity_user_id is None:
+                return None, None
+
+            def _match(conv) -> tuple[str | None, str | None] | None:
+                if conv is None or conv.conversation_type != conversation_type:
+                    return None
+                for participant in getattr(conv, "participants", []) or []:
+                    if not getattr(participant, "is_active", True):
+                        continue
+                    if participant.participant_type != participant_type:
+                        continue
+                    if participant.user_id != entity_user_id:
+                        continue
+                    if getattr(conv, "external_id", None) is None:
+                        return None, None
+                    return str(conv.external_id), str(conv.conversation_type) if conv.conversation_type else None
+                return None
+
+            task = getattr(s, "task", None)
+            if task is not None:
+                candidate_conversations = []
+                parent_convo = getattr(task, "parent_conversation", None)
+                if parent_convo is not None:
+                    candidate_conversations.append(parent_convo)
+                candidate_conversations.extend(list(getattr(task, "external_conversations", []) or []))
+                for conv in candidate_conversations:
+                    hit = _match(conv)
+                    if hit is not None:
+                        return hit
+
+            # Fallback: any active conversation the entity participates in.
+            # Defends against agent calls that forgot ``task_id`` and chat-side
+            # drafts that never had a task. Latest-updated wins so a fresh
+            # thread for an open issue beats stale history.
+            fallback_convos = (
+                db.execute(
+                    select(Conversation)
+                    .join(
+                        ConversationParticipant,
+                        ConversationParticipant.conversation_id == Conversation.id,
+                    )
+                    .where(
+                        Conversation.conversation_type == conversation_type,
+                        Conversation.is_archived.is_(False),
+                        ConversationParticipant.user_id == entity_user_id,
+                        ConversationParticipant.participant_type == participant_type,
+                        ConversationParticipant.is_active.is_(True),
+                    )
+                    .order_by(Conversation.updated_at.desc())
+                    .limit(5)
+                ).scalars().all()
+            )
+            for conv in fallback_convos:
+                hit = _match(conv)
+                if hit is not None:
+                    return hit
+            return None, None
+
+        target_conversation_id, target_conversation_type = _conversation_public_id(payload.get("conversation_id"))
+        if target_conversation_id is None:
+            target_conversation_id, target_conversation_type = _resolve_entity_target()
 
         return cls(
             uid=s.id,
@@ -766,6 +937,8 @@ class SuggestionType:
             task_id=str(s.task_id) if s.task_id else None,
             vendor_name=payload.get("vendor_name"),
             property_name=prop_name,
+            target_conversation_id=target_conversation_id,
+            target_conversation_type=target_conversation_type,
             draft_message=payload.get("draft_message"),
             messages=messages,
             created_at=_utc_iso(s.created_at),
@@ -942,15 +1115,46 @@ class ConversationSummaryType:
     property_name: typing.Optional[str] = None
     participant_count: int = 0
     unread_count: int = 0
+    # Tenant/vendor display name derived from the first non-account-user
+    # participant — lets the UI render a consistent "Ryan Chen" title even
+    # when the stored ``subject`` was generated as "Message Ryan: <task>".
+    participant_label: typing.Optional[str] = None
+    # Optional link to the task that owns this coordination conversation —
+    # surfaced so the chat list can show a "Task #N" badge.
+    task_id: typing.Optional[str] = None
+    task_title: typing.Optional[str] = None
 
     @classmethod
     def from_sql(cls, c: typing.Any) -> "ConversationSummaryType":
+        from db.models import ParticipantType
+
         visible_msgs = [m for m in (c.messages or []) if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)]
         last_msg = max(visible_msgs, key=lambda m: m.sent_at, default=None) if visible_msgs else None
         active_participants = [p for p in c.participants if p.is_active] if c.participants else []
         prop_name = None
         if c.property:
             prop_name = getattr(c.property, "name", None) or getattr(c.property, "address_line1", None)
+
+        external_participants = [
+            p for p in active_participants if p.participant_type != ParticipantType.ACCOUNT_USER
+        ]
+        participant_label: typing.Optional[str] = None
+        for p in external_participants:
+            user = getattr(p, "user", None)
+            if user is None:
+                continue
+            name = " ".join(filter(None, [getattr(user, "first_name", None), getattr(user, "last_name", None)])).strip()
+            if name:
+                participant_label = name
+                break
+
+        task_id = None
+        task_title = None
+        parent_task = getattr(c, "parent_task", None)
+        if parent_task is not None:
+            task_id = str(parent_task.id)
+            task_title = parent_task.title
+
         return cls(
             uid=str(c.external_id),
             conversation_type=c.conversation_type or "tenant",
@@ -961,4 +1165,7 @@ class ConversationSummaryType:
             last_message_sender_name=last_msg.sender_name if last_msg else None,
             property_name=prop_name,
             participant_count=len(active_participants),
+            participant_label=participant_label,
+            task_id=task_id,
+            task_title=task_title,
         )

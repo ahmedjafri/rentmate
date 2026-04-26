@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Eye, Loader2, Target } from 'lucide-react';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
@@ -521,37 +521,53 @@ function TaskGoalPanel({ task, onSelectAi }: { task: ActionDeskTask; onSelectAi:
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { actionDeskTasks, openChat, closeChat, isLoading, updateTask } = useApp();
-  const openedRef = useRef(false);
+  const [searchParams] = useSearchParams();
+  const { actionDeskTasks, suggestions, openChat, closeChat, isLoading, updateTask } = useApp();
+  const openedRef = useRef<string | null>(null);
   const seenTaskRef = useRef<string | null>(null);
+  const suggestionId = searchParams.get('suggestion');
 
   const task = useMemo(
     () => actionDeskTasks.find(t => String(t.id) === String(id)),
     [actionDeskTasks, id],
   );
   const [selectedThread, setSelectedThread] = useState<EmbeddedTaskThreadSelection>({ kind: 'ai' });
+  const activeSuggestion = useMemo(
+    () => suggestionId ? suggestions.find(s => s.id === suggestionId) : null,
+    [suggestionId, suggestions],
+  );
 
   // Open the task in ChatPanel state once — ChatPanel drives the middle column.
   // Close it on unmount so the slide-out doesn't pop back into other routes.
   useEffect(() => {
-    if (!task || openedRef.current) return;
-    openedRef.current = true;
-    openChat({ taskId: task.id });
+    if (!task) return;
+    const openKey = `${task.id}:${suggestionId ?? ''}`;
+    if (openedRef.current === openKey) return;
+    openedRef.current = openKey;
+    openChat({ taskId: task.id, suggestionId });
     return () => {
-      openedRef.current = false;
+      openedRef.current = null;
       closeChat();
     };
-  }, [task?.id, openChat, closeChat]);
+  }, [task?.id, suggestionId, openChat, closeChat]);
 
   // Reset the opened guard when the task id changes so navigation between
   // tasks still triggers openChat.
   useEffect(() => {
-    openedRef.current = false;
+    openedRef.current = null;
   }, [id]);
 
   useEffect(() => {
+    const targetConversationId = activeSuggestion?.targetConversationId;
+    if (
+      targetConversationId
+      && (task?.linkedConversations ?? []).some(conversation => conversation.uid === targetConversationId)
+    ) {
+      setSelectedThread({ kind: 'conversation', id: targetConversationId });
+      return;
+    }
     setSelectedThread({ kind: 'ai' });
-  }, [task?.id]);
+  }, [activeSuggestion?.targetConversationId, task?.id, task?.linkedConversations]);
 
   useEffect(() => {
     if (!task) return;

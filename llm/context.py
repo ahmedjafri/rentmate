@@ -189,6 +189,8 @@ def build_task_context_data(db: Session, task_id: str, query: str | None = None)
         "Task execution rules:",
         "- Stay inside this task unless you discover a genuinely separate issue.",
         "- Do not create a new task for sub-steps or approvals related to this same issue.",
+        "- If a vendor already gave a possible appointment window, with or without pricing, do not re-ask the vendor and do not stop at saying approval is pending. Call message_person to ask the tenant whether access/availability works in this same turn; that check does not approve a quote or commit the vendor.",
+        "- After asking the tenant about access or availability, do not message the vendor again until the tenant actually confirms the proposed time works.",
         "- If you need the user to provide a file or approval, explain the blocker first and ask before creating a suggestion.",
         "- If the user says a requested notice/file was uploaded or served, do not create a follow-up task or suggestion. Acknowledge it, tell them to document service date/method, and continue the same task.",
     ]

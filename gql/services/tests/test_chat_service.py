@@ -75,8 +75,9 @@ def test_get_or_create_conversation_reuses_external_uid_and_builds_history(db):
     )
 
     assert reused.id == convo.id
-    assert history == [
-        {"role": "system", "content": "system context"},
+    assert "Active conversation: internal AI conversation with the PM/manager." in history[0]["content"]
+    assert history[0]["content"].endswith("system context")
+    assert history[1:] == [
         {"role": "user", "content": "first"},
         {"role": "assistant", "content": "second"},
         {"role": "user", "content": "next"},

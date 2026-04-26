@@ -65,9 +65,11 @@ def upgrade() -> None:
     op.create_index(op.f("ix_notifications_task_id"), "notifications", ["task_id"], unique=False)
     op.create_index(op.f("ix_notifications_conversation_id"), "notifications", ["conversation_id"], unique=False)
     op.create_index(op.f("ix_notifications_created_at"), "notifications", ["created_at"], unique=False)
+    op.create_index(op.f("ix_notifications_org_id"), "notifications", ["org_id"], unique=False)
 
 
 def downgrade() -> None:
+    op.drop_index(op.f("ix_notifications_org_id"), table_name="notifications")
     op.drop_index(op.f("ix_notifications_created_at"), table_name="notifications")
     op.drop_index(op.f("ix_notifications_conversation_id"), table_name="notifications")
     op.drop_index(op.f("ix_notifications_task_id"), table_name="notifications")

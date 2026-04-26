@@ -142,19 +142,46 @@ def _tenant_conversation_for_task(db, task: Task, tenant: Tenant) -> Conversatio
 
 def _tenant_portal_conversations(db, tenant_external_id: str) -> list[dict]:
     tenant = _load_tenant(db, tenant_external_id)
-    task_ids = [int(row["id"]) for row in _tenant_tasks(db, tenant_external_id)]
-    if not task_ids:
-        return []
-    tasks = db.execute(
-        select(Task)
-        .where(Task.id.in_(task_ids))
-        .options(selectinload(Task.external_conversations).selectinload(Conversation.messages))
-    ).scalars().all()
     rows: list[dict] = []
-    for task in tasks:
-        conversation = _tenant_conversation_for_task(db, task, tenant)
-        if conversation:
-            rows.append(serialize_portal_conversation_row(conversation, task=task))
+    seen_conv_ids: set[int] = set()
+
+    # 1. Task-linked conversations — walk each tenant task to its tenant-side
+    #    conversation so the row's `linked_task` payload is populated.
+    task_ids = [int(row["id"]) for row in _tenant_tasks(db, tenant_external_id)]
+    if task_ids:
+        tasks = db.execute(
+            select(Task)
+            .where(Task.id.in_(task_ids))
+            .options(selectinload(Task.external_conversations).selectinload(Conversation.messages))
+        ).scalars().all()
+        for task in tasks:
+            conversation = _tenant_conversation_for_task(db, task, tenant)
+            if conversation and conversation.id not in seen_conv_ids:
+                seen_conv_ids.add(conversation.id)
+                rows.append(serialize_portal_conversation_row(conversation, task=task))
+
+    # 2. Standalone conversations — any conversation the tenant participates in
+    #    that isn't attached to a task (e.g. routine check-ins or one-off
+    #    outreach). These were previously hidden from the portal.
+    standalone = db.execute(
+        select(Conversation)
+        .join(
+            ConversationParticipant,
+            ConversationParticipant.conversation_id == Conversation.id,
+        )
+        .where(
+            ConversationParticipant.user_id == tenant.user_id,
+            ConversationParticipant.is_active.is_(True),
+            Conversation.parent_task_id.is_(None),
+        )
+        .options(selectinload(Conversation.messages))
+    ).scalars().all()
+    for conversation in standalone:
+        if conversation.id in seen_conv_ids:
+            continue
+        seen_conv_ids.add(conversation.id)
+        rows.append(serialize_portal_conversation_row(conversation, task=None))
+
     rows.sort(key=lambda row: row["last_message_at"] or row["updated_at"], reverse=True)
     return rows
 

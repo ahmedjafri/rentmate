@@ -16,6 +16,7 @@ from llm.tools._common import (
     _resolve_task_id_from_active_conversation,
     _resolve_task_tenant,
     _sanitize_tenant_outbound_draft,
+    _sanitize_vendor_outbound_draft,
 )
 
 logger = logging.getLogger("rentmate.llm.message_person")
@@ -29,11 +30,11 @@ _VALID_RISK_LEVELS: frozenset[str] = frozenset({"low", "medium", "high", "critic
 #
 # This is the inverse of gql/services/settings_service.py::_MESSAGE_RISK_ALLOWLIST
 # but written from the suggestion-side so the rule reads like the product spec:
-#   - strict     → suggestion for medium/high/critical
+#   - strict     → suggestion for ALL outbound messages (low/medium/high/critical)
 #   - balanced   → suggestion for high/critical
 #   - aggressive → suggestion for critical only
 _SUGGESTION_REVIEW_RISKS: dict[str, frozenset[str]] = {
-    "strict":     frozenset({"medium", "high", "critical"}),
+    "strict":     _VALID_RISK_LEVELS,
     "balanced":   frozenset({"high", "critical"}),
     "aggressive": frozenset({"critical"}),
 }
@@ -67,6 +68,11 @@ class MessageExternalPersonTool(Tool):
     @property
     def name(self) -> str:
         return "message_person"
+
+    @property
+    def category(self):
+        from llm.tools._common import ToolCategory
+        return ToolCategory.REVIEW
 
     @property
     def description(self) -> str:
@@ -185,7 +191,12 @@ class MessageExternalPersonTool(Tool):
                 if not task:
                     return json.dumps({
                         "status": "error",
-                        "message": f"Task {task_id} not found.",
+                        "message": (
+                            f"Task {task_id} not found. If you just called propose_task, "
+                            "its return is a proposal_id (NOT a task_id) and the task does "
+                            "not exist yet — wait for manager approval before messaging. "
+                            "Use list_tasks to find a real task_id if you need one."
+                        ),
                     })
             task_title = task.title if task else None
 
@@ -195,18 +206,55 @@ class MessageExternalPersonTool(Tool):
                 entity_phone = entity.phone if entity else None
             elif entity_type == "tenant":
                 entity = _load_tenant_by_public_id(db, entity_id)
-                if not entity and task_id is not None:
-                    entity = _resolve_task_tenant(db, task_id)
+                # When messaging inside a task context, the resolved tenant
+                # MUST match the task's tenant. The agent frequently picks
+                # a UUID from earlier lookup_tenants results that points to
+                # a real-but-unrelated person — without this check the
+                # message would be sent to the wrong tenant silently.
+                # Skip this gate if the task has no single tenant attached
+                # (e.g. property-wide tasks): we have nothing to compare to.
+                if entity and task_id is not None:
+                    expected = _resolve_task_tenant(db, str(task_id))
+                    if expected is not None and expected.id != entity.id:
+                        expected_name = (
+                            expected.user.name if expected.user else "the task's tenant"
+                        )
+                        actual_name = (
+                            entity.user.name if entity.user else "a different tenant"
+                        )
+                        return json.dumps({
+                            "status": "error",
+                            "message": (
+                                f"tenant_id {entity_id} resolves to {actual_name}, "
+                                f"but task {task_id} belongs to {expected_name}. "
+                                "Use the Tenant ID from this task's context, or "
+                                "call lookup_tenants to confirm the right one — "
+                                "do not reuse Tenant IDs from other tasks."
+                            ),
+                        })
                 entity_name = entity.user.name if entity and entity.user else "Tenant"
                 entity_phone = entity.user.phone if entity and entity.user else None
             else:
                 return json.dumps({"status": "error", "message": f"Can only message tenants or vendors, not {entity_type}"})
 
             if not entity:
-                return json.dumps({"status": "error", "message": f"{entity_type.title()} {entity_id} not found"})
+                return json.dumps({
+                    "status": "error",
+                    "message": (
+                        f"{entity_type.title()} {entity_id} not found. "
+                        "Call lookup_tenants (or lookup_vendors) to get a real "
+                        "external_id, then retry — do not guess UUIDs."
+                    ),
+                })
 
             if entity_type == "tenant" and task_id is not None:
                 draft_message = _sanitize_tenant_outbound_draft(
+                    db,
+                    task_id=task_id,
+                    draft_message=draft_message,
+                )
+            if entity_type == "vendor" and task_id is not None:
+                draft_message = _sanitize_vendor_outbound_draft(
                     db,
                     task_id=task_id,
                     draft_message=draft_message,

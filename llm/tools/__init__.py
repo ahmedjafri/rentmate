@@ -11,6 +11,8 @@ the agent runs.
 """
 from llm.tools._common import (
     Tool,
+    ToolCategory,
+    ToolMode,
     active_conversation_id,
     current_user_message,
     pending_suggestion_messages,
@@ -21,7 +23,12 @@ from llm.tools.documents import (
     CreateDocumentTool,
     ReadDocumentTool,
 )
-from llm.tools.entities import CreatePropertyTool, CreateTenantTool, LookupTenantsTool
+from llm.tools.entities import (
+    CreatePropertyTool,
+    CreateTenantTool,
+    LookupPropertiesTool,
+    LookupTenantsTool,
+)
 from llm.tools.memory import EditMemoryTool, RecallMemoryTool, SaveMemoryTool
 from llm.tools.messaging import MessageExternalPersonTool
 from llm.tools.onboarding import UpdateOnboardingTool
@@ -31,6 +38,7 @@ from llm.tools.tasks import (
     CloseTaskTool,
     CreateRoutineTool,
     CreateSuggestionTool,
+    ListTasksTool,
     ProposeTaskTool,
     UpdateTaskProgressTool,
 )
@@ -38,6 +46,8 @@ from llm.tools.vendors import CreateVendorTool, LookupVendorsTool
 
 __all__ = [
     "Tool",
+    "ToolCategory",
+    "ToolMode",
     "active_conversation_id",
     "current_user_message",
     "pending_suggestion_messages",
@@ -53,6 +63,8 @@ __all__ = [
     "CreateVendorTool",
     "EditMemoryTool",
     "HasHappenedTool",
+    "ListTasksTool",
+    "LookupPropertiesTool",
     "LookupTenantsTool",
     "LookupVendorsTool",
     "MessageExternalPersonTool",

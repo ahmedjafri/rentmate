@@ -81,6 +81,9 @@ type ConversationSummaryType {
   propertyName: String
   participantCount: Int!
   unreadCount: Int!
+  participantLabel: String
+  taskId: String
+  taskTitle: String
 }
 
 enum ConversationType {
@@ -354,6 +357,9 @@ type Query {
   """Returns messages for a conversation by uid"""
   conversationMessages(uid: String!): [ChatMessageType!]!
 
+  """Returns metadata for a single conversation (task link, participants)."""
+  conversation(uid: String!): ConversationSummaryType
+
   """Returns all vendors"""
   vendors: [VendorType!]!
 
@@ -440,6 +446,8 @@ type SuggestionType {
   taskId: String
   vendorName: String
   propertyName: String
+  targetConversationId: String
+  targetConversationType: String
   draftMessage: String
   messages: [ChatMessageType!]!
   createdAt: String!

@@ -177,6 +177,8 @@ query Suggestions($status: SuggestionStatus) {
     taskId
     vendorName
     propertyName
+    targetConversationId
+    targetConversationType
     draftMessage
     createdAt
     messages {
@@ -196,6 +198,17 @@ query Suggestions($status: SuggestionStatus) {
 query ConversationMessages($uid: String!) {
   conversationMessages(uid: $uid) {
     ...TaskMessageFields
+  }
+}
+
+query GetConversation($uid: String!) {
+  conversation(uid: $uid) {
+    uid
+    conversationType
+    title
+    taskId
+    taskTitle
+    participantLabel
   }
 }
 
@@ -251,6 +264,9 @@ query GetConversations($conversationType: ConversationType!, $limit: Int) {
     propertyName
     participantCount
     unreadCount
+    participantLabel
+    taskId
+    taskTitle
   }
 }
 

@@ -111,7 +111,6 @@ On first visit, click **Sign up** to create your account with an email and passw
   - `api` runs `python main.py --reload --port 8002`
   - `web` runs Vite on port `8080`
   - source changes on the host are reflected live inside both containers
-  - the API container uses a writable Hermes runtime home under `./data/hermes` via `HERMES_HOME=/app/data/hermes`
 
 ## Architecture
 

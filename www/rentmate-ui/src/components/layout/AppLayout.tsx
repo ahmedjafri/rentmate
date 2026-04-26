@@ -10,6 +10,7 @@ import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { categoryColors, categoryLabels } from '@/data/mockData';
+import { openSuggestionInContext } from '@/lib/suggestionNavigation';
 import { cn } from '@/lib/utils';
 
 
@@ -255,7 +256,10 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
                         {pendingSuggestions.map(s => (
                           <li key={s.id}>
                             <button
-                              onClick={() => { close(); navigate('/action-desk'); }}
+                              onClick={() => {
+                                close();
+                                openSuggestionInContext(s, navigate, openChat);
+                              }}
                               className="w-full text-left flex flex-col gap-1 px-3 py-2.5 hover:bg-muted/50 transition-colors"
                             >
                               <span className="text-sm font-medium leading-tight line-clamp-1">{s.title}</span>

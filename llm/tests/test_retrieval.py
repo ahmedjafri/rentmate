@@ -463,3 +463,245 @@ def test_compliance_query_prefers_current_property_context_over_old_lease_docume
     assert property_item.final_score > document_item.final_score
     assert "current operational source preferred for identity/contact facts" in property_item.reasons
     assert "lease document treated as low-confidence for compliance-sensitive facts" in document_item.reasons
+
+
+# ── NLP query-entity pre-pass ────────────────────────────────────────────────
+
+
+def _seed_tenant_with_active_lease(
+    db,
+    *,
+    first: str,
+    last: str,
+    property_id: str,
+    address: str,
+    property_name: str | None = None,
+    unit_label: str = "1B",
+):
+    user = User(
+        org_id=1,
+        creator_id=1,
+        user_type="tenant",
+        first_name=first,
+        last_name=last,
+        active=True,
+    )
+    db.add(user)
+    db.flush()
+    tenant = Tenant(org_id=1, creator_id=1, user_id=user.id)
+    db.add(tenant)
+    db.flush()
+    prop = Property(
+        id=property_id,
+        org_id=1,
+        creator_id=1,
+        address_line1=address,
+        name=property_name,
+        property_type="multi_family",
+        source="manual",
+    )
+    unit = Unit(
+        id=f"unit-{property_id}-{unit_label}",
+        org_id=1,
+        creator_id=1,
+        property_id=property_id,
+        label=unit_label,
+    )
+    db.add_all([prop, unit])
+    db.flush()
+    db.add(Lease(
+        id=f"lease-{tenant.id}",
+        org_id=1,
+        creator_id=1,
+        tenant_id=tenant.id,
+        unit_id=unit.id,
+        property_id=property_id,
+        start_date=date(2024, 1, 1),
+        end_date=date(2099, 12, 31),
+        rent_amount=1500,
+        payment_status="current",
+    ))
+    db.flush()
+    return tenant, unit, prop
+
+
+def test_query_extracts_tenant_and_boosts_their_items_over_token_collisions(db):
+    """Query 'gutter cleaning for priyas house' should rank Priya's
+    note above Tyler's note even though both share 'gutter cleaning'
+    tokens — because Priya is a real tenant and the heuristic now
+    auto-anchors the request on her tenant_id.
+    """
+    priya, priya_unit, priya_prop = _seed_tenant_with_active_lease(
+        db,
+        first="Priya",
+        last="Patel",
+        property_id="prop-meadows",
+        address="500 Meadow Way",
+        property_name="The Meadows",
+    )
+    tyler, tyler_unit, tyler_prop = _seed_tenant_with_active_lease(
+        db,
+        first="Tyler",
+        last="Brooks",
+        property_id="prop-harbor",
+        address="200 Harbor Way",
+        property_name="Harbor View",
+        unit_label="Studio A",
+    )
+    # A note tied to Tyler's unit (mentions "gutter cleaning" generically).
+    tyler_conv = Conversation(
+        org_id=1,
+        creator_id=1,
+        subject="Repaired bathroom fan — Studio A",
+        conversation_type=ConversationType.SUGGESTION_AI,
+        unit_id=tyler_unit.id,
+        property_id=tyler_prop.id,
+    )
+    db.add(tyler_conv)
+    db.flush()
+    db.add(Message(
+        org_id=1,
+        conversation_id=tyler_conv.id,
+        sender_type=ParticipantType.ACCOUNT_USER,
+        sender_name="RentMate",
+        body="The agent wants to send a message to Tyler Brooks. Draft message: schedule gutter cleaning visit.",
+        message_type=MessageType.MESSAGE,
+        is_ai=True,
+    ))
+    db.flush()
+    # A note tied to Priya's unit.
+    priya_conv = Conversation(
+        org_id=1,
+        creator_id=1,
+        subject="Schedule gutter cleaning for The Meadows (Unit 1B)",
+        conversation_type=ConversationType.SUGGESTION_AI,
+        unit_id=priya_unit.id,
+        property_id=priya_prop.id,
+    )
+    db.add(priya_conv)
+    db.flush()
+    db.add(Message(
+        org_id=1,
+        conversation_id=priya_conv.id,
+        sender_type=ParticipantType.ACCOUNT_USER,
+        sender_name="RentMate",
+        body="Schedule professional gutter cleaning for The Meadows property; tenant Priya Patel in Unit 1B.",
+        message_type=MessageType.MESSAGE,
+        is_ai=True,
+    ))
+    db.commit()
+
+    bundle = retrieve_context(db, RetrievalRequest(
+        surface="dev",
+        intent="answer_question",
+        query="We need to schedule a gutter cleaning for priyas house",
+        limit=10,
+    ))
+
+    notes = [item for item in bundle.items if item.source_type == "conversation_note"]
+    assert notes, "expected at least one conversation note in the result"
+    top = notes[0]
+    # Priya's note must outrank Tyler's despite shared token overlap.
+    assert "Meadows" in (top.title or "") or "Priya" in top.content
+    assert any("query-extracted tenant" in r or "query-extracted property" in r for r in top.reasons), top.reasons
+
+
+def test_overlap_stopwords_no_longer_inflate_score(db):
+    """'a', 'for', 'to', 'schedule' must not show up as overlap reasons."""
+    _add_property(db)
+    conv = Conversation(
+        org_id=1,
+        creator_id=1,
+        subject="Generic note",
+        conversation_type=ConversationType.SUGGESTION_AI,
+        property_id="prop-acme",
+    )
+    db.add(conv)
+    db.flush()
+    db.add(Message(
+        org_id=1,
+        conversation_id=conv.id,
+        sender_type=ParticipantType.ACCOUNT_USER,
+        sender_name="RentMate",
+        body="We schedule things for tenants and we send messages to vendors.",
+        message_type=MessageType.MESSAGE,
+        is_ai=True,
+    ))
+    db.commit()
+
+    bundle = retrieve_context(db, RetrievalRequest(
+        surface="dev",
+        intent="answer_question",
+        query="schedule a follow-up to send for the property",
+        property_id="prop-acme",
+        limit=5,
+    ))
+
+    for item in bundle.items:
+        for reason in item.reasons:
+            if reason.startswith("token overlap:"):
+                listed = {t.strip() for t in reason.split(":", 1)[1].split(",")}
+                noise = {"a", "for", "to", "schedule", "the", "and"}
+                hits = listed & noise
+                assert not hits, f"stopword leaked into overlap reason: {reason!r}"
+
+
+def test_anchorless_query_returns_empty_bundle(db):
+    """Cross-property/cross-tenant token overlap is misleading. If nothing
+    in the query maps to a real entity AND the caller passed no
+    explicit anchor, return an empty bundle so the agent gets no
+    context rather than wrong context.
+    """
+    _add_property(db)
+    conv = Conversation(
+        org_id=1,
+        creator_id=1,
+        subject="Generic gutter note",
+        conversation_type=ConversationType.SUGGESTION_AI,
+        property_id="prop-acme",
+    )
+    db.add(conv)
+    db.flush()
+    db.add(Message(
+        org_id=1,
+        conversation_id=conv.id,
+        sender_type=ParticipantType.ACCOUNT_USER,
+        sender_name="RentMate",
+        body="Schedule gutter cleaning at the property.",
+        message_type=MessageType.MESSAGE,
+        is_ai=True,
+    ))
+    db.commit()
+
+    bundle = retrieve_context(db, RetrievalRequest(
+        surface="dev",
+        intent="answer_question",
+        # no entity reference — neither a tenant name nor a property name
+        query="we need to schedule a gutter cleaning",
+        limit=10,
+    ))
+
+    assert bundle.items == []
+
+
+def test_explicit_request_entity_skips_extraction(db):
+    """When the caller already passes tenant_id, we don't run NLP extraction."""
+    priya, _, _ = _seed_tenant_with_active_lease(
+        db,
+        first="Priya",
+        last="Patel",
+        property_id="prop-meadows-x",
+        address="500 Meadow Way",
+        property_name="The Meadows X",
+    )
+    db.commit()
+
+    with patch("llm.query_entities.extract_query_entities") as mock_extract:
+        retrieve_context(db, RetrievalRequest(
+            surface="dev",
+            intent="answer_question",
+            query="schedule a gutter cleaning for priyas house",
+            tenant_id=str(priya.external_id),
+            limit=5,
+        ))
+    assert not mock_extract.called

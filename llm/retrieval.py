@@ -13,7 +13,6 @@ import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from pathlib import Path
 from typing import Any
 
 from openai import OpenAI
@@ -47,13 +46,6 @@ from llm.tracing import log_trace
 logger = logging.getLogger(__name__)
 
 
-def _data_dir() -> Path:
-    return Path(os.getenv("RENTMATE_DATA_DIR", "./data"))
-
-
-# Deprecated compatibility placeholder. Memory indexing no longer uses Chroma.
-CHROMA_PATH = _data_dir() / "chroma"
-COLLECTION_NAME = "rentmate_memory_items"
 EMBED_DIM = MEMORY_EMBED_DIM
 RERANK_TOP_K = 8
 RERANK_ENABLED_INTENTS = {"answer_question", "triage"}
@@ -63,7 +55,7 @@ def _vector_index_disabled() -> bool:
     raw = os.getenv("RENTMATE_DISABLE_VECTOR_INDEX", "").lower()
     if raw in {"1", "true", "yes"}:
         return True
-    # Keep unit/integration tests deterministic and avoid Chroma instability under pytest.
+    # Keep unit/integration tests deterministic — pgvector is opt-in under pytest.
     if os.getenv("PYTEST_CURRENT_TEST") and os.getenv("RENTMATE_ENABLE_VECTOR_INDEX_TESTS", "").lower() not in {"1", "true", "yes"}:
         return True
     return False
@@ -79,6 +71,26 @@ def _is_pytest_runtime() -> bool:
 
 def _tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+
+# Tokens we never want driving the heuristic token-overlap signal.
+# Articles, prepositions, generic verbs, and one-word filler that
+# inflate spurious "everything matches everything" overlaps. The
+# embedding tokenizer (``embed_text``) keeps using ``_tokenize`` —
+# dimensional hashing absorbs these without harm.
+_OVERLAP_STOPWORDS: frozenset[str] = frozenset({
+    "a", "an", "the", "and", "or", "of", "to", "for", "in", "on", "at",
+    "by", "is", "are", "be", "we", "i", "you", "they", "he", "she", "it",
+    "my", "our", "your", "their", "his", "her", "this", "that", "these",
+    "those", "need", "want", "would", "could", "please", "just", "send",
+    "get", "make", "do", "with", "from",
+    "schedule", "scheduled", "schedules",  # near-universal in our corpus
+})
+
+
+def _overlap_tokens(text: str) -> set[str]:
+    """Return the tokens of ``text`` minus stopwords + 1-2 char noise."""
+    return {t for t in _tokenize(text) if len(t) > 2 and t not in _OVERLAP_STOPWORDS}
 
 
 def embed_text(text: str, dim: int = EMBED_DIM) -> list[float]:
@@ -131,6 +143,10 @@ class RetrievalRequest:
     creator_id: int | None = None
     org_id: int | None = None
     limit: int = 12
+    # Populated by ``retrieve_context`` via the NLP pre-pass when the
+    # caller didn't explicitly anchor on an entity. Carries the matched
+    # display names so heuristic boost reasons stay legible.
+    extracted_entities: "QueryEntities | None" = None
 
 
 @dataclass
@@ -155,7 +171,7 @@ class RankedContextBundle:
     items: list[RankedContextItem]
 
 
-class ChromaMemoryIndex:
+class PgVectorMemoryIndex:
     def __init__(self, db: Session | None = None) -> None:
         if db is not None and db.bind is not None and not (isinstance(db.bind, Connection) and _is_pytest_runtime()):
             self._bind = db.bind
@@ -656,7 +672,7 @@ def collect_memory_records(db: Session, *, creator_id: int | None = None) -> lis
 def sync_memory_index(db: Session, *, creator_id: int | None = None, enable_vector_index: bool = True) -> int:
     creator = creator_id or resolve_account_id()
     records = collect_memory_records(db, creator_id=creator)
-    index = ChromaMemoryIndex(db) if enable_vector_index else None
+    index = PgVectorMemoryIndex(db) if enable_vector_index else None
     existing = {
         (row.source_type, row.source_id): row
         for row in db.execute(
@@ -760,16 +776,24 @@ def _heuristic_score(request: RetrievalRequest, item: MemoryItem, query_tokens: 
         score += value
         reasons.append(reason)
 
+    extracted = getattr(request, "extracted_entities", None)
+
+    def _entity_reason(kind: str) -> str:
+        names = (extracted.matched_names if extracted else None) or []
+        if names:
+            return f"query-extracted {kind}: {', '.join(names[:2])}"
+        return f"same {kind}"
+
     if request.task_id and metadata.get("task_id") == str(request.task_id):
         bump(5.0, "same task")
     if request.property_id and metadata.get("property_id") == str(request.property_id):
-        bump(4.0, "same property")
+        bump(4.0, _entity_reason("property"))
     if request.unit_id and metadata.get("unit_id") == str(request.unit_id):
-        bump(4.5, "same unit")
+        bump(4.5, _entity_reason("unit"))
     if request.tenant_id and metadata.get("tenant_id") == str(request.tenant_id):
-        bump(4.5, "same tenant")
+        bump(4.5, _entity_reason("tenant"))
     if request.vendor_id and metadata.get("vendor_id") == str(request.vendor_id):
-        bump(4.5, "same vendor")
+        bump(4.5, _entity_reason("vendor"))
 
     intent = request.intent.lower()
     if intent in {"draft_message", "follow_up"} and item.source_type in {"tenant", "vendor", "conversation_note", "task"}:
@@ -810,8 +834,9 @@ def _heuristic_score(request: RetrievalRequest, item: MemoryItem, query_tokens: 
         if targets_identity and item.source_type in {"property", "unit", "task", "entity_note", "tenant", "vendor"}:
             bump(1.5, "current operational source preferred for identity/contact facts")
 
-    content_tokens = set(_tokenize(f"{item.title or ''} {item.content}"))
-    overlap = query_tokens & content_tokens
+    content_tokens = _overlap_tokens(f"{item.title or ''} {item.content}")
+    overlap_query_tokens = {t for t in query_tokens if len(t) > 2 and t not in _OVERLAP_STOPWORDS}
+    overlap = overlap_query_tokens & content_tokens
     if overlap:
         bump(min(2.0, 0.2 * len(overlap)), f"token overlap: {', '.join(sorted(list(overlap))[:5])}")
         if item.source_type in {"tenant", "vendor"}:
@@ -988,10 +1013,72 @@ def retrieve_context(db: Session, request: RetrievalRequest) -> RankedContextBun
 
     items = _eligible_items(db, creator)
     query_tokens = set(_tokenize(request.query or request.intent))
+
+    # NLP pre-pass: when the caller didn't already anchor the request on
+    # a tenant / vendor / property / unit, scan the query string for
+    # names of entities that exist in this org. Each match populates
+    # the corresponding RetrievalRequest slot, which fires the existing
+    # +4.5 / +4.0 heuristic boost in _heuristic_score.
+    explicit_anchor = bool(
+        request.task_id
+        or request.tenant_id
+        or request.vendor_id
+        or request.property_id
+        or request.unit_id
+    )
+    if not explicit_anchor:
+        try:
+            from llm.query_entities import extract_query_entities
+            extracted = extract_query_entities(db, request.query, org_id=request.org_id)
+        except Exception as exc:
+            logger.warning("query entity extraction failed: %s", exc)
+            extracted = None
+        if extracted is not None and (
+            extracted.tenant_ids or extracted.vendor_ids
+            or extracted.property_ids or extracted.unit_ids
+        ):
+            request.extracted_entities = extracted
+            if extracted.tenant_ids and not request.tenant_id:
+                request.tenant_id = next(iter(extracted.tenant_ids))
+            if extracted.vendor_ids and not request.vendor_id:
+                request.vendor_id = next(iter(extracted.vendor_ids))
+            if extracted.property_ids and not request.property_id:
+                request.property_id = next(iter(extracted.property_ids))
+            if extracted.unit_ids and not request.unit_id:
+                request.unit_id = next(iter(extracted.unit_ids))
+
+    # Hard cut: if neither the caller nor the NLP pre-pass anchored the
+    # request on any entity, return an empty bundle. Without an anchor
+    # token-overlap retrieval surfaces unrelated items (e.g. "gutter
+    # cleaning" from another property) and is actively misleading. We'd
+    # rather give the agent no memory than the wrong memory.
+    has_anchor = bool(
+        request.task_id
+        or request.tenant_id
+        or request.vendor_id
+        or request.property_id
+        or request.unit_id
+    )
+    if not has_anchor:
+        log_trace(
+            "memory_rank",
+            request.surface,
+            "Skipped retrieval — no entity anchor in query",
+            detail={
+                "request": {
+                    "surface": request.surface,
+                    "intent": request.intent,
+                    "query": request.query,
+                    "limit": request.limit,
+                },
+                "reason": "no_entity_anchor",
+            },
+        )
+        return RankedContextBundle(request=request, items=[])
     vector_scores: dict[str, float] = {}
     if items and not disable_vector_index:
         try:
-            index = ChromaMemoryIndex(db)
+            index = PgVectorMemoryIndex(db)
             vector_scores = index.query(request, where=_base_where(creator), n_results=min(50, max(10, request.limit * 4)))
         except Exception as exc:
             logger.warning("Skipping vector memory query during retrieval: %s", exc)

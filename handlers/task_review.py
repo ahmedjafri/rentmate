@@ -9,11 +9,10 @@ so a reply always gets a fresh review instead of a stale cached one.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
-
-import json
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -131,6 +130,10 @@ def _build_review_prompt(task, db) -> str:
         "id, or any other UUID. If that line says '(none)' then no "
         "recipient is attached and you should ask the manager before "
         "messaging anyone. "
+        f"You MUST pass `task_id=\"{task.id}\"` to every `message_person` "
+        "call you make on this task — without it the suggestion gets "
+        "orphaned from the task and the manager can't open it in the "
+        "right tenant/vendor conversation. "
         "If a concrete next step is obvious and safe — for example, "
         "messaging a tenant or vendor for information you're waiting on "
         "— take it yourself using the normal tools (message_person, "
@@ -304,6 +307,7 @@ def _persist_review_summary_to_ai_conversation(
             conversation_id=ai_conversation_id,
             body=summary_body,
             task_id=fresh.id,
+            bump_task_activity=False,
         )
         db.commit()
     finally:

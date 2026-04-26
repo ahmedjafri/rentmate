@@ -4,6 +4,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKeyConstraint,
+    Index,
     Integer,
     Numeric,
     String,
@@ -26,7 +27,7 @@ class AgentRun(Base, OrgId, PrimaryId, HasCreatorId):
 
     started_at = Column(DateTime, nullable=False, index=True)
     ended_at = Column(DateTime, nullable=True)
-    status = Column(String(16), nullable=False)
+    status = Column(String(16), nullable=False, index=True)
     source = Column(String(50), nullable=False)
     # chat | assess | task_review | routine | simulate | dev_sim | reply_scanner
     trigger_input = Column(Text, nullable=True)
@@ -56,6 +57,7 @@ class AgentRun(Base, OrgId, PrimaryId, HasCreatorId):
 
     __table_args__ = (
         UniqueConstraint("org_id", "id", name="uq_agent_runs_org"),
+        Index("ix_agent_runs_org_started", "org_id", "started_at"),
         ForeignKeyConstraint(
             ["org_id", "creator_id"],
             ["users.org_id", "users.id"],
@@ -74,6 +76,7 @@ class AgentRunFlag(Base, OrgId, PrimaryId):
 
     __table_args__ = (
         UniqueConstraint("org_id", "id", name="uq_agent_run_flags_org"),
+        Index("ix_agent_run_flags_run", "run_id"),
         ForeignKeyConstraint(
             ["org_id", "run_id"],
             ["agent_runs.org_id", "agent_runs.id"],
@@ -97,6 +100,7 @@ class AgentRunReview(Base, OrgId, PrimaryId):
 
     __table_args__ = (
         UniqueConstraint("org_id", "id", name="uq_agent_run_reviews_org"),
+        Index("ix_agent_run_reviews_run", "run_id"),
         ForeignKeyConstraint(
             ["org_id", "run_id"],
             ["agent_runs.org_id", "agent_runs.id"],

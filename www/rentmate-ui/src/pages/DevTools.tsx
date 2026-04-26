@@ -1,7 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Select,
@@ -18,7 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Terminal, Trash2, Activity, ChevronDown, RefreshCw, Copy } from 'lucide-react';
+import { Terminal, Trash2, Activity, ChevronDown, ChevronRight, RefreshCw, Copy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { authFetch } from '@/lib/auth';
 import { toast } from 'sonner';
@@ -28,12 +27,38 @@ interface TraceEntry {
   timestamp: string;
   trace_type: string;
   source: string;
+  run_id: string | null;
+  sequence_num: number | null;
   task_id: string | null;
   conversation_id: string | null;
   tool_name: string | null;
   summary: string;
   detail: string | null;
   suggestion_id: string | null;
+}
+
+type RunStatus = 'running' | 'completed' | 'errored' | 'iteration_limit' | 'aborted';
+
+interface RunEntry {
+  id: string;
+  source: string;
+  status: RunStatus;
+  task_id: string | null;
+  conversation_id: string | null;
+  model: string | null;
+  agent_version: string;
+  execution_path: string;
+  started_at: string;
+  ended_at: string | null;
+  duration_ms: number | null;
+  iteration_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cost_cents: string;
+  trigger_input: string | null;
+  final_response: string | null;
+  error_message: string | null;
+  trace_count: number;
 }
 
 interface TraceFilterOption {
@@ -91,39 +116,74 @@ const TRACE_COLORS: Record<string, string> = {
   error: 'bg-red-100 text-red-800',
 };
 
-function TracesPanel() {
-  const [traces, setTraces] = useState<TraceEntry[]>([]);
+const RUN_STATUS_COLORS: Record<RunStatus, string> = {
+  completed: 'bg-slate-100 text-slate-800',
+  running: 'bg-blue-100 text-blue-800',
+  errored: 'bg-red-100 text-red-800',
+  iteration_limit: 'bg-amber-100 text-amber-800',
+  aborted: 'bg-gray-100 text-gray-700',
+};
+
+function RunsPanel() {
+  const [runs, setRuns] = useState<RunEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [filter, setFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [sourceFilter, setSourceFilter] = useState<string>('all');
   const [taskFilter, setTaskFilter] = useState<string>('all');
   const [conversationFilter, setConversationFilter] = useState<string>('all');
   const [taskOptions, setTaskOptions] = useState<TraceFilterOption[]>([]);
   const [chatOptions, setChatOptions] = useState<TraceFilterOption[]>([]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [tracesByRun, setTracesByRun] = useState<Map<string, TraceEntry[]>>(new Map());
+  const [traceLoading, setTraceLoading] = useState<Set<string>>(new Set());
   const [selectedTrace, setSelectedTrace] = useState<TraceDetailEntry | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailSection, setDetailSection] = useState<'overview' | 'context' | 'retrieval' | 'io' | 'reasoning' | 'raw'>('overview');
 
-  const loadTraces = useCallback(async () => {
+  const loadRuns = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ limit: '200' });
+      const params = new URLSearchParams({ limit: '50' });
       const selectedTaskOption = taskOptions.find(option => option.id === taskFilter);
-      if (filter !== 'all') params.set('trace_type', filter);
+      if (statusFilter !== 'all') params.set('status', statusFilter);
       if (sourceFilter !== 'all') params.set('source', sourceFilter);
       if (taskFilter !== 'all') {
         params.set('task_id', selectedTaskOption?.raw_id ?? taskFilter);
-        if (selectedTaskOption?.scope) params.set('task_scope', selectedTaskOption.scope);
       }
       if (conversationFilter !== 'all') params.set('conversation_id', conversationFilter);
-      const res = await authFetch(`/dev/traces?${params}`);
-      if (res.ok) setTraces(await res.json());
+      const res = await authFetch(`/dev/runs?${params}`);
+      if (res.ok) setRuns(await res.json());
     } catch { /* ignore */ } finally {
       setLoading(false);
     }
-  }, [conversationFilter, filter, sourceFilter, taskFilter, taskOptions]);
+  }, [conversationFilter, sourceFilter, statusFilter, taskFilter, taskOptions]);
 
-  useEffect(() => { loadTraces(); }, [loadTraces]);
+  const loadTracesForRun = useCallback(async (runId: string) => {
+    setTraceLoading(prev => {
+      const next = new Set(prev);
+      next.add(runId);
+      return next;
+    });
+    try {
+      const res = await authFetch(`/dev/traces?run_id=${encodeURIComponent(runId)}&limit=500`);
+      if (res.ok) {
+        const data = (await res.json()) as TraceEntry[];
+        setTracesByRun(prev => {
+          const next = new Map(prev);
+          next.set(runId, data);
+          return next;
+        });
+      }
+    } catch { /* ignore */ } finally {
+      setTraceLoading(prev => {
+        const next = new Set(prev);
+        next.delete(runId);
+        return next;
+      });
+    }
+  }, []);
+
+  useEffect(() => { loadRuns(); }, [loadRuns]);
 
   useEffect(() => {
     const loadFilters = async () => {
@@ -141,11 +201,29 @@ function TracesPanel() {
     void loadFilters();
   }, []);
 
-  // Auto-refresh every 5s
+  // Auto-refresh every 5s — re-fetch the run list AND any expanded run's traces
   useEffect(() => {
-    const id = setInterval(loadTraces, 5000);
+    const id = setInterval(() => {
+      void loadRuns();
+      expanded.forEach(runId => void loadTracesForRun(runId));
+    }, 5000);
     return () => clearInterval(id);
-  }, [loadTraces]);
+  }, [loadRuns, loadTracesForRun, expanded]);
+
+  const toggleRun = (runId: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(runId)) {
+        next.delete(runId);
+      } else {
+        next.add(runId);
+        if (!tracesByRun.has(runId)) {
+          void loadTracesForRun(runId);
+        }
+      }
+      return next;
+    });
+  };
 
   const copyText = (text: string, label: string = 'Copied') => {
     try {
@@ -166,11 +244,56 @@ function TracesPanel() {
     }
   };
 
-  const copyAllTraces = () => {
-    const text = traces.map(t =>
-      `[${t.timestamp}] ${t.trace_type} (${t.source}) ${t.summary}${t.detail ? '\n' + t.detail : ''}`
-    ).join('\n\n');
-    copyText(text, `Copied ${traces.length} traces`);
+  const formatRunBlock = (run: RunEntry, traces: TraceEntry[] | undefined): string[] => {
+    const lines: string[] = [
+      `### Run ${run.id}  ${run.status}  ${run.source}  (${run.iteration_count} turns, ${run.total_input_tokens}→${run.total_output_tokens} tok, $${(Number(run.total_cost_cents) / 100).toFixed(4)})`,
+    ];
+    if (run.trigger_input) lines.push(`  trigger: ${run.trigger_input}`);
+    if (run.final_response) lines.push(`  reply:   ${run.final_response}`);
+    if (run.error_message) lines.push(`  error:   ${run.error_message}`);
+    (traces ?? []).forEach(t => {
+      lines.push(`  [${formatTime(t.timestamp)}] #${t.sequence_num ?? '?'} ${t.trace_type} (${t.source}) ${t.summary}`);
+      if (t.detail) {
+        const detailText = parseDetail(t.detail);
+        if (detailText) {
+          for (const detailLine of detailText.split('\n')) {
+            lines.push(`    ${detailLine}`);
+          }
+        }
+      }
+    });
+    return lines;
+  };
+
+  const copyAllRuns = () => {
+    const lines: string[] = [];
+    runs.forEach(run => {
+      lines.push(...formatRunBlock(run, tracesByRun.get(run.id)));
+      lines.push('');
+    });
+    copyText(lines.join('\n'), `Copied ${runs.length} runs`);
+  };
+
+  const copyRun = async (run: RunEntry) => {
+    let traces = tracesByRun.get(run.id);
+    if (!traces) {
+      try {
+        const res = await authFetch(`/dev/traces?run_id=${encodeURIComponent(run.id)}&limit=500`);
+        if (res.ok) {
+          traces = (await res.json()) as TraceEntry[];
+          setTracesByRun(prev => {
+            const next = new Map(prev);
+            next.set(run.id, traces!);
+            return next;
+          });
+        }
+      } catch {
+        toast.error('Failed to load traces for run');
+        return;
+      }
+    }
+    const lines = formatRunBlock(run, traces);
+    copyText(lines.join('\n'), `Copied run (${(traces ?? []).length} traces)`);
   };
 
   const copyTrace = (trace: TraceEntry) => {
@@ -181,6 +304,24 @@ function TracesPanel() {
   const formatTime = (ts: string) => {
     const d = new Date(ts);
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
+
+  const formatDuration = (ms: number | null) => {
+    if (ms == null) return 'running';
+    if (ms < 1000) return `${ms}ms`;
+    return `${(ms / 1000).toFixed(2)}s`;
+  };
+
+  const formatCost = (cents: string) => {
+    const dollars = Number(cents) / 100;
+    if (!Number.isFinite(dollars) || dollars === 0) return '$0';
+    return `$${dollars.toFixed(4)}`;
+  };
+
+  const shortModel = (model: string | null) => {
+    if (!model) return '';
+    const tail = model.split('/').pop() ?? model;
+    return tail.replace(/-\d{8}$/, '').replace(/^(claude-|anthropic\.)/, '');
   };
 
   const parseDetail = (detail: string | null): string => {
@@ -207,7 +348,7 @@ function TracesPanel() {
     }
   };
 
-  const sourceOptions = Array.from(new Set(traces.map(t => t.source).filter(Boolean))) as string[];
+  const sourceOptions = Array.from(new Set(runs.map(r => r.source).filter(Boolean))) as string[];
   const detailEnvelope = (selectedTrace?.detail && typeof selectedTrace.detail === 'object')
     ? selectedTrace.detail as Record<string, unknown>
     : null;
@@ -250,24 +391,29 @@ function TracesPanel() {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <Activity className="h-4 w-4 text-muted-foreground" />
-          <h2 className="font-semibold text-sm">Agent Traces</h2>
-          <Badge variant="outline" className="text-[10px]">{traces.length}</Badge>
+          <h2 className="font-semibold text-sm">Agent Runs</h2>
+          <Badge variant="outline" className="text-[10px]">{runs.length}</Badge>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          <select className="text-xs border rounded px-2 py-1 bg-background" value={filter} onChange={e => setFilter(e.target.value)}>
-            <option value="all">All types</option>
-            <option value="tool_call">Tool calls</option>
-            <option value="tool_result">Tool results</option>
-            <option value="llm_request">LLM requests</option>
-            <option value="llm_reply">LLM replies</option>
-            <option value="suggestion_created">Suggestions created</option>
-            <option value="suggestion_executed">Suggestions executed</option>
-            <option value="memory_sync">Memory sync</option>
-            <option value="memory_rank">Memory rank</option>
-            <option value="memory_rerank">Memory rerank</option>
-            <option value="error">Errors</option>
+          <select
+            className="text-xs border rounded px-2 py-1 bg-background"
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value)}
+            aria-label="Filter by status"
+          >
+            <option value="all">All statuses</option>
+            <option value="running">Running</option>
+            <option value="completed">Completed</option>
+            <option value="errored">Errored</option>
+            <option value="iteration_limit">Iteration limit</option>
+            <option value="aborted">Aborted</option>
           </select>
-          <select className="text-xs border rounded px-2 py-1 bg-background max-w-[180px]" value={taskFilter} onChange={e => setTaskFilter(e.target.value)}>
+          <select
+            className="text-xs border rounded px-2 py-1 bg-background max-w-[180px]"
+            value={taskFilter}
+            onChange={e => setTaskFilter(e.target.value)}
+            aria-label="Filter by task"
+          >
             <option value="all">All tasks</option>
             {taskOptions.map(task => (
               <option key={task.id} value={task.id}>
@@ -275,73 +421,152 @@ function TracesPanel() {
               </option>
             ))}
           </select>
-          <select className="text-xs border rounded px-2 py-1 bg-background max-w-[180px]" value={conversationFilter} onChange={e => setConversationFilter(e.target.value)}>
+          <select
+            className="text-xs border rounded px-2 py-1 bg-background max-w-[180px]"
+            value={conversationFilter}
+            onChange={e => setConversationFilter(e.target.value)}
+            aria-label="Filter by chat"
+          >
             <option value="all">All chats</option>
             {chatOptions.map(chat => (
               <option key={chat.id} value={chat.id}>{chat.subject || chat.id}</option>
             ))}
           </select>
-          <select className="text-xs border rounded px-2 py-1 bg-background" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}>
+          <select
+            className="text-xs border rounded px-2 py-1 bg-background"
+            value={sourceFilter}
+            onChange={e => setSourceFilter(e.target.value)}
+            aria-label="Filter by source"
+          >
             <option value="all">All sources</option>
             {sourceOptions.map(source => (
               <option key={source} value={source}>{source}</option>
             ))}
           </select>
-          <Button variant="ghost" size="sm" onClick={loadTraces} disabled={loading} className="h-7 w-7 p-0">
+          <Button variant="ghost" size="sm" onClick={loadRuns} disabled={loading} className="h-7 w-7 p-0" aria-label="Refresh">
             <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
           </Button>
-          {traces.length > 0 && (
-            <Button variant="ghost" size="sm" onClick={copyAllTraces} className="h-7 text-[10px] px-2">
+          {runs.length > 0 && (
+            <Button variant="ghost" size="sm" onClick={copyAllRuns} className="h-7 text-[10px] px-2">
               Copy All
             </Button>
           )}
         </div>
       </div>
 
-      <div className="max-h-[400px] overflow-y-auto space-y-1">
-        {traces.length === 0 && (
-          <p className="text-sm text-muted-foreground text-center py-8">No traces yet. Agent activity will appear here.</p>
+      <div className="max-h-[600px] overflow-y-auto space-y-1.5">
+        {runs.length === 0 && !loading && (
+          <p className="text-sm text-muted-foreground text-center py-8">No agent runs yet. Activity will appear here.</p>
         )}
-        {traces.map(t => (
-          <div key={t.id} className="border rounded-lg">
-            <div className="flex items-center gap-1 px-1 py-1">
-              <button
-                className="min-w-0 flex-1 text-left px-2 py-1 flex items-center gap-2 hover:bg-muted/50 transition-colors rounded-md"
-                onClick={() => void openTrace(t.id)}
-              >
-                <span className="text-[10px] text-muted-foreground font-mono w-16 shrink-0">
-                  {formatTime(t.timestamp)}
-                </span>
-                <Badge className={cn("text-[9px] h-4 px-1.5 shrink-0", TRACE_COLORS[t.trace_type] ?? 'bg-gray-100 text-gray-700')}>
-                  {t.trace_type}
-                </Badge>
-                {t.source && (
-                  <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">{t.source}</Badge>
-                )}
-                {t.task_id && (
-                  <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">task</Badge>
-                )}
-                {t.conversation_id && (
-                  <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">chat</Badge>
-                )}
-                <span className="text-xs truncate flex-1">{t.summary}</span>
-                <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
-              </button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 w-7 shrink-0 p-0"
-                aria-label={`Copy trace ${t.id}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  copyTrace(t);
-                }}
-              >
-                <Copy className="h-3.5 w-3.5" />
-              </Button>
+        {runs.map(run => {
+          const isExpanded = expanded.has(run.id);
+          const traces = tracesByRun.get(run.id);
+          const isLoadingTraces = traceLoading.has(run.id);
+          return (
+            <div key={run.id} className="border rounded-lg">
+              <div className="flex items-start gap-1 px-1 py-1">
+                <button
+                  type="button"
+                  className="min-w-0 flex-1 text-left px-2 py-1 hover:bg-muted/50 transition-colors rounded-md"
+                  onClick={() => toggleRun(run.id)}
+                  aria-expanded={isExpanded}
+                  aria-label={`Toggle run ${run.id}`}
+                >
+                  <div className="flex items-center gap-2 flex-wrap min-w-0">
+                    {isExpanded
+                      ? <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+                      : <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />}
+                    <Badge className={cn("text-[9px] h-4 px-1.5 shrink-0", RUN_STATUS_COLORS[run.status] ?? 'bg-gray-100 text-gray-700')}>
+                      {run.status}
+                    </Badge>
+                    <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">{run.source}</Badge>
+                    <span className="text-[10px] text-muted-foreground font-mono shrink-0">{formatTime(run.started_at)}</span>
+                    <span className="text-[10px] text-muted-foreground shrink-0">{formatDuration(run.duration_ms)}</span>
+                    <span className="text-[10px] text-muted-foreground shrink-0">{run.iteration_count} turns</span>
+                    <span className="text-[10px] text-muted-foreground shrink-0 font-mono">
+                      {run.total_input_tokens}→{run.total_output_tokens}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground shrink-0">{formatCost(run.total_cost_cents)}</span>
+                    {run.model && (
+                      <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">{shortModel(run.model)}</Badge>
+                    )}
+                    {run.task_id && (
+                      <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">task {run.task_id}</Badge>
+                    )}
+                    {run.conversation_id && (
+                      <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">chat</Badge>
+                    )}
+                    <span className="text-[10px] text-muted-foreground shrink-0">{run.trace_count} traces</span>
+                  </div>
+                  {(run.trigger_input || run.error_message) && (
+                    <div className="mt-1 ml-5 text-xs text-muted-foreground truncate">
+                      {run.error_message
+                        ? <span className="text-red-700">{run.error_message}</span>
+                        : run.trigger_input}
+                    </div>
+                  )}
+                </button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 shrink-0 p-0"
+                  aria-label={`Copy run ${run.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void copyRun(run);
+                  }}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+
+              {isExpanded && (
+                <div className="border-t bg-muted/20 px-1 py-1 space-y-1">
+                  {isLoadingTraces && !traces && (
+                    <p className="text-[10px] text-muted-foreground text-center py-2">Loading traces…</p>
+                  )}
+                  {traces && traces.length === 0 && (
+                    <p className="text-[10px] text-muted-foreground text-center py-2">No traces for this run.</p>
+                  )}
+                  {traces?.map(t => (
+                    <div key={t.id} className="flex items-center gap-1 px-1 py-0.5">
+                      <button
+                        className="min-w-0 flex-1 text-left px-2 py-1 flex items-center gap-2 hover:bg-background transition-colors rounded-md"
+                        onClick={() => void openTrace(t.id)}
+                      >
+                        <span className="text-[10px] text-muted-foreground font-mono w-8 shrink-0">
+                          #{t.sequence_num ?? '?'}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground font-mono w-16 shrink-0">
+                          {formatTime(t.timestamp)}
+                        </span>
+                        <Badge className={cn("text-[9px] h-4 px-1.5 shrink-0", TRACE_COLORS[t.trace_type] ?? 'bg-gray-100 text-gray-700')}>
+                          {t.trace_type}
+                        </Badge>
+                        {t.tool_name && (
+                          <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">{t.tool_name}</Badge>
+                        )}
+                        <span className="text-xs truncate flex-1">{t.summary}</span>
+                      </button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 shrink-0 p-0"
+                        aria-label={`Copy trace ${t.id}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          copyTrace(t);
+                        }}
+                      >
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <Dialog open={!!selectedTrace || detailLoading} onOpenChange={open => { if (!open) { setSelectedTrace(null); setDetailLoading(false); } }}>
@@ -819,7 +1044,7 @@ const DevTools = () => {
       </div>
 
       {/* Traces */}
-      <TracesPanel />
+      <RunsPanel />
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         <RetrievalDebugger />

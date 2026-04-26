@@ -538,4 +538,101 @@ class LookupTenantsTool(Tool):
             db.close()
 
 
-__all__ = ["CreatePropertyTool", "CreateTenantTool", "LookupTenantsTool"]
+class LookupPropertiesTool(Tool):
+    """Look up properties in the system, optionally filtered by query/property_id."""
+
+    mode = ToolMode.READ_ONLY
+
+    @property
+    def name(self) -> str:
+        return "lookup_properties"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Search for properties in the system. Returns a list with each "
+            "property's external UUID, name, address, city/state, "
+            "property_type, and unit_count. Use whenever the user references "
+            "a property by name, nickname, or vague locator (e.g. 'the "
+            "Bothell house', 'Pinecrest', 'Marcus's place') and you do not "
+            "already have its property_id in your task context. "
+            "Optionally filter by query (matches name/address/city, case-"
+            "insensitive partial) or property_id (exact UUID). "
+            "If no property matches the user's reference, ASK the manager "
+            "which property they mean — never invent property_ids and never "
+            "propose tasks or message anyone for a property you can't find."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Search by name / address_line1 / city (case-"
+                        "insensitive partial match). Omit to list all "
+                        "properties."
+                    ),
+                },
+                "property_id": {
+                    "type": "string",
+                    "description": "Exact external UUID lookup (optional).",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        from db.models import Property
+        from db.queries import format_address
+        from db.session import SessionLocal
+
+        query = (kwargs.get("query") or "").strip().lower()
+        property_id = (kwargs.get("property_id") or "").strip() or None
+
+        db = SessionLocal.session_factory()
+        try:
+            org_id = resolve_org_id()
+            base = db.query(Property).filter(Property.org_id == org_id)
+            if property_id:
+                base = base.filter(Property.id == property_id)
+            properties = base.all()
+
+            results: list[dict] = []
+            for prop in properties:
+                if query:
+                    haystack = " ".join(
+                        s for s in [prop.name, prop.address_line1, prop.city]
+                        if s
+                    ).lower()
+                    if query not in haystack:
+                        continue
+                results.append({
+                    "property_id": str(prop.id),
+                    "name": prop.name or None,
+                    "address": format_address(prop),
+                    "city": prop.city or None,
+                    "state": prop.state or None,
+                    "property_type": prop.property_type or None,
+                    "unit_count": len(prop.units or []),
+                })
+
+            if not results:
+                msg = (
+                    f"No properties match '{kwargs.get('query') or property_id}'. "
+                    "Ask the manager which property they mean — do not invent "
+                    "a property_id or propose work for a property you can't find."
+                )
+                return json.dumps({"properties": [], "message": msg})
+            return json.dumps({"properties": results, "count": len(results)})
+        finally:
+            db.close()
+
+
+__all__ = [
+    "CreatePropertyTool",
+    "CreateTenantTool",
+    "LookupPropertiesTool",
+    "LookupTenantsTool",
+]

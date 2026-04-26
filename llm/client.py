@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import httpx
-from agent.memory_manager import MemoryManager
 
 from backends.local_auth import (
     reset_fallback_request_context,
@@ -25,8 +24,9 @@ from backends.local_auth import (
     resolve_org_id,
     set_fallback_request_context,
 )
+from llm.loop import AgentLoop
 from llm.model_config import resolve_model_config
-from llm.registry import agent_registry, ensure_agent_runtime_dirs
+from llm.registry import agent_registry
 from llm.rentmate_policy_provider import RentmatePolicyProvider
 from llm.runs import accumulate_run_totals, derive_run_metadata, start_run
 from llm.tools import current_user_message
@@ -58,20 +58,29 @@ def get_last_eval_debug_payload() -> dict[str, Any] | None:
     return _last_eval_debug_payload
 
 
-def _attach_rentmate_policy_provider(agent: Any) -> None:
-    manager = getattr(agent, "_memory_manager", None)
-    if manager is None:
-        manager = MemoryManager()
-        agent._memory_manager = manager
-    if manager.get_provider("rentmate_policy") is not None:
-        return
-    manager.add_provider(RentmatePolicyProvider())
-    manager.initialize_all(
-        session_id=str(getattr(agent, "session_id", "")),
-        platform=getattr(agent, "platform", "api") or "api",
-        hermes_home=str(getattr(agent, "hermes_home", "")),
-        agent_context="primary",
-    )
+def _augment_system_message_with_policies(
+    base: str,
+    *,
+    user_message: str,
+    session_id: str = "",
+) -> str:
+    """Inline RentMate policy text into the system prompt.
+
+    The constitution block always applies; ``prefetch(user_message)`` adds
+    keyword-matched policy excerpts for the current ask.
+    """
+    provider = RentmatePolicyProvider()
+    provider.initialize(session_id=session_id)
+    parts: list[str] = []
+    if base:
+        parts.append(base)
+    constitution = provider.system_prompt_block().strip()
+    if constitution:
+        parts.append(constitution)
+    dynamic = provider.prefetch(user_message or "").strip()
+    if dynamic:
+        parts.append(dynamic)
+    return "\n\n---\n\n".join(parts)
 
 
 _ONBOARDING_PROMPT_PATH = Path(__file__).parent / "policies" / "onboarding.md"
@@ -146,6 +155,26 @@ _DOCUMENT_CLAIM_PATTERNS = [
     ]
 ]
 
+_TENANT_ACCESS_REPLY_PATTERNS = [
+    re.compile(pattern, re.I)
+    for pattern in [
+        r"\bcheck (?:with )?(?:the )?tenant\b",
+        r"\bconfirm (?:access|availability) with (?:the )?tenant\b",
+        r"\bneed to (?:check|confirm).{0,80}\btenant\b",
+        r"\bneed to (?:check|confirm).{0,80}\baccess\b",
+        r"\bif (?:that|the proposed|this) time works\b",
+        r"\bwhether .* access\b",
+    ]
+]
+
+_VENDOR_APPOINTMENT_WINDOW_PATTERNS = [
+    re.compile(pattern, re.I | re.S)
+    for pattern in [
+        r"External conversation:.*\[[^\]]+\]:.*\b(?:i can come|i have|available|open|works on my end|works for me)\b.{0,120}\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next week|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b",
+        r"Vendor conversation:.*\[[^\]]+\]:.*\b(?:i can come|i have|available|open|works on my end|works for me)\b.{0,120}\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next week|\d{1,2}(?::\d{2})?\s*(?:am|pm))\b",
+    ]
+]
+
 _MUTATING_TOOLS = {
     "propose_task",
     "close_task",
@@ -179,6 +208,38 @@ def _has_document_side_effect(side_effects: list[dict]) -> bool:
         if action_card.get("kind") == "document":
             return True
     return False
+
+
+def _has_tenant_message_side_effect(side_effects: list[dict]) -> bool:
+    for effect in side_effects:
+        if not isinstance(effect, dict):
+            continue
+        payload = effect.get("action_payload") or {}
+        if (
+            payload.get("action") == "message_person"
+            and payload.get("entity_type") == "tenant"
+        ):
+            return True
+    return False
+
+
+def _reply_needs_tenant_access_message(
+    reply: str,
+    *,
+    latest_user_message: str,
+    side_effects: list[dict],
+) -> bool:
+    if _has_tenant_message_side_effect(side_effects):
+        return False
+    has_vendor_window = any(
+        pattern.search(latest_user_message or "")
+        for pattern in _VENDOR_APPOINTMENT_WINDOW_PATTERNS
+    )
+    if not has_vendor_window:
+        return False
+    if reply and any(pattern.search(reply) for pattern in _TENANT_ACCESS_REPLY_PATTERNS):
+        return True
+    return True
 
 
 def _summarize_non_document_side_effects(side_effects: list[dict]) -> str | None:
@@ -464,25 +525,18 @@ async def chat_with_agent(
     trace_context: dict[str, Any] | None = None,
 ) -> str:
     """Run the AI agent with the given messages and return its text reply."""
-    from run_agent import AIAgent  # noqa: F401 — optional dep
-
     model = os.getenv("LLM_MODEL", "anthropic/claude-haiku-4-5-20251001")
     api_key = os.getenv("LLM_API_KEY", "")
-    api_base = os.getenv("LLM_BASE_URL") or None
-    resolved_model = resolve_model_config(model=model, api_base=api_base)
-    actual_model = resolved_model.model
-    api_base = resolved_model.api_base
+    explicit_base = os.getenv("LLM_BASE_URL") or None
+    resolved_model = resolve_model_config(model=model, api_base=explicit_base)
+    # Use the litellm-prefixed name so litellm.acompletion can route correctly.
+    actual_model = resolved_model.litellm_model
+    # Only override LiteLLM's provider-default base URL if the user explicitly
+    # set LLM_BASE_URL. For known-provider prefixes (anthropic/, together_ai/,
+    # etc.) LiteLLM picks the right base — passing the resolver's fallback
+    # would mis-route those requests.
+    api_base = explicit_base
     provider = resolved_model.provider
-
-    # Extract system message and conversation history
-    prompt_bundle = agent_registry.build_system_prompt_bundle(agent_id)
-    system_message = str(prompt_bundle.get("system_prompt") or "")
-    onboarding_prompt = _load_onboarding_prompt(session_key=session_key)
-    if onboarding_prompt:
-        system_message = f"{system_message}\n\n---\n\n{onboarding_prompt}" if system_message else onboarding_prompt
-    sys_content = next((m["content"] for m in messages if m.get("role") == "system"), None)
-    if sys_content:
-        system_message = f"{system_message}\n\n---\n\n{sys_content}"
 
     conversation_history = [
         {"role": m["role"], "content": m["content"]}
@@ -496,6 +550,18 @@ async def chat_with_agent(
     if conversation_history and conversation_history[-1]["role"] == "user":
         user_message = conversation_history.pop()["content"]
     user_message_token = current_user_message.set(user_message)
+
+    # Extract system message and conversation history. Pass user_message
+    # into the bundle builder so persistent-memory retrieval is biased
+    # toward the current ask rather than a static account-overview query.
+    prompt_bundle = agent_registry.build_system_prompt_bundle(agent_id, query=user_message)
+    system_message = str(prompt_bundle.get("system_prompt") or "")
+    onboarding_prompt = _load_onboarding_prompt(session_key=session_key)
+    if onboarding_prompt:
+        system_message = f"{system_message}\n\n---\n\n{onboarding_prompt}" if system_message else onboarding_prompt
+    sys_content = next((m["content"] for m in messages if m.get("role") == "system"), None)
+    if sys_content:
+        system_message = f"{system_message}\n\n---\n\n{sys_content}"
 
     # Queue for bridging progress from the sync agent thread to async SSE
     progress_queue: queue.Queue[str] = queue.Queue()
@@ -696,72 +762,61 @@ async def chat_with_agent(
             "conversation_history": conversation_history,
             "user_message": user_message,
         })
-    runtime_dirs = ensure_agent_runtime_dirs(agent_id)
-    hermes_home = runtime_dirs["hermes_home"]
-
-    agent = AIAgent(
-        base_url=api_base,
-        api_key=api_key,
-        provider=provider,
-        model=actual_model,
-        max_iterations=40,
-        enabled_toolsets=["rentmate"],
-        quiet_mode=True,
-        platform="api",
-        session_id=session_key,
-        skip_context_files=True,
-        skip_memory=True,
-        hermes_home=hermes_home,
-        tool_progress_callback=_tool_progress,
-        step_callback=_step_callback,
-        verbose_logging=bool(os.getenv("AGENT_VERBOSE")),
+    system_message = _augment_system_message_with_policies(
+        system_message,
+        user_message=user_message,
+        session_id=str(session_key),
     )
-    # Hermes fires ``tool_complete_callback`` with the real result string;
-    # this is the only hook that can surface *what* a tool returned (and
-    # what it errored on) back into our progress queue + trace rows.
-    agent.tool_complete_callback = _tool_complete_cb
-    agent._tool_use_enforcement = True
-    _attach_rentmate_policy_provider(agent)
 
-    _orig_build = agent._build_api_kwargs
+    extra_completion_kwargs: dict[str, Any] = {}
+    if api_base:
+        extra_completion_kwargs["api_base"] = api_base
+    if api_key:
+        extra_completion_kwargs["api_key"] = api_key
+    if str(session_key).startswith("eval:"):
+        try:
+            extra_completion_kwargs["temperature"] = float(os.getenv("EVAL_AGENT_TEMPERATURE", "0"))
+        except ValueError:
+            extra_completion_kwargs["temperature"] = 0.0
+    extra_completion_kwargs["caching"] = False
+    extra_completion_kwargs["metadata"] = {
+        "account_id": str(resolve_account_id()),
+        "org_id": str(resolve_org_id() or ""),
+        "session_key": str(session_key),
+    }
 
-    def _patched_build_api_kwargs(messages):
-        kw = _orig_build(messages)
-        if agent.tools and "tools" in kw and "tool_choice" not in kw:
-            kw["tool_choice"] = "auto"
-        if str(session_key).startswith("eval:"):
-            try:
-                kw["temperature"] = float(os.getenv("EVAL_AGENT_TEMPERATURE", "0"))
-            except ValueError:
-                kw["temperature"] = 0.0
-        return kw
-    agent._build_api_kwargs = _patched_build_api_kwargs
+    loop_obj = AgentLoop(
+        model=actual_model,
+        system_message=system_message,
+        account_id=resolve_account_id(),
+        org_id=resolve_org_id(),
+        max_iterations=40,
+        tool_progress_callback=_tool_progress,
+        tool_complete_callback=_tool_complete_cb,
+        step_callback=_step_callback,
+        extra_completion_kwargs=extra_completion_kwargs,
+    )
 
     async def _run_with_progress():
-        loop = asyncio.get_event_loop()
-        executor_context = contextvars.copy_context()
-        task = loop.run_in_executor(
-            None,
-            lambda: executor_context.run(
-                agent.run_conversation,
+        run_task = asyncio.create_task(
+            loop_obj.run(
                 user_message=user_message,
-                system_message=system_message,
                 conversation_history=conversation_history if conversation_history else None,
-            ),
+            )
         )
-        while not task.done():
+        while not run_task.done():
             try:
                 msg = progress_queue.get_nowait()
                 if msg and on_progress:
                     await on_progress(msg)
             except queue.Empty:
                 pass
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
         while not progress_queue.empty():
             msg = progress_queue.get_nowait()
             if msg and on_progress:
                 await on_progress(msg)
-        return task.result()
+        return await run_task
 
     try:
         result = await _run_with_progress()
@@ -922,6 +977,47 @@ async def _local_fallback(
             side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
             failed_tools = list(current_failed_tools.get())
             completed_tools = list(current_completed_tools.get())
+            if _reply_needs_tenant_access_message(
+                reply,
+                latest_user_message=latest_user,
+                side_effects=side_effects,
+            ):
+                log_trace(
+                    "error",
+                    "chat",
+                    "Assistant said tenant access needed checking without message_person",
+                    detail=make_trace_envelope(
+                        "tool_enforcement",
+                        expected_tool="message_person",
+                        reply=reply,
+                        trace_context=trace_context,
+                    ),
+                )
+                pending_suggestion_messages.set([])
+                current_failed_tools.set([])
+                current_completed_tools.set([])
+                corrective_messages = [
+                    *messages,
+                    {"role": "assistant", "content": reply},
+                    {
+                        "role": "user",
+                        "content": (
+                            "System correction: you said tenant access or availability needs to be checked, "
+                            "but you did not call message_person. Call message_person for the task tenant now. "
+                            "Do not message the vendor again until the tenant actually confirms the proposed time works."
+                        ),
+                    },
+                ]
+                reply = await chat_with_agent(
+                    agent_id,
+                    session_key,
+                    corrective_messages,
+                    on_progress,
+                    trace_context=trace_context,
+                )
+                side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
+                failed_tools = list(current_failed_tools.get())
+                completed_tools = list(current_completed_tools.get())
             if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
                 side_effect_reply = _summarize_non_document_side_effects(side_effects)
                 if side_effect_reply:

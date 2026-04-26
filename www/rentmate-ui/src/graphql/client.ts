@@ -8,6 +8,7 @@ import {
   AssignVendorToTaskDocument,
   ConversationMessagesDocument,
   CreatePropertyDocument,
+  GetConversationDocument,
   CreateRoutineDocument,
   CreateTaskDocument,
   CreateTenantWithLeaseDocument,
@@ -208,6 +209,10 @@ export function actOnSuggestion(uid: string | number, action: string, editedBody
 
 export function getConversationMessages(uid: string) {
   return graphqlRequest(ConversationMessagesDocument, { uid });
+}
+
+export function getConversation(uid: string) {
+  return graphqlRequest(GetConversationDocument, { uid });
 }
 
 export function getConversations(conversationType: string, limit = 50) {

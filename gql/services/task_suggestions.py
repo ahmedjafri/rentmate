@@ -19,7 +19,7 @@ from db.models import (
     Task,
 )
 from gql.services import chat_service, settings_service, suggestion_service
-from gql.services.task_service import TaskService, dump_task_steps
+from gql.services.task_service import TaskProgressStep, TaskService, dump_task_steps
 from gql.services.vendor_service import get_vendor_by_external_id, get_vendor_by_id
 from gql.types import CreateTaskInput
 from llm.tools._common import _placeholder_message_block_error
@@ -329,12 +329,14 @@ class CreateTaskSuggestionExecutor(SuggestionExecutor):
             task = self._create_task_from_suggestion(suggestion)
 
             # Apply progress steps if the agent included them
-            steps = payload.get("steps")
+            steps = [TaskProgressStep.model_validate(s) for s in (payload.get("steps") or [])]
             if steps:
+                from datetime import UTC, datetime
+
                 task.steps = dump_task_steps(steps)
                 from sqlalchemy.orm.attributes import flag_modified
                 flag_modified(task, "steps")
-                task.updated_at = now
+                task.updated_at = datetime.now(UTC)
 
             vendor_id = payload.get("vendor_id")
             if vendor_id:

@@ -5,14 +5,12 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from backends.local_auth import resolve_account_id, resolve_org_id
-from db.enums import RoutineState, SuggestionOption, TaskCategory, TaskStatus, Urgency
-from gql.services.task_service import dump_task_steps
-
+from db.enums import RoutineState, SuggestionOption, TaskCategory, TaskStatus, TaskStepStatus, Urgency
+from gql.services.task_service import TaskProgressStep, dump_task_steps
 from llm.tools._common import (
     Tool,
+    ToolMode,
     _create_suggestion,
     _load_vendor_by_public_id,
     _placeholder_message_block_error,
@@ -22,6 +20,8 @@ from llm.tools._common import (
     _sanitize_tenant_outbound_draft,
     current_user_message,
 )
+
+logger = logging.getLogger(__name__)
 
 
 _DIRECT_DRAFT_NEGATIVE_PATTERNS = [
@@ -63,6 +63,49 @@ _SUGGESTION_CONFIRM_PATTERNS = [
         r"\bnotice\b",
     ]
 ]
+
+_DRAFT_SALUTATION_RE = re.compile(
+    r"^\s*(?:hi|hello|hey|dear)\s+([A-Za-z][A-Za-z' -]{0,60}?)(?:[,!.\n]|$)",
+    re.I,
+)
+
+
+def _salutation_name(draft: str | None) -> str:
+    match = _DRAFT_SALUTATION_RE.search(str(draft or ""))
+    if not match:
+        return ""
+    return " ".join(match.group(1).strip().lower().split())
+
+
+def _vendor_address_names(vendor: Any) -> set[str]:
+    names: set[str] = set()
+    for raw in (
+        getattr(vendor, "first_name", None),
+        getattr(vendor, "last_name", None),
+        getattr(vendor, "name", None),
+        getattr(vendor, "company", None),
+    ):
+        value = " ".join(str(raw or "").strip().lower().split())
+        if value:
+            names.add(value)
+    return names
+
+
+def _vendor_draft_recipient_error(*, draft_message: str | None, vendor: Any, vendor_name: str) -> str | None:
+    addressed_to = _salutation_name(draft_message)
+    if not addressed_to:
+        return None
+
+    allowed_names = _vendor_address_names(vendor)
+    if addressed_to in allowed_names:
+        return None
+
+    return (
+        f"draft_message appears addressed to '{addressed_to}', but propose_task sends "
+        f"draft_message to the assigned vendor ({vendor_name}). Use a vendor-addressed "
+        "draft here, or omit draft_message and create a separate message_person "
+        "suggestion for tenant outreach."
+    )
 
 _IN_TASK_PM_APPROVAL_PATTERNS = [
     re.compile(pattern, re.I)
@@ -121,11 +164,8 @@ def _has_user_confirmed_upload_request(task_id: str) -> bool:
     return False
 
 
-def _is_confirmation_style_step(step: dict[str, Any]) -> bool:
-    text = " ".join(
-        str(step.get(key) or "")
-        for key in ("key", "label", "note")
-    )
+def _is_confirmation_style_step(step: TaskProgressStep) -> bool:
+    text = " ".join(s for s in (step.key, step.label, step.note or "") if s)
     return bool(_OUTCOME_CONFIRM_STEP_RE.search(text))
 
 
@@ -280,24 +320,22 @@ def _mark_task_waiting_on_upload_request(
         if not task:
             return
 
-        steps = list(task.steps or [])
+        steps = [TaskProgressStep.model_validate(s) for s in (task.steps or [])]
         blocked_note = f"Blocked until {requested_file_label} is uploaded."
         updated = False
         for step in steps:
-            key = str(step.get("key") or "")
-            label = str(step.get("label") or "")
-            if key == "upload_requested_file" or requested_file_label.lower() in label.lower():
-                step["status"] = "pending"
-                step["note"] = blocked_note
+            if step.key == "upload_requested_file" or requested_file_label.lower() in step.label.lower():
+                step.status = TaskStepStatus.PENDING
+                step.note = blocked_note
                 updated = True
                 break
         if not updated:
-            steps.append({
-                "key": "upload_requested_file",
-                "label": f"Upload {requested_file_label}",
-                "status": "pending",
-                "note": blocked_note,
-            })
+            steps.append(TaskProgressStep(
+                key="upload_requested_file",
+                label=f"Upload {requested_file_label}",
+                status=TaskStepStatus.PENDING,
+                note=blocked_note,
+            ))
 
         task.steps = dump_task_steps(steps)
         flag_modified(task, "steps")
@@ -359,12 +397,168 @@ def _direct_draft_block_message() -> str:
     )
 
 
+_VALID_LIST_TASKS_STATUS = {"active", "resolved", "all"}
+_DEFAULT_LIST_TASKS_LIMIT = 50
+_MAX_LIST_TASKS_LIMIT = 200
+
+
+def _enum_value(value: Any) -> Any:
+    if value is None:
+        return None
+    return getattr(value, "name", None) or getattr(value, "value", None) or str(value)
+
+
+class ListTasksTool(Tool):
+    """List/search existing tasks scoped to the current account."""
+
+    mode = ToolMode.READ_ONLY
+
+    @property
+    def name(self) -> str:
+        return "list_tasks"
+
+    @property
+    def description(self) -> str:
+        return (
+            "List existing tasks for the current account. Use before creating a "
+            "new task to avoid duplicates, or to answer 'what's open right now?' "
+            "questions. Returns each task's id, title, status, mode, urgency, "
+            "priority, category, property/unit ids, goal, and timestamps. "
+            "Defaults to active tasks, sorted by most recent activity."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "resolved", "all"],
+                    "description": (
+                        "Which tasks to include. 'active' (default) returns "
+                        "tasks that are not resolved/dismissed; 'resolved' "
+                        "returns finished tasks; 'all' returns everything."
+                    ),
+                },
+                "property_id": {
+                    "type": "string",
+                    "description": "Filter to tasks attached to this property's UUID.",
+                },
+                "urgency": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"],
+                    "description": "Filter by urgency level.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Case-insensitive partial match against task title and goal.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        f"Max tasks to return (default {_DEFAULT_LIST_TASKS_LIMIT}, "
+                        f"hard cap {_MAX_LIST_TASKS_LIMIT})."
+                    ),
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        from db.models import Task
+        from db.session import SessionLocal
+
+        status_filter = (kwargs.get("status") or "active").strip().lower()
+        if status_filter not in _VALID_LIST_TASKS_STATUS:
+            return json.dumps({
+                "status": "error",
+                "error": f"invalid status {status_filter!r}; expected one of {sorted(_VALID_LIST_TASKS_STATUS)}",
+            })
+
+        property_id = (kwargs.get("property_id") or "").strip() or None
+        urgency_raw = (kwargs.get("urgency") or "").strip().lower() or None
+        urgency_filter: Urgency | None = None
+        if urgency_raw:
+            try:
+                urgency_filter = Urgency[urgency_raw.upper()]
+            except KeyError:
+                return json.dumps({
+                    "status": "error",
+                    "error": f"invalid urgency {urgency_raw!r}",
+                })
+        query = (kwargs.get("query") or "").strip().lower() or None
+
+        limit_raw = kwargs.get("limit")
+        try:
+            limit = int(limit_raw) if limit_raw is not None else _DEFAULT_LIST_TASKS_LIMIT
+        except (TypeError, ValueError):
+            limit = _DEFAULT_LIST_TASKS_LIMIT
+        if limit <= 0:
+            limit = _DEFAULT_LIST_TASKS_LIMIT
+        limit = min(limit, _MAX_LIST_TASKS_LIMIT)
+
+        account_id = resolve_account_id()
+        org_id = resolve_org_id()
+
+        db = SessionLocal.session_factory()
+        try:
+            q = db.query(Task).filter(
+                Task.creator_id == account_id,
+                Task.org_id == org_id,
+            )
+            if status_filter == "active":
+                q = q.filter(Task.task_status.in_([TaskStatus.SUGGESTED, TaskStatus.ACTIVE, TaskStatus.PAUSED]))
+            elif status_filter == "resolved":
+                q = q.filter(Task.task_status.in_([TaskStatus.RESOLVED, TaskStatus.DISMISSED]))
+            if property_id:
+                q = q.filter(Task.property_id == property_id)
+            if urgency_filter is not None:
+                q = q.filter(Task.urgency == urgency_filter)
+
+            tasks = q.order_by(Task.updated_at.desc()).all()
+
+            results: list[dict[str, Any]] = []
+            for task in tasks:
+                if query:
+                    title_lc = (task.title or "").lower()
+                    goal_lc = (task.goal or "").lower()
+                    if query not in title_lc and query not in goal_lc:
+                        continue
+                results.append({
+                    "id": task.id,
+                    "title": task.title,
+                    "status": _enum_value(task.task_status),
+                    "mode": _enum_value(task.task_mode),
+                    "urgency": _enum_value(task.urgency),
+                    "priority": _enum_value(task.priority),
+                    "category": _enum_value(task.category),
+                    "property_id": task.property_id,
+                    "unit_id": task.unit_id,
+                    "lease_id": task.lease_id,
+                    "goal": task.goal,
+                    "last_message_at": task.last_message_at.isoformat() if task.last_message_at else None,
+                    "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+                    "created_at": task.created_at.isoformat() if task.created_at else None,
+                })
+                if len(results) >= limit:
+                    break
+
+            return json.dumps({"tasks": results, "count": len(results)})
+        finally:
+            db.close()
+
+
 class ProposeTaskTool(Tool):
     """Create a task proposal for manager review."""
 
     @property
     def name(self) -> str:
         return "propose_task"
+
+    @property
+    def category(self):
+        from llm.tools._common import ToolCategory
+        return ToolCategory.REVIEW
 
     @property
     def description(self) -> str:
@@ -425,7 +619,7 @@ class ProposeTaskTool(Tool):
                             "label": {"type": "string", "description": "Human-readable step label"},
                             "status": {
                                 "type": "string",
-                                "enum": ["pending", "active", "done"],
+                                "enum": [s.value for s in TaskStepStatus],
                                 "description": "Step status",
                             },
                             "note": {"type": "string", "description": "Optional context note"},
@@ -466,15 +660,52 @@ class ProposeTaskTool(Tool):
                 ),
             })
 
+        from db.models import Property
         from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
             vendor = _load_vendor_by_public_id(db, vendor_id)
-            vendor_name = vendor.name if vendor else "Vendor"
+            if not vendor:
+                return json.dumps({
+                    "status": "error",
+                    "message": (
+                        f"Vendor {vendor_id} not found. Use lookup_vendors first and pass "
+                        "the returned vendor id; do not use placeholder vendor ids."
+                    ),
+                })
+            vendor_name = vendor.name or vendor.company or "Vendor"
+            recipient_error = _vendor_draft_recipient_error(
+                draft_message=kwargs.get("draft_message"),
+                vendor=vendor,
+                vendor_name=vendor_name,
+            )
+            if recipient_error:
+                return json.dumps({"status": "error", "message": recipient_error})
+
+            # Reject fabricated property references — agents that fall back to
+            # plausible-sounding property_ids ("the bothell house") would
+            # otherwise create suggestions for properties that don't exist.
+            property_id = (kwargs.get("property_id") or "").strip() or None
+            if property_id:
+                prop = db.query(Property).filter(
+                    Property.id == property_id,
+                    Property.org_id == resolve_org_id(),
+                ).first()
+                if not prop:
+                    return json.dumps({
+                        "status": "error",
+                        "message": (
+                            f"Property {property_id} not found. Call "
+                            "`lookup_properties` with the user's reference "
+                            "(name, nickname, or address) and use the returned "
+                            "property_id — never invent one."
+                        ),
+                    })
         finally:
             db.close()
 
         action_payload: dict = {
+            "action": "send_and_create_task",
             "vendor_id": vendor_id,
             "vendor_name": vendor_name,
         }
@@ -487,7 +718,19 @@ class ProposeTaskTool(Tool):
             return json.dumps({"status": "error", "message": placeholder_error})
         if draft_message:
             action_payload["draft_message"] = draft_message
-        steps = kwargs.get("steps")
+        try:
+            steps = [TaskProgressStep.model_validate(s) for s in (kwargs.get("steps") or [])]
+        except Exception as exc:
+            valid_statuses = sorted({s.value for s in TaskStepStatus})
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    f"Step validation failed: {exc}. Each step must have key, "
+                    f"label, and status — valid step statuses are {valid_statuses}. "
+                    "Track waiting/blocked/needs-action state via record_task_review, "
+                    "not step status."
+                ),
+            })
         if steps:
             action_payload["steps"] = dump_task_steps(steps)
 
@@ -520,7 +763,18 @@ class ProposeTaskTool(Tool):
             risk_score=risk,
             suggestion_type=kwargs["category"],
         )
-        return json.dumps({"status": "ok", "suggestion_id": sid, "message": f"Task proposal '{kwargs['title']}' with {vendor_name} created for manager review."})
+        return json.dumps({
+            "status": "pending_approval",
+            "task_id": None,
+            "proposal_id": sid,
+            "message": (
+                f"Task proposal '{kwargs['title']}' with {vendor_name} is queued for manager review. "
+                "The task does NOT exist yet — there is no task_id to act on. "
+                "STOP this turn now: do not call message_person, update_task_progress, close_task, "
+                "or any tool that takes a task_id. The manager will approve the proposal in a "
+                "separate step; only then can dependent actions run."
+            ),
+        })
 
 
 class CloseTaskTool(Tool):
@@ -605,7 +859,7 @@ class UpdateTaskProgressTool(Tool):
                 "step_label": {"type": "string", "description": "Step label to update when key is unknown"},
                 "status": {
                     "type": "string",
-                    "enum": ["pending", "active", "done"],
+                    "enum": [s.value for s in TaskStepStatus],
                     "description": "New step status",
                 },
                 "note": {"type": "string", "description": "Optional step note to store"},
@@ -619,6 +873,22 @@ class UpdateTaskProgressTool(Tool):
         step_label = (kwargs.get("step_label") or "").strip()
         status = kwargs["status"]
         note = kwargs.get("note")
+
+        # Reject unknown statuses up front with a tool-friendly error.
+        # The JSON-schema enum is just a hint; agents sometimes pass review-
+        # vocabulary words like "waiting" that aren't valid step statuses.
+        valid_statuses = {s.value for s in TaskStepStatus}
+        if status not in valid_statuses:
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    f"Invalid step status {status!r}. Valid step statuses are: "
+                    f"{sorted(valid_statuses)}. Use 'pending' for steps not yet "
+                    "started, 'active' for the in-progress step, and 'done' "
+                    "for completed steps. Track waiting/blocked/needs-action "
+                    "state via record_task_review, not step status."
+                ),
+            })
 
         # Active conversation is ground truth: progress updates posted
         # from inside a task's AI conversation belong to that task.
@@ -653,20 +923,35 @@ class UpdateTaskProgressTool(Tool):
             if not task:
                 return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
 
-            steps = list(task.steps or [])
+            # Tolerate stored steps with statuses outside the current enum
+            # (e.g. legacy 'waiting' rows). Coerce unknowns to 'pending' and
+            # log so the operator can spot upstream bugs without locking the
+            # agent out of progress updates.
+            steps: list[TaskProgressStep] = []
+            for raw in (task.steps or []):
+                try:
+                    steps.append(TaskProgressStep.model_validate(raw))
+                except Exception:
+                    coerced = dict(raw or {})
+                    bad_status = coerced.get("status")
+                    if bad_status not in valid_statuses:
+                        logger.warning(
+                            "update_task_progress: coercing invalid stored step status %r → 'pending' on task %s step %r",
+                            bad_status, task_id, coerced.get("key"),
+                        )
+                        coerced["status"] = TaskStepStatus.PENDING.value
+                    steps.append(TaskProgressStep.model_validate(coerced))
             if not steps:
                 return json.dumps({"status": "error", "message": f"Task {task_id} has no progress steps"})
 
-            updated_step = None
+            updated_step: TaskProgressStep | None = None
             for step in steps:
-                if not isinstance(step, dict):
-                    continue
-                matches_key = step_key and str(step.get("key") or "") == step_key
-                matches_label = step_label and str(step.get("label") or "").strip().lower() == step_label.lower()
+                matches_key = step_key and step.key == step_key
+                matches_label = step_label and step.label.strip().lower() == step_label.lower()
                 if matches_key or matches_label:
-                    step["status"] = status
+                    step.status = status
                     if note is not None:
-                        step["note"] = note
+                        step.note = note
                     updated_step = step
                     break
 
@@ -674,35 +959,32 @@ class UpdateTaskProgressTool(Tool):
                 identifier = step_key or step_label
                 return json.dumps({"status": "error", "message": f"Step '{identifier}' not found on task {task_id}"})
 
-            if status == "done" and _is_confirmation_style_step(updated_step):
+            if status == TaskStepStatus.DONE and _is_confirmation_style_step(updated_step):
                 if not _task_external_confirmation_received(db, task_id=str(task_id)):
                     return json.dumps({
                         "status": "error",
                         "message": (
-                            f"Cannot mark step '{updated_step.get('label', updated_step.get('key', 'step'))}' done "
+                            f"Cannot mark step '{updated_step.label or updated_step.key}' done "
                             "until an external tenant/vendor confirmation has actually been received."
                         ),
                     })
 
             # Keep only one active step. If a step was just completed, advance the next pending step.
-            if status == "active":
+            if status == TaskStepStatus.ACTIVE:
                 for step in steps:
-                    if step is updated_step or not isinstance(step, dict):
+                    if step is updated_step:
                         continue
-                    if step.get("status") == "active":
-                        step["status"] = "pending"
-            elif status == "done":
+                    if step.status == TaskStepStatus.ACTIVE:
+                        step.status = TaskStepStatus.PENDING
+            elif status == TaskStepStatus.DONE:
                 for step in steps:
-                    if not isinstance(step, dict) or step is updated_step:
+                    if step is updated_step:
                         continue
-                    if step.get("status") == "active":
-                        step["status"] = "pending"
-                next_pending = next(
-                    (step for step in steps if isinstance(step, dict) and step.get("status") == "pending"),
-                    None,
-                )
+                    if step.status == TaskStepStatus.ACTIVE:
+                        step.status = TaskStepStatus.PENDING
+                next_pending = next((s for s in steps if s.status == TaskStepStatus.PENDING), None)
                 if next_pending is not None:
-                    next_pending["status"] = "active"
+                    next_pending.status = TaskStepStatus.ACTIVE
 
             task.steps = dump_task_steps(steps)
             flag_modified(task, "steps")
@@ -710,7 +992,7 @@ class UpdateTaskProgressTool(Tool):
 
             return json.dumps({
                 "status": "ok",
-                "message": f"Updated step '{updated_step.get('label', updated_step.get('key', 'step'))}' to {status}.",
+                "message": f"Updated step '{updated_step.label or updated_step.key}' to {status}.",
                 "steps": task.steps,
             })
 

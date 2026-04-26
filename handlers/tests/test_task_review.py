@@ -273,12 +273,16 @@ class TestReviewPersistsToAIConversation:
         assert "Reasoning" not in summary.body
         assert "Reading task context" not in summary.body
 
+        refreshed = self.db.query(Task).filter_by(id=task.id).one()
+        assert refreshed.last_message_at is None
+
     def test_review_logs_llm_request_trace_with_context_and_retrieval(self):
         """The trace UI surfaces system prompt + context sections + retrieval
         for routines; task_review must match so the same panel shows the
         same shape of data for review runs."""
-        from db.models import AgentTrace
         import json as _json
+
+        from db.models import AgentTrace
 
         task = _make_task(self.db, title="trace-shape", with_ai_conversation=True)
         self.db.expunge(task)
@@ -614,10 +618,10 @@ class TestTriggerEndpoint(unittest.TestCase):
         import os
 
         import jwt
+        from fastapi import HTTPException
         from fastapi.testclient import TestClient
 
         from backends.local_auth import get_org_external_id, set_request_context
-        from fastapi import HTTPException
         from handlers.deps import get_db
         from main import app
 

@@ -6,6 +6,7 @@ tenant-first scheduling, no PII leaks, one-task-per-issue.
 
 import pytest
 
+from db.enums import TaskStepStatus
 from db.models import (
     ConversationType,
     ParticipantType,
@@ -17,6 +18,7 @@ from evals.conftest import (
     get_tool_calls,
     run_turn_sync,
 )
+from gql.services.task_service import TaskProgressStep, dump_task_steps
 
 
 @pytest.mark.eval
@@ -153,11 +155,11 @@ class TestSchedulingProtocol:
             context_body="Two quotes received. Need to finalize time and book the spring cleanup.",
         )
         task.goal = "Get at least two landscaper quotes and pick one to do a spring cleanup at The Meadows by end of month."
-        task.steps = [
-            {"key": "collect_quotes", "label": "Collect landscaper quotes", "status": "done"},
-            {"key": "compare_bids", "label": "Compare bids and timing", "status": "done"},
-            {"key": "book_vendor", "label": "Book the selected landscaper", "status": "active"},
-        ]
+        task.steps = dump_task_steps([
+            TaskProgressStep(key="collect_quotes", label="Collect landscaper quotes", status=TaskStepStatus.DONE),
+            TaskProgressStep(key="compare_bids", label="Compare bids and timing", status=TaskStepStatus.DONE),
+            TaskProgressStep(key="book_vendor", label="Book the selected landscaper", status=TaskStepStatus.ACTIVE),
+        ])
         db.flush()
 
         from gql.services import chat_service

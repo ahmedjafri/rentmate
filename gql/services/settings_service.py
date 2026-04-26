@@ -126,7 +126,7 @@ _ENTITY_CONFIDENCE_THRESHOLDS: dict[ActionPolicyLevel, float] = {
 }
 
 _MESSAGE_RISK_ALLOWLIST: dict[ActionPolicyLevel, set[str]] = {
-    "strict": {"low"},
+    "strict": set(),
     "balanced": {"low", "medium"},
     "aggressive": {"low", "medium", "high"},
 }

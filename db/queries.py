@@ -154,6 +154,7 @@ def fetch_conversations(
             .selectinload(ConversationParticipant.user),
             selectinload(Conversation.messages),
             selectinload(Conversation.property),
+            selectinload(Conversation.parent_task),
         )
         .order_by(Conversation.updated_at.desc())
         .offset(offset)

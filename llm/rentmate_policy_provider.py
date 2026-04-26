@@ -3,9 +3,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-
-from agent.memory_provider import MemoryProvider
 
 POLICY_DIR = Path(__file__).parent / "policies"
 
@@ -152,7 +149,14 @@ POLICIES: tuple[PolicyRule, ...] = (
 )
 
 
-class RentmatePolicyProvider(MemoryProvider):
+class RentmatePolicyProvider:
+    """Provides RentMate's constitution + keyword-matched policy excerpts.
+
+    Plain class — used to inherit from Hermes's ``MemoryProvider`` but is
+    now called directly from the agent loop. The methods retain their
+    original names for compatibility with any external callers.
+    """
+
     def __init__(self) -> None:
         self._session_id = ""
         self._hermes_home = Path(".")
@@ -161,9 +165,6 @@ class RentmatePolicyProvider(MemoryProvider):
     @property
     def name(self) -> str:
         return "rentmate_policy"
-
-    def is_available(self) -> bool:
-        return True
 
     def initialize(self, session_id: str, **kwargs) -> None:
         self._session_id = session_id
@@ -215,9 +216,6 @@ class RentmatePolicyProvider(MemoryProvider):
                 fh.write(json.dumps(event) + "\n")
         except Exception:
             pass
-
-    def get_tool_schemas(self) -> list[dict[str, Any]]:
-        return []
 
 
 def select_policy_keys(query: str) -> tuple[str, ...]:

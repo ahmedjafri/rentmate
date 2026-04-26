@@ -24,7 +24,7 @@ from .auth_mutations import Mutation as AuthMutation
 from .services import chat_service
 from .services.document_service import DocumentService
 from .services.property_service import PropertyService
-from .services.task_service import TaskService
+from .services.task_service import TaskProgressStep, TaskService, dump_task_steps
 from .services.tenant_service import TenantService
 from .services.vendor_service import VendorService
 from .types import (
@@ -176,6 +176,25 @@ class Query:
         _current_user(info)
         return [ChatMessageType.from_sql(m) for m in fetch_messages(_session(info), uid)]
 
+    @strawberry.field(description="Returns metadata for a single conversation (task link, participants).")
+    def conversation(self, info: Info, uid: str) -> typing.Optional[ConversationSummaryType]:
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from db.models import Conversation, ConversationParticipant
+        _current_user(info)
+        db = _session(info)
+        conv = db.execute(
+            select(Conversation)
+            .where(Conversation.external_id == uid)
+            .options(
+                selectinload(Conversation.participants).selectinload(ConversationParticipant.user),
+                selectinload(Conversation.messages),
+                selectinload(Conversation.property),
+                selectinload(Conversation.parent_task),
+            )
+        ).scalar_one_or_none()
+        return ConversationSummaryType.from_sql(conv) if conv else None
+
     @strawberry.field(description="Returns all vendors")
     def vendors(self, info: Info) -> typing.List[VendorType]:
         _current_user(info)
@@ -198,11 +217,17 @@ class Query:
         from sqlalchemy import select as sa_select
         from sqlalchemy.orm import joinedload
 
-        from db.models import Conversation, Suggestion
+        from db.models import Conversation, Suggestion, Task
         db = _session(info)
         q = sa_select(Suggestion).options(
             joinedload(Suggestion.ai_conversation).selectinload(Conversation.messages),
             joinedload(Suggestion.property),
+            joinedload(Suggestion.task)
+            .selectinload(Task.external_conversations)
+            .selectinload(Conversation.participants),
+            joinedload(Suggestion.task)
+            .joinedload(Task.parent_conversation)
+            .selectinload(Conversation.participants),
         ).where(
             Suggestion.org_id == resolve_org_id(),
             Suggestion.creator_id == resolve_account_id(),
@@ -408,7 +433,8 @@ class Mutation(AuthMutation):
         ).first()
         if not task:
             raise ValueError(f"Task {uid} not found")
-        task.steps = steps
+        typed_steps = [TaskProgressStep.model_validate(s) for s in (steps or [])]
+        task.steps = dump_task_steps(typed_steps)
         from sqlalchemy.orm.attributes import flag_modified
         flag_modified(task, "steps")
         task.updated_at = datetime.now(UTC)

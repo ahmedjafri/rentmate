@@ -144,6 +144,8 @@ export interface Suggestion {
   taskId?: string;
   vendorName?: string;
   propertyName?: string;
+  targetConversationId?: string;
+  targetConversationType?: string;
   draftMessage?: string;
   createdAt: Date;
   chatThread: ChatMessage[];

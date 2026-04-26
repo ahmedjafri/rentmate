@@ -68,6 +68,8 @@ class NotificationService:
         row = NotificationService.create(sess, notification)
         if row.channel != "sms":
             return row
+        if os.getenv("RENTMATE_DISABLE_ASYNC_NOTIFICATIONS"):
+            return row
         try:
             loop = asyncio.get_event_loop()
             loop.create_task(NotificationService._deliver_in_background(row.id))

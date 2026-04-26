@@ -24,7 +24,7 @@ def upgrade():
         "agent_runs",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("org_id", sa.Integer, nullable=False, index=True),
-        sa.Column("creator_id", sa.Integer, nullable=True),
+        sa.Column("creator_id", sa.Integer, nullable=False),
         sa.Column("started_at", sa.DateTime, nullable=False, index=True),
         sa.Column("ended_at", sa.DateTime, nullable=True),
         sa.Column("status", sa.String(16), nullable=False),
@@ -77,6 +77,7 @@ def upgrade():
         ["org_id", "id"],
         ondelete="CASCADE",
     )
+    op.create_index("ix_agent_traces_run_id", "agent_traces", ["run_id"])
     op.create_index("ix_agent_traces_run_seq", "agent_traces", ["run_id", "sequence_num"])
 
     # 4. Automated flags.
@@ -125,6 +126,7 @@ def upgrade():
 def downgrade():
     op.drop_table("agent_run_reviews")
     op.drop_table("agent_run_flags")
+    op.drop_index("ix_agent_traces_run_id", table_name="agent_traces")
     op.drop_index("ix_agent_traces_run_seq", table_name="agent_traces")
     op.drop_constraint("fk_agent_traces_run", "agent_traces", type_="foreignkey")
     op.drop_column("agent_traces", "sequence_num")

@@ -7,6 +7,7 @@ import { createTask, sendMessage } from '@/graphql/client';
 import { useApp } from '@/context/AppContext';
 import { ActionDeskTask } from '@/data/mockData';
 import { toast } from 'sonner';
+import { useNavigate } from 'react-router-dom';
 
 export interface AgentProposedTask {
   _proposalId: string;
@@ -37,7 +38,8 @@ interface Props {
 }
 
 export function AgentTaskProposal({ proposal, onDismiss }: Props) {
-  const { addTask, openChat } = useApp();
+  const { addTask } = useApp();
+  const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
 
@@ -163,7 +165,7 @@ export function AgentTaskProposal({ proposal, onDismiss }: Props) {
             size="sm"
             variant="ghost"
             className="h-6 rounded-lg text-[11px] px-2 text-primary hover:bg-primary/10"
-            onClick={() => openChat({ taskId: created })}
+            onClick={() => navigate(`/tasks/${created}`)}
           >
             Open →
           </Button>

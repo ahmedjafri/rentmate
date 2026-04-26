@@ -30,6 +30,7 @@ from llm.tools import (
     CreateSuggestionTool,
     CreateTenantTool,
     CreateVendorTool,
+    LookupPropertiesTool,
     LookupTenantsTool,
     LookupVendorsTool,
     MessageExternalPersonTool,
@@ -809,8 +810,72 @@ def test_propose_task_tool_uses_external_vendor_id_in_payload(db):
             draft_message="Can you take a look at this leak?",
         ))
 
-    suggestion = db.query(Suggestion).filter_by(id=payload["suggestion_id"]).one()
+    # propose_task returns a proposal_id (not a task_id) and explicitly
+    # signals the dependent-task does not exist yet.
+    assert payload["status"] == "pending_approval"
+    assert payload["task_id"] is None
+    suggestion = db.query(Suggestion).filter_by(id=payload["proposal_id"]).one()
     assert suggestion.action_payload["vendor_id"] == vendor.external_id
+    assert suggestion.action_payload["action"] == "send_and_create_task"
+
+
+def test_propose_task_tool_rejects_unknown_vendor_id(db):
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            ProposeTaskTool(),
+            title="Leak in unit",
+            category="maintenance",
+            vendor_id="vendor_id_needed",
+            goal="Stop the leak in unit and document the repair.",
+            steps=[
+                {"key": "diagnose", "label": "Diagnose the source of the leak", "status": "active"},
+                {"key": "repair", "label": "Repair the leak", "status": "pending"},
+                {"key": "confirm", "label": "Confirm with tenant the leak is resolved", "status": "pending"},
+            ],
+            draft_message="Can you take a look at this leak?",
+        ))
+
+    assert payload["status"] == "error"
+    assert "Vendor vendor_id_needed not found" in payload["message"]
+    assert db.query(Suggestion).count() == 0
+
+
+def test_propose_task_tool_rejects_tenant_addressed_vendor_draft(db):
+    vendor = User(
+        org_id=1,
+        creator_id=1,
+        user_type="vendor",
+        first_name="Sarah",
+        last_name="Chen",
+        company="Green Thumb Landscaping",
+        role_label="Landscaper",
+        phone="+15550005556",
+        active=True,
+    )
+    db.add(vendor)
+    db.flush()
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            ProposeTaskTool(),
+            title="Schedule gutter cleaning",
+            category="maintenance",
+            vendor_id=vendor.external_id,
+            goal="Schedule gutter cleaning and confirm access with Priya.",
+            steps=[
+                {"key": "confirm_vendor", "label": "Confirm vendor availability", "status": "active"},
+                {"key": "coordinate_access", "label": "Coordinate tenant access", "status": "pending"},
+                {"key": "complete", "label": "Complete gutter cleaning", "status": "pending"},
+            ],
+            draft_message="Hi Priya, what days work for gutter cleaning?",
+        ))
+
+    assert payload["status"] == "error"
+    assert "appears addressed to 'priya'" in payload["message"]
+    assert "propose_task sends draft_message to the assigned vendor" in payload["message"]
+    assert db.query(Suggestion).count() == 0
 
 
 def test_propose_task_tool_blocks_explicit_direct_draft_request(db):
@@ -1605,7 +1670,6 @@ def test_read_write_tools_are_blackholed_in_simulation(db, tool_factory, args):
     the dispatcher records the inputs and does NOT run ``execute``, so no
     database rows or external side effects are produced.
     """
-    from llm.tools import CreatePropertyTool, CreateTenantTool, CreateVendorTool
     from llm.tools._common import ToolMode, simulation_actions
 
     tool = tool_factory()
@@ -1718,8 +1782,8 @@ def _seed_message_person_task(db) -> tuple[str, str]:
 
 
 @pytest.mark.parametrize("policy,risk,expects_review", [
-    # strict — only low auto-sends
-    ("strict",     "low",      False),
+    # strict — every outbound message routes to manager review
+    ("strict",     "low",      True),
     ("strict",     "medium",   True),
     ("strict",     "high",     True),
     ("strict",     "critical", True),
@@ -2632,6 +2696,100 @@ def test_lookup_tenants_returns_external_ids(db):
     assert row["lease_active"] is False
 
 
+def _seed_property(db, *, name=None, address_line1="123 Main St", city="Bellevue", state="WA", org_id=1):
+    prop = Property(
+        org_id=org_id,
+        creator_id=org_id,
+        name=name,
+        address_line1=address_line1,
+        city=city,
+        state=state,
+        property_type="multi_family",
+    )
+    db.add(prop)
+    db.flush()
+    return prop
+
+
+def test_lookup_properties_returns_match_by_name(db):
+    _seed_property(db, name="The Meadows", address_line1="1842 Meadow Lane")
+    _seed_property(db, name="Pinecrest Apartments", address_line1="3310 Pine Street")
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(LookupPropertiesTool(), query="meadow"))
+
+    assert payload["count"] == 1
+    assert payload["properties"][0]["name"] == "The Meadows"
+
+
+def test_lookup_properties_returns_match_by_address(db):
+    _seed_property(db, name="The Meadows", address_line1="1842 Meadow Lane", city="Bellevue")
+    _seed_property(db, name="Northshore", address_line1="221 Bothell Way", city="Bothell")
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(LookupPropertiesTool(), query="bothell"))
+
+    assert payload["count"] == 1
+    assert payload["properties"][0]["name"] == "Northshore"
+
+
+def test_lookup_properties_returns_empty_when_no_match(db):
+    _seed_property(db, name="The Meadows")
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(LookupPropertiesTool(), query="bothell"))
+
+    assert payload["properties"] == []
+    assert "bothell" in payload["message"].lower()
+    assert "lookup_properties" in payload["message"] or "ask the manager" in payload["message"].lower()
+
+
+def test_lookup_properties_exact_id_lookup(db):
+    target = _seed_property(db, name="The Meadows")
+    _seed_property(db, name="Pinecrest")
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(LookupPropertiesTool(), property_id=str(target.id)))
+
+    assert payload["count"] == 1
+    assert payload["properties"][0]["property_id"] == str(target.id)
+
+
+def test_propose_task_rejects_unknown_property_id(db):
+    vendor = User(
+        org_id=1, creator_id=1, user_type="vendor",
+        first_name="Sarah", last_name="Chen",
+        role_label="Landscaper", phone="+15550005555",
+    )
+    db.add(vendor)
+    db.flush()
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            ProposeTaskTool(),
+            title="Tree trimming at Bothell",
+            category="maintenance",
+            vendor_id=vendor.external_id,
+            goal="Trim the trees at the Bothell property and confirm completion.",
+            steps=[
+                {"key": "quote", "label": "Get a quote", "status": "active"},
+                {"key": "schedule", "label": "Schedule the work", "status": "pending"},
+                {"key": "confirm", "label": "Confirm completion", "status": "pending"},
+            ],
+            property_id="00000000-0000-0000-0000-000000000bad",
+        ))
+
+    assert payload["status"] == "error"
+    assert "lookup_properties" in payload["message"]
+    # And nothing was staged.
+    assert db.query(Suggestion).count() == 0
+
+
 def test_lookup_tenants_filters_by_query(db):
     for first, last, email in [
         ("Priya", "Patel", "priya@example.com"),
@@ -2743,6 +2901,85 @@ def test_update_task_progress_overrides_wrong_task_id_with_active_conversation(d
     db.refresh(other_task)
     assert correct_task.steps[0]["status"] == "done"
     assert other_task.steps[0]["status"] == "active"
+
+
+def test_update_task_progress_rejects_unknown_status(db):
+    """status='waiting' (a review-status word, not a step status) must be
+    rejected up front with a tool-friendly error — not crash via Pydantic."""
+    task = _seed_task_with_ai_conversation(db, title="A task")
+    task.steps = [{"key": "step_a", "label": "Step A", "status": "active"}]
+    db.flush()
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            UpdateTaskProgressTool(),
+            task_id=str(task.id),
+            step_key="step_a",
+            status="waiting",
+        ))
+
+    assert payload["status"] == "error"
+    assert "waiting" in payload["message"]
+    assert "record_task_review" in payload["message"]
+
+
+def test_update_task_progress_tolerates_legacy_invalid_stored_status(db):
+    """A task with a step stored as 'waiting' (legacy/bad data) must not
+    lock the agent out — the loader coerces unknown stored statuses to
+    'pending' so progress updates can still complete."""
+    task = _seed_task_with_ai_conversation(db, title="A task")
+    task.steps = [
+        {"key": "step_a", "label": "Step A", "status": "waiting"},
+        {"key": "step_b", "label": "Step B", "status": "pending"},
+    ]
+    db.flush()
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            UpdateTaskProgressTool(),
+            task_id=str(task.id),
+            step_key="step_b",
+            status="active",
+        ))
+
+    assert payload["status"] == "ok"
+    db.refresh(task)
+    by_key = {s["key"]: s for s in task.steps}
+    # Legacy 'waiting' has been normalized through the loader so the next
+    # write doesn't carry the bad value forward.
+    assert by_key["step_a"]["status"] == "pending"
+    assert by_key["step_b"]["status"] == "active"
+
+
+def test_propose_task_rejects_invalid_step_status_with_tool_friendly_error(db):
+    vendor = User(
+        org_id=1, creator_id=1, user_type="vendor",
+        first_name="Sarah", last_name="Chen",
+        role_label="Landscaper", phone="+15550005555",
+    )
+    db.add(vendor)
+    db.flush()
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            ProposeTaskTool(),
+            title="Tree trimming",
+            category="maintenance",
+            vendor_id=vendor.external_id,
+            goal="Trim the trees and confirm completion.",
+            steps=[
+                {"key": "wait", "label": "Wait for vendor", "status": "waiting"},
+                {"key": "schedule", "label": "Schedule", "status": "pending"},
+            ],
+        ))
+
+    assert payload["status"] == "error"
+    assert "step" in payload["message"].lower()
+    assert "record_task_review" in payload["message"]
+    assert db.query(Suggestion).count() == 0
 
 
 def test_ask_manager_overrides_wrong_task_id_with_active_conversation(db):

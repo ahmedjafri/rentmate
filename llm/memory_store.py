@@ -64,14 +64,25 @@ class DbMemoryStore:
 
     # ── System prompt context ────────────────────────────────────────────
 
-    def get_memory_context(self) -> str:
-        """Build a memory block for the system prompt via ranked retrieval."""
+    def get_memory_context(self, query: str | None = None) -> str:
+        """Build a memory block for the system prompt via ranked retrieval.
+
+        ``query`` should be the user's current message so retrieval ranks
+        memories relevant to the immediate ask. Falls back to a generic
+        account-overview query when no message is available (e.g. during
+        agent warmup, migrations, or surfaces that build the prompt
+        outside a chat turn).
+        """
+        ranking_query = (query or "").strip() or (
+            "property management account overview memory notes "
+            "active leases vendors tasks"
+        )
         db = self._get_db()
         try:
             bundle = retrieve_context(db, RetrievalRequest(
                 surface="system_prompt",
                 intent="system_prompt",
-                query="property management account overview memory notes active leases vendors tasks",
+                query=ranking_query,
                 creator_id=self.creator_id,
                 org_id=self.org_id,
                 limit=12,

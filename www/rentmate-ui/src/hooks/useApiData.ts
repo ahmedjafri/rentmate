@@ -318,6 +318,8 @@ function apiSuggestionToSuggestion(s: ApiSuggestion): Suggestion {
     taskId: s.taskId ?? undefined,
     vendorName: s.vendorName ?? undefined,
     propertyName: s.propertyName ?? undefined,
+    targetConversationId: s.targetConversationId ?? undefined,
+    targetConversationType: s.targetConversationType ?? undefined,
     draftMessage: s.draftMessage ?? undefined,
     createdAt: new Date(s.createdAt),
     chatThread: apiMessagesToChatThread(s.messages ?? []),
@@ -441,6 +443,8 @@ interface ApiSuggestion {
   taskId?: string;
   vendorName?: string;
   propertyName?: string;
+  targetConversationId?: string;
+  targetConversationType?: string;
   draftMessage?: string;
   createdAt: string;
   messages?: ApiTaskMessage[];

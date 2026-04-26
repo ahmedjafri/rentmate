@@ -21,7 +21,7 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 
-from db.enums import TaskCategory, TaskMode, TaskSource, TaskStatus, Urgency
+from db.enums import TaskCategory, TaskMode, TaskSource, TaskStatus, TaskStepStatus, Urgency
 from db.models import (
     Base,
     Conversation,
@@ -40,6 +40,7 @@ from db.models import (
 from db.models.account import create_shadow_user
 from evals.conftest import _extract_latest_outbound_message
 from gql.services.number_allocator import NumberAllocator
+from gql.services.task_service import TaskProgressStep, dump_task_steps
 
 # ── constants ────────────────────────────────────────────────────────────────
 
@@ -697,11 +698,11 @@ class TestGarageDoorLifecycle:
         task.parent_conversation_id = tenant_conv.id
 
         # Set progress steps (simulating prior turns)
-        task.steps = [
-            {"label": "Assess garage door damage", "status": "completed"},
-            {"label": "Get repair quote", "status": "active"},
-            {"label": "Complete repair", "status": "pending"},
-        ]
+        task.steps = dump_task_steps([
+            TaskProgressStep(key="assess_damage", label="Assess garage door damage", status=TaskStepStatus.DONE),
+            TaskProgressStep(key="get_quote", label="Get repair quote", status=TaskStepStatus.ACTIVE),
+            TaskProgressStep(key="complete_repair", label="Complete repair", status=TaskStepStatus.PENDING),
+        ])
         db.flush()
 
         # Conversation history

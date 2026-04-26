@@ -137,6 +137,37 @@ def test_tenant_portal_uses_external_tenant_id_from_jwt(db):
     assert conv_detail.json()["messages"][0]["body"] == "We can stop by tomorrow morning."
 
 
+def test_tenant_portal_lists_standalone_conversation_without_task(db):
+    """Conversations the tenant participates in that aren't tied to any task
+    should still appear in the tenant portal's conversation list."""
+    tenant, prop, unit, _lease, headers = _tenant_headers(db)
+
+    standalone = chat_service.get_or_create_external_conversation(
+        db,
+        subject="Quick check-in",
+        conversation_type=ConversationType.TENANT,
+        tenant_id=tenant.id,
+    )
+    chat_service.send_message(
+        db,
+        conversation_id=standalone.id,
+        body="Hi Alice, just checking in — everything good at the unit?",
+        sender_name="RentMate",
+        is_ai=True,
+    )
+    db.commit()
+
+    client = TestClient(app)
+    response = client.get("/api/tenant/conversations", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    row = payload[0]
+    assert row["id"] == str(standalone.id)
+    assert row["linked_task"] is None
+    assert row["title"] == "Quick check-in"
+
+
 def test_tenant_portal_message_creates_pm_notification(db):
     tenant, prop, unit, _lease, headers = _tenant_headers(db)
     task = _tenant_task(db, prop, unit)

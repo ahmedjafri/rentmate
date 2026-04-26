@@ -89,6 +89,16 @@ class Conversation(Base, OrgId, SmallPrimaryId, HasCreatorId):
         foreign_keys=[parent_conversation_id],
         remote_side="Conversation.id",
     )
+    # The owning task, if any. Composite-key match mirrors the FK on this row.
+    parent_task = relationship(
+        "Task",
+        primaryjoin=(
+            "and_(foreign(Conversation.org_id) == Task.org_id,"
+            " foreign(Conversation.parent_task_id) == Task.id)"
+        ),
+        uselist=False,
+        viewonly=True,
+    )
 
     participants = relationship(
         "ConversationParticipant",

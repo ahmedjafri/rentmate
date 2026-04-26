@@ -135,7 +135,6 @@ class RecordTaskReviewTool(Tool):
             task.last_review_status = status
             task.last_review_summary = summary
             task.last_review_next_step = next_step
-            task.updated_at = now
 
         # Log a mirror AgentTrace row for history. log_trace runs in its own
         # savepoint and never raises, so a trace failure won't undo the
@@ -245,6 +244,8 @@ class AskManagerTool(Tool):
                 "message": "question is required and must not be empty",
             })
 
+        from sqlalchemy.orm.attributes import flag_modified
+
         from db.models import (
             Conversation,
             Message,
@@ -254,7 +255,6 @@ class AskManagerTool(Tool):
         )
         from gql.services.chat_service import dump_message_meta
         from gql.services.notification_service import NotificationRequest, NotificationService
-        from sqlalchemy.orm.attributes import flag_modified
 
         with tool_session() as db:
             task = db.query(TaskModel).filter_by(id=task_id).first()

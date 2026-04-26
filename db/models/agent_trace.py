@@ -8,6 +8,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
@@ -47,6 +48,7 @@ class AgentTrace(Base, OrgId, PrimaryId, HasCreatorId):
 
     __table_args__ = (
         UniqueConstraint("org_id", "id", name="uq_agent_traces_org"),
+        Index("ix_agent_traces_run_seq", "run_id", "sequence_num"),
         ForeignKeyConstraint(
             ["org_id", "creator_id"],
             ["users.org_id", "users.id"],

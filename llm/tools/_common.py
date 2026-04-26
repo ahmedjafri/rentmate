@@ -75,6 +75,22 @@ class ToolMode(str, Enum):
     READ_WRITE = "read_write"
 
 
+class ToolCategory(str, Enum):
+    """How the tool surfaces to the manager. Used to group tools in the
+    auto-generated SOUL.md tool list.
+
+    - ``READ``: pure lookups, safe to run without consent.
+    - ``IMMEDIATE``: writes that apply directly (saving notes, creating
+      vendors, closing tasks).
+    - ``REVIEW``: writes that go to the suggestion queue for manager
+      approval (proposing tasks, sending external messages).
+    """
+
+    READ = "read"
+    IMMEDIATE = "immediate"
+    REVIEW = "review"
+
+
 class Tool(ABC):
     """Base class for RentMate agent tools (standalone, no nanobot dependency)."""
 
@@ -94,6 +110,14 @@ class Tool(ABC):
     def mode(self) -> ToolMode:
         """Default classification. Override on subclasses that are read-only."""
         return ToolMode.READ_WRITE
+
+    @property
+    def category(self) -> ToolCategory:
+        """SOUL.md grouping. Read-only tools default to READ; read-write
+        defaults to IMMEDIATE. Tools that queue for human approval should
+        override to REVIEW.
+        """
+        return ToolCategory.READ if self.mode == ToolMode.READ_ONLY else ToolCategory.IMMEDIATE
 
     @abstractmethod
     async def execute(self, **kwargs: Any) -> str: ...
@@ -320,6 +344,31 @@ def _sanitize_tenant_outbound_draft(db: Any, *, task_id: str, draft_message: str
     sanitized = re.sub(r"\b\d{3}[-.\s]\d{3}[-.\s]\d{4}\b", "", sanitized)
     sanitized = re.sub(r"\s{2,}", " ", sanitized).strip()
     sanitized = re.sub(r"\ba contractor contractor\b", "a contractor", sanitized, flags=re.I)
+    return sanitized
+
+
+def _sanitize_vendor_outbound_draft(db: Any, *, task_id: str, draft_message: str) -> str:
+    from db.models import Task
+
+    draft = str(draft_message or "")
+    if not draft:
+        return draft
+
+    tenant = _resolve_task_tenant(db, str(task_id))
+    if not tenant or not getattr(tenant, "user", None):
+        return draft
+
+    sanitized = draft
+    user = tenant.user
+    for value in (user.name, user.phone, user.email):
+        text = str(value or "").strip()
+        if text:
+            sanitized = re.sub(rf"\b{re.escape(text)}\b", "", sanitized, flags=re.I)
+    sanitized = re.sub(r"\bthe tenant is\s*[.!,;:]?", "", sanitized, flags=re.I)
+    sanitized = re.sub(r"\s+([.,;:!?])", r"\1", sanitized)
+    sanitized = re.sub(r"\s{2,}", " ", sanitized).strip()
+    if db.query(Task).filter_by(id=str(task_id)).first() is None:
+        return draft
     return sanitized
 
 

@@ -335,6 +335,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const openChat = useCallback((opts?: { suggestionId?: string | null; taskId?: string | null; pageContext?: string | null; conversationId?: string | null; lazy?: boolean }) => {
+    if (opts?.conversationId && !opts?.taskId) {
+      setChatPanel(prev => ({
+        ...prev,
+        isOpen: true,
+        taskId: null,
+        suggestionId: opts?.suggestionId ?? null,
+        conversationId: opts.conversationId!,
+        pageContext: opts?.pageContext ?? null,
+      }));
+      return;
+    }
+
     if (opts?.taskId || opts?.suggestionId) {
       setChatPanel(prev => ({
         ...prev,
@@ -342,18 +354,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         taskId: opts?.taskId ?? null,
         suggestionId: opts?.suggestionId ?? null,
         conversationId: opts?.conversationId ?? null,
-        pageContext: opts?.pageContext ?? null,
-      }));
-      return;
-    }
-
-    if (opts?.conversationId) {
-      setChatPanel(prev => ({
-        ...prev,
-        isOpen: true,
-        taskId: null,
-        suggestionId: null,
-        conversationId: opts.conversationId!,
         pageContext: opts?.pageContext ?? null,
       }));
       return;

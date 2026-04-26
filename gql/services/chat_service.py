@@ -402,6 +402,7 @@ def send_autonomous_message(
     *, conversation_id: int,
     body: str,
     task_id: int | None = None,
+    bump_task_activity: bool = True,
 ) -> Message:
     """Send an AI-generated message to a conversation and clear the typing indicator."""
     now = datetime.now(UTC)
@@ -430,7 +431,7 @@ def send_autonomous_message(
     convo.extra = set_conversation_ai_typing(convo.extra, ai_typing=None)
     flag_modified(convo, "extra")
 
-    if task_id:
+    if task_id and bump_task_activity:
         task = db.execute(
             select(Task).where(
                 Task.id == task_id,

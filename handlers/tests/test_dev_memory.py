@@ -11,7 +11,7 @@ from db.enums import RoutineState, TaskMode, TaskStatus
 from db.models import AgentMemory, AgentTrace, Conversation, Message, MessageType, ParticipantType, Property, Routine, Task
 from gql.services.number_allocator import NumberAllocator
 from handlers.deps import get_db
-from llm.retrieval import ChromaMemoryIndex
+from llm.retrieval import PgVectorMemoryIndex
 from main import app
 
 
@@ -50,8 +50,7 @@ class TestDevMemoryEndpoints:
         self.require_user_patcher.stop()
 
     def test_lists_memory_items_from_index(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("llm.retrieval.CHROMA_PATH", tmp_path / "chroma")
-        ChromaMemoryIndex().reset()
+        PgVectorMemoryIndex(self.db).reset()
 
         self.db.add(Property(
             id="prop-dev-1",
@@ -82,8 +81,7 @@ class TestDevMemoryEndpoints:
         assert "Boiler replacement" in items[0]["content"]
 
     def test_retrieve_context_returns_ranked_results_and_reindex_endpoint(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("llm.retrieval.CHROMA_PATH", tmp_path / "chroma")
-        ChromaMemoryIndex().reset()
+        PgVectorMemoryIndex(self.db).reset()
 
         self.db.add(Property(
             id="prop-dev-2",

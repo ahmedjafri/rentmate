@@ -58,6 +58,9 @@ def upgrade() -> None:
     # numeric id can exist in multiple orgs. The existing single-column PK on `id`
     # and the redundant UniqueConstraint on (org_id, id) are both dropped.
     if bind.dialect.name == "postgresql":
+        op.execute(
+            "ALTER TABLE suggestions DROP CONSTRAINT IF EXISTS suggestions_org_id_task_id_fkey"
+        )
         for table, old_uq in (
             ("tasks", "uq_tasks_server"),
             ("suggestions", "uq_suggestions_org"),
@@ -69,6 +72,14 @@ def upgrade() -> None:
             )
             op.execute(f"ALTER TABLE {table} ALTER COLUMN id DROP DEFAULT")
             op.execute(f"DROP SEQUENCE IF EXISTS {table}_id_seq")
+        op.create_foreign_key(
+            "suggestions_org_id_task_id_fkey",
+            "suggestions",
+            "tasks",
+            ["org_id", "task_id"],
+            ["org_id", "id"],
+            ondelete="CASCADE",
+        )
 
 
 def downgrade() -> None:
@@ -77,6 +88,9 @@ def downgrade() -> None:
     existing = set(inspector.get_table_names())
 
     if bind.dialect.name == "postgresql":
+        op.execute(
+            "ALTER TABLE suggestions DROP CONSTRAINT IF EXISTS suggestions_org_id_task_id_fkey"
+        )
         for table, old_uq in (
             ("tasks", "uq_tasks_server"),
             ("suggestions", "uq_suggestions_org"),
@@ -95,6 +109,14 @@ def downgrade() -> None:
             op.execute(
                 f"ALTER TABLE {table} ADD CONSTRAINT {old_uq} UNIQUE (org_id, id)"
             )
+        op.create_foreign_key(
+            "suggestions_org_id_task_id_fkey",
+            "suggestions",
+            "tasks",
+            ["org_id", "task_id"],
+            ["org_id", "id"],
+            ondelete="CASCADE",
+        )
 
     if "task_number_sequences" not in existing:
         op.create_table(

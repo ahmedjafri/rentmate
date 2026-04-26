@@ -4,9 +4,9 @@ import { PageLoader } from '@/components/ui/page-loader';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Link, useNavigate } from 'react-router-dom';
-import { Building2, Users, Wrench, ShieldCheck, Bot, Clock, MessageCircle, Hand, Lock, Zap, Plus } from 'lucide-react';
+import { Building2, Users, Wrench, ShieldCheck, Bot, Clock, MessageCircle, Lock, Plus, ClipboardList } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { TaskMode, TaskParticipantType, categoryColors, categoryLabels } from '@/data/mockData';
+import { TaskParticipantType, categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
 import { ChatWorkspaceLayout } from '@/components/chat/ChatWorkspaceLayout';
 import { ConversationListPane } from '@/components/chat/ConversationListPane';
@@ -14,12 +14,6 @@ import { useConversations } from '@/hooks/useConversations';
 import { actOnSuggestion, deleteConversation } from '@/graphql/client';
 import { toast } from 'sonner';
 import { SuggestionCard } from './ActionDesk';
-
-const modeConfig: Record<TaskMode, { label: string; icon: React.ElementType; className: string }> = {
-  autonomous: { label: 'Autonomous', icon: Zap, className: 'bg-accent/15 text-accent' },
-  waiting_approval: { label: 'Needs Approval', icon: ShieldCheck, className: 'bg-warning/15 text-warning-foreground' },
-  manual: { label: 'Manual', icon: Hand, className: 'bg-muted text-muted-foreground' },
-};
 
 const participantIcon: Record<TaskParticipantType, React.ElementType> = {
   agent: Bot,
@@ -190,22 +184,34 @@ const Index = () => {
                 suggestion={sug}
                 onAction={handleSuggestionAction}
                 compact
+                onOpen={(s) => {
+                  // Prefer the tenant/vendor conversation the message targets so
+                  // the dashboard chat panel opens the actual messaging thread,
+                  // not the task's AI coordination conversation.
+                  if (s.targetConversationId) {
+                    openChat({ conversationId: s.targetConversationId, suggestionId: s.id });
+                    return;
+                  }
+                  if (s.taskId) {
+                    openChat({ taskId: s.taskId, suggestionId: s.id });
+                    return;
+                  }
+                  openChat({ suggestionId: s.id });
+                }}
               />
             ))}
 
             {/* Tasks needing attention */}
             {needsAttention.map(task => {
-              const mode = modeConfig[task.mode];
-              const ModeIcon = mode.icon;
               const property = task.propertyId ? properties.find(p => p.id === task.propertyId) : null;
 
               return (
                 <Card key={task.id} className="p-3 rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={() => navigate(`/tasks/${task.id}`)}>
                   <div className="flex items-start justify-between gap-2 mb-1.5">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <Badge variant="secondary" className={cn('text-[10px] rounded-lg gap-1', mode.className)}>
-                        <ModeIcon className="h-3 w-3" />
-                        {mode.label}
+                      <Badge variant="secondary" className="text-[10px] rounded-lg gap-1 bg-muted text-muted-foreground">
+                        <ClipboardList className="h-3 w-3" />
+                        Task #{task.id}
                       </Badge>
                       <Badge variant="secondary" className={cn('text-[10px] rounded-lg', categoryColors[task.category])}>
                         {categoryLabels[task.category]}
