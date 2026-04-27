@@ -1169,3 +1169,59 @@ class ConversationSummaryType:
             task_id=task_id,
             task_title=task_title,
         )
+
+
+# ---------------------------------------------------------------------------
+# Chrome extension surface (TenantCloud bridge)
+# ---------------------------------------------------------------------------
+
+
+@strawberry.type
+class TenantSearchResult:
+    """A fuzzy-matched tenant returned by ``Query.searchTenants``.
+
+    ``score`` is a 0-100 hint for the caller — 100 means an exact email or
+    phone match, 50 means the query was a substring of the full name, 25
+    means it matched first or last name only.
+    """
+    tenant_id: str
+    name: str
+    score: int
+    email: typing.Optional[str] = None
+    phone: typing.Optional[str] = None
+    property_id: typing.Optional[str] = None
+    unit_label: typing.Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "TenantSearchResult":
+        return cls(
+            tenant_id=payload["tenant_id"],
+            name=payload["name"],
+            score=int(payload.get("score") or 0),
+            email=payload.get("email"),
+            phone=payload.get("phone"),
+            property_id=payload.get("property_id"),
+            unit_label=payload.get("unit_label"),
+        )
+
+
+@strawberry.input
+class ConversationTurnInput:
+    sender: str
+    text: str
+
+
+@strawberry.input
+class SuggestReplyInput:
+    """Payload the chrome extension sends for a one-shot reply draft."""
+    conversation_history: typing.List[ConversationTurnInput]
+    header_title: typing.Optional[str] = None
+    header_description: typing.Optional[str] = None
+    tenant_id: typing.Optional[str] = None
+    property_id: typing.Optional[str] = None
+
+
+@strawberry.type
+class SuggestReplyResult:
+    suggestion: str
+    matched_tenant: typing.Optional[TenantSearchResult] = None

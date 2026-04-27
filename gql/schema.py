@@ -47,10 +47,13 @@ from .types import (
     SpawnTaskInput,
     SuggestionStatusEnum,
     SuggestionType,
+    SuggestReplyInput,
+    SuggestReplyResult,
     TaskCategoryEnum,
     TaskSourceEnum,
     TaskStatusEnum,
     TaskType,
+    TenantSearchResult,
     TenantType,
     UpdatePropertyInput,
     UpdateTaskInput,
@@ -249,6 +252,12 @@ class Query:
     ) -> typing.List[ConversationSummaryType]:
         _current_user(info)
         return [ConversationSummaryType.from_sql(c) for c in fetch_conversations(_session(info), conversation_type=conversation_type, limit=limit, offset=offset)]
+
+    @strawberry.field(description="Fuzzy-match tenants by name / email / phone. Top 3 ranked.")
+    def search_tenants(self, info: Info, *, query: str) -> typing.List[TenantSearchResult]:
+        from gql.services.extension_service import rank_tenants
+        _current_user(info)
+        return [TenantSearchResult.from_dict(r) for r in rank_tenants(_session(info), query)]
 
 
 # ---------------------------
@@ -802,6 +811,30 @@ class Mutation(AuthMutation):
         sess.commit()
         sess.refresh(task)
         return TaskType.from_sql(task)
+
+    @strawberry.mutation(description=(
+        "One-shot agent-drafted reply for a TenantCloud conversation viewed "
+        "in the chrome extension. Pure read on rentmate data — no DB writes."
+    ))
+    async def suggest_reply(self, info: Info, *, input: SuggestReplyInput) -> SuggestReplyResult:
+        from gql.services.extension_service import draft_reply
+        _current_user(info)
+        result = await draft_reply(
+            _session(info),
+            conversation_history=[
+                {"sender": turn.sender, "text": turn.text}
+                for turn in (input.conversation_history or [])
+            ],
+            header_title=input.header_title,
+            header_description=input.header_description,
+            tenant_id=input.tenant_id,
+            property_id=input.property_id,
+        )
+        matched = result.get("matched_tenant")
+        return SuggestReplyResult(
+            suggestion=result["suggestion"],
+            matched_tenant=TenantSearchResult.from_dict(matched) if matched else None,
+        )
 
 
 # ---------------------------
