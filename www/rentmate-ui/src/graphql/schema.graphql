@@ -86,6 +86,11 @@ type ConversationSummaryType {
   taskTitle: String
 }
 
+input ConversationTurnInput {
+  sender: String!
+  text: String!
+}
+
 enum ConversationType {
   TENANT
   VENDOR
@@ -321,6 +326,11 @@ type Mutation {
 
   """Spawn a Task from an existing conversation, linking lineage"""
   spawnTask(input: SpawnTaskInput!): TaskType!
+
+  """
+  One-shot agent-drafted reply for a TenantCloud conversation viewed in the chrome extension. Pure read on rentmate data — no DB writes.
+  """
+  suggestReply(input: SuggestReplyInput!): SuggestReplyResult!
 }
 
 type Query {
@@ -371,6 +381,9 @@ type Query {
 
   """Returns conversations by type (tenant/vendor/user_ai/task_ai)"""
   conversations(conversationType: ConversationType!, limit: Int! = 50, offset: Int! = 0): [ConversationSummaryType!]!
+
+  """Fuzzy-match tenants by name / email / phone. Top 3 ranked."""
+  searchTenants(query: String!): [TenantSearchResult!]!
 }
 
 enum RoutineState {
@@ -414,6 +427,19 @@ input SpawnTaskInput {
   priority: TaskPriority = null
   taskMode: TaskMode! = AUTONOMOUS
   source: TaskSource! = MANUAL
+}
+
+input SuggestReplyInput {
+  conversationHistory: [ConversationTurnInput!]!
+  headerTitle: String = null
+  headerDescription: String = null
+  tenantId: String = null
+  propertyId: String = null
+}
+
+type SuggestReplyResult {
+  suggestion: String!
+  matchedTenant: TenantSearchResult
 }
 
 enum SuggestionSource {
@@ -527,6 +553,16 @@ type TaskType {
   lastReviewSummary: String
   lastReviewNextStep: String
   unreadCount: Int!
+}
+
+type TenantSearchResult {
+  tenantId: String!
+  name: String!
+  score: Int!
+  email: String
+  phone: String
+  propertyId: String
+  unitLabel: String
 }
 
 type TenantType {
