@@ -702,9 +702,11 @@ def agent_task_autoreply(task_id: str, hint: str | None = None) -> str | None:
 
 def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | None:
 
+    from backends.local_auth import reset_request_context, set_request_context
     from llm.client import call_agent
 
     db = SessionLocal.session_factory()
+    ctx_token = None
     try:
         task = db.query(Task).filter_by(id=task_id).first()
         if not task:
@@ -712,6 +714,17 @@ def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | 
         conv = task.ai_conversation
         if not conv:
             return None
+
+        # Background callers (reply_scanner, portal autoreply daemon
+        # threads, demo simulator) never went through HTTP auth, so
+        # the request context is empty and any DB query downstream
+        # that calls ``resolve_account_id`` would raise. Derive the
+        # context from the task we just loaded and pin it for the
+        # rest of this autoreply.
+        ctx_token = set_request_context(
+            account_id=task.creator_id,
+            org_id=task.org_id,
+        )
 
         # Change detection: skip if nothing changed since the last reply scan
         current_hash = _compute_autoreply_hash(task)
@@ -854,6 +867,8 @@ def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | 
         log_trace("error", "reply_scanner", f"Reply scan failed: {e}")
         return None
     finally:
+        if ctx_token is not None:
+            reset_request_context(ctx_token)
         db.close()
 
 ASSESS_PROMPT = (
