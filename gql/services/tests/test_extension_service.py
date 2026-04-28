@@ -163,7 +163,7 @@ def test_draft_reply_includes_tenant_name_in_system_prompt(db):
 
 def test_draft_reply_falls_back_on_llm_error(db):
     with _request_scope():
-        with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=RuntimeError("network")):
+        with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=RuntimeError("connection refused")):
             result = asyncio.run(draft_reply(
                 db,
                 conversation_history=[{"sender": "Tenant", "text": "Hi?"}],
@@ -175,6 +175,57 @@ def test_draft_reply_falls_back_on_llm_error(db):
 
     assert result["suggestion"] == _FALLBACK_REPLY
     assert result["matched_tenant"] is None
+    assert result["fallback"] is True
+    # Connection-style failures get the "endpoint unreachable" message,
+    # not a generic LLM error blob.
+    assert result["error"] is not None
+    assert "unreachable" in result["error"].lower() or "base url" in result["error"].lower()
+
+
+def test_draft_reply_classifies_auth_error(db):
+    """The exact error PMs hit when the OpenAI/OpenRouter key is wrong
+    deserves an actionable message that names the env var."""
+    class FakeAuthError(Exception):
+        pass
+    FakeAuthError.__name__ = "AuthenticationError"
+
+    with _request_scope():
+        with patch(
+            "litellm.acompletion",
+            new_callable=AsyncMock,
+            side_effect=FakeAuthError("Incorrect API key provided: sk-xxx"),
+        ):
+            result = asyncio.run(draft_reply(
+                db,
+                conversation_history=[{"sender": "T", "text": "hi"}],
+                header_title=None, header_description=None,
+                tenant_id=None, property_id=None,
+            ))
+
+    assert result["fallback"] is True
+    assert "LLM_API_KEY" in result["error"]
+
+
+def test_draft_reply_success_has_no_error(db):
+    """Happy path doesn't set ``error`` or ``fallback`` so the extension
+    can trust the suggestion."""
+    with _request_scope():
+        async def fake_acompletion(*_args, **_kwargs):
+            fake = MagicMock()
+            fake.choices = [MagicMock(message=MagicMock(content="A real reply."))]
+            return fake
+
+        with patch("litellm.acompletion", side_effect=fake_acompletion):
+            result = asyncio.run(draft_reply(
+                db,
+                conversation_history=[{"sender": "T", "text": "hi"}],
+                header_title=None, header_description=None,
+                tenant_id=None, property_id=None,
+            ))
+
+    assert result["suggestion"] == "A real reply."
+    assert result["fallback"] is False
+    assert result["error"] is None
 
 
 def test_draft_reply_clamps_long_completion(db):

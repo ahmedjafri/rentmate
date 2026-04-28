@@ -157,6 +157,29 @@ def _build_user_message(history: list[dict[str, str]]) -> str:
     )
 
 
+def _classify_llm_error(exc: Exception) -> str:
+    """Map a LiteLLM failure to a short, actionable user-facing string.
+    The chrome extension renders this verbatim so PMs know whether the
+    hosted LLM is mis-configured (auth, model, base URL) vs. a transient
+    blip worth retrying."""
+    name = type(exc).__name__
+    msg = str(exc).lower()
+    if "authentication" in name.lower() or "incorrect api key" in msg or "401" in msg:
+        return "Hosted LLM rejected the API key. Check LLM_API_KEY in the rentmate Cloud Run service."
+    if "model" in msg and ("not found" in msg or "does not exist" in msg or "invalid" in msg):
+        return "Hosted LLM doesn't recognise the configured model. Check LLM_MODEL."
+    if "rate" in msg and "limit" in msg or "429" in msg:
+        return "Hosted LLM is rate-limiting. Try again in a moment."
+    if "timeout" in msg or "timed out" in msg:
+        return "Hosted LLM timed out. Try again."
+    if "connection" in msg or "could not reach" in msg or "unreachable" in msg:
+        return "Hosted LLM endpoint unreachable. Check LLM_BASE_URL."
+    # Generic — include a short prefix of the upstream error so support
+    # has something to grep without leaking full tracebacks to the UI.
+    detail = str(exc)[:160]
+    return f"Hosted LLM error: {detail}"
+
+
 async def draft_reply(
     db: Any,
     *,
@@ -167,7 +190,9 @@ async def draft_reply(
     property_id: str | None,
 ) -> dict[str, Any]:
     """Run a single LiteLLM completion and return the drafted reply +
-    matched-tenant echo. Falls back to a canned reply on any LLM error."""
+    matched-tenant echo. On any LLM error, populate ``error`` and
+    ``fallback`` so the chrome extension can surface a real banner
+    instead of pretending the canned reply is a draft."""
     import litellm
 
     from llm.model_config import build_litellm_request_kwargs
@@ -203,6 +228,16 @@ async def draft_reply(
         suggestion = suggestion[:500]
     except Exception as exc:  # noqa: BLE001
         logger.warning("[extension] suggestReply LLM failed; using canned: %s", exc)
-        suggestion = _FALLBACK_REPLY
+        return {
+            "suggestion": _FALLBACK_REPLY,
+            "matched_tenant": matched_tenant,
+            "error": _classify_llm_error(exc),
+            "fallback": True,
+        }
 
-    return {"suggestion": suggestion, "matched_tenant": matched_tenant}
+    return {
+        "suggestion": suggestion,
+        "matched_tenant": matched_tenant,
+        "error": None,
+        "fallback": False,
+    }

@@ -643,6 +643,8 @@ export type SuggestReplyInput = {
 };
 
 export type SuggestReplyResult = {
+  error: Maybe<Scalars['String']['output']>;
+  fallback: Scalars['Boolean']['output'];
   matchedTenant: Maybe<TenantSearchResult>;
   suggestion: Scalars['String']['output'];
 };
