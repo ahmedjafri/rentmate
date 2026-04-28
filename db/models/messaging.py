@@ -27,11 +27,12 @@ class ParticipantType(str, Enum):
 
 
 class ConversationType(str, Enum):
-    TENANT        = "tenant"
-    VENDOR        = "vendor"
-    USER_AI       = "user_ai"
-    TASK_AI       = "task_ai"
-    SUGGESTION_AI = "suggestion_ai"
+    TENANT             = "tenant"
+    VENDOR             = "vendor"
+    USER_AI            = "user_ai"
+    TASK_AI            = "task_ai"
+    SUGGESTION_AI      = "suggestion_ai"
+    TENANTCLOUD_MIRROR = "tenantcloud_mirror"
 
 
 class MessageType(int, Enum):

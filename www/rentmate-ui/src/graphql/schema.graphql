@@ -97,6 +97,7 @@ enum ConversationType {
   USER_AI
   TASK_AI
   SUGGESTION_AI
+  TENANTCLOUD_MIRROR
 }
 
 input CreatePropertyInput {
@@ -328,7 +329,7 @@ type Mutation {
   spawnTask(input: SpawnTaskInput!): TaskType!
 
   """
-  One-shot agent-drafted reply for a TenantCloud conversation viewed in the chrome extension. Pure read on rentmate data — no DB writes.
+  Agent-drafted reply for a TenantCloud conversation viewed in the chrome extension. When ``externalThreadId`` is provided the thread is mirrored into rentmate as a read-only conversation so the AgentRun is groupable in DevTools and re-clicking ``Suggest`` doesn't duplicate messages.
   """
   suggestReply(input: SuggestReplyInput!): SuggestReplyResult!
 }
@@ -435,6 +436,7 @@ input SuggestReplyInput {
   headerDescription: String = null
   tenantId: String = null
   propertyId: String = null
+  externalThreadId: String = null
 }
 
 type SuggestReplyResult {
@@ -442,6 +444,7 @@ type SuggestReplyResult {
   matchedTenant: TenantSearchResult
   error: String
   fallback: Boolean!
+  conversationExternalId: String
 }
 
 enum SuggestionSource {
