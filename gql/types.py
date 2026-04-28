@@ -1225,3 +1225,9 @@ class SuggestReplyInput:
 class SuggestReplyResult:
     suggestion: str
     matched_tenant: typing.Optional[TenantSearchResult] = None
+    # Set when the LLM call failed and ``suggestion`` is the canned
+    # placeholder. The chrome extension shows ``error`` verbatim in a
+    # banner so a misconfigured hosted LLM is visible immediately,
+    # rather than silently shipping fake-looking drafts.
+    error: typing.Optional[str] = None
+    fallback: bool = False

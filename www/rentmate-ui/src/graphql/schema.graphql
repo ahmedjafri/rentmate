@@ -440,6 +440,8 @@ input SuggestReplyInput {
 type SuggestReplyResult {
   suggestion: String!
   matchedTenant: TenantSearchResult
+  error: String
+  fallback: Boolean!
 }
 
 enum SuggestionSource {

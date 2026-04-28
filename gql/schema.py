@@ -834,6 +834,8 @@ class Mutation(AuthMutation):
         return SuggestReplyResult(
             suggestion=result["suggestion"],
             matched_tenant=TenantSearchResult.from_dict(matched) if matched else None,
+            error=result.get("error"),
+            fallback=bool(result.get("fallback")),
         )
 
 
