@@ -97,7 +97,7 @@ enum ConversationType {
   USER_AI
   TASK_AI
   SUGGESTION_AI
-  TENANTCLOUD_MIRROR
+  MIRRORED_CHAT
 }
 
 input CreatePropertyInput {

@@ -111,10 +111,10 @@ export type ConversationTurnInput = {
 };
 
 export type ConversationType =
+  | 'MIRRORED_CHAT'
   | 'SUGGESTION_AI'
   | 'TASK_AI'
   | 'TENANT'
-  | 'TENANTCLOUD_MIRROR'
   | 'USER_AI'
   | 'VENDOR';
 

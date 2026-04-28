@@ -1,6 +1,6 @@
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Bot, MessageCircle, Building2, Trash2, ClipboardList } from 'lucide-react';
+import { Bot, MessageCircle, Building2, Trash2, ClipboardList, Cloud, Lock } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
 export interface ConvSummary {
@@ -19,24 +19,27 @@ export interface ConvSummary {
   taskTitle?: string | null;
 }
 
-export type TabKey = 'user_ai' | 'tenant' | 'vendor';
+export type TabKey = 'user_ai' | 'tenant' | 'vendor' | 'mirrored_chat';
 
 export const TAB_CONFIG: { key: TabKey; label: string; icon: React.ElementType }[] = [
   { key: 'user_ai', label: 'With RentMate', icon: Bot },
   { key: 'tenant', label: 'Tenants', icon: MessageCircle },
   { key: 'vendor', label: 'Vendors', icon: Building2 },
+  { key: 'mirrored_chat', label: 'Mirrored', icon: Cloud },
 ];
 
 export const typeLabels: Record<string, string> = {
   user_ai: 'RentMate',
   tenant: 'Tenant',
   vendor: 'Vendor',
+  mirrored_chat: 'Mirrored',
 };
 
 export const typeColors: Record<string, string> = {
   user_ai: 'bg-primary/10 text-primary',
   tenant: 'bg-green-800/15 text-green-700 dark:text-green-400',
   vendor: 'bg-orange-100 text-orange-700 dark:bg-orange-900/20 dark:text-orange-400',
+  mirrored_chat: 'bg-sky-100 text-sky-700 dark:bg-sky-900/20 dark:text-sky-400',
 };
 
 export function ConvRow({ conv, onClick, onDelete, isActive }: { conv: ConvSummary; onClick: () => void; onDelete?: () => void; isActive?: boolean }) {
@@ -48,6 +51,7 @@ export function ConvRow({ conv, onClick, onDelete, isActive }: { conv: ConvSumma
   // title; the stored ``subject`` varies (e.g. "Chat with X" vs
   // "Message X: <task>") and is unreliable for display.
   const isExternalConv = conv.conversationType === 'tenant' || conv.conversationType === 'vendor';
+  const isMirror = conv.conversationType === 'mirrored_chat';
   const displayTitle = isExternalConv
     ? (conv.participantLabel ?? conv.title)
     : conv.title;
@@ -83,6 +87,16 @@ export function ConvRow({ conv, onClick, onDelete, isActive }: { conv: ConvSumma
           {conv.unreadCount > 0 && (
             <Badge className="h-4 px-1.5 text-[10px] bg-primary text-primary-foreground shrink-0">
               {conv.unreadCount} new
+            </Badge>
+          )}
+          {isMirror && (
+            <Badge
+              variant="secondary"
+              className="text-[10px] rounded-lg gap-1 shrink-0 bg-muted text-muted-foreground"
+              title="Mirrored from another platform — replies must happen there"
+            >
+              <Lock className="h-3 w-3" />
+              Read-only
             </Badge>
           )}
         </div>

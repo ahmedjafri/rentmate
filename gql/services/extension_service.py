@@ -7,7 +7,7 @@ Three responsibilities:
   rentmate tenant id before drafting a reply.
 - ``draft_reply`` — drive the actual rentmate agent over a TenantCloud
   conversation and return its drafted reply. The thread is mirrored into
-  rentmate as a read-only ``TENANTCLOUD_MIRROR`` Conversation so DevTools
+  rentmate as a read-only ``MIRRORED_CHAT`` Conversation so DevTools
   can show the AgentRun, and so re-clicking "Suggest" for the same thread
   doesn't duplicate the mirrored history.
 - ``MirrorConversationReadOnly`` — exception raised when something tries to
@@ -55,7 +55,7 @@ _PM_SENDER_TOKENS = ("you", "property manager", "manager")
 
 
 class MirrorConversationReadOnly(Exception):
-    """Raised when send-message paths target a TENANTCLOUD_MIRROR Conversation.
+    """Raised when send-message paths target a MIRRORED_CHAT Conversation.
 
     The inbound TenantCloud thread is the authoritative source for both
     PM and tenant turns; new replies happen in TenantCloud, not rentmate.
@@ -163,7 +163,7 @@ def _find_mirror_conversation(db: Session, *, external_thread_id: str) -> Conver
         .filter_by(
             org_id=resolve_org_id(),
             creator_id=resolve_account_id(),
-            conversation_type=ConversationType.TENANTCLOUD_MIRROR,
+            conversation_type=ConversationType.MIRRORED_CHAT,
         )
         .all()
     )
@@ -207,7 +207,7 @@ def _upsert_mirror_conversation(
             creator_id=resolve_account_id(),
             subject=subject[:255],
             property_id=property_id or (tenant_payload or {}).get("property_id"),
-            conversation_type=ConversationType.TENANTCLOUD_MIRROR,
+            conversation_type=ConversationType.MIRRORED_CHAT,
             is_group=False,
             is_archived=False,
             extra=extra,
@@ -489,7 +489,7 @@ async def draft_reply(
     Otherwise behaves as the standard *Suggest* flow.
 
     When ``external_thread_id`` is provided we upsert a
-    ``TENANTCLOUD_MIRROR`` Conversation, dedup-insert any new turns from
+    ``MIRRORED_CHAT`` Conversation, dedup-insert any new turns from
     ``conversation_history``, and run the actual rentmate agent so the
     invocation appears in DevTools. Without an external thread id we fall
     back to a one-shot LiteLLM completion (older extension versions).

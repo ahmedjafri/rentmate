@@ -295,7 +295,7 @@ def _patch_call_agent(reply: str):
 
 
 def test_draft_reply_with_thread_id_creates_mirror_conversation(db):
-    """First Suggest click for a thread creates a TENANTCLOUD_MIRROR conversation
+    """First Suggest click for a thread creates a MIRRORED_CHAT conversation
     keyed by ``external_thread_id`` and dedup-mirrors the scraped history."""
     with _request_scope():
         tenant = _seed_tenant(
@@ -324,7 +324,7 @@ def test_draft_reply_with_thread_id_creates_mirror_conversation(db):
     conv = db.query(Conversation).filter_by(
         external_id=result["conversation_external_id"],
     ).one()
-    assert conv.conversation_type == ConversationType.TENANTCLOUD_MIRROR
+    assert conv.conversation_type == ConversationType.MIRRORED_CHAT
     assert (conv.extra or {}).get("source") == "tenantcloud"
     assert (conv.extra or {}).get("read_only") is True
     assert (conv.extra or {}).get("external_thread_id") == "tenantcloud:/messenger/conversation/9001"
@@ -383,7 +383,7 @@ def test_draft_reply_repeat_call_dedups_existing_messages(db):
             ))
 
     convs = db.query(Conversation).filter_by(
-        conversation_type=ConversationType.TENANTCLOUD_MIRROR,
+        conversation_type=ConversationType.MIRRORED_CHAT,
     ).all()
     assert len(convs) == 1
     msgs = db.query(Message).filter_by(conversation_id=convs[0].id).all()
@@ -458,7 +458,7 @@ def test_draft_reply_without_thread_id_falls_back_to_one_shot(db):
     assert result["suggestion"] == "Legacy reply."
     assert result["conversation_external_id"] is None
     assert db.query(Conversation).filter_by(
-        conversation_type=ConversationType.TENANTCLOUD_MIRROR,
+        conversation_type=ConversationType.MIRRORED_CHAT,
     ).count() == 0
 
 
@@ -479,7 +479,7 @@ def test_send_message_blocks_for_mirror_conversation(db):
             ))
 
         conv = db.query(Conversation).filter_by(
-            conversation_type=ConversationType.TENANTCLOUD_MIRROR,
+            conversation_type=ConversationType.MIRRORED_CHAT,
         ).one()
 
         with pytest.raises(MirrorConversationReadOnly):
@@ -560,7 +560,7 @@ def test_send_autonomous_message_blocks_for_mirror_conversation(db):
             ))
 
         conv = db.query(Conversation).filter_by(
-            conversation_type=ConversationType.TENANTCLOUD_MIRROR,
+            conversation_type=ConversationType.MIRRORED_CHAT,
         ).one()
 
         with pytest.raises(MirrorConversationReadOnly):
