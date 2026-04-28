@@ -365,7 +365,6 @@ def create_app(
         CORSMiddleware,
         allow_origins=allow_origins
         or [
-            "https://app.tenantcloud.com",
             "https://rentmate.io",
             "http://localhost:5173",
             "http://localhost:8080",
