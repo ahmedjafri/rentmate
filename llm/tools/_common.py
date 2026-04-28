@@ -12,9 +12,8 @@ from contextlib import contextmanager
 from enum import Enum
 from typing import Any
 
-from backends.local_auth import resolve_account_id, resolve_org_id
-from db.id_utils import normalize_optional_id
 from db.enums import AgentSource, SuggestionOption, Urgency
+from db.id_utils import normalize_optional_id
 from db.models import MessageType
 
 logger = logging.getLogger("rentmate.llm.tools")
@@ -140,6 +139,10 @@ current_user_message: contextvars.ContextVar[str | None] = contextvars.ContextVa
     "current_user_message", default=None,
 )
 
+current_request_context: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "current_request_context", default=None,
+)
+
 # When set, tools classified as read-write short-circuit inside the
 # dispatcher: the inputs are appended here and ``execute`` is skipped.
 # Read-only tools still run normally. See ``ToolMode`` + ``is_simulating``.
@@ -245,8 +248,7 @@ def _load_vendor_by_public_id(db: Any, vendor_id: str):
 
 
 def _load_tenant_by_public_id(db: Any, tenant_id: str):
-    from db.models import Tenant
-    from db.models import User
+    from db.models import Tenant, User
 
     tenant_id = normalize_optional_id(tenant_id)
     if tenant_id is None:
@@ -306,7 +308,7 @@ def _load_entity_by_public_id(db: Any, entity_type: str, entity_id: str):
 
 
 def _sanitize_tenant_outbound_draft(db: Any, *, task_id: str, draft_message: str) -> str:
-    from db.models import Conversation, ParticipantType, Task, User
+    from db.models import ParticipantType, Task, User
 
     draft = str(draft_message or "")
     if not draft:
