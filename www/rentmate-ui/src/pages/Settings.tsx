@@ -93,6 +93,11 @@ function labelForAgentFile(filename: string): string {
 export const SettingsPage = ({ hideLlmConfig = false }: SettingsPageProps) => {
   const { actionPolicySettings, setActionPolicySettings } = useApp();
   const [llmConfig, setLlmConfig] = useState<LlmConfig>({ apiKey: '', model: '', baseUrl: '' });
+  // Hosted backends report ``llm_managed: true`` from /api/settings.
+  // Treat that the same as the explicit ``hideLlmConfig`` prop so PMs
+  // never see a form whose POSTs the server silently ignores.
+  const [llmManagedByHost, setLlmManagedByHost] = useState(false);
+  const llmConfigHidden = hideLlmConfig || llmManagedByHost;
   const [integrations, setIntegrations] = useState<IntegrationsState>({
     quo: { enabled: false, apiKey: '', fromNumber: '', phoneWhitelist: '' },
     telegram: emptyChannel(),
@@ -112,6 +117,7 @@ export const SettingsPage = ({ hideLlmConfig = false }: SettingsPageProps) => {
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data) {
+          setLlmManagedByHost(Boolean(data.llm_managed));
           setLlmConfig({
             apiKey: data.api_key ?? '',
             model: data.model ?? '',
@@ -335,7 +341,21 @@ export const SettingsPage = ({ hideLlmConfig = false }: SettingsPageProps) => {
         <p className="text-sm text-muted-foreground">Configure RentMate</p>
       </div>
 
-      {!hideLlmConfig && (
+      {llmConfigHidden && llmManagedByHost && (
+        <Card className="p-6 rounded-xl bg-muted/30">
+          <div className="flex items-center gap-2 mb-1">
+            <Bot className="h-5 w-5 text-primary" />
+            <h2 className="text-lg font-bold">AI Model</h2>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            AI configuration is managed by RentMate. The hosted service
+            picks the model and credentials for your account; there's
+            nothing to set up here.
+          </p>
+        </Card>
+      )}
+
+      {!llmConfigHidden && (
         <Card className="p-6 rounded-xl">
           <div className="flex items-center gap-2 mb-1">
             <Bot className="h-5 w-5 text-primary" />
