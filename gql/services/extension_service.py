@@ -3,16 +3,16 @@
 Three responsibilities:
 
 - ``rank_tenants`` — fuzzy-search the org's active tenants by name, email,
-  or phone. Used by the extension to map a TenantCloud sender name onto a
-  rentmate tenant id before drafting a reply.
-- ``draft_reply`` — drive the actual rentmate agent over a TenantCloud
-  conversation and return its drafted reply. The thread is mirrored into
+  or phone. Used by the extension to map a scraped sender name from an
+  external chat platform onto a rentmate tenant id before drafting.
+- ``draft_reply`` — drive the actual rentmate agent over an external chat
+  thread and return its drafted reply. The thread is mirrored into
   rentmate as a read-only ``MIRRORED_CHAT`` Conversation so DevTools
   can show the AgentRun, and so re-clicking "Suggest" for the same thread
   doesn't duplicate the mirrored history.
-- ``MirrorConversationReadOnly`` — exception raised when something tries to
-  send a new message into a mirror conversation; the inbound history is
-  authoritative, replies happen back in TenantCloud.
+- ``MirrorConversationReadOnly`` — exception raised when something tries
+  to send a new message into a mirror conversation; the inbound history
+  is authoritative, replies happen back on the source platform.
 
 Both helpers run inside a request context that already has org/account
 ids resolved (subdomain middleware / JWT auth), so they don't take ids
@@ -48,17 +48,24 @@ _FULL_NAME_MATCH_SCORE = 50
 _PARTIAL_NAME_MATCH_SCORE = 25
 _MAX_RESULTS = 3
 
-# Lowercase tokens TenantCloud uses for the property manager themselves.
-# Used to map a scraped sender name onto ParticipantType.ACCOUNT_USER vs
-# EXTERNAL_CONTACT when mirroring messages.
+# Lowercase tokens external chat platforms use for the property manager
+# themselves. Used to map a scraped sender name onto
+# ParticipantType.ACCOUNT_USER vs EXTERNAL_CONTACT when mirroring
+# messages — most platforms label the PM as "You" or "Property Manager".
 _PM_SENDER_TOKENS = ("you", "property manager", "manager")
+
+# Source identifier used when the client doesn't supply one. Stored on
+# the mirror Conversation's ``extra.source`` so future analytics /
+# integrations can tell where a thread came from. The chrome extension
+# overrides this with its own platform-specific value.
+_DEFAULT_SOURCE = "chrome_extension"
 
 
 class MirrorConversationReadOnly(Exception):
     """Raised when send-message paths target a MIRRORED_CHAT Conversation.
 
-    The inbound TenantCloud thread is the authoritative source for both
-    PM and tenant turns; new replies happen in TenantCloud, not rentmate.
+    The inbound mirror thread is the authoritative record for both PM and
+    tenant turns; new replies happen on the source platform, not rentmate.
     """
 
 
@@ -152,11 +159,11 @@ def _is_pm_sender(sender: str | None) -> bool:
 
 
 def _find_mirror_conversation(db: Session, *, external_thread_id: str) -> Conversation | None:
-    """Look up the read-only TenantCloud mirror for this thread, if any.
+    """Look up the read-only mirror Conversation for this external thread.
 
     Stored in ``Conversation.extra->>'external_thread_id'`` so two threads
-    with the same TenantCloud URL don't collide and so we can dedup
-    messages on a re-import without scanning every conversation in the org.
+    with the same external URL don't collide and so we can dedup messages
+    on a re-import without scanning every conversation in the org.
     """
     rows = (
         db.query(Conversation)
@@ -182,19 +189,22 @@ def _upsert_mirror_conversation(
     header_description: str | None,
     tenant_payload: dict[str, Any] | None,
     property_id: str | None,
+    source: str | None = None,
 ) -> Conversation:
-    """Find or create the read-only mirror Conversation for a TenantCloud thread.
+    """Find or create the read-only mirror Conversation for an external thread.
 
     The conversation is keyed by ``external_thread_id`` (typically the
-    scraped TenantCloud URL pathname) so re-clicking ``Suggest`` for the
-    same thread reuses the existing row instead of spawning duplicates.
+    URL pathname scraped from the source platform) so re-clicking
+    ``Suggest`` for the same thread reuses the existing row instead of
+    spawning duplicates.
     """
     conv = _find_mirror_conversation(db, external_thread_id=external_thread_id)
     now = datetime.now(UTC)
-    subject = (header_title or "").strip() or "TenantCloud thread"
+    subject = (header_title or "").strip() or "Mirrored thread"
+    resolved_source = (source or _DEFAULT_SOURCE).strip() or _DEFAULT_SOURCE
     if conv is None:
         extra = {
-            "source": "tenantcloud",
+            "source": resolved_source,
             "external_thread_id": str(external_thread_id),
             "read_only": True,
         }
@@ -237,16 +247,16 @@ def _upsert_mirror_conversation(
 
 
 def _existing_mirror_indices(conv: Conversation) -> set[int]:
-    """Indices of TenantCloud turns already mirrored on this conversation.
+    """Indices of external turns already mirrored on this conversation.
 
     Each mirrored Message stores its zero-based position inside the
-    TenantCloud thread under ``meta.tenantcloud_index``. The set is used
-    to skip turns that were imported on a previous ``Suggest`` click.
+    source thread under ``meta.mirror_index``. The set is used to skip
+    turns that were imported on a previous ``Suggest`` click.
     """
     indices: set[int] = set()
     for msg in conv.messages or []:
         meta = msg.meta or {}
-        idx = meta.get("tenantcloud_index")
+        idx = meta.get("mirror_index")
         if isinstance(idx, int):
             indices.add(idx)
     return indices
@@ -257,12 +267,13 @@ def _sync_mirror_messages(
     *,
     conv: Conversation,
     conversation_history: list[dict[str, str]],
+    source: str | None = None,
 ) -> int:
-    """Insert any TenantCloud turns we haven't mirrored yet.
+    """Insert any external turns we haven't mirrored yet.
 
-    Dedup is position-based: TenantCloud always renders a thread
+    Dedup is position-based: external chat platforms render a thread
     chronologically, so the n-th turn is stable across scrapes. Each
-    mirrored Message records ``meta.tenantcloud_index = n``; turns whose
+    mirrored Message records ``meta.mirror_index = n``; turns whose
     index is already on the conversation are skipped. Returns the number
     of messages newly inserted.
     """
@@ -292,8 +303,8 @@ def _sync_mirror_messages(
             is_ai=False,
             is_system=False,
             meta={
-                "source": "tenantcloud",
-                "tenantcloud_index": idx,
+                "source": (source or _DEFAULT_SOURCE),
+                "mirror_index": idx,
                 "direction": "outbound" if is_pm else "inbound",
             },
             sent_at=now,
@@ -315,22 +326,23 @@ def _build_system_prompt(
     if refine_mode:
         intro = (
             "You are RentMate refining a draft reply the property manager "
-            "has already typed in TenantCloud. Polish the draft for "
-            "clarity, tone, and completeness while preserving the PM's "
-            "intent and any concrete facts they wrote (dates, vendor "
-            "names, dollar amounts). Keep it SMS-style, 1-3 sentences, "
-            "warm and professional. Do not invent facts the PM didn't "
-            "include. Do not mention RentMate or that you are an AI. "
-            "Output only the refined reply text, no labels or commentary."
+            "has already typed in their tenant chat tool. Polish the "
+            "draft for clarity, tone, and completeness while preserving "
+            "the PM's intent and any concrete facts they wrote (dates, "
+            "vendor names, dollar amounts). Keep it SMS-style, 1-3 "
+            "sentences, warm and professional. Do not invent facts the "
+            "PM didn't include. Do not mention RentMate or that you are "
+            "an AI. Output only the refined reply text, no labels or "
+            "commentary."
         )
     else:
         intro = (
             "You are RentMate drafting a reply on behalf of the property "
-            "manager. The PM is composing a response to a tenant inside "
-            "TenantCloud. Draft a single SMS-style reply, 1-3 sentences, "
-            "warm and professional. Do not invent facts or commit to "
-            "dates. Do not mention RentMate or that you are an AI. "
-            "Output only the reply text, no labels."
+            "manager. The PM is composing a response to a tenant in their "
+            "tenant chat tool. Draft a single SMS-style reply, 1-3 "
+            "sentences, warm and professional. Do not invent facts or "
+            "commit to dates. Do not mention RentMate or that you are an "
+            "AI. Output only the reply text, no labels."
         )
     parts: list[str] = [intro]
     if tenant_payload:
@@ -410,7 +422,7 @@ async def _draft_via_agent(
     so DevTools surfaces the run alongside chat/task agent runs. The agent
     is invoked with a single-turn user prompt containing the formatted
     transcript — we don't replay individual messages as alternating
-    user/assistant turns because TenantCloud's PM/tenant labels don't
+    user/assistant turns because external chat platforms' PM/tenant labels don't
     cleanly map onto the agent's role taxonomy.
     """
     from llm import registry as agent_registry_mod
@@ -480,13 +492,15 @@ async def draft_reply(
     property_id: str | None,
     external_thread_id: str | None = None,
     draft_text: str | None = None,
+    source: str | None = None,
 ) -> dict[str, Any]:
-    """Draft (or refine) a TenantCloud reply and persist a read-only mirror.
+    """Draft (or refine) a reply for an external chat thread and persist
+    a read-only mirror.
 
     When ``draft_text`` is non-empty the extension is in *Refine* mode —
-    the PM has already typed something into TenantCloud's reply box, so
-    we ask the agent to polish that draft instead of composing fresh.
-    Otherwise behaves as the standard *Suggest* flow.
+    the PM has already typed something into the source platform's reply
+    box, so we ask the agent to polish that draft instead of composing
+    fresh. Otherwise behaves as the standard *Suggest* flow.
 
     When ``external_thread_id`` is provided we upsert a
     ``MIRRORED_CHAT`` Conversation, dedup-insert any new turns from
@@ -520,8 +534,14 @@ async def draft_reply(
             header_description=header_description,
             tenant_payload=matched_tenant,
             property_id=property_id,
+            source=source,
         )
-        _sync_mirror_messages(db, conv=mirror_conv, conversation_history=conversation_history or [])
+        _sync_mirror_messages(
+            db,
+            conv=mirror_conv,
+            conversation_history=conversation_history or [],
+            source=source,
+        )
         db.commit()
         db.refresh(mirror_conv)
 

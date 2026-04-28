@@ -1172,7 +1172,7 @@ class ConversationSummaryType:
 
 
 # ---------------------------------------------------------------------------
-# Chrome extension surface (TenantCloud bridge)
+# Chrome extension surface (external chat platform bridge)
 # ---------------------------------------------------------------------------
 
 
@@ -1219,17 +1219,21 @@ class SuggestReplyInput:
     header_description: typing.Optional[str] = None
     tenant_id: typing.Optional[str] = None
     property_id: typing.Optional[str] = None
-    # Stable identifier for the TenantCloud thread (typically the
+    # Stable identifier for the external chat thread (typically the
     # ``window.location.pathname`` at the time of scraping). Used to
     # mirror the thread as a read-only rentmate Conversation so the
     # AgentRun is grouped under one row in DevTools and so re-clicking
     # ``Suggest`` for the same thread doesn't duplicate messages.
     external_thread_id: typing.Optional[str] = None
-    # Text the PM has already typed into TenantCloud's reply box. When
-    # set, the extension button reads "Refine" and the agent is asked
-    # to polish the draft (clarity, tone, missing context) instead of
-    # composing a fresh reply.
+    # Text the PM has already typed into the source platform's reply
+    # box. When set, the extension button reads "Refine" and the agent
+    # is asked to polish the draft (clarity, tone, missing context)
+    # instead of composing a fresh reply.
     draft_text: typing.Optional[str] = None
+    # Optional source platform identifier stored on the mirror
+    # conversation's ``extra.source`` for analytics and future
+    # per-platform behavior. Defaults server-side when omitted.
+    source: typing.Optional[str] = None
 
 
 @strawberry.type

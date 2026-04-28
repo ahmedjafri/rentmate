@@ -416,8 +416,8 @@ def send_autonomous_message(
     if convo.conversation_type == ConversationType.MIRRORED_CHAT:
         from gql.services.extension_service import MirrorConversationReadOnly
         raise MirrorConversationReadOnly(
-            f"Conversation {conversation_id} mirrors a TenantCloud thread; "
-            "replies must be sent via TenantCloud."
+            f"Conversation {conversation_id} mirrors an external chat thread; "
+            "replies must be sent on the source platform."
         )
 
     msg = Message(
@@ -557,8 +557,8 @@ def send_message(
     if convo is not None and convo.conversation_type == ConversationType.MIRRORED_CHAT:
         from gql.services.extension_service import MirrorConversationReadOnly
         raise MirrorConversationReadOnly(
-            f"Conversation {conversation_id} mirrors a TenantCloud thread; "
-            "replies must be sent via TenantCloud."
+            f"Conversation {conversation_id} mirrors an external chat thread; "
+            "replies must be sent on the source platform."
         )
     now = sent_at or datetime.now(UTC)
     msg = Message(

@@ -290,7 +290,7 @@ export type Mutation = {
   simulateRoutine: Scalars['String']['output'];
   /** Spawn a Task from an existing conversation, linking lineage */
   spawnTask: TaskType;
-  /** Agent-drafted reply for a TenantCloud conversation viewed in the chrome extension. When ``externalThreadId`` is provided the thread is mirrored into rentmate as a read-only conversation so the AgentRun is groupable in DevTools and re-clicking ``Suggest`` doesn't duplicate messages. */
+  /** Agent-drafted reply for a conversation in an external chat tool, viewed via the chrome extension. When ``externalThreadId`` is provided the thread is mirrored into rentmate as a read-only conversation so the AgentRun is groupable in DevTools and re-clicking ``Suggest`` doesn't duplicate messages. */
   suggestReply: SuggestReplyResult;
   /** Update the agent context for any entity (property, unit, tenant, vendor) */
   updateEntityContext: Scalars['Boolean']['output'];
@@ -642,6 +642,7 @@ export type SuggestReplyInput = {
   headerDescription: InputMaybe<Scalars['String']['input']>;
   headerTitle: InputMaybe<Scalars['String']['input']>;
   propertyId: InputMaybe<Scalars['String']['input']>;
+  source: InputMaybe<Scalars['String']['input']>;
   tenantId: InputMaybe<Scalars['String']['input']>;
 };
 

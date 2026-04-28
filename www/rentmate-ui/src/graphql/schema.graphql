@@ -329,7 +329,7 @@ type Mutation {
   spawnTask(input: SpawnTaskInput!): TaskType!
 
   """
-  Agent-drafted reply for a TenantCloud conversation viewed in the chrome extension. When ``externalThreadId`` is provided the thread is mirrored into rentmate as a read-only conversation so the AgentRun is groupable in DevTools and re-clicking ``Suggest`` doesn't duplicate messages.
+  Agent-drafted reply for a conversation in an external chat tool, viewed via the chrome extension. When ``externalThreadId`` is provided the thread is mirrored into rentmate as a read-only conversation so the AgentRun is groupable in DevTools and re-clicking ``Suggest`` doesn't duplicate messages.
   """
   suggestReply(input: SuggestReplyInput!): SuggestReplyResult!
 }
@@ -438,6 +438,7 @@ input SuggestReplyInput {
   propertyId: String = null
   externalThreadId: String = null
   draftText: String = null
+  source: String = null
 }
 
 type SuggestReplyResult {

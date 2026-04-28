@@ -353,8 +353,8 @@ def create_app(
     app.include_router(tenant_portal.router)
 
     # In dev (``RENTMATE_ENV=development``) accept chrome-extension://
-    # origins so the unpacked rentmate-for-tenantcloud extension can
-    # call /graphql against a local API without forcing devs to bounce
+    # origins so the unpacked rentmate chrome extension can call
+    # /graphql against a local API without forcing devs to bounce
     # through the hosted CORS layer. Production gates extension origins
     # via ``allow_origin_regex`` injected by the hosted middleware.
     effective_regex = allow_origin_regex

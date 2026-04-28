@@ -31,14 +31,14 @@ const Chats = () => {
   const ai = useConversations('user_ai');
   const tenants = useConversations('tenant');
   const vendors = useConversations('vendor');
-  const tenantcloud = useConversations('mirrored_chat');
+  const mirrored = useConversations('mirrored_chat');
 
   const sources: Record<ChatFilter, ReturnType<typeof useConversations>> = {
     all: ai, // placeholder, overridden below
     user_ai: ai,
     tenant: tenants,
     vendor: vendors,
-    mirrored_chat: tenantcloud,
+    mirrored_chat: mirrored,
   };
 
   const conversations = useMemo(() => {
@@ -47,7 +47,7 @@ const Chats = () => {
         ...ai.conversations,
         ...tenants.conversations,
         ...vendors.conversations,
-        ...tenantcloud.conversations,
+        ...mirrored.conversations,
       ].sort(
         (a, b) => {
           const at = a.lastMessageAt ?? a.updatedAt;
@@ -62,13 +62,13 @@ const Chats = () => {
     ai.conversations,
     tenants.conversations,
     vendors.conversations,
-    tenantcloud.conversations,
+    mirrored.conversations,
     sources,
   ]);
 
   const loading =
     filter === 'all'
-      ? ai.loading || tenants.loading || vendors.loading || tenantcloud.loading
+      ? ai.loading || tenants.loading || vendors.loading || mirrored.loading
       : sources[filter].loading;
 
   // Removing a conversation needs to drop it from whichever list owns it.
@@ -76,7 +76,7 @@ const Chats = () => {
     ai.removeConversation(uid);
     tenants.removeConversation(uid);
     vendors.removeConversation(uid);
-    tenantcloud.removeConversation(uid);
+    mirrored.removeConversation(uid);
   };
 
   const leftRail = (

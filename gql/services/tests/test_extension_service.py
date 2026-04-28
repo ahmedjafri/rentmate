@@ -276,7 +276,7 @@ def test_draft_reply_unknown_tenant_id_returns_no_match(db):
     assert result["matched_tenant"] is None
 
 
-# ─── TenantCloud mirror + agent routing ─────────────────────────────────
+# ─── External-chat mirror + agent routing ──────────────────────────────
 
 
 def _patch_call_agent(reply: str):
@@ -315,7 +315,7 @@ def test_draft_reply_with_thread_id_creates_mirror_conversation(db):
                 header_description="Standing water under the unit.",
                 tenant_id=str(tenant.external_id),
                 property_id=None,
-                external_thread_id="tenantcloud:/messenger/conversation/9001",
+                external_thread_id="ext-thread:9001",
             ))
 
     assert result["fallback"] is False
@@ -325,14 +325,17 @@ def test_draft_reply_with_thread_id_creates_mirror_conversation(db):
         external_id=result["conversation_external_id"],
     ).one()
     assert conv.conversation_type == ConversationType.MIRRORED_CHAT
-    assert (conv.extra or {}).get("source") == "tenantcloud"
+    # Default ``source`` is ``chrome_extension`` when the client
+    # doesn't supply a platform identifier — keeps backend rentmate
+    # source-agnostic. Specific platforms pass their own value.
+    assert (conv.extra or {}).get("source") == "chrome_extension"
     assert (conv.extra or {}).get("read_only") is True
-    assert (conv.extra or {}).get("external_thread_id") == "tenantcloud:/messenger/conversation/9001"
+    assert (conv.extra or {}).get("external_thread_id") == "ext-thread:9001"
     assert conv.subject == "Dishwasher leak"
 
     msgs = sorted(
         db.query(Message).filter_by(conversation_id=conv.id).all(),
-        key=lambda m: (m.meta or {}).get("tenantcloud_index", -1),
+        key=lambda m: (m.meta or {}).get("mirror_index", -1),
     )
     assert [m.body for m in msgs] == [
         "The dishwasher is leaking.",
@@ -367,7 +370,7 @@ def test_draft_reply_repeat_call_dedups_existing_messages(db):
                 header_title="Dishwasher leak",
                 header_description=None,
                 tenant_id=None, property_id=None,
-                external_thread_id="tenantcloud:/messenger/conversation/9002",
+                external_thread_id="ext-thread:9002",
             ))
             # Second click: same thread, one extra tenant turn appended.
             asyncio.run(draft_reply(
@@ -379,7 +382,7 @@ def test_draft_reply_repeat_call_dedups_existing_messages(db):
                 header_title="Dishwasher leak",
                 header_description=None,
                 tenant_id=None, property_id=None,
-                external_thread_id="tenantcloud:/messenger/conversation/9002",
+                external_thread_id="ext-thread:9002",
             ))
 
     convs = db.query(Conversation).filter_by(
@@ -408,7 +411,7 @@ def test_draft_reply_records_agent_run_against_mirror(db):
                 conversation_history=[{"sender": "T", "text": "hi"}],
                 header_title=None, header_description=None,
                 tenant_id=None, property_id=None,
-                external_thread_id="tenantcloud:/messenger/conversation/9003",
+                external_thread_id="ext-thread:9003",
             ))
 
     convo_uid = result["conversation_external_id"]
@@ -421,7 +424,7 @@ def test_draft_reply_records_agent_run_against_mirror(db):
 
 def test_draft_reply_session_key_uses_mirror_external_id(db):
     """``session_key`` carries the mirror's external_id so downstream
-    agent state (memory, tracing) is partitioned per TenantCloud thread
+    agent state (memory, tracing) is partitioned per external thread
     instead of leaking into the PM's normal chat history."""
     with _request_scope():
         ctx, spy = _patch_call_agent("OK.")
@@ -431,7 +434,7 @@ def test_draft_reply_session_key_uses_mirror_external_id(db):
                 conversation_history=[{"sender": "T", "text": "hi"}],
                 header_title=None, header_description=None,
                 tenant_id=None, property_id=None,
-                external_thread_id="tenantcloud:/messenger/conversation/9004",
+                external_thread_id="ext-thread:9004",
             ))
 
     assert spy.last_call is not None
@@ -463,8 +466,8 @@ def test_draft_reply_without_thread_id_falls_back_to_one_shot(db):
 
 
 def test_send_message_blocks_for_mirror_conversation(db):
-    """``chat_service.send_message`` refuses to write into a TenantCloud
-    mirror — replies must go through TenantCloud, not rentmate."""
+    """``chat_service.send_message`` refuses to write into an external-chat
+    mirror — replies must go through the source platform, not rentmate."""
     from gql.services import chat_service
 
     with _request_scope():
@@ -475,7 +478,7 @@ def test_send_message_blocks_for_mirror_conversation(db):
                 conversation_history=[{"sender": "T", "text": "hi"}],
                 header_title=None, header_description=None,
                 tenant_id=None, property_id=None,
-                external_thread_id="tenantcloud:/messenger/conversation/9005",
+                external_thread_id="ext-thread:9005",
             ))
 
         conv = db.query(Conversation).filter_by(
@@ -487,7 +490,7 @@ def test_send_message_blocks_for_mirror_conversation(db):
 
 
 def test_draft_reply_refine_mode_includes_user_draft_in_prompt(db):
-    """When the PM has typed text into TenantCloud's reply box the
+    """When the PM has typed text into the source platform's reply box the
     extension sends ``draft_text`` and rentmate flips into Refine mode:
     the system prompt asks the agent to polish, and the user prompt
     quotes the draft verbatim so the agent can preserve PM intent."""
@@ -508,7 +511,7 @@ def test_draft_reply_refine_mode_includes_user_draft_in_prompt(db):
                 header_title="Dishwasher leak",
                 header_description=None,
                 tenant_id=None, property_id=None,
-                external_thread_id="tenantcloud:/messenger/conversation/9100",
+                external_thread_id="ext-thread:9100",
                 draft_text="hey marcus plumber will come tomorrow at 10",
             ))
 
@@ -535,7 +538,7 @@ def test_draft_reply_blank_draft_text_uses_compose_mode(db):
                 conversation_history=[{"sender": "T", "text": "hi"}],
                 header_title=None, header_description=None,
                 tenant_id=None, property_id=None,
-                external_thread_id="tenantcloud:/messenger/conversation/9101",
+                external_thread_id="ext-thread:9101",
                 draft_text="   \n  ",
             ))
 
@@ -556,7 +559,7 @@ def test_send_autonomous_message_blocks_for_mirror_conversation(db):
                 conversation_history=[{"sender": "T", "text": "hi"}],
                 header_title=None, header_description=None,
                 tenant_id=None, property_id=None,
-                external_thread_id="tenantcloud:/messenger/conversation/9006",
+                external_thread_id="ext-thread:9006",
             ))
 
         conv = db.query(Conversation).filter_by(

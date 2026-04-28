@@ -813,11 +813,11 @@ class Mutation(AuthMutation):
         return TaskType.from_sql(task)
 
     @strawberry.mutation(description=(
-        "Agent-drafted reply for a TenantCloud conversation viewed in the "
-        "chrome extension. When ``externalThreadId`` is provided the thread "
-        "is mirrored into rentmate as a read-only conversation so the "
-        "AgentRun is groupable in DevTools and re-clicking ``Suggest`` "
-        "doesn't duplicate messages."
+        "Agent-drafted reply for a conversation in an external chat tool, "
+        "viewed via the chrome extension. When ``externalThreadId`` is "
+        "provided the thread is mirrored into rentmate as a read-only "
+        "conversation so the AgentRun is groupable in DevTools and "
+        "re-clicking ``Suggest`` doesn't duplicate messages."
     ))
     async def suggest_reply(self, info: Info, *, input: SuggestReplyInput) -> SuggestReplyResult:
         from gql.services.extension_service import draft_reply
@@ -834,6 +834,7 @@ class Mutation(AuthMutation):
             property_id=input.property_id,
             external_thread_id=input.external_thread_id,
             draft_text=input.draft_text,
+            source=input.source,
         )
         matched = result.get("matched_tenant")
         return SuggestReplyResult(

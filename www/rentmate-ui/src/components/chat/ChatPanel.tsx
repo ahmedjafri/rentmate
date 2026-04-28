@@ -277,7 +277,7 @@ export function ChatPanel({
   // Fetch the conversation's task linkage + conversation_type so the
   // middle pane can show a "Task #N — <title>" header when the loaded
   // conversation belongs to a task, and so we can disable the input for
-  // read-only mirror conversations (TenantCloud thread snapshots).
+  // read-only mirror conversations (external chat thread snapshots).
   useEffect(() => {
     if (!activeConversationId || activeTask) {
       setConvTaskLink(null);
@@ -305,10 +305,11 @@ export function ChatPanel({
     return () => { cancelled = true; };
   }, [activeConversationId, activeTask]);
 
-  // Mirror conversations are snapshots of TenantCloud threads — replies
-  // happen back in TenantCloud, not in rentmate. Disable the composer
-  // and surface a banner so PMs aren't confused why their messages
-  // bounce off the read-only guard in ``chat_service.send_message``.
+  // Mirror conversations are read-only snapshots of threads from
+  // external chat platforms — replies happen on the source platform,
+  // not in rentmate. Disable the composer and surface a banner so PMs
+  // aren't confused why their messages bounce off the read-only guard
+  // in ``chat_service.send_message``.
   const isReadOnlyConv = activeConvType === 'mirrored_chat'
     || activeConvType === 'MIRRORED_CHAT';
 

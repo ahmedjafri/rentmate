@@ -32,10 +32,9 @@ class ConversationType(str, Enum):
     USER_AI       = "user_ai"
     TASK_AI       = "task_ai"
     SUGGESTION_AI = "suggestion_ai"
-    # Read-only snapshot of a thread mirrored from another platform
-    # (TenantCloud is the only source today). Replies happen back on
-    # the source platform — rentmate's send-message paths refuse to
-    # write into these conversations.
+    # Read-only snapshot of a thread mirrored from an external chat
+    # platform. Replies happen back on the source platform — rentmate's
+    # send-message paths refuse to write into these conversations.
     MIRRORED_CHAT = "mirrored_chat"
 
 
