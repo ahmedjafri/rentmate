@@ -833,6 +833,7 @@ class Mutation(AuthMutation):
             tenant_id=input.tenant_id,
             property_id=input.property_id,
             external_thread_id=input.external_thread_id,
+            draft_text=input.draft_text,
         )
         matched = result.get("matched_tenant")
         return SuggestReplyResult(

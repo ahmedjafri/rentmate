@@ -486,6 +486,63 @@ def test_send_message_blocks_for_mirror_conversation(db):
             chat_service.send_message(db, conversation_id=conv.id, body="nope")
 
 
+def test_draft_reply_refine_mode_includes_user_draft_in_prompt(db):
+    """When the PM has typed text into TenantCloud's reply box the
+    extension sends ``draft_text`` and rentmate flips into Refine mode:
+    the system prompt asks the agent to polish, and the user prompt
+    quotes the draft verbatim so the agent can preserve PM intent."""
+    with _request_scope():
+        captured: dict = {}
+
+        async def fake_call_agent(_agent_id, *, session_key, messages, trace_context=None, **_kwargs):
+            captured["system"] = messages[0]["content"]
+            captured["user"] = messages[1]["content"]
+            return AgentResponse(reply="Refined: hi Marcus, plumber tomorrow at 10.", side_effects=[])
+
+        with patch("llm.client.call_agent", side_effect=fake_call_agent):
+            result = asyncio.run(draft_reply(
+                db,
+                conversation_history=[
+                    {"sender": "Marcus", "text": "Dishwasher leaked again."},
+                ],
+                header_title="Dishwasher leak",
+                header_description=None,
+                tenant_id=None, property_id=None,
+                external_thread_id="tenantcloud:/messenger/conversation/9100",
+                draft_text="hey marcus plumber will come tomorrow at 10",
+            ))
+
+    assert result["fallback"] is False
+    assert "refining a draft" in captured["system"].lower()
+    assert "preserving the PM's intent" in captured["system"]
+    assert "hey marcus plumber will come tomorrow at 10" in captured["user"]
+    assert result["suggestion"].startswith("Refined:")
+
+
+def test_draft_reply_blank_draft_text_uses_compose_mode(db):
+    """A whitespace-only ``draft_text`` shouldn't trigger Refine mode —
+    the PM hasn't actually typed anything meaningful, so we compose fresh."""
+    with _request_scope():
+        captured: dict = {}
+
+        async def fake_call_agent(_agent_id, *, session_key, messages, trace_context=None, **_kwargs):
+            captured["system"] = messages[0]["content"]
+            return AgentResponse(reply="Hi.", side_effects=[])
+
+        with patch("llm.client.call_agent", side_effect=fake_call_agent):
+            asyncio.run(draft_reply(
+                db,
+                conversation_history=[{"sender": "T", "text": "hi"}],
+                header_title=None, header_description=None,
+                tenant_id=None, property_id=None,
+                external_thread_id="tenantcloud:/messenger/conversation/9101",
+                draft_text="   \n  ",
+            ))
+
+    assert "drafting a reply" in captured["system"].lower()
+    assert "refining a draft" not in captured["system"].lower()
+
+
 def test_send_autonomous_message_blocks_for_mirror_conversation(db):
     """The agent's autonomous-message path is also blocked so a buggy
     agent run can't accidentally post into the read-only mirror."""

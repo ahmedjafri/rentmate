@@ -637,6 +637,7 @@ export type SpawnTaskInput = {
 
 export type SuggestReplyInput = {
   conversationHistory: Array<ConversationTurnInput>;
+  draftText: InputMaybe<Scalars['String']['input']>;
   externalThreadId: InputMaybe<Scalars['String']['input']>;
   headerDescription: InputMaybe<Scalars['String']['input']>;
   headerTitle: InputMaybe<Scalars['String']['input']>;

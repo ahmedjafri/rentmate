@@ -1225,6 +1225,11 @@ class SuggestReplyInput:
     # AgentRun is grouped under one row in DevTools and so re-clicking
     # ``Suggest`` for the same thread doesn't duplicate messages.
     external_thread_id: typing.Optional[str] = None
+    # Text the PM has already typed into TenantCloud's reply box. When
+    # set, the extension button reads "Refine" and the agent is asked
+    # to polish the draft (clarity, tone, missing context) instead of
+    # composing a fresh reply.
+    draft_text: typing.Optional[str] = None
 
 
 @strawberry.type

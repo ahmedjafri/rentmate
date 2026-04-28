@@ -310,15 +310,28 @@ def _build_system_prompt(
     tenant_payload: dict[str, Any] | None,
     header_title: str | None,
     header_description: str | None,
+    refine_mode: bool = False,
 ) -> str:
-    intro = (
-        "You are RentMate drafting a reply on behalf of the property "
-        "manager. The PM is composing a response to a tenant inside "
-        "TenantCloud. Draft a single SMS-style reply, 1-3 sentences, "
-        "warm and professional. Do not invent facts or commit to dates. "
-        "Do not mention RentMate or that you are an AI. Output only the "
-        "reply text, no labels."
-    )
+    if refine_mode:
+        intro = (
+            "You are RentMate refining a draft reply the property manager "
+            "has already typed in TenantCloud. Polish the draft for "
+            "clarity, tone, and completeness while preserving the PM's "
+            "intent and any concrete facts they wrote (dates, vendor "
+            "names, dollar amounts). Keep it SMS-style, 1-3 sentences, "
+            "warm and professional. Do not invent facts the PM didn't "
+            "include. Do not mention RentMate or that you are an AI. "
+            "Output only the refined reply text, no labels or commentary."
+        )
+    else:
+        intro = (
+            "You are RentMate drafting a reply on behalf of the property "
+            "manager. The PM is composing a response to a tenant inside "
+            "TenantCloud. Draft a single SMS-style reply, 1-3 sentences, "
+            "warm and professional. Do not invent facts or commit to "
+            "dates. Do not mention RentMate or that you are an AI. "
+            "Output only the reply text, no labels."
+        )
     parts: list[str] = [intro]
     if tenant_payload:
         unit = f" ({tenant_payload['unit_label']})" if tenant_payload.get("unit_label") else ""
@@ -333,14 +346,29 @@ def _build_system_prompt(
     return "\n".join(parts)
 
 
-def _build_user_message(history: list[dict[str, str]]) -> str:
-    if not history:
-        return "(No prior messages.) Open the conversation with a brief acknowledgement."
-    transcript = "\n".join(
+def _build_user_message(
+    history: list[dict[str, str]],
+    *,
+    draft_text: str | None = None,
+) -> str:
+    transcript_lines = [
         f"{(turn.get('sender') or 'Tenant')}: {(turn.get('text') or '').strip()}"
         for turn in history
         if (turn.get('text') or '').strip()
-    )
+    ]
+    transcript = "\n".join(transcript_lines) if transcript_lines else "(No prior messages.)"
+    if draft_text:
+        return (
+            "Recent conversation between the property manager and the "
+            "tenant (most recent last):\n\n"
+            f"{transcript}\n\n"
+            "The property manager has typed the following draft reply. "
+            "Refine it — keep their intent and any concrete facts, but "
+            "improve clarity and tone:\n\n"
+            f"{draft_text.strip()}"
+        )
+    if not transcript_lines:
+        return "(No prior messages.) Open the conversation with a brief acknowledgement."
     return (
         "Recent conversation between the property manager and the tenant "
         "(most recent last):\n\n"
@@ -451,8 +479,14 @@ async def draft_reply(
     tenant_id: str | None,
     property_id: str | None,
     external_thread_id: str | None = None,
+    draft_text: str | None = None,
 ) -> dict[str, Any]:
-    """Draft a TenantCloud reply, persist a read-only mirror, return the draft.
+    """Draft (or refine) a TenantCloud reply and persist a read-only mirror.
+
+    When ``draft_text`` is non-empty the extension is in *Refine* mode —
+    the PM has already typed something into TenantCloud's reply box, so
+    we ask the agent to polish that draft instead of composing fresh.
+    Otherwise behaves as the standard *Suggest* flow.
 
     When ``external_thread_id`` is provided we upsert a
     ``TENANTCLOUD_MIRROR`` Conversation, dedup-insert any new turns from
@@ -464,13 +498,18 @@ async def draft_reply(
     ``error`` + ``fallback=True`` so the extension banner can surface the
     real cause instead of pretending the canned reply is a draft.
     """
+    refine_mode = bool((draft_text or "").strip())
     matched_tenant = _resolve_tenant_for_reply(db, tenant_id)
     system = _build_system_prompt(
         tenant_payload=matched_tenant,
         header_title=header_title,
         header_description=header_description,
+        refine_mode=refine_mode,
     )
-    user_msg = _build_user_message(conversation_history or [])
+    user_msg = _build_user_message(
+        conversation_history or [],
+        draft_text=draft_text if refine_mode else None,
+    )
 
     mirror_conv: Conversation | None = None
     if external_thread_id:

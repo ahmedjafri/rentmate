@@ -437,6 +437,7 @@ input SuggestReplyInput {
   tenantId: String = null
   propertyId: String = null
   externalThreadId: String = null
+  draftText: String = null
 }
 
 type SuggestReplyResult {
