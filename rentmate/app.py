@@ -12,7 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import MetaData, inspect as sa_inspect, text
+from sqlalchemy import MetaData
+from sqlalchemy import inspect as sa_inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 from strawberry.fastapi import GraphQLRouter
 
@@ -26,12 +27,12 @@ from handlers import (
     notifications,
     settings,
 )
-from handlers.deps import SessionLocal, engine
 from handlers.portals import tenant_invite, tenant_portal, vendor_invite, vendor_portal
+from handlers.deps import SessionLocal, engine
 from handlers.routines import router as routine_router
-from handlers.settings import load_integrations
 from handlers.streams import router as streams_router
 from handlers.task_review import router as task_review_router
+from handlers.settings import load_integrations
 from llm.registry import agent_registry
 from memory_watchdog import set_memory_backstop, start_memory_monitor
 
@@ -42,13 +43,6 @@ _SCHEMA_MIGRATE_COMMANDS = [_DEFAULT_SCHEMA_MIGRATE_COMMAND]
 _SCHEMA_MIGRATE_CWD = _PACKAGE_ROOT
 _DEV_BOOTSTRAP_EMAIL = "test@test.com"
 _DEV_BOOTSTRAP_PASSWORD = "test"
-_DEFAULT_CORS_ORIGINS = [
-    "https://app.tenantcloud.com",
-    "https://rentmate.io",
-    "http://localhost:5173",
-    "http://localhost:8080",
-]
-_DEV_EXTENSION_ORIGIN_REGEX = r"chrome-extension://.*"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -227,27 +221,6 @@ async def get_context(request: Request):
 graphql_app = GraphQLRouter(schema, context_getter=get_context)
 
 
-def _csv_env(name: str) -> list[str]:
-    return [item.strip() for item in os.getenv(name, "").split(",") if item.strip()]
-
-
-def _cors_origins(allow_origins: list[str] | None) -> list[str]:
-    origins = allow_origins or _DEFAULT_CORS_ORIGINS
-    extra_origins = _csv_env("RENTMATE_CORS_ORIGINS")
-    if not extra_origins:
-        return origins
-    return [*origins, *extra_origins]
-
-
-def _cors_origin_regex(allow_origin_regex: str | None) -> str | None:
-    regex = allow_origin_regex or os.getenv("RENTMATE_CORS_ORIGIN_REGEX")
-    if regex:
-        return regex
-    if os.getenv("RENTMATE_ENV") == "development":
-        return _DEV_EXTENSION_ORIGIN_REGEX
-    return None
-
-
 def create_app(
     *,
     pre_request_hook=None,
@@ -339,8 +312,8 @@ def create_app(
             seed_default_routines()
             asyncio.create_task(routine_loop())
 
-            from handlers.quo_poller import quo_poll_loop
             from handlers.reply_scanner import reply_scanner_loop
+            from handlers.quo_poller import quo_poll_loop
             from handlers.task_review import task_review_loop
 
             asyncio.create_task(reply_scanner_loop())
@@ -381,8 +354,14 @@ def create_app(
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=_cors_origins(allow_origins),
-        allow_origin_regex=_cors_origin_regex(allow_origin_regex),
+        allow_origins=allow_origins
+        or [
+            "https://app.tenantcloud.com",
+            "https://rentmate.io",
+            "http://localhost:5173",
+            "http://localhost:8080",
+        ],
+        allow_origin_regex=allow_origin_regex,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
