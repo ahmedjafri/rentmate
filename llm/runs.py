@@ -212,6 +212,21 @@ def start_run(
     run_token = current_run_id.set(run_id)
     seq_token = current_run_sequence.set(itertools.count(start=0))
     handle_token = _current_run_handle.set(handle)
+    # ATIF step_id is 1-indexed per spec — distinct from the legacy
+    # 0-indexed sequence_num used by the in-flight log_trace shim.
+    from llm.trajectory import (
+        init_run_step_counter, record_step, reset_run_step_counter,
+    )
+    step_token = init_run_step_counter()
+
+    # ATIF Step 1 = the user's trigger input. Recording at run start
+    # gives every trajectory a deterministic first step regardless of
+    # whether the loop produces any agent steps (e.g. fast-path errors).
+    if trigger_input:
+        try:
+            record_step("user", trigger_input)
+        except Exception:
+            logger.exception("failed to record initial user step run_id=%s", run_id)
     raised: BaseException | None = None
     try:
         yield handle
@@ -222,6 +237,7 @@ def start_run(
             handle.error_message = str(exc)
         raise
     finally:
+        reset_run_step_counter(step_token)
         _current_run_handle.reset(handle_token)
         current_run_sequence.reset(seq_token)
         current_run_id.reset(run_token)

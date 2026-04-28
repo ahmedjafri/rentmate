@@ -574,6 +574,7 @@ async def chat_with_agent(
     _trace_conversation_id = str((trace_context or {}).get("conversation_id") or "") or None
 
     def _tool_progress(event_type: str, tool_name: str, preview: str | None, args: dict | None, **kwargs):
+        from llm.trajectory import current_step_builder
         label = _TOOL_LABELS.get(tool_name, tool_name)
         trace_detail = current_trace_context.get() or trace_context or {}
         if event_type == "tool.started":
@@ -631,19 +632,25 @@ async def chat_with_agent(
             msg = f"{label}{hint}"
             progress_events.append(msg)
             progress_queue.put(msg)
-            log_trace(
-                "tool_call",
-                _trace_source,
-                msg,
-                tool_name=tool_name,
-                detail=make_trace_envelope(
+            # The ATIF tool_call entry is created at completion (when we
+            # have the real ``tool_call_id`` from litellm). For runs not
+            # wrapped in an active step builder — e.g. background paths
+            # that haven't migrated yet — fall back to the legacy
+            # AgentTrace shim so DevTools' historical view stays intact.
+            if current_step_builder() is None:
+                log_trace(
                     "tool_call",
+                    _trace_source,
+                    msg,
                     tool_name=tool_name,
-                    args=args or {},
-                    preview=preview,
-                    trace_context=trace_detail,
-                ),
-            )
+                    detail=make_trace_envelope(
+                        "tool_call",
+                        tool_name=tool_name,
+                        args=args or {},
+                        preview=preview,
+                        trace_context=trace_detail,
+                    ),
+                )
         elif event_type == "tool.completed":
             # All "tool.completed" bookkeeping (failed/completed contextvars,
             # progress events, trace rows) happens in ``_tool_complete_cb``
@@ -658,13 +665,15 @@ async def chat_with_agent(
         """Fires right after tool.completed with the real result string.
 
         Parses the tool's return payload to extract success/error status and
-        any ``message`` / ``error`` field, then logs a trace row and pushes a
-        progress event that actually contains the detail the user needs to
-        diagnose a failure.
+        any ``message`` / ``error`` field, then attaches the call + observation
+        to the active ATIF step builder (or falls back to the legacy
+        AgentTrace shim if no builder is open).
         """
+        from llm.trajectory import current_step_builder
         try:
             label = _TOOL_LABELS.get(function_name, function_name)
             trace_detail = current_trace_context.get() or trace_context or {}
+            builder = current_step_builder()
 
             result_text = function_result if isinstance(function_result, str) else str(function_result or "")
             is_error = False
@@ -698,42 +707,68 @@ async def chat_with_agent(
                     "error": error_message or result_text,
                 })
                 current_failed_tools.set(failed)
-                log_trace(
-                    "error",
-                    _trace_source,
-                    msg,
-                    tool_name=function_name,
-                    detail=make_trace_envelope(
-                        "tool_error",
+                if builder is not None:
+                    builder.add_tool_call(
+                        tool_call_id=str(tool_call_id),
+                        function_name=function_name,
+                        arguments=function_args or {},
+                    )
+                    err_text = error_message or result_text or ""
+                    if isinstance(err_text, str) and len(err_text) > 500:
+                        err_text = err_text[:500] + "…"
+                    builder.add_observation(
+                        source_call_id=str(tool_call_id),
+                        content=f"ERROR: {err_text}",
+                    )
+                    builder.add_extra("error_kind", "tool_error")
+                else:
+                    log_trace(
+                        "error",
+                        _trace_source,
+                        msg,
                         tool_name=function_name,
-                        args=function_args or {},
-                        error=error_message or result_text,
-                        result=result_text,
-                        trace_context=trace_detail,
-                    ),
-                )
+                        detail=make_trace_envelope(
+                            "tool_error",
+                            tool_name=function_name,
+                            args=function_args or {},
+                            error=error_message or result_text,
+                            result=result_text,
+                            trace_context=trace_detail,
+                        ),
+                    )
                 return
 
-            # Success path — record completion + log the (truncated) result.
+            # Success path — record completion + emit the (truncated) result.
             completed = list(current_completed_tools.get())
             completed.append(function_name)
             current_completed_tools.set(completed)
             trimmed = result_text
             if len(trimmed) > 500:
                 trimmed = trimmed[:500] + "…"
-            log_trace(
-                "tool_result",
-                _trace_source,
-                f"{label} completed",
-                tool_name=function_name,
-                detail=make_trace_envelope(
+            if builder is not None:
+                builder.add_tool_call(
+                    tool_call_id=str(tool_call_id),
+                    function_name=function_name,
+                    arguments=function_args or {},
+                )
+                builder.add_observation(
+                    source_call_id=str(tool_call_id),
+                    content=trimmed,
+                )
+            else:
+                log_trace(
                     "tool_result",
+                    _trace_source,
+                    f"{label} completed",
                     tool_name=function_name,
-                    args=function_args or {},
-                    result=trimmed,
-                    trace_context=trace_detail,
-                ),
-            )
+                    detail=make_trace_envelope(
+                        "tool_result",
+                        tool_name=function_name,
+                        args=function_args or {},
+                        result=trimmed,
+                        trace_context=trace_detail,
+                    ),
+                )
         except Exception:
             # Never let trace plumbing break tool execution.
             pass
@@ -934,6 +969,33 @@ async def _sync_request(payload: dict) -> AgentResponse:
         )
 
 
+async def _agent_turn(
+    agent_id: str,
+    session_key: str,
+    messages: list[dict],
+    on_progress: Optional[Callable],
+    *,
+    trace_context: dict[str, Any] | None,
+    model_name: str | None,
+) -> str:
+    """Run one agent turn inside an ATIF ``begin_agent_step`` context.
+
+    Tool-dispatch callbacks pull the active builder off the contextvar
+    and attach tool_calls + observations onto the same step row, so a
+    multi-tool turn collapses to one ATIF Step. Token totals from
+    ``litellm.acompletion`` flow into the run handle and the step
+    builder derives its ``metrics`` from the delta on context exit.
+    """
+    from llm.trajectory import begin_agent_step
+    with begin_agent_step("", model_name=model_name) as step:
+        reply = await chat_with_agent(
+            agent_id, session_key, messages, on_progress, trace_context=trace_context,
+        )
+        if step is not None:
+            step.update_message(reply or "")
+        return reply
+
+
 async def _local_fallback(
     agent_id: str,
     session_key: str,
@@ -965,12 +1027,17 @@ async def _local_fallback(
         conversation_id=str((trace_context or {}).get("conversation_id") or "") or None,
     )
 
+    _model_for_step = run_metadata.get("model")
+
     try:
         with start_run(
             **run_metadata,
             trigger_input=latest_user,
         ) as run:
-            reply = await chat_with_agent(agent_id, session_key, messages, on_progress, trace_context=trace_context)
+            reply = await _agent_turn(
+                agent_id, session_key, messages, on_progress,
+                trace_context=trace_context, model_name=_model_for_step,
+            )
             side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
             failed_tools = list(current_failed_tools.get())
             completed_tools = list(current_completed_tools.get())
@@ -979,16 +1046,15 @@ async def _local_fallback(
                 latest_user_message=latest_user,
                 side_effects=side_effects,
             ):
-                log_trace(
-                    "error",
-                    "chat",
+                from llm.trajectory import record_step
+                record_step(
+                    "system",
                     "Assistant said tenant access needed checking without message_person",
-                    detail=make_trace_envelope(
-                        "tool_enforcement",
-                        expected_tool="message_person",
-                        reply=reply,
-                        trace_context=trace_context,
-                    ),
+                    extra={
+                        "kind": "tool_enforcement",
+                        "expected_tool": "message_person",
+                        "reply": reply,
+                    },
                 )
                 pending_suggestion_messages.set([])
                 current_failed_tools.set([])
@@ -1005,12 +1071,9 @@ async def _local_fallback(
                         ),
                     },
                 ]
-                reply = await chat_with_agent(
-                    agent_id,
-                    session_key,
-                    corrective_messages,
-                    on_progress,
-                    trace_context=trace_context,
+                reply = await _agent_turn(
+                    agent_id, session_key, corrective_messages, on_progress,
+                    trace_context=trace_context, model_name=_model_for_step,
                 )
                 side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
                 failed_tools = list(current_failed_tools.get())
@@ -1021,16 +1084,15 @@ async def _local_fallback(
                     reply = side_effect_reply
                     run.complete(status="completed", final_response=reply)
                     return AgentResponse(reply=reply, side_effects=side_effects)
-                log_trace(
-                    "error",
-                    "chat",
+                from llm.trajectory import record_step
+                record_step(
+                    "system",
                     "Assistant claimed document creation without create_document tool call",
-                    detail=make_trace_envelope(
-                        "tool_enforcement",
-                        expected_tool="create_document",
-                        reply=reply,
-                        trace_context=trace_context,
-                    ),
+                    extra={
+                        "kind": "tool_enforcement",
+                        "expected_tool": "create_document",
+                        "reply": reply,
+                    },
                 )
                 pending_suggestion_messages.set([])
                 corrective_messages = [
@@ -1045,12 +1107,9 @@ async def _local_fallback(
                         ),
                     },
                 ]
-                reply = await chat_with_agent(
-                    agent_id,
-                    session_key,
-                    corrective_messages,
-                    on_progress,
-                    trace_context=trace_context,
+                reply = await _agent_turn(
+                    agent_id, session_key, corrective_messages, on_progress,
+                    trace_context=trace_context, model_name=_model_for_step,
                 )
                 side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
                 if _reply_claims_document_created(reply) and not _has_document_side_effect(side_effects):
@@ -1064,17 +1123,16 @@ async def _local_fallback(
             )
             if switched_mutating_tool:
                 failed_tool, replacement_tool = switched_mutating_tool
-                log_trace(
-                    "error",
-                    "chat",
+                from llm.trajectory import record_step
+                record_step(
+                    "system",
                     "Assistant switched to a different mutating tool after tool failure",
-                    detail=make_trace_envelope(
-                        "tool_enforcement",
-                        failed_tool=failed_tool,
-                        replacement_tool=replacement_tool,
-                        reply=reply,
-                        trace_context=trace_context,
-                    ),
+                    extra={
+                        "kind": "tool_enforcement",
+                        "failed_tool": failed_tool,
+                        "replacement_tool": replacement_tool,
+                        "reply": reply,
+                    },
                 )
                 pending_suggestion_messages.set([])
                 current_failed_tools.set([])
@@ -1091,12 +1149,9 @@ async def _local_fallback(
                         ),
                     },
                 ]
-                reply = await chat_with_agent(
-                    agent_id,
-                    session_key,
-                    corrective_messages,
-                    on_progress,
-                    trace_context=trace_context,
+                reply = await _agent_turn(
+                    agent_id, session_key, corrective_messages, on_progress,
+                    trace_context=trace_context, model_name=_model_for_step,
                 )
                 side_effects = _collect_pending_side_effects(pending_items=pending_suggestion_messages.get())
                 failed_tools = list(current_failed_tools.get())

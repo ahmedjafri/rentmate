@@ -300,24 +300,36 @@ async def list_runs(
     status: str | None = None,
     limit: int = 50,
 ):
-    """Return recent agent runs (newest first) with per-run trace counts.
+    """Return recent agent runs (newest first) with per-run step + trace counts.
 
-    The dev UI groups traces by run; this endpoint feeds the collapsed
-    run rows. Per-run traces come from ``GET /dev/traces?run_id=...``.
+    The dev UI groups events by run; per-run trajectory comes from
+    ``GET /dev/runs/{run_id}/trajectory`` (ATIF v1.4). ``step_count`` is
+    the post-cutover ATIF step count; ``trace_count`` is the legacy
+    AgentTrace count for runs that pre-date the trajectory rewrite.
     """
     await require_user(request)
     from sqlalchemy import func, select
 
-    from db.models import AgentRun, AgentTrace
+    from db.models import AgentRun, AgentStep, AgentTrace
 
     trace_count_subq = (
         select(AgentTrace.run_id, func.count().label("trace_count"))
         .group_by(AgentTrace.run_id)
         .subquery()
     )
+    step_count_subq = (
+        select(AgentStep.run_id, func.count().label("step_count"))
+        .group_by(AgentStep.run_id)
+        .subquery()
+    )
     q = (
-        select(AgentRun, trace_count_subq.c.trace_count)
+        select(
+            AgentRun,
+            trace_count_subq.c.trace_count,
+            step_count_subq.c.step_count,
+        )
         .outerjoin(trace_count_subq, trace_count_subq.c.run_id == AgentRun.id)
+        .outerjoin(step_count_subq, step_count_subq.c.run_id == AgentRun.id)
         .order_by(AgentRun.started_at.desc())
     )
     if task_id:
@@ -332,7 +344,7 @@ async def list_runs(
 
     rows = db.execute(q).all()
     out: list[dict] = []
-    for run, trace_count in rows:
+    for run, trace_count, step_count in rows:
         duration_ms: int | None = None
         if run.ended_at and run.started_at:
             duration_ms = int((run.ended_at - run.started_at).total_seconds() * 1000)
@@ -355,9 +367,32 @@ async def list_runs(
             "trigger_input": (run.trigger_input or "")[:240] or None,
             "final_response": (run.final_response or "")[:240] or None,
             "error_message": run.error_message,
+            "step_count": int(step_count or 0),
             "trace_count": int(trace_count or 0),
         })
     return out
+
+
+@router.get("/runs/{run_id}/trajectory")
+async def get_run_trajectory(
+    run_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Return the run's full ATIF v1.4 trajectory.
+
+    Reads from ``agent_steps`` for post-cutover runs; falls back to a
+    legacy adapter that synthesizes ATIF Steps from ``agent_traces`` for
+    runs that pre-date the trajectory rewrite. See
+    ``llm/trajectory.py:to_trajectory``.
+    """
+    await require_user(request)
+    from llm.trajectory import to_trajectory
+
+    trajectory = to_trajectory(db, run_id)
+    if trajectory is None:
+        raise HTTPException(status_code=404, detail=f"run {run_id} not found")
+    return trajectory
 
 
 @router.get("/trace-filters/tasks")

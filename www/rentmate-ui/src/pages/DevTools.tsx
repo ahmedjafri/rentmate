@@ -59,6 +59,9 @@ interface RunEntry {
   final_response: string | null;
   error_message: string | null;
   trace_count: number;
+  // ATIF Step rows for post-cutover runs. Legacy runs (pre-cutover) only
+  // have ``trace_count``; when ``step_count > 0`` we show steps instead.
+  step_count: number;
 }
 
 interface TraceFilterOption {
@@ -496,7 +499,16 @@ function RunsPanel() {
                     {run.conversation_id && (
                       <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">chat</Badge>
                     )}
-                    <span className="text-[10px] text-muted-foreground shrink-0">{run.trace_count} traces</span>
+                    {/* TODO(atif): replace the trace-table view with a
+                        per-step ATIF viewer that hits
+                        /dev/runs/{id}/trajectory and renders steps,
+                        tool_calls, and observations natively. The count
+                        below is the only post-cutover surface for now. */}
+                    <span className="text-[10px] text-muted-foreground shrink-0">
+                      {run.step_count > 0
+                        ? `${run.step_count} steps`
+                        : `${run.trace_count} traces`}
+                    </span>
                   </div>
                   {(run.trigger_input || run.error_message) && (
                     <div className="mt-1 ml-5 text-xs text-muted-foreground truncate">
