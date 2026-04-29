@@ -64,6 +64,61 @@ interface RunEntry {
   step_count: number;
 }
 
+// Harbor ATIF v1.4 Step shape returned by /dev/runs/{id}/trajectory.
+interface AtifToolCall {
+  tool_call_id: string;
+  function_name: string;
+  arguments: Record<string, unknown>;
+}
+
+interface AtifObservationResult {
+  source_call_id: string;
+  content: string;
+}
+
+interface AtifStep {
+  step_id: number;
+  timestamp: string | null;
+  source: 'user' | 'agent' | 'system';
+  message: string;
+  model_name?: string | null;
+  reasoning_content?: string | null;
+  tool_calls?: AtifToolCall[];
+  observation?: { results: AtifObservationResult[] };
+  metrics?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    cached_tokens?: number;
+    cost_usd?: number;
+  };
+  extra?: Record<string, unknown>;
+}
+
+interface AtifTrajectory {
+  schema_version: string;
+  session_id: string;
+  agent: {
+    name: string;
+    version: string | null;
+    model_name: string | null;
+  };
+  steps: AtifStep[];
+  final_metrics: {
+    total_prompt_tokens: number;
+    total_completion_tokens: number;
+    total_cached_tokens?: number;
+    total_cost_usd: number;
+    total_steps: number;
+  };
+  extra?: Record<string, unknown>;
+}
+
+const STEP_SOURCE_COLORS: Record<AtifStep['source'], string> = {
+  user: 'bg-slate-100 text-slate-800',
+  agent: 'bg-purple-100 text-purple-800',
+  system: 'bg-amber-100 text-amber-800',
+};
+
 interface TraceFilterOption {
   id: string;
   raw_id?: string;
@@ -139,6 +194,12 @@ function RunsPanel() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [tracesByRun, setTracesByRun] = useState<Map<string, TraceEntry[]>>(new Map());
   const [traceLoading, setTraceLoading] = useState<Set<string>>(new Set());
+  // ATIF trajectory cache. Always populated for expanded runs (the
+  // legacy adapter on the server synthesizes ATIF steps from
+  // pre-cutover trace rows so the UI has a single rendering path).
+  const [trajectoryByRun, setTrajectoryByRun] = useState<Map<string, AtifTrajectory>>(new Map());
+  const [trajectoryLoading, setTrajectoryLoading] = useState<Set<string>>(new Set());
+  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
   const [selectedTrace, setSelectedTrace] = useState<TraceDetailEntry | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailSection, setDetailSection] = useState<'overview' | 'context' | 'retrieval' | 'io' | 'reasoning' | 'raw'>('overview');
@@ -186,6 +247,31 @@ function RunsPanel() {
     }
   }, []);
 
+  const loadTrajectoryForRun = useCallback(async (runId: string) => {
+    setTrajectoryLoading(prev => {
+      const next = new Set(prev);
+      next.add(runId);
+      return next;
+    });
+    try {
+      const res = await authFetch(`/dev/runs/${encodeURIComponent(runId)}/trajectory`);
+      if (res.ok) {
+        const data = (await res.json()) as AtifTrajectory;
+        setTrajectoryByRun(prev => {
+          const next = new Map(prev);
+          next.set(runId, data);
+          return next;
+        });
+      }
+    } catch { /* ignore */ } finally {
+      setTrajectoryLoading(prev => {
+        const next = new Set(prev);
+        next.delete(runId);
+        return next;
+      });
+    }
+  }, []);
+
   useEffect(() => { loadRuns(); }, [loadRuns]);
 
   useEffect(() => {
@@ -204,14 +290,19 @@ function RunsPanel() {
     void loadFilters();
   }, []);
 
-  // Auto-refresh every 5s — re-fetch the run list AND any expanded run's traces
+  // Auto-refresh every 5s — re-fetch the run list AND any expanded
+  // run's trajectory (or legacy traces, for the run-detail dialog
+  // path).
   useEffect(() => {
     const id = setInterval(() => {
       void loadRuns();
-      expanded.forEach(runId => void loadTracesForRun(runId));
+      expanded.forEach(runId => {
+        void loadTrajectoryForRun(runId);
+        if (tracesByRun.has(runId)) void loadTracesForRun(runId);
+      });
     }, 5000);
     return () => clearInterval(id);
-  }, [loadRuns, loadTracesForRun, expanded]);
+  }, [loadRuns, loadTracesForRun, loadTrajectoryForRun, expanded, tracesByRun]);
 
   const toggleRun = (runId: string) => {
     setExpanded(prev => {
@@ -220,10 +311,19 @@ function RunsPanel() {
         next.delete(runId);
       } else {
         next.add(runId);
-        if (!tracesByRun.has(runId)) {
-          void loadTracesForRun(runId);
+        if (!trajectoryByRun.has(runId)) {
+          void loadTrajectoryForRun(runId);
         }
       }
+      return next;
+    });
+  };
+
+  const toggleStep = (key: string) => {
+    setExpandedSteps(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -463,8 +563,8 @@ function RunsPanel() {
         )}
         {runs.map(run => {
           const isExpanded = expanded.has(run.id);
-          const traces = tracesByRun.get(run.id);
-          const isLoadingTraces = traceLoading.has(run.id);
+          const trajectory = trajectoryByRun.get(run.id);
+          const isLoadingTrajectory = trajectoryLoading.has(run.id);
           return (
             <div key={run.id} className="border rounded-lg">
               <div className="flex items-start gap-1 px-1 py-1">
@@ -499,11 +599,6 @@ function RunsPanel() {
                     {run.conversation_id && (
                       <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">chat</Badge>
                     )}
-                    {/* TODO(atif): replace the trace-table view with a
-                        per-step ATIF viewer that hits
-                        /dev/runs/{id}/trajectory and renders steps,
-                        tool_calls, and observations natively. The count
-                        below is the only post-cutover surface for now. */}
                     <span className="text-[10px] text-muted-foreground shrink-0">
                       {run.step_count > 0
                         ? `${run.step_count} steps`
@@ -534,46 +629,177 @@ function RunsPanel() {
 
               {isExpanded && (
                 <div className="border-t bg-muted/20 px-1 py-1 space-y-1">
-                  {isLoadingTraces && !traces && (
-                    <p className="text-[10px] text-muted-foreground text-center py-2">Loading traces…</p>
+                  {isLoadingTrajectory && !trajectory && (
+                    <p className="text-[10px] text-muted-foreground text-center py-2">Loading trajectory…</p>
                   )}
-                  {traces && traces.length === 0 && (
-                    <p className="text-[10px] text-muted-foreground text-center py-2">No traces for this run.</p>
+                  {trajectory && trajectory.steps.length === 0 && (
+                    <p className="text-[10px] text-muted-foreground text-center py-2">No steps recorded for this run.</p>
                   )}
-                  {traces?.map(t => (
-                    <div key={t.id} className="flex items-center gap-1 px-1 py-0.5">
-                      <button
-                        className="min-w-0 flex-1 text-left px-2 py-1 flex items-center gap-2 hover:bg-background transition-colors rounded-md"
-                        onClick={() => void openTrace(t.id)}
-                      >
-                        <span className="text-[10px] text-muted-foreground font-mono w-8 shrink-0">
-                          #{t.sequence_num ?? '?'}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground font-mono w-16 shrink-0">
-                          {formatTime(t.timestamp)}
-                        </span>
-                        <Badge className={cn("text-[9px] h-4 px-1.5 shrink-0", TRACE_COLORS[t.trace_type] ?? 'bg-gray-100 text-gray-700')}>
-                          {t.trace_type}
-                        </Badge>
-                        {t.tool_name && (
-                          <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">{t.tool_name}</Badge>
+                  {trajectory?.steps.map(step => {
+                    const stepKey = `${run.id}:${step.step_id}`;
+                    const stepExpanded = expandedSteps.has(stepKey);
+                    const toolCount = step.tool_calls?.length ?? 0;
+                    const obsCount = step.observation?.results?.length ?? 0;
+                    const errored = (step.extra as Record<string, unknown> | undefined)?.error_kind === 'tool_error'
+                      || (step.extra as Record<string, unknown> | undefined)?.step_errored === true;
+                    const messageOneLine = (step.message || '').split('\n', 1)[0] || '(no message)';
+                    return (
+                      <div key={stepKey} className="border rounded-md bg-background/40">
+                        <button
+                          type="button"
+                          className="w-full text-left px-2 py-1 flex items-center gap-2 hover:bg-background transition-colors rounded-md"
+                          onClick={() => toggleStep(stepKey)}
+                          aria-expanded={stepExpanded}
+                        >
+                          {stepExpanded
+                            ? <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+                            : <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />}
+                          <span className="text-[10px] text-muted-foreground font-mono w-8 shrink-0">
+                            #{step.step_id}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground font-mono w-16 shrink-0">
+                            {step.timestamp ? formatTime(step.timestamp) : ''}
+                          </span>
+                          <Badge className={cn(
+                            'text-[9px] h-4 px-1.5 shrink-0',
+                            STEP_SOURCE_COLORS[step.source] ?? 'bg-gray-100 text-gray-700',
+                          )}>
+                            {step.source}
+                          </Badge>
+                          {step.model_name && (
+                            <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">
+                              {shortModel(step.model_name)}
+                            </Badge>
+                          )}
+                          {toolCount > 0 && (
+                            <Badge variant="outline" className="text-[9px] h-4 px-1.5 shrink-0">
+                              {toolCount} tool{toolCount === 1 ? '' : 's'}
+                            </Badge>
+                          )}
+                          {errored && (
+                            <Badge className="text-[9px] h-4 px-1.5 shrink-0 bg-red-100 text-red-800">
+                              error
+                            </Badge>
+                          )}
+                          <span className="text-xs truncate flex-1">{messageOneLine}</span>
+                          {step.metrics?.cost_usd !== undefined && step.metrics.cost_usd > 0 && (
+                            <span className="text-[10px] text-muted-foreground font-mono shrink-0">
+                              ${step.metrics.cost_usd.toFixed(4)}
+                            </span>
+                          )}
+                          {step.metrics && (
+                            <span className="text-[10px] text-muted-foreground font-mono shrink-0">
+                              {step.metrics.prompt_tokens ?? 0}→{step.metrics.completion_tokens ?? 0}
+                            </span>
+                          )}
+                        </button>
+                        {stepExpanded && (
+                          <div className="border-t px-3 py-2 space-y-2 text-xs">
+                            {step.message && (
+                              <div>
+                                <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+                                  Message
+                                </div>
+                                <pre className="bg-muted/40 rounded p-2 whitespace-pre-wrap font-mono text-[11px]">
+                                  {step.message}
+                                </pre>
+                              </div>
+                            )}
+                            {step.reasoning_content && (
+                              <div>
+                                <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+                                  Reasoning
+                                </div>
+                                <pre className="bg-muted/40 rounded p-2 whitespace-pre-wrap font-mono text-[11px]">
+                                  {step.reasoning_content}
+                                </pre>
+                              </div>
+                            )}
+                            {step.tool_calls?.map(tc => {
+                              // Pair each tool call with its observation result by source_call_id.
+                              const result = step.observation?.results.find(
+                                r => r.source_call_id === tc.tool_call_id,
+                              );
+                              const isError = result?.content?.startsWith('ERROR:');
+                              return (
+                                <div key={tc.tool_call_id} className="border rounded">
+                                  <div className="px-2 py-1 flex items-center gap-2 bg-muted/30">
+                                    <Badge variant="outline" className="text-[9px] h-4 px-1.5">
+                                      {tc.function_name}
+                                    </Badge>
+                                    <span className="text-[10px] text-muted-foreground font-mono truncate">
+                                      {tc.tool_call_id}
+                                    </span>
+                                    {isError && (
+                                      <Badge className="text-[9px] h-4 px-1.5 bg-red-100 text-red-800">
+                                        error
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <div className="px-2 py-1 grid grid-cols-1 md:grid-cols-2 gap-2">
+                                    <div>
+                                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+                                        Arguments
+                                      </div>
+                                      <pre className="bg-muted/40 rounded p-1.5 whitespace-pre-wrap font-mono text-[10px]">
+                                        {JSON.stringify(tc.arguments, null, 2)}
+                                      </pre>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+                                        Observation
+                                      </div>
+                                      <pre className={cn(
+                                        'rounded p-1.5 whitespace-pre-wrap font-mono text-[10px]',
+                                        isError ? 'bg-red-50 text-red-800' : 'bg-muted/40',
+                                      )}>
+                                        {result?.content ?? '(no result)'}
+                                      </pre>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                            {/* Observations without a matching tool_call (rare but possible from the legacy adapter). */}
+                            {(step.observation?.results ?? [])
+                              .filter(r => !(step.tool_calls ?? []).some(tc => tc.tool_call_id === r.source_call_id))
+                              .map(r => (
+                                <div key={r.source_call_id} className="border rounded">
+                                  <div className="px-2 py-1 bg-muted/30 text-[10px] text-muted-foreground font-mono">
+                                    {r.source_call_id}
+                                  </div>
+                                  <pre className="px-2 py-1 whitespace-pre-wrap font-mono text-[10px]">
+                                    {r.content}
+                                  </pre>
+                                </div>
+                              ))}
+                            {step.metrics && (
+                              <div className="text-[10px] text-muted-foreground">
+                                tokens: {step.metrics.prompt_tokens ?? 0} prompt /
+                                {' '}{step.metrics.completion_tokens ?? 0} completion
+                                {step.metrics.cached_tokens
+                                  ? ` / ${step.metrics.cached_tokens} cached`
+                                  : ''}
+                                {step.metrics.cost_usd
+                                  ? ` · cost $${step.metrics.cost_usd.toFixed(6)}`
+                                  : ''}
+                              </div>
+                            )}
+                            {step.extra && Object.keys(step.extra).length > 0 && (
+                              <details className="text-[10px]">
+                                <summary className="cursor-pointer text-muted-foreground">
+                                  extra
+                                </summary>
+                                <pre className="mt-1 bg-muted/40 rounded p-2 whitespace-pre-wrap font-mono">
+                                  {JSON.stringify(step.extra, null, 2)}
+                                </pre>
+                              </details>
+                            )}
+                          </div>
                         )}
-                        <span className="text-xs truncate flex-1">{t.summary}</span>
-                      </button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 shrink-0 p-0"
-                        aria-label={`Copy trace ${t.id}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          copyTrace(t);
-                        }}
-                      >
-                        <Copy className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  ))}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
