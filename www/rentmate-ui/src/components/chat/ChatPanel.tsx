@@ -32,7 +32,8 @@ import {
   triggerTaskReview,
   updateTaskStatus,
 } from '@/graphql/client';
-import { notifyConversationRead } from '@/lib/conversationReadEvents';
+import { useMarkThreadSeen } from '@/lib/conversationReadEvents';
+import { useStreamingState } from '@/hooks/useStreamingState';
 
 export type EmbeddedTaskThreadSelection =
   | { kind: 'ai' }
@@ -118,6 +119,15 @@ export function normalizeActionCard(card: any): ChatMessage['actionCard'] | unde
   };
 }
 
+export function normalizeReviewCard(card: any): ChatMessage['reviewCard'] | undefined {
+  if (!card) return undefined;
+  return {
+    status: card.status as NonNullable<ChatMessage['reviewCard']>['status'],
+    summary: card.summary ?? undefined,
+    nextStep: (card.nextStep ?? card.next_step) ?? undefined,
+  };
+}
+
 function getLastSentMessage(messages: ChatMessage[]): string | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -190,16 +200,7 @@ export function ChatPanel({
   const participantMessageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const onboarding = useOnboarding();
   const onboardingStartedRef = useRef(false);
-  const markedConversationIdsRef = useRef<Set<string>>(new Set());
-
-  const markThreadSeen = useCallback((conversationId: string) => {
-    if (markedConversationIdsRef.current.has(conversationId)) return;
-    markedConversationIdsRef.current.add(conversationId);
-    notifyConversationRead(conversationId);
-    void markConversationSeen(conversationId).catch(() => {
-      markedConversationIdsRef.current.delete(conversationId);
-    });
-  }, []);
+  const markThreadSeen = useMarkThreadSeen(markConversationSeen);
 
   const handleDismiss = async () => {
     if (!chatPanel.taskId) return;
@@ -261,8 +262,6 @@ export function ChatPanel({
   const [pendingAttachments, setPendingAttachments] = useState<import('./ChatInput').PendingAttachment[]>([]);
   // Track in-flight stream IDs so we can reconnect on panel reopen
   const activeStreamIdRef = useRef<string | null>(null);
-  const [isTyping, setIsTyping] = useState(false);
-  const [progressLog, setProgressLog] = useState<string[]>([]);
 
   const activeSuggestion = useMemo(() =>
     chatPanel.suggestionId ? suggestions.find(s => s.id === chatPanel.suggestionId) : null,
@@ -301,6 +300,20 @@ export function ChatPanel({
   const [convTaskLink, setConvTaskLink] = useState<{ taskId: string; taskTitle: string | null } | null>(null);
   const [activeConvType, setActiveConvType] = useState<string | null>(null);
   const activeConversationId = chatPanel.conversationId;
+
+  const {
+    isTyping,
+    progressLog,
+    setProgressLog,
+    visibleIsTyping,
+    visibleProgressLog,
+    beginStream,
+    endStream,
+  } = useStreamingState({
+    taskId: chatPanel.taskId,
+    suggestionId: chatPanel.suggestionId,
+    conversationId: chatPanel.conversationId,
+  });
 
   // Fetch the conversation's task linkage + conversation_type so the
   // middle pane can show a "Task #N — <title>" header when the loaded
@@ -372,6 +385,11 @@ export function ChatPanel({
             label: unit.label,
             propertyId: unit.propertyId,
           })) ?? undefined,
+        } : undefined,
+        reviewCard: m.reviewCard ? {
+          status: m.reviewCard.status as NonNullable<ChatMessage['reviewCard']>['status'],
+          summary: m.reviewCard.summary ?? undefined,
+          nextStep: m.reviewCard.nextStep ?? undefined,
         } : undefined,
       })));
     }).catch(() => {});
@@ -529,6 +547,11 @@ export function ChatPanel({
               propertyId: unit.propertyId,
             })) ?? undefined,
           } : undefined,
+          reviewCard: m.reviewCard ? {
+            status: m.reviewCard.status as NonNullable<ChatMessage['reviewCard']>['status'],
+            summary: m.reviewCard.summary ?? undefined,
+            nextStep: m.reviewCard.nextStep ?? undefined,
+          } : undefined,
         };
       });
       setParticipantMessages(msgs);
@@ -608,8 +631,7 @@ export function ChatPanel({
     if (!activeTask || String(activeTask.id) !== String(reviewTrigger.taskId)) return;
 
     const controller = new AbortController();
-    setIsTyping(true);
-    setProgressLog([]);
+    beginStream();
     // Make sure the AI tab is on screen.
     setActiveTaskTab('ai');
 
@@ -617,7 +639,7 @@ export function ChatPanel({
       try {
         const res = await triggerTaskReview(reviewTrigger.taskId);
         if (!res.ok || !res.body) {
-          setIsTyping(false);
+          endStream();
           toast.error('Agent review failed to start');
           return;
         }
@@ -637,22 +659,21 @@ export function ChatPanel({
               if (event.type === 'progress') {
                 setProgressLog(prev => [...prev, event.text as string]);
               } else if (event.type === 'done') {
-                setIsTyping(false);
-                setProgressLog([]);
+                endStream();
                 refreshData();
                 return;
               } else if (event.type === 'error') {
-                setIsTyping(false);
+                endStream();
                 toast.error(`Agent error: ${event.message}`);
                 return;
               }
             } catch { /* skip malformed */ }
           }
         }
-        setIsTyping(false);
+        endStream();
       } catch (err) {
         if ((err as Error).name !== 'AbortError') {
-          setIsTyping(false);
+          endStream();
           toast.error(err instanceof Error ? err.message : 'Agent review failed');
         }
       }
@@ -697,8 +718,7 @@ export function ChatPanel({
               if (event.type === 'idle') return; // nothing running
               if (!active) {
                 active = true;
-                setIsTyping(true);
-                setProgressLog([]);
+                beginStream();
               }
               if (event.type === 'progress') {
                 setProgressLog(prev => [...prev, event.text as string]);
@@ -707,11 +727,11 @@ export function ChatPanel({
 	                activeStreamIdRef.current = null;
 	                addAiMessage(event.reply, { taskId });
 	                appendEffectMessages(event.effect_messages, { taskId });
-	                setIsTyping(false);
+	                endStream();
 	              } else if (event.type === 'error') {
                 activeStreamIdRef.current = null;
                 toast.error('Agent encountered an error');
-                setIsTyping(false);
+                endStream();
               }
             } catch { /* ignore malformed lines */ }
           }
@@ -731,7 +751,7 @@ export function ChatPanel({
           console.warn('[reconnect] stream error:', err);
         }
       } finally {
-        setIsTyping(false);
+        endStream();
       }
     })();
 
@@ -762,6 +782,7 @@ export function ChatPanel({
       message_type?: string | null;
       suggestion_id?: string | null;
       action_card?: ChatMessage['actionCard'];
+      review_card?: ChatMessage['reviewCard'];
     }> | undefined,
     context: { taskId?: string | null; suggestionId?: string | null },
   ) => {
@@ -769,6 +790,7 @@ export function ChatPanel({
     const documentIds = new Set<string>();
     for (const msg of effectMessages) {
       const normalizedCard = normalizeActionCard(msg.action_card);
+      const normalizedReview = normalizeReviewCard(msg.review_card);
       for (const link of normalizedCard?.links ?? []) {
         if (link.entityType === 'document' && link.entityId) documentIds.add(link.entityId);
       }
@@ -782,6 +804,7 @@ export function ChatPanel({
         messageType: (msg.message_type as ChatMessage['messageType']) ?? 'message',
         suggestionId: msg.suggestion_id ?? undefined,
         actionCard: normalizedCard,
+        reviewCard: normalizedReview,
       };
       if (!context.taskId && !context.suggestionId) {
         setConvMessages(prev => [...prev, effectMessage]);
@@ -820,8 +843,7 @@ export function ChatPanel({
     const taskId = chatPanel.taskId;
     const suggestionId = chatPanel.suggestionId;
 
-    setIsTyping(true);
-    setProgressLog([]);
+    beginStream();
     try {
       // Build the request — unified endpoint handles both task and session chats
       const suggestionHint = !taskId && activeSuggestion
@@ -867,7 +889,7 @@ export function ChatPanel({
             stream_id?: string;
             message?: string;
             conversation_id?: string;
-            effect_messages?: Array<{ id: string; body?: string | null; message_type?: string | null; suggestion_id?: string | null; action_card?: ChatMessage['actionCard'] }>;
+            effect_messages?: Array<{ id: string; body?: string | null; message_type?: string | null; suggestion_id?: string | null; action_card?: ChatMessage['actionCard']; review_card?: ChatMessage['reviewCard'] }>;
             onboarding?: Parameters<typeof onboarding.update>[0];
           };
           try { event = JSON.parse(line.slice(6)); } catch { continue; }
@@ -939,8 +961,7 @@ export function ChatPanel({
       addAiMessage(errorMsg, { taskId, suggestionId, messageType: 'error' });
       toast.error('RentMate is unavailable right now.');
     } finally {
-      setIsTyping(false);
-      setProgressLog([]);
+      endStream();
     }
   };
 
@@ -1243,7 +1264,7 @@ export function ChatPanel({
             </div>
             <ScrollArea className="flex-1 min-w-0 overflow-x-hidden" ref={scrollRef}>
               <div className="w-full min-w-0 max-w-full space-y-4 overflow-x-hidden p-4">
-                {aiRenderedItems.length === 0 && !isTyping && (
+                {aiRenderedItems.length === 0 && !visibleIsTyping && (
                   <div className="text-center py-8 text-muted-foreground">
                     <Bot className="h-8 w-8 mx-auto mb-2 opacity-40" />
                     <p className="text-sm font-medium">Ask RentMate about this task</p>
@@ -1262,13 +1283,13 @@ export function ChatPanel({
                     />
                   )
                 )}
-                {isTyping && (
+                {visibleIsTyping && (
                   <div data-testid="thinking-row" className="flex items-start gap-2 overflow-hidden text-muted-foreground">
                     <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 shrink-0 mt-0.5">
                       <Bot className="h-3.5 w-3.5 text-primary" />
                     </div>
                     <div data-testid="thinking-bubble" className="flex-1 min-w-0 overflow-hidden py-2 px-3 rounded-2xl bg-muted">
-                      {progressLog.length === 0 ? (
+                      {visibleProgressLog.length === 0 ? (
                         <div className="flex gap-1 py-0.5">
                           <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:0ms]" />
                           <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:150ms]" />
@@ -1276,7 +1297,7 @@ export function ChatPanel({
                         </div>
                       ) : (
                         <div className="space-y-0.5 overflow-hidden">
-                          {progressLog.slice(-3).map((line, i, arr) => (
+                          {visibleProgressLog.slice(-3).map((line, i, arr) => (
                             <p
                               key={i}
                               data-testid="progress-line"
@@ -1574,7 +1595,7 @@ export function ChatPanel({
           {/* Messages (non-task) */}
           <ScrollArea className="flex-1 min-w-0 overflow-x-hidden" ref={scrollRef}>
             <div className="w-full min-w-0 max-w-full space-y-4 overflow-x-hidden p-4">
-              {messages.length === 0 && !isTyping && !onboarding.isActive && (
+              {messages.length === 0 && !visibleIsTyping && !onboarding.isActive && (
                 <div className="text-center py-8 text-muted-foreground">
                   <Bot className="h-8 w-8 mx-auto mb-2 opacity-40" />
                   <p className="text-sm font-medium">
@@ -1602,13 +1623,13 @@ export function ChatPanel({
                   />
                 ) : null
               )}
-              {isTyping && (
+              {visibleIsTyping && (
                 <div data-testid="thinking-row" className="flex items-start gap-2 overflow-hidden text-muted-foreground">
                   <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 shrink-0 mt-0.5">
                     <Bot className="h-3.5 w-3.5 text-primary" />
                   </div>
                   <div data-testid="thinking-bubble" className="flex-1 min-w-0 overflow-hidden py-2 px-3 rounded-2xl bg-muted">
-                    {progressLog.length === 0 ? (
+                    {visibleProgressLog.length === 0 ? (
                       <div className="flex gap-1 py-0.5">
                         <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:0ms]" />
                         <span className="w-1.5 h-1.5 bg-muted-foreground/50 rounded-full animate-bounce [animation-delay:150ms]" />
@@ -1616,7 +1637,7 @@ export function ChatPanel({
                       </div>
                     ) : (
                       <div className="space-y-0.5 overflow-hidden">
-                        {progressLog.slice(-3).map((line, i, arr) => (
+                        {visibleProgressLog.slice(-3).map((line, i, arr) => (
                           <p
                             key={i}
                             data-testid="progress-line"

@@ -61,7 +61,14 @@ type ChatMessageType {
   relatedTaskIds: JSON
   suggestionId: String
   actionCard: ChatActionCardType
+  reviewCard: ChatReviewCardType
   sentAt: String!
+}
+
+type ChatReviewCardType {
+  status: String!
+  summary: String
+  nextStep: String
 }
 
 type ConversationParticipantType {

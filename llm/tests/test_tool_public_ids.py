@@ -1000,7 +1000,7 @@ def test_propose_task_infers_property_and_unit_from_retrieval_context(db):
                 steps=[
                     {"key": "confirm_vendor", "label": "Confirm vendor availability", "status": "active"},
                     {"key": "coordinate_access", "label": "Coordinate tenant access", "status": "pending"},
-                    {"key": "complete_cleaning", "label": "Complete gutter cleaning", "status": "pending"},
+                    {"key": "verify_completed", "label": "Verify gutter cleaning completed", "status": "pending"},
                 ],
             ))
     finally:
@@ -1063,7 +1063,7 @@ def test_propose_task_tool_rejects_tenant_addressed_vendor_draft(db):
             steps=[
                 {"key": "confirm_vendor", "label": "Confirm vendor availability", "status": "active"},
                 {"key": "coordinate_access", "label": "Coordinate tenant access", "status": "pending"},
-                {"key": "complete", "label": "Complete gutter cleaning", "status": "pending"},
+                {"key": "verify_completed", "label": "Verify gutter cleaning completed", "status": "pending"},
             ],
             draft_message="Hi Priya, what days work for gutter cleaning?",
         ))

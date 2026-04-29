@@ -134,16 +134,23 @@ _IN_TASK_PM_APPROVAL_PATTERNS = [
     ]
 ]
 
+# Verbs paired with outcome-state words signal a step that's verifying
+# something actually got done (vs. scheduling/coordinating). Used both
+# at propose-time (require last step matches) and at update-time
+# (gate marking a confirmation step done on real external confirmation).
+_OUTCOME_STATE_WORDS = (
+    r"works?|working|worked|fixed|resolved|repair|repaired|complete|completed|completion|done|finished"
+)
 _OUTCOME_CONFIRM_STEP_RE = re.compile(
-    r"("
-    r"\bconfirm\b.*\b(works?|working|worked|fixed|resolved|repair|repaired|completed)\b"
-    r"|"
-    r"\bverify\b.*\b(works?|working|worked|fixed|resolved|repair|repaired|completed)\b"
-    r"|"
-    r"\bcheck\b.*\b(works?|working|worked|fixed|resolved|repair|repaired|completed)\b"
-    r"|"
-    r"\bmake sure\b.*\b(works?|working|worked|fixed|resolved)\b"
-    r")",
+    rf"("
+    rf"\bconfirm\b.*\b({_OUTCOME_STATE_WORDS})\b"
+    rf"|"
+    rf"\bverify\b.*\b({_OUTCOME_STATE_WORDS})\b"
+    rf"|"
+    rf"\bcheck\b.*\b({_OUTCOME_STATE_WORDS})\b"
+    rf"|"
+    rf"\bmake sure\b.*\b({_OUTCOME_STATE_WORDS})\b"
+    rf")",
     re.I,
 )
 _AFFIRMATIVE_CONFIRM_RE = re.compile(
@@ -644,7 +651,15 @@ class ProposeTaskTool(Tool):
             "You MUST provide steps — an ordered list of 3–6 progress steps "
             "(each with key/label/status). Mark the first step `active`; the "
             "rest start `pending`. Tasks without steps render with an empty "
-            "progress tracker and are rejected."
+            "progress tracker and are rejected. "
+            "**The LAST step MUST be an outcome-verification step** — phrasing "
+            "like 'Confirm the faucet works', 'Verify the lock is fixed', "
+            "'Make sure the leak is resolved'. The phrasing must include "
+            "confirm/verify/check (or 'make sure') paired with "
+            "works/fixed/repaired/resolved/completed. Without this terminal "
+            "step the task can be marked 100% done before the real work "
+            "happens; the propose call is rejected if the last step doesn't "
+            "match this shape."
         )
 
     @property
@@ -840,6 +855,29 @@ class ProposeTaskTool(Tool):
                     "not step status."
                 ),
             })
+        # Require the LAST step to be an outcome-verification step (matches
+        # ``confirm/verify/check ... works/fixed/repaired/completed``). Without
+        # this, agents propose plans like "review issue / schedule vendor /
+        # confirm access" and mark all three done before the actual repair
+        # happens — the dashboard then shows 3/3 while the work is unfinished.
+        # The same regex powers the runtime gate in
+        # ``UpdateTaskProgressTool``, so a confirmation step also gets the
+        # "external confirmation required" enforcement automatically.
+        if steps and not _OUTCOME_CONFIRM_STEP_RE.search(
+            f"{steps[-1].key} {steps[-1].label} {steps[-1].note or ''}"
+        ):
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    "The final step must be an outcome-verification step — "
+                    "something like 'Confirm faucet repair completed' or "
+                    "'Verify the lock works'. Phrasing must include "
+                    "confirm/verify/check (or 'make sure') paired with "
+                    "works/fixed/repaired/resolved/completed. Without a "
+                    "verification step, the task can be marked 100% done "
+                    "before the actual work happens."
+                ),
+            })
         if steps:
             action_payload["steps"] = dump_task_steps(steps)
 
@@ -958,7 +996,12 @@ class UpdateTaskProgressTool(Tool):
         return (
             "Update one progress step on a task by marking it pending, active, or done. "
             "Use this whenever work advances so the task can be closed once all steps are done. "
-            "Provide either step_key or step_label to identify the step."
+            "Provide either step_key or step_label to identify the step. "
+            "**Do NOT mark a step done before the underlying real-world work has actually happened.** "
+            "Scheduling a vendor is not 'repair complete'. A tenant agreeing to an access window is "
+            "not 'access confirmed for the appointment that already happened'. The final "
+            "verification step (Confirm/Verify the work) is gated server-side: it can only be "
+            "marked done after a tenant or vendor inbound message actually confirms the outcome."
         )
 
     @property

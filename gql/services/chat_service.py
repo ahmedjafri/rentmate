@@ -16,6 +16,7 @@ from db.models import (
     Message,
     MessageReceipt,
     MessageType,
+    Notification,
     ParticipantType,
     Task,
     Tenant,
@@ -131,6 +132,14 @@ class MessageActionCard(BaseModel):
     units: list[MessageActionCardUnit] | None = None
 
 
+class MessageReviewCard(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["on_track", "needs_action", "blocked", "waiting", "recorded"]
+    summary: str | None = None
+    next_step: str | None = None
+
+
 class MessageMeta(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -139,6 +148,7 @@ class MessageMeta(BaseModel):
     draft_reply: str | None = None
     related_task_ids: MessageRelatedTaskIds | None = None
     action_card: MessageActionCard | None = None
+    review_card: MessageReviewCard | None = None
 
 
 class MessageAttachment(BaseModel):
@@ -195,6 +205,8 @@ def dump_message_meta(meta: MessageMeta | dict | None = None, **updates) -> dict
             value = MessageRelatedTaskIds.model_validate(value)
         if key == "action_card" and value is not None:
             value = MessageActionCard.model_validate(value)
+        if key == "review_card" and value is not None:
+            value = MessageReviewCard.model_validate(value)
         setattr(parsed, key, value)
     dumped = parsed.model_dump(exclude_none=True)
     return dumped or None
@@ -312,6 +324,18 @@ def mark_conversation_seen(db: Session, *, conversation_uid: str) -> Conversatio
             ))
         else:
             receipt.read_at = now
+
+    # Opening the conversation also dismisses any in-app notifications
+    # routed to it ("Task needs your input", etc.). Without this the bell
+    # badge in the header keeps surfacing the same item even after the
+    # PM has obviously seen it by reading the thread.
+    db.query(Notification).filter(
+        Notification.org_id == resolve_org_id(),
+        Notification.recipient_user_id == resolve_account_id(),
+        Notification.conversation_id == conversation.id,
+        Notification.read_at.is_(None),
+        Notification.archived_at.is_(None),
+    ).update({Notification.read_at: now}, synchronize_session=False)
     return conversation
 
 
