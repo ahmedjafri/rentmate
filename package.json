@@ -8,6 +8,7 @@
     "dev:down": "docker compose -f infra/docker-compose.dev.yml down",
     "dev:dummy-data": "RENTMATE_DB_URI=postgresql+psycopg2://postgres:postgres@127.0.0.1:5432/rentmate poetry run python scripts/seed_dummy_data.py && docker compose -f infra/docker-compose.dev.yml up --build",
     "test:doc-gen:container": "bash scripts/test_doc_gen_container.sh",
+    "test:integration": "node --test tests/integration/",
     "build": "npm run build --prefix www/rentmate-ui",
     "start": "npm run build && poetry run uvicorn main:app --host 0.0.0.0 --port 8000",
     "lint": "poetry run ruff check . && poetry run python scripts/lint_kwargs.py",
