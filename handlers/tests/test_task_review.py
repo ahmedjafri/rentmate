@@ -242,7 +242,7 @@ class TestReviewPersistsToAIConversation:
             ),
         ), patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"), \
              patch("llm.context.build_task_context_data", return_value=_stub_task_context()):
-            asyncio.run(mod._review_one_task(task, trigger="manual"))
+            asyncio.run(mod._review_one_task(task))
 
         self.db.expire_all()
         messages = (
@@ -251,9 +251,9 @@ class TestReviewPersistsToAIConversation:
             .order_by(Message.sent_at.asc())
             .all()
         )
-        # Two rows: INTERNAL trace (rendered as ThinkingChain) + MESSAGE
-        # summary (rendered as the manager-facing reply).
-        assert len(messages) == 2, "review should post one trace + one summary"
+        # Two rows: INTERNAL trace (rendered as ThinkingChain) + ACTION
+        # review-card (rendered as a distinct status card, not a chat reply).
+        assert len(messages) == 2, "review should post one trace + one review card"
         trace, summary = messages
 
         # 1. INTERNAL trace carries the reasoning bullets — chat panel
@@ -263,15 +263,19 @@ class TestReviewPersistsToAIConversation:
         assert "Reading task context" in trace.body
         assert "Checking recent activity" in trace.body
 
-        # 2. MESSAGE summary is the manager-facing reply — no reasoning
-        #    bullets crammed in here.
+        # 2. ACTION row carries the structured review_card payload — no
+        #    "Agent review" preamble or "Summary" label in the body.
         assert summary.is_ai is True
-        assert summary.message_type == MessageType.MESSAGE
-        assert "Agent review (manual)" in summary.body
-        assert "Quote pending" in summary.body
-        assert "Ping vendor for quote status." in summary.body
-        assert "Reasoning" not in summary.body
-        assert "Reading task context" not in summary.body
+        assert summary.message_type == MessageType.ACTION
+        assert summary.body == "Quote pending; follow up tomorrow."
+        assert "Agent review" not in (summary.body or "")
+        assert summary.meta == {
+            "review_card": {
+                "status": "needs_action",
+                "summary": "Quote pending; follow up tomorrow.",
+                "next_step": "Ping vendor for quote status.",
+            }
+        }
 
         refreshed = self.db.query(Task).filter_by(id=task.id).one()
         assert refreshed.last_message_at is None
@@ -306,7 +310,7 @@ class TestReviewPersistsToAIConversation:
             ),
         ), patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"), \
              patch("llm.context.build_task_context_data", return_value=stub_context):
-            asyncio.run(mod._review_one_task(task, trigger="manual"))
+            asyncio.run(mod._review_one_task(task))
 
         self.db.expire_all()
         from db.models import AgentRun
@@ -502,7 +506,7 @@ class TestReviewPersistsToAIConversation:
 
         with patch("llm.client.call_agent", new=AsyncMock(side_effect=_capture_call)), \
              patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"):
-            asyncio.run(mod._review_one_task(task, trigger="manual"))
+            asyncio.run(mod._review_one_task(task))
 
         system_prompt = captured_messages["messages"][0]["content"]
         assert "Linked conversation transcripts:" in system_prompt
@@ -605,7 +609,7 @@ class TestReviewPersistsToAIConversation:
             ),
         ), patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"), \
              patch("llm.context.build_task_context_data", return_value=_stub_task_context()):
-            asyncio.run(mod._review_one_task(task, trigger="auto"))
+            asyncio.run(mod._review_one_task(task))
 
         assert self.db.query(Message).count() == baseline_messages, (
             "orphan task review must not create any messages"

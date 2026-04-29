@@ -144,3 +144,29 @@ test('question card renders the Answered state when an answer body is provided',
   // Reply textarea is hidden once answered.
   expect(screen.queryByPlaceholderText('Type your answer…')).not.toBeInTheDocument();
 });
+
+test('renders agent-review messages as a status card, not a chat reply', () => {
+  renderBubble({
+    id: 'msg-review-1',
+    role: 'assistant',
+    content: 'Sent confirmation request to Marcus.',
+    timestamp: new Date('2026-04-25T12:00:00Z'),
+    senderName: 'RentMate',
+    senderType: 'ai',
+    messageType: 'action',
+    reviewCard: {
+      status: 'waiting',
+      summary: 'Sent confirmation request to Marcus.',
+      nextStep: 'Await tenant access window.',
+    },
+  });
+
+  // Distinct status card surface — no "🤖 Agent review" preamble, no
+  // "Summary" label, no agent sender row.
+  expect(screen.queryByText(/🤖 Agent review/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/^Summary$/)).not.toBeInTheDocument();
+  expect(screen.getByText('Waiting')).toBeInTheDocument();
+  expect(screen.getByText('Agent update')).toBeInTheDocument();
+  expect(screen.getByText('Sent confirmation request to Marcus.')).toBeInTheDocument();
+  expect(screen.getByText(/Await tenant access window\./)).toBeInTheDocument();
+});

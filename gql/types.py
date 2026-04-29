@@ -429,6 +429,13 @@ class ChatActionCardType:
 
 
 @strawberry.type
+class ChatReviewCardType:
+    status: str
+    summary: typing.Optional[str] = None
+    next_step: typing.Optional[str] = None
+
+
+@strawberry.type
 class ChatMessageType:
     uid: str
     body: typing.Optional[str] = None
@@ -442,6 +449,7 @@ class ChatMessageType:
     related_task_ids: typing.Optional[strawberry.scalars.JSON] = None
     suggestion_id: typing.Optional[str] = None
     action_card: typing.Optional[ChatActionCardType] = None
+    review_card: typing.Optional[ChatReviewCardType] = None
     sent_at: str = ""
 
     @classmethod
@@ -489,6 +497,11 @@ class ChatMessageType:
                     for unit in (meta.action_card.units or [])
                 ],
             ) if meta.action_card else None,
+            review_card=ChatReviewCardType(
+                status=meta.review_card.status,
+                summary=meta.review_card.summary,
+                next_step=meta.review_card.next_step,
+            ) if meta.review_card else None,
             sent_at=_utc_iso(msg.sent_at),
         )
 

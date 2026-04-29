@@ -1,7 +1,7 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, type ElementType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
-import { Bot, User, Eye, Lightbulb, Check, X, Send, Pencil, ChevronDown, ChevronUp, CheckCircle2, XCircle, Zap, Building2, Wrench, BookOpen, ArrowUpRight, Loader2, Expand, FileText, HelpCircle } from 'lucide-react';
+import { Bot, User, Eye, Lightbulb, Check, X, Send, Pencil, ChevronDown, ChevronUp, CheckCircle2, XCircle, Zap, Building2, Wrench, BookOpen, ArrowUpRight, Loader2, Expand, FileText, HelpCircle, AlertCircle, OctagonAlert, Clock, NotebookPen } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
@@ -39,7 +39,7 @@ function ThinkingChain({ steps, isChain }: { steps: string[]; isChain: boolean }
     </div>
   );
 }
-import { ChatActionCardLink, ChatMessage as ChatMessageType } from '@/data/mockData';
+import { ChatActionCardLink, ChatMessage as ChatMessageType, ChatReviewStatus } from '@/data/mockData';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -371,6 +371,80 @@ function QuestionReplyForm({
   );
 }
 
+const REVIEW_STATUS_CONFIG: Record<ChatReviewStatus, {
+  icon: ElementType;
+  label: string;
+  iconClassName: string;
+  badgeClassName: string;
+}> = {
+  on_track: {
+    icon: CheckCircle2,
+    label: 'On track',
+    iconClassName: 'text-emerald-700 bg-emerald-50 dark:text-emerald-400 dark:bg-emerald-950/40',
+    badgeClassName: 'border-emerald-200 text-emerald-700 dark:border-emerald-900 dark:text-emerald-400',
+  },
+  needs_action: {
+    icon: AlertCircle,
+    label: 'Needs action',
+    iconClassName: 'text-amber-700 bg-amber-50 dark:text-amber-400 dark:bg-amber-950/40',
+    badgeClassName: 'border-amber-200 text-amber-700 dark:border-amber-900 dark:text-amber-400',
+  },
+  blocked: {
+    icon: OctagonAlert,
+    label: 'Blocked',
+    iconClassName: 'text-rose-700 bg-rose-50 dark:text-rose-400 dark:bg-rose-950/40',
+    badgeClassName: 'border-rose-200 text-rose-700 dark:border-rose-900 dark:text-rose-400',
+  },
+  waiting: {
+    icon: Clock,
+    label: 'Waiting',
+    iconClassName: 'text-sky-700 bg-sky-50 dark:text-sky-400 dark:bg-sky-950/40',
+    badgeClassName: 'border-sky-200 text-sky-700 dark:border-sky-900 dark:text-sky-400',
+  },
+  recorded: {
+    icon: NotebookPen,
+    label: 'Update',
+    iconClassName: 'text-muted-foreground bg-muted/40',
+    badgeClassName: 'border-muted text-muted-foreground',
+  },
+};
+
+function ReviewCardBubble({ message }: { message: ChatMessageType }) {
+  const card = message.reviewCard;
+  if (!card) return null;
+  const cfg = REVIEW_STATUS_CONFIG[card.status] ?? REVIEW_STATUS_CONFIG.recorded;
+  const Icon = cfg.icon;
+  const summary = card.summary?.trim();
+  const nextStep = card.nextStep?.trim();
+  return (
+    <div className="w-full rounded-lg border border-border/60 bg-muted/30 px-3 py-2">
+      <div className="flex items-start gap-2">
+        <div className={cn('mt-0.5 flex h-6 w-6 items-center justify-center rounded-md', cfg.iconClassName)}>
+          <Icon className="h-3.5 w-3.5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Badge variant="outline" className={cn('h-5 rounded-md px-1.5 text-[9px] font-semibold uppercase tracking-wide', cfg.badgeClassName)}>
+              {cfg.label}
+            </Badge>
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Agent update</span>
+          </div>
+          {summary && (
+            <p className="mt-1 text-[12px] leading-snug text-foreground whitespace-pre-line">{summary}</p>
+          )}
+          {nextStep && (
+            <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+              <span className="font-semibold text-foreground/80">Next: </span>
+              {nextStep}
+            </p>
+          )}
+        </div>
+        <span className="pt-0.5 text-[10px] text-muted-foreground shrink-0">{formatMessageTime(message.timestamp)}</span>
+      </div>
+    </div>
+  );
+}
+
 interface Props {
   message: ChatMessageType;
   onApprove?: (messageId: string) => void;
@@ -420,6 +494,10 @@ export function ChatMessageBubble({
   // Context message — opening summary with optional cross-references
   if (msgType === 'context') {
     return <ContextBubble message={message} taskId={taskId} />;
+  }
+
+  if (isAssistant && message.reviewCard) {
+    return <ReviewCardBubble message={message} />;
   }
 
   if (isAssistant && msgType === 'action') {

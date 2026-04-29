@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Property, Tenant, Vendor, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, ChatActionCardLink, TaskParticipant, LinkedConversation } from '@/data/mockData';
+import { Property, Tenant, Vendor, ActionDeskTask, MaintenanceTicket, Suggestion, ChatMessage, ChatActionCardLink, ChatReviewStatus, TaskParticipant, LinkedConversation } from '@/data/mockData';
 import {
   fromGraphqlEnum,
   fromGraphqlTaskStatus,
@@ -187,6 +187,13 @@ export function apiMessagesToChatThread(messages: ApiTaskMessage[]): ChatMessage
             label: unit.label,
             propertyId: unit.propertyId,
           })) ?? undefined,
+        }
+      : undefined,
+    reviewCard: m.reviewCard
+      ? {
+          status: m.reviewCard.status as ChatReviewStatus,
+          summary: m.reviewCard.summary ?? undefined,
+          nextStep: m.reviewCard.nextStep ?? undefined,
         }
       : undefined,
   }));
@@ -393,6 +400,11 @@ interface ApiTaskMessage {
     fields?: { label: string; value: string }[];
     links?: { label: string; entityType: string; entityId: string; propertyId?: string | null }[];
     units?: { uid: string; label: string; propertyId: string }[];
+  };
+  reviewCard?: {
+    status: string;
+    summary?: string | null;
+    nextStep?: string | null;
   };
   sentAt: string;
 }

@@ -8,6 +8,8 @@ from db.models import (
     ConversationParticipant,
     ConversationType,
     Message,
+    MessageType,
+    Notification,
     ParticipantType,
     Property,
     Task,
@@ -419,6 +421,31 @@ def test_dump_message_meta_round_trips_question_action_card():
     assert parsed.action_card.title.startswith("Should I approve")
 
 
+def test_dump_message_meta_round_trips_review_card():
+    """Task-review status updates persist as a structured review_card on
+    meta — the renderer keys off this to show a distinct status bubble
+    instead of a plain agent reply."""
+    meta = chat_service.dump_message_meta(
+        review_card={
+            "status": "waiting",
+            "summary": "Sent confirmation request to Marcus.",
+            "next_step": "Await tenant access window.",
+        },
+    )
+    assert meta == {
+        "review_card": {
+            "status": "waiting",
+            "summary": "Sent confirmation request to Marcus.",
+            "next_step": "Await tenant access window.",
+        }
+    }
+    parsed = chat_service.parse_message_meta(meta)
+    assert parsed.review_card is not None
+    assert parsed.review_card.status == "waiting"
+    assert parsed.review_card.summary == "Sent confirmation request to Marcus."
+    assert parsed.review_card.next_step == "Await tenant access window."
+
+
 def test_parse_message_meta_ignores_legacy_extra_keys():
     meta = chat_service.parse_message_meta({
         "source": "dev_sim",
@@ -471,3 +498,118 @@ def test_build_agent_message_history_does_not_read_other_org_conversation(db):
         {"role": "system", "content": "local context"},
         {"role": "user", "content": "local follow-up"},
     ]
+
+
+def test_mark_conversation_seen_dismisses_in_app_notifications_for_that_conversation(db):
+    """Opening an AI conversation must clear any "Task needs your input"
+    bell notifications routed to it. Without this the header badge keeps
+    showing the same item even after the PM has obviously read the
+    thread by opening it."""
+    convo = _conversation(db, convo_type=ConversationType.TASK_AI)
+    db.add(Message(
+        org_id=1,
+        conversation_id=convo.id,
+        sender_type=ParticipantType.ACCOUNT_USER,
+        body="What should I do?",
+        message_type=MessageType.ACTION,
+        is_ai=True,
+        sent_at=datetime.now(UTC),
+    ))
+
+    notification_for_this_convo = Notification(
+        org_id=1,
+        creator_id=1,
+        recipient_user_id=1,
+        conversation_id=convo.id,
+        kind="manager_attention",
+        channel="in_app",
+        delivery_status="recorded",
+        title="Task needs your input: Plumber quote approval",
+        body="Approve the $450 quote?",
+    )
+    notification_for_other_convo = Notification(
+        org_id=1,
+        creator_id=1,
+        recipient_user_id=1,
+        conversation_id=None,
+        kind="manager_attention",
+        channel="in_app",
+        delivery_status="recorded",
+        title="Different unrelated alert",
+    )
+    already_archived_for_this_convo = Notification(
+        org_id=1,
+        creator_id=1,
+        recipient_user_id=1,
+        conversation_id=convo.id,
+        kind="manager_attention",
+        channel="in_app",
+        delivery_status="recorded",
+        title="Old archived alert",
+        archived_at=datetime.now(UTC) - timedelta(days=1),
+    )
+    db.add_all([
+        notification_for_this_convo,
+        notification_for_other_convo,
+        already_archived_for_this_convo,
+    ])
+    db.commit()
+    target_id = notification_for_this_convo.id
+    other_id = notification_for_other_convo.id
+    archived_id = already_archived_for_this_convo.id
+
+    chat_service.mark_conversation_seen(db, conversation_uid=convo.external_id)
+    db.commit()
+    db.expire_all()
+
+    target = db.query(Notification).filter_by(id=target_id).one()
+    other = db.query(Notification).filter_by(id=other_id).one()
+    archived = db.query(Notification).filter_by(id=archived_id).one()
+
+    # The bell-targeted notification linked to the opened conversation
+    # is now read so the badge can decrement.
+    assert target.read_at is not None, (
+        "in-app notification for the opened conversation must be marked read"
+    )
+    # Notifications for OTHER conversations stay untouched.
+    assert other.read_at is None, (
+        "notifications not linked to this conversation must not be cleared"
+    )
+    # Already-archived notifications stay archived (and don't get a
+    # spurious read_at stamp that would interfere with archival audits).
+    assert archived.read_at is None, (
+        "archived notifications must not be touched by mark_conversation_seen"
+    )
+    assert archived.archived_at is not None
+
+
+def test_mark_conversation_seen_does_not_re_read_already_read_notifications(db):
+    """Re-opening a conversation should be a no-op for notifications the
+    PM had already read previously — we don't want to shift their read_at
+    stamp on every visit and lose the original ack timestamp."""
+    convo = _conversation(db, convo_type=ConversationType.TASK_AI)
+    earlier = datetime.now(UTC) - timedelta(hours=1)
+    notif = Notification(
+        org_id=1,
+        creator_id=1,
+        recipient_user_id=1,
+        conversation_id=convo.id,
+        kind="manager_attention",
+        channel="in_app",
+        delivery_status="recorded",
+        title="Already read notification",
+        read_at=earlier,
+    )
+    db.add(notif)
+    db.commit()
+
+    chat_service.mark_conversation_seen(db, conversation_uid=convo.external_id)
+    db.commit()
+    db.expire_all()
+
+    refreshed = db.query(Notification).filter_by(id=notif.id).one()
+    # read_at is preserved at the original timestamp; mark_conversation_seen
+    # only touches notifications whose read_at is currently NULL. (Compare
+    # naive — Notification.read_at is stored without tzinfo.)
+    expected = earlier.replace(tzinfo=None)
+    assert refreshed.read_at.replace(tzinfo=None) == expected

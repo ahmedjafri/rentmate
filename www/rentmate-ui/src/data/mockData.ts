@@ -106,6 +106,14 @@ export interface ChatActionCard {
   units?: ChatActionCardUnit[];
 }
 
+export type ChatReviewStatus = 'on_track' | 'needs_action' | 'blocked' | 'waiting' | 'recorded';
+
+export interface ChatReviewCard {
+  status: ChatReviewStatus;
+  summary?: string;
+  nextStep?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -120,6 +128,7 @@ export interface ChatMessage {
   relatedTasks?: ChatMessageRelatedTask[];
   attachments?: ChatMessageAttachment[];
   actionCard?: ChatActionCard;
+  reviewCard?: ChatReviewCard;
 }
 
 export interface SuggestionOption {

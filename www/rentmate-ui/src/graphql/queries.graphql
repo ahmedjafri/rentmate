@@ -30,6 +30,11 @@ fragment TaskMessageFields on ChatMessageType {
       propertyId
     }
   }
+  reviewCard {
+    status
+    summary
+    nextStep
+  }
   sentAt
 }
 
@@ -503,6 +508,11 @@ mutation SendMessage($input: SendMessageInput!) {
         label
         propertyId
       }
+    }
+    reviewCard {
+      status
+      summary
+      nextStep
     }
     sentAt
   }

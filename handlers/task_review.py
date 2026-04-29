@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -25,8 +25,6 @@ router = APIRouter()
 
 _TASK_REVIEW_POLL_SECONDS = 300          # 5-minute sweep cadence
 _TASK_REVIEW_COOLDOWN = timedelta(hours=1)
-
-TriggerSource = Literal["auto", "manual"]
 
 
 def _follow_up_wait_window_text(task) -> str:
@@ -220,48 +218,26 @@ def _select_due_tasks(db):
     return db.execute(stmt).scalars().all()
 
 
-def _format_summary_only(
-    *,
-    trigger: TriggerSource,
-    status: str | None,
-    summary: str | None,
-    next_step: str | None,
-) -> str:
-    """Compose the manager-facing summary posted to the AI conversation.
-
-    Reasoning trace lives in a separate INTERNAL message — the chat panel
-    renders that as a compact ThinkingChain — so it doesn't get crammed
-    into the reply body here.
-    """
-    trigger_label = "(manual)" if trigger == "manual" else "(auto)"
-    header_status = (status or "recorded").replace("_", " ")
-    parts = [f"🤖 Agent review {trigger_label} — {header_status}"]
-    if summary:
-        parts.append(f"\nSummary\n{summary.strip()}")
-    if next_step:
-        parts.append(f"\nNext step\n{next_step.strip()}")
-    return "\n".join(parts).strip()
+_REVIEW_CARD_STATUSES = {"on_track", "needs_action", "blocked", "waiting", "recorded"}
 
 
 def _persist_review_summary_to_ai_conversation(
     *,
     task_id: int,
     ai_conversation_id: int | None,
-    trigger: TriggerSource,
     trace_events: list[str],
 ) -> None:
     """Persist this review into the task's AI chat as two rows:
 
-    1. an ``INTERNAL`` row containing the reasoning trace (rendered by
+    1. an ``INTERNAL`` row carrying the reasoning trace (rendered by
        ``ChatMessage.tsx`` as a compact ThinkingChain);
-    2. a ``MESSAGE`` row containing only the manager-facing summary
-       (status / summary / next step).
+    2. an ``ACTION`` row whose ``meta.review_card`` carries the structured
+       status / summary / next step (rendered as a distinct status card,
+       not a chat reply).
 
-    Splitting the two lets the chat UI lay them out as separate items
-    instead of bundling the trace into the reply body. Skips silently
-    when the task has no AI conversation (some legacy tasks don't).
-    Re-reads review fields from a fresh Task row so we pick up whatever
-    ``record_task_review`` just wrote.
+    Skips silently when the task has no AI conversation (some legacy
+    tasks don't). Re-reads review fields from a fresh Task row so we pick
+    up whatever ``record_task_review`` just wrote.
     """
     if ai_conversation_id is None:
         return
@@ -272,7 +248,7 @@ def _persist_review_summary_to_ai_conversation(
         Task as TaskModel,
     )
     from db.session import SessionLocal
-    from gql.services import chat_service
+    from gql.services.chat_service import dump_message_meta
 
     db = SessionLocal()
     try:
@@ -280,10 +256,11 @@ def _persist_review_summary_to_ai_conversation(
         if fresh is None:
             return
 
+        now = datetime.now(UTC)
+
         # 1. Reasoning trace as INTERNAL — chat UI renders ThinkingChain.
         trace_lines = [line for line in trace_events if line]
         if trace_lines:
-            now = datetime.now(UTC)
             db.add(Message(
                 conversation_id=ai_conversation_id,
                 sender_type=ParticipantType.ACCOUNT_USER,
@@ -295,20 +272,29 @@ def _persist_review_summary_to_ai_conversation(
             ))
             db.flush()
 
-        # 2. Summary as MESSAGE — the manager-facing reply.
-        summary_body = _format_summary_only(
-            trigger=trigger,
-            status=fresh.last_review_status,
-            summary=fresh.last_review_summary,
-            next_step=fresh.last_review_next_step,
-        )
-        chat_service.send_autonomous_message(
-            db,
+        # 2. Status update as ACTION + meta.review_card. The bare summary
+        # text goes in body so legacy/screen-reader paths still have
+        # something readable; the bubble renders from review_card.
+        raw_status = (fresh.last_review_status or "recorded")
+        status = raw_status if raw_status in _REVIEW_CARD_STATUSES else "recorded"
+        summary_text = (fresh.last_review_summary or "").strip() or None
+        next_step_text = (fresh.last_review_next_step or "").strip() or None
+        review_card = {"status": status}
+        if summary_text:
+            review_card["summary"] = summary_text
+        if next_step_text:
+            review_card["next_step"] = next_step_text
+
+        db.add(Message(
             conversation_id=ai_conversation_id,
-            body=summary_body,
-            task_id=fresh.id,
-            bump_task_activity=False,
-        )
+            sender_type=ParticipantType.ACCOUNT_USER,
+            body=summary_text or "",
+            message_type=MessageType.ACTION,
+            sender_name="RentMate",
+            is_ai=True,
+            meta=dump_message_meta(review_card=review_card),
+            sent_at=now,
+        ))
         db.commit()
     finally:
         db.close()
@@ -363,7 +349,6 @@ def _task_review_trace_detail(
 async def _review_one_task(
     task,
     *,
-    trigger: TriggerSource = "auto",
     on_progress=None,
 ) -> None:
     """Run one agent review for a single task.
@@ -458,7 +443,6 @@ async def _review_one_task(
             _persist_review_summary_to_ai_conversation(
                 task_id=task.id,
                 ai_conversation_id=ai_conversation_id,
-                trigger=trigger,
                 trace_events=trace_events,
             )
     finally:
@@ -531,7 +515,7 @@ async def trigger_task_review(task_id: int, request: Request):
         async def _run():
             try:
                 await _review_one_task(
-                    task, trigger="manual", on_progress=_forward_progress,
+                    task, on_progress=_forward_progress,
                 )
                 await queue.put(("done", None))
             except Exception as exc:
