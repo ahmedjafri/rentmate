@@ -100,7 +100,9 @@ class LeaseTenant(Base, OrgId):
     __tablename__ = "lease_tenants"
 
     lease_id = Column(String(36), nullable=False)
-    tenant_id = Column(Integer, nullable=False)
+    # Indexed so "leases for tenant X" lookups (LeaseService.list_leases
+    # with tenant_id filter) hit the join via index instead of a scan.
+    tenant_id = Column(Integer, nullable=False, index=True)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
     lease = relationship("Lease", back_populates="tenant_links", overlaps="lease_links,tenant")
