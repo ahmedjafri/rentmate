@@ -755,7 +755,7 @@ def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | 
         # Gather progress steps
         steps_text = ""
         if task.steps:
-            steps_text = "\n\nTask progress steps:\n" + _hbjson.dumps(task.steps, indent=2)
+            steps_text = "\n\nTask progress steps:\n" + json.dumps(task.steps, indent=2)
 
         # Build AI conversation history
         all_msgs = [
