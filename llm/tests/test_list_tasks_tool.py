@@ -34,6 +34,21 @@ def _make_task(db, *, title: str, status=TaskStatus.ACTIVE, urgency=None,
     return task
 
 
+def test_list_tasks_rejects_placeholder_property_id(db):
+    """The placeholder-id guard now wraps every id-taking tool, not just
+    leases — passing a literal token like 'property_id_from_context'
+    should fail fast with an actionable message instead of silently
+    returning an empty list (or worse, matching nothing and looking
+    like a real "no tasks" outcome)."""
+    db.commit()
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        result = _run_tool(ListTasksTool(), property_id="property_id_from_context")
+    assert result["status"] == "error"
+    assert "placeholder" in result["message"].lower()
+    assert "lookup_properties" in result["message"]
+
+
 def test_list_tasks_defaults_to_active(db):
     _make_task(db, title="Open task A", status=TaskStatus.ACTIVE)
     _make_task(db, title="Open task B", status=TaskStatus.SUGGESTED)

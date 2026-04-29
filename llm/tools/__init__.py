@@ -30,7 +30,20 @@ from llm.tools.entities import (
     LookupPropertiesTool,
     LookupTenantsTool,
 )
-from llm.tools.memory import EditMemoryTool, RecallMemoryTool, SaveMemoryTool
+from llm.tools.leases import (
+    AddTenantToLeaseTool,
+    CreateLeaseTool,
+    LookupLeasesTool,
+    RemoveTenantFromLeaseTool,
+    TerminateLeaseTool,
+    UpdateLeaseTool,
+)
+from llm.tools.memory import (
+    AddTaskNoteTool,
+    EditMemoryTool,
+    RecallMemoryTool,
+    RememberAboutEntityTool,
+)
 from llm.tools.messaging import MessageExternalPersonTool
 from llm.tools.onboarding import UpdateOnboardingTool
 from llm.tools.task_review import AskManagerTool, RecordTaskReviewTool
@@ -54,10 +67,13 @@ __all__ = [
     "current_user_message",
     "pending_suggestion_messages",
     "simulation_suggestions",
+    "AddTaskNoteTool",
+    "AddTenantToLeaseTool",
     "AnalyzeDocumentTool",
     "AskManagerTool",
     "CloseTaskTool",
     "CreateDocumentTool",
+    "CreateLeaseTool",
     "CreatePropertyTool",
     "CreateRoutineTool",
     "CreateSuggestionTool",
@@ -66,6 +82,7 @@ __all__ = [
     "EditMemoryTool",
     "HasHappenedTool",
     "ListTasksTool",
+    "LookupLeasesTool",
     "LookupPropertiesTool",
     "LookupTenantsTool",
     "LookupVendorsTool",
@@ -74,7 +91,10 @@ __all__ = [
     "ReadDocumentTool",
     "RecallMemoryTool",
     "RecordTaskReviewTool",
-    "SaveMemoryTool",
+    "RememberAboutEntityTool",
+    "RemoveTenantFromLeaseTool",
+    "TerminateLeaseTool",
+    "UpdateLeaseTool",
     "UpdateTaskProgressTool",
     "UpdateOnboardingTool",
 ]

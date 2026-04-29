@@ -1,159 +1,478 @@
-"""Memory tools: save, recall, edit entity and task notes."""
+"""Entity-context + task-note tools.
+
+Two writers, two read/edit helpers:
+
+- ``RememberAboutEntityTool`` — durable per-entity context (preferences,
+  quirks, recurring patterns, stable constraints, stakeholder context,
+  compliance). A heuristic gate (length, PII strip, ``note_kind`` shape,
+  operational-phrasing reject, dedup) rejects low-signal saves so the
+  retrieval index stays useful instead of accumulating noise.
+- ``AddTaskNoteTool`` — short progress notes appended to ``Task.context``
+  for in-flight task state. No gate; task scope is by definition
+  short-lived and the agent already has plenty of friction recording it.
+- ``RecallMemoryTool`` — read-only fetch of an entity's combined
+  shared (``HasContext.context``) + private (``EntityNote``) notes.
+- ``EditMemoryTool`` — replace the full context for one entity (compact,
+  correct, or clear). Used after ``recall_memory`` returns notes the
+  agent wants to consolidate.
+
+All four reject placeholder ids (e.g. ``"tenant_id_from_context"``) up
+front via ``_check_placeholder_ids`` so junk never hits the persistence
+layer.
+
+The old ``SaveMemoryTool`` (and its ``general``/``task``/``entity`` scope
+discriminator) is gone; ``general`` was duplicating ``DbMemoryStore``
+and ``task`` is now ``add_task_note``. See
+``llm/agent_mds/SOUL.md`` for the recording policy the agent reads.
+"""
+from __future__ import annotations
+
 import json
+import re
+from datetime import UTC, datetime
 from typing import Any
 
 from backends.local_auth import resolve_account_id
 
-from llm.tools._common import Tool, ToolMode, _load_entity_by_public_id, _public_entity_id
+from llm.tools._common import (
+    Tool,
+    ToolMode,
+    _check_placeholder_ids,
+    _load_entity_by_public_id,
+    _public_entity_id,
+    tool_session,
+)
 
 
-class SaveMemoryTool(Tool):
-    """Save a note — either task-scoped or permanent entity context."""
+# ─── Heuristic gate primitives (shared by RememberAboutEntityTool) ────
+
+# Order matters — replacements run sequentially. Each pattern is paired
+# with a placeholder so the post-strip text still scans grammatically;
+# the gate then re-checks length, so notes that *only* contained the
+# stripped values get rejected as too short.
+_PII_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # UUIDs — internal pks, external_ids, anything in canonical form
+    (re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"), "[id]"),
+    # Email
+    (re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"), "[email]"),
+    # NANP-shaped phone numbers
+    (re.compile(r"\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"), "[phone]"),
+    # ``tenant_id``, ``lease_id``, etc. mentioned in prose
+    (re.compile(r"\b(tenant|lease|property|unit|document|vendor|task)_id(s)?\b", re.I), r"\1"),
+    # ``lease 123``, ``tenant #45`` style references
+    (re.compile(r"\b(lease|tenant|property|unit|document|vendor|task)\s*#?\s*\d{2,}\b", re.I), r"\1"),
+]
+
+# Phrases that signal the note is operational/transient — these should
+# live on a Task or in a chat message, not in durable entity context.
+_TRANSIENT_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"\bwaiting (for|on|to)\b", re.I),
+    re.compile(r"\bI\s+(just|am going to|am about to|will|need to)\b", re.I),
+    re.compile(r"\babout to\b", re.I),
+    re.compile(r"\b(today|tomorrow|tonight|this (morning|afternoon|evening|week))\b", re.I),
+    re.compile(r"\bnext (mon|tues|wed|thurs|fri|satur|sun)day\b", re.I),
+    re.compile(r"\bcurrently (working on|trying to|resolving)\b", re.I),
+    re.compile(r"\bin progress\b", re.I),
+]
+
+_FREQUENCY_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"\b\d+\s*(time|times|month|months|year|years|week|weeks|day|days)\b", re.I),
+    re.compile(r"\b(recurring|every|whenever|annually|quarterly|monthly|weekly|seasonal)\b", re.I),
+]
+
+_COMPLIANCE_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"§\s*\d+"),               # §37.3
+    re.compile(r"\bRCW\s*\d+"),            # WA Revised Code
+    re.compile(r"\b\d{1,3}\.\d{1,3}\b"),   # 37.3 etc.
+    re.compile(r"\b(code|ordinance|notice|law|statute|required|regulation|RCW|HUD|HOA)\b", re.I),
+]
+
+_VALID_NOTE_KINDS = (
+    "preference", "quirk", "pattern", "constraint", "stakeholder_context", "compliance",
+)
+_VALID_ENTITY_TYPES = ("property", "unit", "tenant", "vendor", "document")
+
+_MIN_LEN = 30
+_MAX_LEN = 400
+
+
+def _strip_pii(content: str) -> str:
+    """Remove IDs, emails, phone numbers, and lease/property/etc.
+    bookkeeping references. Tightens whitespace afterward so the
+    post-strip note doesn't read like a redacted document."""
+    out = content
+    for pattern, repl in _PII_PATTERNS:
+        out = pattern.sub(repl, out)
+    # Collapse runs of whitespace + the stub markers we left behind.
+    out = re.sub(r"\s+", " ", out).strip()
+    return out
+
+
+def _has_frequency_anchor(content: str) -> bool:
+    return any(p.search(content) for p in _FREQUENCY_PATTERNS)
+
+
+def _has_compliance_anchor(content: str) -> bool:
+    return any(p.search(content) for p in _COMPLIANCE_PATTERNS)
+
+
+def _is_operational(content: str) -> bool:
+    return any(p.search(content) for p in _TRANSIENT_PATTERNS)
+
+
+def _normalize_for_dedup(text: str) -> set[str]:
+    """Lowercase + tokenize on word boundaries; drop stopwords-ish
+    fillers so two paraphrases with different glue words still collide.
+    Cheap; if false-positives bite, swap in proper stemming later."""
+    fillers = {
+        "the", "a", "an", "of", "to", "and", "or", "in", "on", "for",
+        "with", "is", "are", "was", "were", "be", "been", "this", "that",
+        "by", "as", "at", "from", "it", "its",
+    }
+    tokens = {t for t in re.findall(r"[a-z0-9]+", text.lower()) if t not in fillers}
+    return tokens
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 0.0
+
+
+# Threshold biased toward catching paraphrases: agents often re-state
+# the same fact with different glue words, and sending them to
+# ``edit_memory`` is cheap. The cost of a false-positive reject is
+# low — the agent gets a specific error pointing at edit_memory.
+_DEDUP_THRESHOLD = 0.6
+
+
+def _split_existing_notes(blob: str | None) -> list[str]:
+    """Notes are joined with ``\\n---\\n`` (plus historical newline-only
+    separators). Splitting handles both."""
+    if not blob:
+        return []
+    chunks: list[str] = []
+    for major in (blob or "").split("\n---\n"):
+        for line in major.splitlines():
+            line = line.strip()
+            if line:
+                chunks.append(line)
+    return chunks
+
+
+# ─── Tools ────────────────────────────────────────────────────────────
+
+
+class RememberAboutEntityTool(Tool):
+    """Save a durable, high-signal note about a property/unit/tenant/vendor/document.
+
+    The heuristic gate (length bounds, PII strip, kind-specific shape
+    check, operational-phrase reject, Jaccard dedup) is intentionally
+    strict — retrieval surfaces these notes into every future agent
+    invocation that touches the same entity, so noise here directly
+    wastes context budget on every later turn.
+    """
 
     @property
     def name(self) -> str:
-        return "save_memory"
+        return "remember_about_entity"
 
     @property
     def description(self) -> str:
         return (
-            "Save a note. Use scope='task' for task-specific observations, "
-            "scope='entity' for permanent entity knowledge. "
-            "For entity notes, set visibility: 'private' (default) for account-specific "
-            "observations/assessments only your account can see; 'shared' for objective "
-            "facts visible to all accounts (lease terms, property features, extraction data). "
-            "When unsure, use private. When processing documents, save factual summaries "
-            "as shared and your assessments as private."
+            "Save a 1-3 sentence durable note about an entity "
+            "(property, unit, tenant, vendor, document) — the kind of "
+            "thing you'd want to know next time you touch this entity: "
+            "preferences, quirks, recurring patterns, stable constraints, "
+            "stakeholder context, compliance. NOT for today's task "
+            "progress, contact info, IDs, or anything already in the "
+            "schema (lease end dates, rent amounts, unit labels, "
+            "phone/email — retrieval pulls those automatically). The "
+            "server enforces a relevance gate; if your note is "
+            "operational, too short, all-PII, or near-duplicate of an "
+            "existing note you'll get a specific rejection telling you "
+            "what to fix or what tool to use instead."
         )
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "required": ["content"],
+            "required": ["entity_type", "entity_id", "note_kind", "content"],
             "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "The note to save (concise, one topic per note).",
-                },
-                "scope": {
-                    "type": "string",
-                    "enum": ["task", "entity"],
-                    "description": "Where to save: 'task' for this task only (default), 'entity' for permanent entity knowledge.",
-                },
-                "visibility": {
-                    "type": "string",
-                    "enum": ["private", "shared"],
-                    "description": "For entity scope: 'private' (default) = only this account sees it; 'shared' = all accounts see it.",
-                },
-                "task_id": {
-                    "type": "string",
-                    "description": "Task ID (required when scope='task'). Use the Task ID from context.",
-                },
                 "entity_type": {
                     "type": "string",
-                    "enum": ["property", "unit", "tenant", "vendor", "document", "general"],
-                    "description": "Entity type (required when scope='entity').",
+                    "enum": list(_VALID_ENTITY_TYPES),
                 },
                 "entity_id": {
                     "type": "string",
-                    "description": "Entity external UUID when available (required when scope='entity').",
+                    "description": (
+                        "Entity external UUID from lookup_properties / "
+                        "lookup_tenants / etc. Do not pass internal "
+                        "integer pks or placeholder strings."
+                    ),
                 },
-                "entity_label": {
+                "note_kind": {
                     "type": "string",
-                    "description": "Human-readable label for display.",
+                    "enum": list(_VALID_NOTE_KINDS),
+                    "description": (
+                        "preference (recipient/owner choice), quirk "
+                        "(specific oddity), pattern (recurring "
+                        "behavior — REQUIRES a frequency anchor like "
+                        "'every 6 months' or 'third time'), constraint "
+                        "(rule that bounds future actions), "
+                        "stakeholder_context (owner/PM relationship "
+                        "facts), compliance (regulatory — REQUIRES a "
+                        "citation or regulatory keyword)."
+                    ),
+                },
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "1-3 sentences. 30-400 characters after PII "
+                        "stripping. State the durable fact; do not "
+                        "include IDs, phone numbers, emails, or "
+                        "today's operational details."
+                    ),
+                },
+                "visibility": {
+                    "type": "string",
+                    "enum": ["shared", "private"],
+                    "description": (
+                        "shared (default) writes to the entity row "
+                        "visible to every account in this org. private "
+                        "writes to a per-creator EntityNote — use only "
+                        "for assessments you don't want other accounts "
+                        "to see."
+                    ),
                 },
             },
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        content = kwargs["content"]
-        scope = kwargs.get("scope", "task")
-        entity_type = kwargs.get("entity_type", "general")
-        entity_id = kwargs.get("entity_id", "")
-        entity_label = kwargs.get("entity_label", "")
-        task_id = kwargs.get("task_id", "")
+        # Placeholder ids first so the early reject doesn't waste a DB
+        # round-trip on the lookup below.
+        err = _check_placeholder_ids(kwargs, [("entity_id", None)])
+        if err:
+            return err
 
-        from datetime import UTC, datetime
+        entity_type = (kwargs.get("entity_type") or "").strip().lower()
+        entity_id = (kwargs.get("entity_id") or "").strip()
+        note_kind = (kwargs.get("note_kind") or "").strip().lower()
+        raw_content = (kwargs.get("content") or "").strip()
+        visibility = (kwargs.get("visibility") or "shared").strip().lower()
 
-        from db.session import SessionLocal
-
-        from llm.tools._common import tool_session
-
-        # Task-scoped notes
-        if scope == "task":
-            if not task_id:
-                return json.dumps({"status": "error", "message": "task_id is required for scope='task'"})
-            with tool_session() as db:
-                from db.models import Task as TaskModel
-                task = db.query(TaskModel).filter_by(id=task_id).first()
-                if not task:
-                    return json.dumps({"status": "error", "message": f"Task {task_id} not found"})
-                now = datetime.now(UTC).strftime("%Y-%m-%d")
-                entry = f"[{now}] {content}"
-                existing = task.context or ""
-                task.context = f"{existing}\n{entry}".strip()
-            return json.dumps({"status": "ok", "message": "Task note saved."})
-
-        if entity_type == "general" or not entity_id:
-            # General notes go to agent_memory table
-            from llm.memory_store import DbMemoryStore
-            store = DbMemoryStore(str(resolve_account_id()))
-            store.add_note(content=content, entity_type="general", entity_id="", entity_label="")
-            return json.dumps({"status": "ok", "message": "General note saved."})
-
-        visibility = kwargs.get("visibility", "private")
-
-        _VALID_ENTITY_TYPES = {"property", "unit", "tenant", "vendor", "document"}
         if entity_type not in _VALID_ENTITY_TYPES:
-            return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
+            return _err(f"entity_type must be one of {list(_VALID_ENTITY_TYPES)}, got {entity_type!r}.")
+        if note_kind not in _VALID_NOTE_KINDS:
+            return _err(f"note_kind must be one of {list(_VALID_NOTE_KINDS)}, got {note_kind!r}.")
+        if visibility not in ("shared", "private"):
+            return _err(f"visibility must be 'shared' or 'private', got {visibility!r}.")
+        if not raw_content:
+            return _err("content is required.")
 
+        # ── Gate step 1: PII strip (so length check applies to the
+        #    persisted form, not the noisy input).
+        cleaned = _strip_pii(raw_content)
+        if not cleaned:
+            return _err("content was entirely IDs / contact info — nothing durable to save.")
+
+        # ── Gate step 2: length bounds on the cleaned form.
+        if len(cleaned) < _MIN_LEN:
+            return _err(
+                f"content is too short ({len(cleaned)} chars after PII strip; "
+                f"need ≥ {_MIN_LEN}). State a durable fact in 1-3 sentences."
+            )
+        if len(cleaned) > _MAX_LEN:
+            return _err(
+                f"content is too long ({len(cleaned)} chars; max {_MAX_LEN}). "
+                "Tighten to 1-3 sentences — longer notes are noisier on retrieval."
+            )
+
+        # ── Gate step 3: operational/transient phrasing.
+        if _is_operational(cleaned):
+            return _err(
+                "content reads as operational/transient (today's plan, "
+                "in-progress work). That belongs on the task — use "
+                "add_task_note. Entity context is for durable facts."
+            )
+
+        # ── Gate step 4: kind-specific shape requirements.
+        if note_kind == "pattern" and not _has_frequency_anchor(cleaned):
+            return _err(
+                "note_kind='pattern' requires a frequency anchor "
+                "(e.g. 'third time in 18 months', 'every winter', "
+                "'recurring quarterly'). Either add one or pick "
+                "a different note_kind (quirk for one-offs)."
+            )
+        if note_kind == "compliance" and not _has_compliance_anchor(cleaned):
+            return _err(
+                "note_kind='compliance' requires a citation or "
+                "regulatory keyword (e.g. '§37.3', 'RCW 59.18', "
+                "'HOA notice rule', 'code-required'). Add one or "
+                "pick a different note_kind."
+            )
+
+        # ── Persist + dedup against existing notes for this entity.
         with tool_session() as db:
+            entity = _load_entity_by_public_id(db, entity_type, entity_id)
+            if entity is None:
+                return _err(
+                    f"{entity_type} {entity_id!r} not found. Pass the external "
+                    "UUID from lookup_properties / lookup_tenants / etc. — "
+                    "internal integer pks aren't valid here."
+                )
+
+            from db.models import EntityNote
+            from sqlalchemy.orm.attributes import flag_modified
+
+            creator_id = resolve_account_id()
+            public_entity_id = _public_entity_id(entity)
+
+            shared_existing = entity.context or ""
+            private_note: EntityNote | None = (
+                db.query(EntityNote)
+                .filter_by(
+                    creator_id=creator_id,
+                    entity_type=entity_type,
+                    entity_id=public_entity_id,
+                )
+                .first()
+            )
+            private_existing = private_note.content if private_note else ""
+
+            # Dedup considers BOTH visibilities — a private note that
+            # echoes a shared one is still noise.
+            existing_chunks = _split_existing_notes(shared_existing) + _split_existing_notes(private_existing)
+            new_tokens = _normalize_for_dedup(cleaned)
+            for chunk in existing_chunks:
+                # Strip the leading ``[YYYY-MM-DD] (kind)`` prefix the
+                # writer adds so the date+kind don't dominate the
+                # similarity score.
+                bare = re.sub(r"^\[[^\]]+\]\s*(\([^)]+\)\s*)?", "", chunk)
+                if _jaccard(_normalize_for_dedup(bare), new_tokens) >= _DEDUP_THRESHOLD:
+                    return _err(
+                        f"Similar note already saved: {bare[:120]!r}. "
+                        "Use edit_memory to update it instead of adding a "
+                        "near-duplicate."
+                    )
+
+            # ── Write.
             now = datetime.now(UTC)
-            now_str = now.strftime("%Y-%m-%d")
-            entry = f"[{now_str}] {content}"
-            label = entity_label or entity_type
+            stamped = f"[{now.strftime('%Y-%m-%d')}] ({note_kind}) {cleaned}"
+            label = (
+                getattr(entity, "name", None)
+                or getattr(entity, "label", None)
+                or entity_type
+            )
 
             if visibility == "shared":
-                # Write to entity.context (visible to all accounts)
-                _MODEL_MAP = {
-                    "property": "Property",
-                    "unit": "Unit",
-                    "tenant": "Tenant",
-                    "vendor": "User",
-                    "document": "Document",
-                }
-                entity = _load_entity_by_public_id(db, entity_type, entity_id)
-                if not entity:
-                    return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
-                existing = entity.context or ""
-                entity.context = f"{existing}\n{entry}".strip()
-                from sqlalchemy.orm.attributes import flag_modified
+                entity.context = (f"{shared_existing}\n---\n{stamped}".strip()
+                                  if shared_existing else stamped)
                 flag_modified(entity, "context")
-                return json.dumps({"status": "ok", "message": f"Shared context saved for {label}."})
             else:
-                # Write to EntityNote (private to this account)
-                from db.models import EntityNote
-                creator_id = resolve_account_id()
-                note_entity_id = str(entity_id)
-                note = db.query(EntityNote).filter_by(
-                    creator_id=creator_id, entity_type=entity_type, entity_id=note_entity_id,
-                ).first()
-                if note:
-                    existing = note.content or ""
-                    note.content = f"{existing}\n{entry}".strip()
-                    note.updated_at = now
+                if private_note is not None:
+                    private_note.content = (
+                        f"{private_existing}\n---\n{stamped}".strip()
+                        if private_existing else stamped
+                    )
+                    private_note.updated_at = now
                 else:
-                    note = EntityNote(
+                    db.add(EntityNote(
                         creator_id=creator_id,
                         entity_type=entity_type,
-                        entity_id=note_entity_id,
-                        content=entry,
+                        entity_id=public_entity_id,
+                        content=stamped,
                         created_at=now,
                         updated_at=now,
-                    )
-                    db.add(note)
-                return json.dumps({"status": "ok", "message": f"Private note saved for {label}."})
+                    ))
+
+        # TODO(memory): swap heuristic gate for a small Haiku classifier
+        # call once heuristic false-positives become annoying. Score
+        # durability + tighten the summary in one shot.
+        return json.dumps({
+            "status": "ok",
+            "message": f"Saved {note_kind} note for {label}.",
+            "note_kind": note_kind,
+            "entity_id": public_entity_id,
+            "applied_summary": cleaned,
+        })
+
+
+class AddTaskNoteTool(Tool):
+    """Append a short progress note to a task's ``context`` column.
+
+    Companion to ``remember_about_entity``: this is the right place for
+    operational state ("vendor confirmed Tue 2pm", "tenant uploaded
+    consent form"). The note gets stamped with a date but otherwise
+    concatenated to ``Task.context``; the gate is just length bounds +
+    PII strip + ``task_id`` placeholder check.
+    """
+
+    @property
+    def name(self) -> str:
+        return "add_task_note"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Append a short progress note to the current task. Use "
+            "this for in-flight task state: appointments confirmed, "
+            "documents received, decisions made. NOT for durable "
+            "per-entity context (that's remember_about_entity) or for "
+            "outbound communications (that's message_person). The "
+            "note appears in the task's ``context`` column for the "
+            "next agent turn on this task."
+        )
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": ["task_id", "note"],
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Real task id (numeric per-org id from list_tasks).",
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Short progress note. Up to 500 chars after PII strip.",
+                },
+            },
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [("task_id", "list_tasks")])
+        if err:
+            return err
+
+        task_id = (kwargs.get("task_id") or "").strip()
+        raw_note = (kwargs.get("note") or "").strip()
+        if not task_id:
+            return _err("task_id is required.")
+        if not raw_note:
+            return _err("note is required.")
+
+        cleaned = _strip_pii(raw_note)
+        if not cleaned:
+            return _err("note was entirely IDs / contact info — nothing to save.")
+        if len(cleaned) > 500:
+            cleaned = cleaned[:500].rstrip() + "…"
+
+        with tool_session() as db:
+            from db.models import Task as TaskModel
+            task = db.query(TaskModel).filter_by(id=task_id).first()
+            if task is None:
+                return _err(f"Task {task_id} not found.")
+
+            now = datetime.now(UTC).strftime("%Y-%m-%d")
+            entry = f"[{now}] {cleaned}"
+            task.context = f"{task.context}\n{entry}".strip() if task.context else entry
+
+        return json.dumps({"status": "ok", "message": "Task note saved.", "applied_summary": cleaned})
 
 
 class RecallMemoryTool(Tool):
@@ -168,8 +487,11 @@ class RecallMemoryTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Read your long-term memory notes. Optionally filter by entity "
-            "type or specific entity ID. Returns all notes if no filter given."
+            "Read your long-term memory notes for one or more entities. "
+            "Returns shared (entity row) + private (per-creator) notes "
+            "for the requested entity_type / entity_id. Useful before "
+            "calling edit_memory (consolidate/correct) or before "
+            "messaging an entity (refresh durable context)."
         )
 
     @property
@@ -179,21 +501,31 @@ class RecallMemoryTool(Tool):
             "properties": {
                 "entity_type": {
                     "type": "string",
-                    "enum": ["property", "unit", "tenant", "vendor", "document", "general"],
-                    "description": "Filter by entity type. Omit to get all notes.",
+                    "enum": list(_VALID_ENTITY_TYPES),
+                    "description": "Filter by entity type. Omit to query general notes.",
                 },
                 "entity_id": {
                     "type": "string",
-                    "description": "Filter by specific entity external UUID when available. Omit to get all notes of the given type.",
+                    "description": (
+                        "Filter to a specific entity (external UUID from "
+                        "lookup_*). Omit to get every entity of the given "
+                        "type that has notes."
+                    ),
                 },
             },
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        entity_type = kwargs.get("entity_type")
-        entity_id = kwargs.get("entity_id")
+        err = _check_placeholder_ids(kwargs, [("entity_id", None)])
+        if err:
+            return err
 
-        if entity_type == "general" or (not entity_type and not entity_id):
+        entity_type = (kwargs.get("entity_type") or "").strip().lower() or None
+        entity_id = (kwargs.get("entity_id") or "").strip() or None
+
+        # Without an entity_type, fall back to agent-level memory store
+        # — used to be ``general`` scope on SaveMemoryTool.
+        if entity_type is None:
             from llm.memory_store import DbMemoryStore
             store = DbMemoryStore(str(resolve_account_id()))
             notes = store.get_notes(entity_type="general")
@@ -201,23 +533,24 @@ class RecallMemoryTool(Tool):
                 return json.dumps({"notes": [], "message": "No general notes found."})
             return json.dumps({"notes": notes, "count": len(notes)})
 
-        _MODEL_MAP = {
+        if entity_type not in _VALID_ENTITY_TYPES:
+            return _err(f"entity_type must be one of {list(_VALID_ENTITY_TYPES)}, got {entity_type!r}.")
+
+        _MODEL_NAMES = {
             "property": "Property",
             "unit": "Unit",
             "tenant": "Tenant",
             "vendor": "User",
             "document": "Document",
         }
-        model_name = _MODEL_MAP.get(entity_type or "")
-        if not model_name:
-            return json.dumps({"notes": [], "message": f"Unknown entity type: {entity_type}"})
 
         import db.models as models
         from db.models import EntityNote
         from db.session import SessionLocal
+
         db = SessionLocal.session_factory()
         try:
-            model_cls = getattr(models, model_name)
+            model_cls = getattr(models, _MODEL_NAMES[entity_type])
             creator_id = resolve_account_id()
 
             if entity_id:
@@ -226,22 +559,27 @@ class RecallMemoryTool(Tool):
             else:
                 entities = db.query(model_cls).all()
 
-            results = []
+            results: list[dict[str, Any]] = []
             for e in entities:
                 if not e:
                     continue
-                label = getattr(e, "name", None) or getattr(e, "label", None) or str(e.id)[:8]
+                label = (
+                    getattr(e, "name", None)
+                    or getattr(e, "label", None)
+                    or str(getattr(e, "id", ""))[:8]
+                )
                 shared = e.context or ""
-                # Get private notes for this creator
-                public_entity_id = _public_entity_id(e)
-                private_note = db.query(EntityNote).filter_by(
-                    creator_id=creator_id, entity_type=entity_type, entity_id=public_entity_id,
-                ).first()
+                public_eid = _public_entity_id(e)
+                private_note = (
+                    db.query(EntityNote)
+                    .filter_by(creator_id=creator_id, entity_type=entity_type, entity_id=public_eid)
+                    .first()
+                )
                 private = private_note.content if private_note else ""
                 if shared or private:
                     results.append({
                         "entity_type": entity_type,
-                        "entity_id": public_entity_id,
+                        "entity_id": public_eid,
                         "label": label,
                         "shared_context": shared,
                         "private_notes": private,
@@ -254,7 +592,7 @@ class RecallMemoryTool(Tool):
 
 
 class EditMemoryTool(Tool):
-    """Replace the entire context for an entity — use to compact, correct, or clean up notes."""
+    """Replace the entire context for an entity — compact, correct, or clear notes."""
 
     @property
     def name(self) -> str:
@@ -263,10 +601,12 @@ class EditMemoryTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Replace the full context notes for an entity. Use this to remove stale "
-            "entries, compact verbose notes, or correct mistakes. First call recall_memory "
-            "to read the current notes, then call edit_memory with the cleaned-up version. "
-            "Pass an empty string to clear all notes for an entity."
+            "Replace the full context notes for an entity. Use this to "
+            "remove stale entries, compact verbose notes, or correct "
+            "mistakes. First call recall_memory to read the current "
+            "notes, then call edit_memory with the cleaned-up "
+            "version. Pass an empty string to clear all notes for an "
+            "entity."
         )
 
     @property
@@ -277,79 +617,101 @@ class EditMemoryTool(Tool):
             "properties": {
                 "entity_type": {
                     "type": "string",
-                    "enum": ["property", "unit", "tenant", "vendor", "document"],
-                    "description": "Type of entity whose context to replace.",
+                    "enum": list(_VALID_ENTITY_TYPES),
                 },
                 "entity_id": {
                     "type": "string",
-                    "description": "External UUID of the entity when available.",
+                    "description": "External UUID from lookup_*. Internal pks are rejected.",
                 },
                 "new_context": {
                     "type": "string",
-                    "description": "The full replacement context text. Pass empty string to clear.",
+                    "description": "Replacement text (PII still gets stripped). Empty = clear.",
                 },
                 "visibility": {
                     "type": "string",
-                    "enum": ["private", "shared"],
-                    "description": "'private' (default) edits your account's notes; 'shared' edits the shared context visible to all.",
+                    "enum": ["shared", "private"],
+                    "description": (
+                        "shared (default) edits the entity row visible "
+                        "to all accounts; private edits this account's "
+                        "EntityNote."
+                    ),
                 },
             },
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        entity_type = kwargs["entity_type"]
-        entity_id = kwargs["entity_id"]
-        new_context = kwargs["new_context"]
-        visibility = kwargs.get("visibility", "private")
+        err = _check_placeholder_ids(kwargs, [("entity_id", None)])
+        if err:
+            return err
 
-        _VALID = {"property", "unit", "tenant", "vendor", "document"}
-        if entity_type not in _VALID:
-            return json.dumps({"status": "error", "message": f"Unknown entity type: {entity_type}"})
+        entity_type = (kwargs.get("entity_type") or "").strip().lower()
+        entity_id = (kwargs.get("entity_id") or "").strip()
+        raw_new = kwargs.get("new_context")
+        if raw_new is None:
+            return _err("new_context is required (pass empty string to clear).")
+        visibility = (kwargs.get("visibility") or "shared").strip().lower()
 
-        from llm.tools._common import tool_session
+        if entity_type not in _VALID_ENTITY_TYPES:
+            return _err(f"entity_type must be one of {list(_VALID_ENTITY_TYPES)}, got {entity_type!r}.")
+        if visibility not in ("shared", "private"):
+            return _err(f"visibility must be 'shared' or 'private', got {visibility!r}.")
+
+        cleaned = _strip_pii(str(raw_new)).strip()
+
         with tool_session() as db:
+            entity = _load_entity_by_public_id(db, entity_type, entity_id)
+            if entity is None:
+                return _err(
+                    f"{entity_type} {entity_id!r} not found. Pass the external UUID."
+                )
+            label = (
+                getattr(entity, "name", None)
+                or getattr(entity, "label", None)
+                or entity_type
+            )
+
             if visibility == "shared":
-                _MODEL_MAP = {
-                    "property": "Property",
-                    "unit": "Unit",
-                    "tenant": "Tenant",
-                    "vendor": "User",
-                    "document": "Document",
-                }
-                entity = _load_entity_by_public_id(db, entity_type, entity_id)
-                if not entity:
-                    return json.dumps({"status": "error", "message": f"{entity_type} {entity_id} not found"})
-                entity.context = new_context.strip() or None
                 from sqlalchemy.orm.attributes import flag_modified
+                entity.context = cleaned or None
                 flag_modified(entity, "context")
-                label = getattr(entity, "name", None) or getattr(entity, "label", None) or entity_type
-                action = "cleared" if not new_context.strip() else "updated"
+                action = "cleared" if not cleaned else "updated"
                 return json.dumps({"status": "ok", "message": f"Shared context {action} for {label}."})
-            else:
-                from datetime import UTC, datetime
 
-                from db.models import EntityNote
-                creator_id = resolve_account_id()
-                note = db.query(EntityNote).filter_by(
-                    creator_id=creator_id, entity_type=entity_type, entity_id=entity_id,
-                ).first()
-                if new_context.strip():
-                    if note:
-                        note.content = new_context.strip()
-                        note.updated_at = datetime.now(UTC)
-                    else:
-                        db.add(EntityNote(
-                            creator_id=creator_id,
-                            entity_type=entity_type,
-                            entity_id=entity_id,
-                            content=new_context.strip(),
-                            created_at=datetime.now(UTC),
-                            updated_at=datetime.now(UTC),
-                        ))
-                elif note:
-                    db.delete(note)
-                action = "cleared" if not new_context.strip() else "updated"
-                return json.dumps({"status": "ok", "message": f"Private notes {action}."})
+            from db.models import EntityNote
+            creator_id = resolve_account_id()
+            public_eid = _public_entity_id(entity)
+            note = (
+                db.query(EntityNote)
+                .filter_by(creator_id=creator_id, entity_type=entity_type, entity_id=public_eid)
+                .first()
+            )
+            now = datetime.now(UTC)
+            if cleaned:
+                if note is not None:
+                    note.content = cleaned
+                    note.updated_at = now
+                else:
+                    db.add(EntityNote(
+                        creator_id=creator_id,
+                        entity_type=entity_type,
+                        entity_id=public_eid,
+                        content=cleaned,
+                        created_at=now,
+                        updated_at=now,
+                    ))
+            elif note is not None:
+                db.delete(note)
+        action = "cleared" if not cleaned else "updated"
+        return json.dumps({"status": "ok", "message": f"Private notes {action} for {label}."})
 
 
-__all__ = ["SaveMemoryTool", "RecallMemoryTool", "EditMemoryTool"]
+def _err(message: str) -> str:
+    return json.dumps({"status": "error", "message": message})
+
+
+__all__ = [
+    "AddTaskNoteTool",
+    "EditMemoryTool",
+    "RecallMemoryTool",
+    "RememberAboutEntityTool",
+]

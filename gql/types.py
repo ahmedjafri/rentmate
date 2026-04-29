@@ -31,6 +31,7 @@ from db.models import (
     Tenant,
     User,
 )
+from gql.services import chat_service
 
 TaskCategoryEnum = strawberry.enum(TaskCategory, name="TaskCategory")
 TaskModeEnum = strawberry.enum(TaskMode, name="TaskMode")
@@ -146,6 +147,14 @@ class UpdateTaskInput:
     urgency: typing.Optional[UrgencyEnum] = None
 
 @strawberry.input
+class NewTenantForLeaseInput:
+    first_name: str
+    last_name: str
+    email: typing.Optional[str] = None
+    phone: typing.Optional[str] = None
+
+
+@strawberry.input
 class CreateTenantWithLeaseInput:
     first_name: str
     last_name: str
@@ -156,6 +165,8 @@ class CreateTenantWithLeaseInput:
     rent_amount: float
     email: typing.Optional[str] = None
     phone: typing.Optional[str] = None
+    existing_tenant_ids: typing.List[str] = strawberry.field(default_factory=list)
+    additional_tenants: typing.List[NewTenantForLeaseInput] = strawberry.field(default_factory=list)
 
 @strawberry.input
 class CreatePropertyInput:
@@ -175,6 +186,7 @@ class AddLeaseForTenantInput:
     lease_start: str   # YYYY-MM-DD
     lease_end: str     # YYYY-MM-DD
     rent_amount: float
+    tenant_ids: typing.List[str] = strawberry.field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -235,14 +247,13 @@ class HouseType:
         monthly_revenue = 0.0
 
         for l in p.leases:
-            t = l.tenant
             is_active = l.end_date >= today if l.end_date else False
-            if t:
+            for t in getattr(l, "tenants", []) or ([l.tenant] if l.tenant else []):
                 t_key = str(t.external_id)
                 if t_key not in tenant_map:
                     tenant_map[t_key] = TenantType(uid=str(t.external_id), name=tenant_display_name(t))
-                if is_active and l.unit_id:
-                    active_unit_ids.add(l.unit_id)
+            if is_active and l.unit_id and (getattr(l, "tenants", None) or l.tenant):
+                active_unit_ids.add(l.unit_id)
             if is_active:
                 monthly_revenue += l.rent_amount or 0.0
             lease_items.append(LeaseType.from_sql(l))
@@ -357,17 +368,27 @@ class LeaseType:
     end_date: str
     rent_amount: float
     tenant: typing.Optional[TenantType] = None
+    tenants: typing.List[TenantType] = strawberry.field(default_factory=list)
     house: typing.Optional[HouseType] = None
 
     @classmethod
     def from_sql(cls, l: typing.Any) -> "LeaseType":
         from db.queries import format_address, tenant_display_name
+        tenants = list(getattr(l, "tenants", []) or [])
+        primary_tenant = l.tenant or (tenants[0] if tenants else None)
         return cls(
             uid=str(l.id),
             start_date=str(l.start_date),
             end_date=str(l.end_date),
             rent_amount=l.rent_amount,
-            tenant=TenantType(uid=str(l.tenant.external_id), name=tenant_display_name(l.tenant)) if l.tenant else None,
+            tenant=TenantType(uid=str(primary_tenant.external_id), name=tenant_display_name(primary_tenant)) if primary_tenant else None,
+            tenants=[
+                TenantType(uid=str(tenant.external_id), name=tenant_display_name(tenant))
+                for tenant in tenants
+            ] or (
+                [TenantType(uid=str(primary_tenant.external_id), name=tenant_display_name(primary_tenant))]
+                if primary_tenant else []
+            ),
             house=HouseType(
                 uid=str(l.property.id),
                 name=l.property.name or "",
@@ -488,26 +509,27 @@ class LinkedConversationType:
     conversation_type: ConversationTypeEnum
     last_message_at: typing.Optional[str] = None
     message_count: int = 0
+    unread_count: int = 0
     participants: typing.List[ConversationParticipantType] = strawberry.field(default_factory=list)
 
     @classmethod
     def from_sql(cls, conv: typing.Any, label: str) -> "LinkedConversationType":
-
         msgs = getattr(conv, "messages", []) or []
         last_msg = max(msgs, key=lambda m: m.sent_at, default=None) if msgs else None
+        sess = object_session(conv)
+        unread_count = chat_service.conversation_unread_count(sess, conversation_id=conv.id) if sess else 0
 
         parts: list[ConversationParticipantType] = []
         for p in getattr(conv, "participants", []) or []:
             if not p.is_active:
                 continue
-            from db.models import ParticipantType as PT
-            if p.participant_type == PT.TENANT:
+            if p.participant_type == ParticipantType.TENANT:
                 name = f"{p.user.first_name} {p.user.last_name}".strip()
                 parts.append(ConversationParticipantType(
                     name=name, participant_type="tenant", entity_id=str(p.user_id),
                     portal_url="",
                 ))
-            elif p.participant_type == PT.EXTERNAL_CONTACT:
+            elif p.participant_type == ParticipantType.EXTERNAL_CONTACT:
                 name = f"{p.user.first_name or ''} {p.user.last_name or ''}".strip() or "Vendor"
                 parts.append(ConversationParticipantType(
                     name=name, participant_type="vendor",
@@ -521,6 +543,7 @@ class LinkedConversationType:
             conversation_type=conv.conversation_type or "task_ai",
             last_message_at=_utc_iso(last_msg.sent_at) if last_msg else None,
             message_count=len(msgs),
+            unread_count=unread_count,
             participants=parts,
         )
 
@@ -656,9 +679,13 @@ class TaskType:
         messages = [ChatMessageType.from_sql(m) for m in all_msgs]
 
         tenant_name = None
-        if getattr(t, "lease", None) and t.lease.tenant:
-            ten = t.lease.tenant
-            tenant_name = f"{ten.user.first_name} {ten.user.last_name}".strip()
+        if getattr(t, "lease", None):
+            tenants = list(getattr(t.lease, "tenants", []) or [])
+            if tenants:
+                tenant_name = ", ".join(f"{ten.user.first_name} {ten.user.last_name}".strip() for ten in tenants if ten.user)
+            elif t.lease.tenant:
+                ten = t.lease.tenant
+                tenant_name = f"{ten.user.first_name} {ten.user.last_name}".strip()
 
         unit_label = None
         if getattr(t, "unit", None):
@@ -1133,11 +1160,11 @@ class ConversationSummaryType:
 
     @classmethod
     def from_sql(cls, c: typing.Any) -> "ConversationSummaryType":
-        from db.models import ParticipantType
-
         visible_msgs = [m for m in (c.messages or []) if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)]
         last_msg = max(visible_msgs, key=lambda m: m.sent_at, default=None) if visible_msgs else None
         active_participants = [p for p in c.participants if p.is_active] if c.participants else []
+        sess = object_session(c)
+        unread_count = chat_service.conversation_unread_count(sess, conversation_id=c.id) if sess else 0
         prop_name = None
         if c.property:
             prop_name = getattr(c.property, "name", None) or getattr(c.property, "address_line1", None)
@@ -1172,6 +1199,7 @@ class ConversationSummaryType:
             last_message_sender_name=last_msg.sender_name if last_msg else None,
             property_name=prop_name,
             participant_count=len(active_participants),
+            unread_count=unread_count,
             participant_label=participant_label,
             task_id=task_id,
             task_title=task_title,

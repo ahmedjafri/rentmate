@@ -421,8 +421,12 @@ def _lease_records(db: Session) -> list[MemoryRecord]:
     records: list[MemoryRecord] = []
     today = date.today()
     for lease in db.query(Lease).filter(Lease.org_id == resolve_org_id()).all():
-        tenant_name = tenant_display_name(lease.tenant) if lease.tenant else "Tenant"
-        title = f"Lease for {tenant_name}"
+        tenants = list(getattr(lease, "tenants", []) or [])
+        primary_tenant = lease.tenant or (tenants[0] if tenants else None)
+        tenant_names = [tenant_display_name(tenant) for tenant in tenants] or (
+            [tenant_display_name(primary_tenant)] if primary_tenant else []
+        )
+        title = f"Lease for {', '.join(name for name in tenant_names if name) or 'Tenant'}"
         is_active = bool(lease.start_date and lease.end_date and lease.start_date <= today <= lease.end_date)
         is_expired = bool(lease.end_date and lease.end_date < today)
         facts = [
@@ -435,12 +439,15 @@ def _lease_records(db: Session) -> list[MemoryRecord]:
             facts.append(f"Unit: {lease.unit.label}")
         if lease.property:
             facts.append(f"Property: {lease.property.name or format_address(lease.property)}")
+        if tenant_names:
+            facts.append(f"Tenants: {', '.join(name for name in tenant_names if name)}")
         records.append(MemoryRecord(
             source=MemorySourceRef("lease", str(lease.id), "lease", str(lease.id), "shared"),
             title=title,
             content="\n".join(facts),
             metadata={
-                "tenant_id": str(lease.tenant.external_id) if lease.tenant else "",
+                "tenant_id": str(primary_tenant.external_id) if primary_tenant else "",
+                "tenant_ids": [str(tenant.external_id) for tenant in tenants],
                 "property_id": str(lease.property_id),
                 "unit_id": str(lease.unit_id),
                 "lease_start": str(lease.start_date),
@@ -790,7 +797,13 @@ def _heuristic_score(request: RetrievalRequest, item: MemoryItem, query_tokens: 
         bump(4.0, _entity_reason("property"))
     if request.unit_id and metadata.get("unit_id") == str(request.unit_id):
         bump(4.5, _entity_reason("unit"))
-    if request.tenant_id and metadata.get("tenant_id") == str(request.tenant_id):
+    metadata_tenant_ids = metadata.get("tenant_ids") or []
+    if isinstance(metadata_tenant_ids, str):
+        metadata_tenant_ids = [metadata_tenant_ids]
+    if request.tenant_id and (
+        metadata.get("tenant_id") == str(request.tenant_id)
+        or str(request.tenant_id) in {str(tenant_id) for tenant_id in metadata_tenant_ids}
+    ):
         bump(4.5, _entity_reason("tenant"))
     if request.vendor_id and metadata.get("vendor_id") == str(request.vendor_id):
         bump(4.5, _entity_reason("vendor"))

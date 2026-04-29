@@ -43,7 +43,7 @@ from .messaging import (
     ParticipantType,
 )
 from .notifications import Notification
-from .rental import Lease, Property, Tenant, Unit
+from .rental import Lease, LeaseTenant, Property, Tenant, Unit
 from .routine import Routine
 from .settings import AppSetting
 from .suggestions import Suggestion
@@ -58,6 +58,7 @@ __all__ = [
     "Unit",
     "Tenant",
     "Lease",
+    "LeaseTenant",
     "ParticipantType",
     "ConversationType",
     "MessageType",

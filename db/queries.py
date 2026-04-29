@@ -57,6 +57,7 @@ def fetch_properties(db: Session) -> list[Property]:
             .options(
                 selectinload(Property.units),
                 selectinload(Property.leases).selectinload(Lease.tenant).selectinload(Tenant.user),
+                selectinload(Property.leases).selectinload(Lease.tenants).selectinload(Tenant.user),
                 selectinload(Property.leases).selectinload(Lease.unit),
             )
         )
@@ -74,6 +75,7 @@ def fetch_tenants(db: Session) -> list[Tenant]:
                 selectinload(Tenant.user),
                 selectinload(Tenant.leases).selectinload(Lease.property),
                 selectinload(Tenant.leases).selectinload(Lease.unit),
+                selectinload(Tenant.leases).selectinload(Lease.tenants).selectinload(Tenant.user),
             )
         )
         .scalars()
@@ -88,6 +90,7 @@ def fetch_leases(db: Session) -> list[Lease]:
             .where(Lease.creator_id == _account_id())
             .options(
                 selectinload(Lease.tenant).selectinload(Tenant.user),
+                selectinload(Lease.tenants).selectinload(Tenant.user),
                 selectinload(Lease.property),
                 selectinload(Lease.unit),
             )
@@ -116,6 +119,7 @@ def fetch_tasks(
         selectinload(Task.external_conversations).selectinload(Conversation.messages),
         selectinload(Task.unit),
         selectinload(Task.lease).selectinload(Lease.tenant).selectinload(Tenant.user),
+        selectinload(Task.lease).selectinload(Lease.tenants).selectinload(Tenant.user),
         selectinload(Task.lease).selectinload(Lease.unit),
     )
     return db.execute(q).scalars().all()
@@ -132,6 +136,7 @@ def fetch_task(db: Session, task_id: int) -> Optional[Task]:
             selectinload(Task.external_conversations).selectinload(Conversation.messages),
             selectinload(Task.unit),
             selectinload(Task.lease).selectinload(Lease.tenant).selectinload(Tenant.user),
+            selectinload(Task.lease).selectinload(Lease.tenants).selectinload(Tenant.user),
             selectinload(Task.lease).selectinload(Lease.unit),
         )
     ).scalar_one_or_none()

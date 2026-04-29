@@ -135,6 +135,22 @@ describe('Chats page', () => {
     expect(screen.getByText(/Chat vendor-1/)).toBeInTheDocument();
   });
 
+  it('shows unread indicators for conversations with unread messages', () => {
+    useConversationsMock.mockImplementation((conversationType: string) => ({
+      conversations: [{
+        ...makeConv(`${conversationType}-1`, conversationType as ConvSummary['conversationType']),
+        unreadCount: conversationType === 'tenant' ? 2 : 0,
+      }],
+      loading: false,
+      refresh: vi.fn(),
+      removeConversation: vi.fn(),
+    }));
+
+    renderChats();
+
+    expect(screen.getByLabelText('2 unread messages')).toBeInTheDocument();
+  });
+
   it('selecting a non-All filter narrows the list to that bucket', () => {
     renderChats();
 

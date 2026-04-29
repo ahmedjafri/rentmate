@@ -94,7 +94,7 @@ export function useApiData(): ApiState {
             email: t.email ?? '',
             unit: t.unitLabel ?? '',
             propertyId: t.rents?.[0]?.uid ?? '',
-            leaseEnd: t.leaseEndDate ? new Date(t.leaseEndDate) : new Date(),
+            leaseEnd: t.leaseEndDate ? new Date(t.leaseEndDate) : null,
             rentAmount: t.rentAmount ?? 0,
             paymentStatus: (t.paymentStatus as Tenant['paymentStatus']) ?? 'current',
             isActive: t.isActive ?? false,
@@ -267,6 +267,7 @@ function apiTaskToActionDesk(t: ApiTask): ActionDeskTask {
       conversationType: fromGraphqlEnum(lc.conversationType) ?? lc.conversationType,
       lastMessageAt: lc.lastMessageAt,
       messageCount: lc.messageCount,
+      unreadCount: lc.unreadCount ?? 0,
       participants: lc.participants ?? [],
     })),
     lastReviewedAt: t.lastReviewedAt ?? null,
@@ -424,7 +425,7 @@ interface ApiTask {
   aiConversationId?: string | null;
   parentConversationId?: string | null;
   externalConversationIds?: string[];
-  linkedConversations?: { uid: string; label: string; conversationType: string; lastMessageAt?: string; messageCount: number; participants?: { name: string; participantType: string; entityId?: string | null; portalUrl?: string | null }[] }[];
+  linkedConversations?: { uid: string; label: string; conversationType: string; lastMessageAt?: string; messageCount: number; unreadCount?: number; participants?: { name: string; participantType: string; entityId?: string | null; portalUrl?: string | null }[] }[];
 }
 
 interface ApiSuggestion {

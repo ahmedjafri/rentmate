@@ -14,6 +14,7 @@ from llm.tools._common import (
     Tool,
     ToolMode,
     _action_card_field,
+    _check_placeholder_ids,
     _load_entity_by_public_id,
     _load_tenant_by_public_id,
     _log_tool_error,
@@ -397,6 +398,15 @@ class CreateDocumentTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [
+            ("property_id", "lookup_properties"),
+            ("unit_id", "lookup_properties"),
+            ("tenant_id", "lookup_tenants"),
+            ("task_id", "list_tasks"),
+        ])
+        if err:
+            return err
+
         legal_requirements = kwargs.get("legal_requirements") or {}
         if _is_legal_or_compliance_document(kwargs):
             citation = (
@@ -564,6 +574,10 @@ class ReadDocumentTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [("document_id", None)])
+        if err:
+            return err
+
         from db.models import Document
         from db.session import SessionLocal
 
@@ -733,6 +747,10 @@ class AnalyzeDocumentTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [("document_id", None)])
+        if err:
+            return err
+
         from db.models import Document
         from db.session import SessionLocal
 

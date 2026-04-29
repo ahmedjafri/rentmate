@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, useState } from 'react';
+import { useCallback, useRef, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { X, Bot, Sparkles, Users, Lock, MessageSquare, RotateCcw, Loader2, Trash2, Link as LinkIcon, User, Wrench, ClipboardList } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -27,14 +27,16 @@ import {
   getConversation,
   getConversationMessages,
   getTask,
+  markConversationSeen,
   sendMessage,
   triggerTaskReview,
   updateTaskStatus,
 } from '@/graphql/client';
+import { notifyConversationRead } from '@/lib/conversationReadEvents';
 
 export type EmbeddedTaskThreadSelection =
   | { kind: 'ai' }
-  | { kind: 'conversation'; id: string };
+  | { kind: 'conversation'; id: string; messageId?: string | null };
 
 export function getLinkedConversationTabLabel(
   conversation: Pick<LinkedConversation, 'conversationType' | 'label' | 'participants'>,
@@ -76,6 +78,16 @@ function getTaskAiConversationId(task: ActionDeskTask | null | undefined): strin
     lc => isAiConversationType(lc.conversationType),
   );
   return linkedAiConversation?.uid ?? null;
+}
+
+function apiSenderType(message: {
+  isAi?: boolean | null;
+  senderType?: string | null;
+}): ChatMessage['senderType'] {
+  if (message.isAi) return 'ai';
+  if (message.senderType === 'external_contact') return 'vendor';
+  if (message.senderType === 'tenant') return 'tenant';
+  return 'manager';
 }
 
 function backendStatusToFrontend(status: string): ManagedDocument['status'] {
@@ -174,8 +186,20 @@ export function ChatPanel({
   const [activeTaskTab, setActiveTaskTab] = useState<string>('ai');
   const [participantMessages, setParticipantMessages] = useState<ChatMessage[]>([]);
   const [participantLoading, setParticipantLoading] = useState(false);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const participantMessageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const onboarding = useOnboarding();
   const onboardingStartedRef = useRef(false);
+  const markedConversationIdsRef = useRef<Set<string>>(new Set());
+
+  const markThreadSeen = useCallback((conversationId: string) => {
+    if (markedConversationIdsRef.current.has(conversationId)) return;
+    markedConversationIdsRef.current.add(conversationId);
+    notifyConversationRead(conversationId);
+    void markConversationSeen(conversationId).catch(() => {
+      markedConversationIdsRef.current.delete(conversationId);
+    });
+  }, []);
 
   const handleDismiss = async () => {
     if (!chatPanel.taskId) return;
@@ -263,6 +287,10 @@ export function ChatPanel({
         ? 'ai'
         : embeddedTaskSelection.id
       : activeTaskTab;
+  const targetParticipantMessageId =
+    embedded && embeddedTaskSelection?.kind === 'conversation'
+      ? embeddedTaskSelection.messageId ?? null
+      : null;
   const activeTaskSuggestionTargetTab = activeSuggestion?.targetConversationId ?? 'ai';
   const shouldShowActiveTaskSuggestion = Boolean(
     activeTask && activeSuggestion && effectiveTaskTab === activeTaskSuggestionTargetTab,
@@ -317,13 +345,14 @@ export function ChatPanel({
     if (activeTask || (activeSuggestion && !activeConversationId)) { setConvMessages([]); return; }
     if (!activeConversationId) { setConvMessages([]); onboardingStartedRef.current = false; return; }
     getConversationMessages(activeConversationId).then(result => {
+      markThreadSeen(activeConversationId);
       setConvMessages((result.conversationMessages ?? []).map(m => ({
         id: m.uid,
         role: m.isAi ? 'assistant' as const : 'user' as const,
         content: m.body,
         timestamp: new Date(m.sentAt),
         senderName: m.senderName,
-        senderType: m.isAi ? 'ai' as const : 'manager' as const,
+        senderType: apiSenderType(m),
         messageType: (fromGraphqlEnum(m.messageType) as ChatMessage['messageType']) ?? 'message',
         draftReply: m.draftReply ?? undefined,
         suggestionId: m.suggestionId ?? undefined,
@@ -346,7 +375,7 @@ export function ChatPanel({
         } : undefined,
       })));
     }).catch(() => {});
-  }, [activeConversationId, activeTask, activeSuggestion]);
+  }, [activeConversationId, activeTask, activeSuggestion, markThreadSeen]);
 
   const messages = activeTask
     ? activeTask.chatThread
@@ -358,28 +387,14 @@ export function ChatPanel({
 
   const isAutonomous = activeTask?.mode === 'autonomous';
 
-  // Build flat list with section dividers inserted at internal↔external transitions.
+  // Keep the render pipeline uniform without inferring conversation scope
+  // from sender type. Tenant/vendor conversations are external as a whole,
+  // including outbound manager/RentMate messages.
   const renderedItems = useMemo(() => {
     type Item =
       | { kind: 'msg'; msg: typeof messages[0] }
       | { kind: 'divider'; label: string; key: string };
-    const result: Item[] = [];
-    let lastWasExternal: boolean | null = null;
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i];
-      const st = msg.senderType ?? (msg.role === 'assistant' ? 'ai' : 'manager');
-      const isExternal = st === 'tenant' || st === 'vendor';
-      if (lastWasExternal !== null && isExternal !== lastWasExternal) {
-        result.push({
-          kind: 'divider',
-          label: isExternal ? 'External conversation' : 'Internal thread',
-          key: `divider-${i}`,
-        });
-      }
-      lastWasExternal = isExternal;
-      result.push({ kind: 'msg', msg });
-    }
-    return result;
+    return messages.map((msg): Item => ({ kind: 'msg', msg }));
   }, [messages]);
 
   // For each question card, the next user message in the same thread
@@ -415,13 +430,19 @@ export function ChatPanel({
   );
 
   useEffect(() => {
+    if (
+      targetParticipantMessageId
+      && participantMessages.some(message => message.id === targetParticipantMessageId)
+    ) {
+      return;
+    }
     // ScrollArea renders a viewport child — scroll that instead of the wrapper
     const el = scrollRef.current;
     if (!el) return;
     const viewport = el.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement | null;
     const target = viewport ?? el;
     setTimeout(() => { target.scrollTop = target.scrollHeight; }, 50);
-  }, [messages, convMessages, participantMessages, isTyping, progressLog]);
+  }, [messages, convMessages, participantMessages, isTyping, progressLog, targetParticipantMessageId]);
 
   // Refresh task messages from DB whenever a task is opened + poll for new ones
   const loadTaskMessages = (taskId: string) => {
@@ -481,18 +502,15 @@ export function ChatPanel({
   const loadParticipantMessages = (convoId: string, showLoading = false) => {
     if (showLoading) setParticipantLoading(true);
     getConversationMessages(convoId).then(result => {
+      markThreadSeen(convoId);
       const msgs: ChatMessage[] = (result.conversationMessages ?? []).map(m => {
-        let st: ChatMessage['senderType'] = 'manager';
-        if (m.isAi) st = 'ai';
-        else if (m.senderType === 'external_contact') st = 'vendor';
-        else if (m.senderType === 'tenant') st = 'tenant';
         return {
           id: m.uid,
           role: m.isAi ? 'assistant' as const : 'user' as const,
           content: m.body,
           timestamp: new Date(m.sentAt),
           senderName: m.senderName,
-          senderType: st,
+          senderType: apiSenderType(m),
           messageType: (fromGraphqlEnum(m.messageType) as ChatMessage['messageType']) ?? 'message',
           actionCard: m.actionCard ? {
             kind: m.actionCard.kind as NonNullable<ChatMessage['actionCard']>['kind'],
@@ -563,6 +581,20 @@ export function ChatPanel({
     const interval = setInterval(() => loadParticipantMessages(convoId), 5000);
     return () => clearInterval(interval);
   }, [effectiveTaskTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!targetParticipantMessageId || effectiveTaskTab === 'ai') return;
+    const node = participantMessageRefs.current[targetParticipantMessageId];
+    if (!node) return;
+    node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlightedMessageId(targetParticipantMessageId);
+    const timeout = window.setTimeout(() => {
+      setHighlightedMessageId(current => (
+        current === targetParticipantMessageId ? null : current
+      ));
+    }, 1800);
+    return () => window.clearTimeout(timeout);
+  }, [effectiveTaskTab, participantMessages, targetParticipantMessageId]);
 
   // External trigger — the Trigger Agent button in TaskDetail bumps
   // chatPanel.reviewTrigger.nonce to ask this panel to run an SSE review
@@ -1419,12 +1451,20 @@ export function ChatPanel({
                     </div>
                   )}
                   {participantMessages.map(msg => (
-                    <ChatMessageBubble
+                    <div
                       key={msg.id}
-                      message={msg}
-                      conversationId={chatPanel.conversationId}
-                      onSuggestionClick={(sid) => openChat({ suggestionId: sid })}
-                    />
+                      ref={node => { participantMessageRefs.current[msg.id] = node; }}
+                      className={cn(
+                        'rounded-2xl transition-[background-color,box-shadow] duration-1000',
+                        highlightedMessageId === msg.id && 'bg-primary/5 ring-2 ring-primary/50',
+                      )}
+                    >
+                      <ChatMessageBubble
+                        message={msg}
+                        conversationId={chatPanel.conversationId}
+                        onSuggestionClick={(sid) => openChat({ suggestionId: sid })}
+                      />
+                    </div>
                   ))}
                 </div>
               </ScrollArea>
@@ -1552,16 +1592,7 @@ export function ChatPanel({
                 </div>
               )}
               {renderedItems.map(item =>
-                item.kind === 'divider' ? (
-                  <div key={item.key} className="flex items-center gap-2 py-1">
-                    <div className="flex-1 h-px bg-border/60" />
-                    <span className="flex items-center gap-1 text-[10px] text-muted-foreground font-medium">
-                      <MessageSquare className="h-2.5 w-2.5" />
-                      {item.label}
-                    </span>
-                    <div className="flex-1 h-px bg-border/60" />
-                  </div>
-                ) : (
+                item.kind === 'msg' ? (
                   <ChatMessageBubble
                     key={item.msg.id}
                     message={item.msg}
@@ -1569,7 +1600,7 @@ export function ChatPanel({
                     questionAnsweredByContent={questionAnswers.get(item.msg.id) ?? null}
                     onSuggestionClick={(sid) => openChat({ suggestionId: sid })}
                   />
-                )
+                ) : null
               )}
               {isTyping && (
                 <div data-testid="thinking-row" className="flex items-start gap-2 overflow-hidden text-muted-foreground">

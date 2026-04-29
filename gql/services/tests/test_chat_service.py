@@ -271,8 +271,18 @@ def test_should_ai_respond_and_external_conversation_helpers(db):
         tenant_id=tenant.id,
     )
 
-    vendor_participant = db.query(ConversationParticipant).filter_by(conversation_id=vendor_convo.id).one()
-    tenant_participant = db.query(ConversationParticipant).filter_by(conversation_id=tenant_convo.id).one()
+    # ``get_or_create_external_conversation`` now also adds the manager
+    # as a participant (so they get unread receipts on inbound messages),
+    # so each conversation has 2 rows: the external contact + the
+    # manager. Filter to the external participant for these assertions.
+    vendor_participant = db.query(ConversationParticipant).filter_by(
+        conversation_id=vendor_convo.id,
+        participant_type=ParticipantType.EXTERNAL_CONTACT,
+    ).one()
+    tenant_participant = db.query(ConversationParticipant).filter_by(
+        conversation_id=tenant_convo.id,
+        participant_type=ParticipantType.TENANT,
+    ).one()
 
     assert vendor_participant.participant_type == ParticipantType.EXTERNAL_CONTACT
     assert tenant_participant.user_id == tenant.user_id
@@ -310,8 +320,16 @@ def test_external_conversations_use_shadow_user_ids_for_tenant_and_vendor(db):
         tenant_id=tenant.id,
     )
 
-    vendor_participant = db.query(ConversationParticipant).filter_by(conversation_id=vendor_convo.id).one()
-    tenant_participant = db.query(ConversationParticipant).filter_by(conversation_id=tenant_convo.id).one()
+    # Filter to the external participant — get_or_create_external_conversation
+    # also adds a manager-side participant (ACCOUNT_USER) for unread tracking.
+    vendor_participant = db.query(ConversationParticipant).filter_by(
+        conversation_id=vendor_convo.id,
+        participant_type=ParticipantType.EXTERNAL_CONTACT,
+    ).one()
+    tenant_participant = db.query(ConversationParticipant).filter_by(
+        conversation_id=tenant_convo.id,
+        participant_type=ParticipantType.TENANT,
+    ).one()
 
     assert vendor_participant.user_id == vendor.id
     assert vendor_participant.participant_type == ParticipantType.EXTERNAL_CONTACT

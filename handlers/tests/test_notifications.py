@@ -61,6 +61,7 @@ class TestNotificationsHandler(unittest.TestCase):
                 body="Which quote should I accept?",
                 kind="manager_attention",
                 channel="in_app",
+                extra={"message_id": "42"},
             ),
         )
         self.db.commit()
@@ -72,6 +73,7 @@ class TestNotificationsHandler(unittest.TestCase):
         assert len(payload) == 1
         assert payload[0]["kind"] == "manager_attention"
         assert payload[0]["title"] == "Task needs your input"
+        assert payload[0]["message_id"] == "42"
 
     def test_can_mark_read_and_archive_notification(self):
         row = NotificationService.create(

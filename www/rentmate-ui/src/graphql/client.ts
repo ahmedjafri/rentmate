@@ -24,6 +24,7 @@ import {
   GetDocumentDocument,
   HousesDocument,
   LoginDocument,
+  MarkConversationSeenDocument,
   MarkTaskSeenDocument,
   MeDocument,
   RunRoutineDocument,
@@ -262,6 +263,7 @@ export function createTenantWithLease(input: CreateTenantWithLeaseInput) {
 
 export function addLeaseForTenant(input: {
   tenantId: string;
+  tenantIds?: string[];
   propertyId: string;
   unitId: string;
   leaseStart: string;
@@ -374,6 +376,10 @@ export function markTaskSeen(uid: string | number) {
   return graphqlRequest(MarkTaskSeenDocument, {
     uid: toIntId(uid),
   });
+}
+
+export function markConversationSeen(uid: string) {
+  return graphqlRequest(MarkConversationSeenDocument, { uid });
 }
 
 export function deleteTask(uid: string | number) {

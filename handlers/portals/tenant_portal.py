@@ -5,12 +5,23 @@ from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from db.models import Conversation, ConversationParticipant, Lease, Message, MessageType, ParticipantType, Task, Tenant
+from db.models import (
+    Conversation,
+    ConversationParticipant,
+    Lease,
+    LeaseTenant,
+    Message,
+    MessageType,
+    ParticipantType,
+    Task,
+    Tenant,
+)
+from gql.services import chat_service
 from gql.services.tenant_service import TenantService
 from handlers.deps import get_db
 from handlers.portals._common import (
-    notify_task_owner_of_portal_message,
     SendMessageBody,
+    notify_task_owner_of_portal_message,
     read_bearer_token,
     serialize_portal_conversation_row,
     serialize_task_list_row,
@@ -59,7 +70,7 @@ def _tenant_tasks(db, tenant_external_id: str) -> list:
 
     # Via lease → unit → task
     leases = db.execute(
-        select(Lease).where(Lease.tenant_id == tenant.id)
+        select(Lease).join(LeaseTenant).where(LeaseTenant.tenant_id == tenant.id)
     ).scalars().all()
     unit_ids = {l.unit_id for l in leases if l.unit_id}
     property_ids = {l.property_id for l in leases if l.property_id}
@@ -276,7 +287,9 @@ def _verify_tenant_task(db, task_id: str, tenant_external_id: str) -> Task:
     # Check via unit lease
     if task.unit_id:
         lease = db.execute(
-            select(Lease).where(Lease.tenant_id == tenant.id, Lease.unit_id == task.unit_id)
+            select(Lease)
+            .join(LeaseTenant)
+            .where(LeaseTenant.tenant_id == tenant.id, Lease.unit_id == task.unit_id)
         ).scalars().first()
         if lease:
             return task
@@ -284,7 +297,9 @@ def _verify_tenant_task(db, task_id: str, tenant_external_id: str) -> Task:
     # Check via property lease (task without unit_id)
     if task.property_id:
         lease = db.execute(
-            select(Lease).where(Lease.tenant_id == tenant.id, Lease.property_id == task.property_id)
+            select(Lease)
+            .join(LeaseTenant)
+            .where(LeaseTenant.tenant_id == tenant.id, Lease.property_id == task.property_id)
         ).scalars().first()
         if lease:
             return task
@@ -391,6 +406,8 @@ def tenant_send_message(task_id: str, msg: SendMessageBody, request: Request):
         sent_at=now,
     )
     db.add(message)
+    db.flush()
+    chat_service.create_unread_receipts_for_message(db, message=message)
     notify_task_owner_of_portal_message(
         db,
         task=task,
@@ -398,6 +415,7 @@ def tenant_send_message(task_id: str, msg: SendMessageBody, request: Request):
         sender_label=tenant_name,
         body=msg.body,
         actor_kind="tenant",
+        message_id=message.id,
     )
     db.commit()
     db.refresh(message)
@@ -441,6 +459,8 @@ def tenant_send_conversation_message(conversation_id: int, msg: SendMessageBody,
         sent_at=now,
     )
     db.add(message)
+    db.flush()
+    chat_service.create_unread_receipts_for_message(db, message=message)
     notify_task_owner_of_portal_message(
         db,
         task=task,
@@ -448,6 +468,7 @@ def tenant_send_conversation_message(conversation_id: int, msg: SendMessageBody,
         sender_label=tenant_name,
         body=msg.body,
         actor_kind="tenant",
+        message_id=message.id,
     )
     db.commit()
     db.refresh(message)

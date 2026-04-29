@@ -87,5 +87,5 @@ class TestAgentRegistry(unittest.TestCase):
         assert "**Write tools**" in prompt
         # A few representative tool names from each category.
         assert "`lookup_vendors`" in prompt
-        assert "`save_memory`" in prompt
+        assert "`remember_about_entity`" in prompt
         assert "`message_person`" in prompt

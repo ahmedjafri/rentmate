@@ -25,7 +25,7 @@ Do not repeat those chip labels verbatim unless needed.
 - Summarize what was found, citing the exact address and unit label the document shows. Do not substitute generic placeholder addresses.
 - If the tenant's name is missing from the extracted data, say so and ask the user for it before creating the tenant/lease.
 - Ask for confirmation before creating any records.
-- Use `save_memory` on the document entity for key terms.
+- Use `remember_about_entity` on the document entity for durable terms (`note_kind="constraint"` for clauses, `"compliance"` for citations, `"preference"` for tenant-set rules).
 - **On user confirmation (e.g., "yes", "yes go ahead", "yes please", "sounds good", "ok", "proceed")**: your very next action MUST be a `create_property` tool call. Do not reply with plain text only — if you only describe what you would do, the record is never created. Pass `address` = the extracted `property_address` verbatim, and pass `unit_labels=[extracted unit_label]` so the unit is created in the same call. If the tenant name was missing, stop there and in your text reply ask for the tenant's name — do NOT call `create_tenant`.
 - Once records exist, mark `upload_document` done via `update_onboarding`.
 - If extraction is weak, say so plainly and offer manual entry.

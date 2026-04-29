@@ -183,6 +183,7 @@ class Query:
     def conversation(self, info: Info, uid: str) -> typing.Optional[ConversationSummaryType]:
         from sqlalchemy import select
         from sqlalchemy.orm import selectinload
+
         from db.models import Conversation, ConversationParticipant
         _current_user(info)
         db = _session(info)
@@ -459,6 +460,15 @@ class Mutation(AuthMutation):
         db.commit()
         db.refresh(task)
         return TaskType.from_sql(task)
+
+    @strawberry.mutation(description="Mark a conversation as seen by the current manager")
+    def mark_conversation_seen(self, info: Info, uid: str) -> ConversationSummaryType:
+        _current_user(info)
+        db = _session(info)
+        conv = chat_service.mark_conversation_seen(db, conversation_uid=uid)
+        db.commit()
+        db.refresh(conv)
+        return ConversationSummaryType.from_sql(conv)
 
     @strawberry.mutation(description="Archive (soft-delete) a conversation")
     def delete_conversation(self, info: Info, uid: str) -> bool:

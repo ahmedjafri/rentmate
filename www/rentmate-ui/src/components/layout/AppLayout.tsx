@@ -1,6 +1,6 @@
 import { useState, type MouseEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Bell, ShieldCheck, Hand, Bot, MessageSquareHeart } from 'lucide-react';
+import { Bell, ShieldCheck, Hand, Bot, MessageSquareHeart, X } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AppSidebar } from './Sidebar';
@@ -56,7 +56,9 @@ function usePageContext() {
           `Tenant: ${t.name}`,
           p ? `Property: ${p.name || p.address}, Unit ${t.unit}` : `Unit: ${t.unit}`,
           `Rent: $${t.rentAmount.toLocaleString()}/mo (${t.paymentStatus})`,
-          `Lease ends: ${t.leaseEnd instanceof Date ? t.leaseEnd.toLocaleDateString() : new Date(t.leaseEnd as unknown as string).toLocaleDateString()}`,
+          t.leaseEnd
+            ? `Lease ends: ${t.leaseEnd instanceof Date ? t.leaseEnd.toLocaleDateString() : new Date(t.leaseEnd as unknown as string).toLocaleDateString()}`
+            : 'No lease on file',
           tasks.length ? `Related tasks: ${tasks.map(x => x.title).join('; ')}` : '',
         ].filter(Boolean).join('\n'),
       };
@@ -95,7 +97,6 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
     actionDeskTasks,
     suggestions,
     notifications,
-    unreadNotificationCount,
     markNotificationRead,
     archiveNotification,
   } = useApp();
@@ -110,8 +111,8 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
   const isTaskDetail = /^\/tasks\/[^/]+$/.test(location.pathname);
   const isChats = location.pathname === '/chats';
   const pendingSuggestions = suggestions.filter(s => s.status === 'pending');
-  const attentionCount = unreadNotificationCount + pendingSuggestions.length;
   const activeNotifications = notifications.filter(n => !n.archivedAt).slice(0, 8);
+  const unreadVisibleNotifications = activeNotifications.filter(n => !n.readAt).length;
 
   const close = () => setOpen(false);
 
@@ -123,17 +124,27 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
     openChat({ pageContext: pageCtx?.context ?? null });
   };
 
-  const handleNotificationClick = async (notificationId: string, taskId?: string | null, conversationId?: string | null) => {
+  const handleNotificationClick = async (
+    notificationId: string,
+    taskId?: string | null,
+    conversationUid?: string | null,
+    conversationId?: string | null,
+    messageId?: string | null,
+  ) => {
     try {
       await markNotificationRead(notificationId);
     } catch {}
     close();
     if (taskId) {
-      navigate(`/tasks/${taskId}`);
+      const params = new URLSearchParams();
+      if (conversationUid) params.set('conversation', conversationUid);
+      if (messageId) params.set('message', messageId);
+      const query = params.toString();
+      navigate(`/tasks/${taskId}${query ? `?${query}` : ''}`);
       return;
     }
     if (conversationId) {
-      openChat({ conversationId });
+      openChat({ conversationId: conversationUid ?? conversationId });
     }
   };
 
@@ -183,12 +194,12 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
               <PopoverTrigger asChild>
                 <button
                   className="relative flex items-center justify-center h-7 w-7 rounded-md hover:bg-muted transition-colors"
-                  aria-label={attentionCount > 0 ? `${attentionCount} items needing attention` : 'Notifications'}
+                  aria-label={unreadVisibleNotifications > 0 ? `${unreadVisibleNotifications} unread notifications` : 'Notifications'}
                 >
                   <Bell className="h-4 w-4 text-muted-foreground" />
-                  {attentionCount > 0 && (
+                  {unreadVisibleNotifications > 0 && (
                     <span className="absolute -top-0.5 -right-0.5 h-4 min-w-4 px-1 flex items-center justify-center rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold leading-none">
-                      {attentionCount > 99 ? '99+' : attentionCount}
+                      {unreadVisibleNotifications > 99 ? '99+' : unreadVisibleNotifications}
                     </span>
                   )}
                 </button>
@@ -197,7 +208,7 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
                 <div className="flex items-center justify-between px-3 py-2 border-b">
                   <span className="text-sm font-semibold">Notifications</span>
                   <span className="text-xs text-muted-foreground">
-                    {unreadNotificationCount} unread
+                    {unreadVisibleNotifications} unread
                   </span>
                 </div>
                 <div className="max-h-96 overflow-y-auto">
@@ -207,7 +218,13 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
                         <li key={notification.id}>
                           <div className="flex items-start gap-2 px-3 py-2.5 hover:bg-muted/50 transition-colors">
                             <button
-                              onClick={() => void handleNotificationClick(notification.id, notification.taskId, notification.conversationId)}
+                              onClick={() => void handleNotificationClick(
+                                notification.id,
+                                notification.taskId,
+                                notification.conversationUid,
+                                notification.conversationId,
+                                notification.messageId,
+                              )}
                               className="flex min-w-0 flex-1 gap-2 text-left"
                             >
                               <div className="pt-1">
@@ -227,11 +244,12 @@ export function AppLayout({ children }: {children: React.ReactNode;}) {
                             </button>
                             <Button
                               variant="ghost"
-                              size="sm"
-                              className="h-6 px-2 text-[10px]"
+                              size="icon"
+                              aria-label="Dismiss notification"
+                              className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
                               onClick={(e) => void handleArchiveNotification(e, notification.id)}
                             >
-                              Archive
+                              <X className="h-3.5 w-3.5" />
                             </Button>
                           </div>
                         </li>

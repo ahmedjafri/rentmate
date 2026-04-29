@@ -76,6 +76,10 @@ def _serialize_properties(props) -> list:
                 "id": str(l.id),
                 "tenant": tenant_display_name(l.tenant) if l.tenant else None,
                 "tenant_id": _public_id(l.tenant) if l.tenant else None,
+                "tenants": [
+                    {"id": _public_id(tenant), "name": tenant_display_name(tenant)}
+                    for tenant in (getattr(l, "tenants", []) or [])
+                ],
                 "unit": l.unit.label if l.unit else None,
                 "start_date": str(l.start_date),
                 "end_date": str(l.end_date),
@@ -130,6 +134,10 @@ def _serialize_leases(leases) -> list:
             "id": str(l.id),
             "tenant": tenant_display_name(l.tenant) if l.tenant else None,
             "tenant_id": _public_id(l.tenant) if l.tenant else None,
+            "tenants": [
+                {"id": _public_id(tenant), "name": tenant_display_name(tenant)}
+                for tenant in (getattr(l, "tenants", []) or [])
+            ],
             "property": l.property.name if l.property else None,
             "property_id": str(l.property_id) if l.property_id else None,
             "unit": l.unit.label if l.unit else None,
@@ -146,8 +154,12 @@ def _serialize_leases(leases) -> list:
 
 def _task_tenant_and_unit(c):
     tenant_name = None
-    if c.lease and c.lease.tenant:
-        tenant_name = tenant_display_name(c.lease.tenant)
+    if c.lease:
+        lease_tenants = getattr(c.lease, "tenants", []) or []
+        if lease_tenants:
+            tenant_name = ", ".join(tenant_display_name(tenant) for tenant in lease_tenants)
+        elif c.lease.tenant:
+            tenant_name = tenant_display_name(c.lease.tenant)
     unit_label = None
     if c.unit:
         unit_label = c.unit.label

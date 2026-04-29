@@ -33,7 +33,7 @@ const PropertyDetail = () => {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { properties, tenants, actionDeskTasks, removeProperty, updateProperty, addTenant } = useApp();
+  const { properties, tenants, actionDeskTasks, removeProperty, updateProperty, addTenant, refreshData } = useApp();
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -45,6 +45,8 @@ const PropertyDetail = () => {
   const [addMode, setAddMode] = useState<'new' | 'existing'>('new');
   const [tenantSearch, setTenantSearch] = useState('');
   const [selectedExistingId, setSelectedExistingId] = useState('');
+  const [selectedCoTenantIds, setSelectedCoTenantIds] = useState<string[]>([]);
+  const [additionalTenants, setAdditionalTenants] = useState<Array<{ firstName: string; lastName: string; email: string; phone: string }>>([]);
   const [tenantForm, setTenantForm] = useState({
     firstName: '', lastName: '', email: '', phone: '',
     unitId: '', leaseStart: '', leaseEnd: '', rentAmount: '',
@@ -116,11 +118,21 @@ const PropertyDetail = () => {
         if (!selectedExistingId) { toast.error('Select a tenant'); return; }
         const result = await addLeaseForTenant({
           tenantId: selectedExistingId,
+          tenantIds: selectedCoTenantIds,
           propertyId: id,
           unitId: tenantForm.unitId,
           leaseStart: tenantForm.leaseStart,
           leaseEnd: tenantForm.leaseEnd,
           rentAmount: parseFloat(tenantForm.rentAmount),
+          existingTenantIds: selectedCoTenantIds,
+          additionalTenants: additionalTenants
+            .filter(tenant => tenant.firstName.trim() && tenant.lastName.trim())
+            .map(tenant => ({
+              firstName: tenant.firstName.trim(),
+              lastName: tenant.lastName.trim(),
+              email: tenant.email || null,
+              phone: tenant.phone || null,
+            })),
         });
         t = result.addLeaseForTenant;
       } else {
@@ -143,15 +155,18 @@ const PropertyDetail = () => {
         email: t.email ?? '',
         unit: t.unitLabel ?? '',
         propertyId: id,
-        leaseEnd: t.leaseEndDate ? new Date(t.leaseEndDate) : new Date(),
+        leaseEnd: t.leaseEndDate ? new Date(t.leaseEndDate) : null,
         rentAmount: t.rentAmount ?? 0,
         paymentStatus: (t.paymentStatus as 'current' | 'late' | 'overdue') ?? 'current',
         isActive: true,
       });
       toast.success('Tenant added');
+      refreshData();
       setShowAddTenant(false);
       setAddMode('new');
       setSelectedExistingId('');
+      setSelectedCoTenantIds([]);
+      setAdditionalTenants([]);
       setTenantSearch('');
       setTenantForm({ firstName: '', lastName: '', email: '', phone: '', unitId: '', leaseStart: '', leaseEnd: '', rentAmount: '' });
     } catch (err) {
@@ -183,6 +198,7 @@ const PropertyDetail = () => {
   const vacantUnits = property.units - property.occupiedUnits;
   const lateTenants = currentTenants.filter(t => t.paymentStatus === 'late' || t.paymentStatus === 'overdue');
   const upcomingLeases = currentTenants.filter(t => {
+    if (!t.leaseEnd) return false;
     const months = (t.leaseEnd.getTime() - Date.now()) / (1000 * 60 * 60 * 24 * 30);
     return months <= 3 && months > 0;
   });
@@ -195,7 +211,7 @@ const PropertyDetail = () => {
     ...(!isSingleFamily ? [{ label: 'Units', value: `${property.occupiedUnits}/${property.units} occupied (${occupancyRate}%)${vacantUnits > 0 ? ` · ${vacantUnits} vacant` : ''}` }] : []),
     { label: 'Tenants', value: currentTenants.length > 0 ? currentTenants.map(t => `${t.name} (Unit ${t.unit})`).join(', ') : 'None' },
     ...(lateTenants.length > 0 ? [{ label: 'Payment issues', value: lateTenants.map(t => `${t.name} — ${t.paymentStatus}`).join(', ') }] : []),
-    ...(upcomingLeases.length > 0 ? [{ label: 'Leases expiring soon', value: upcomingLeases.map(t => `${t.name} (${t.leaseEnd.toLocaleDateString()})`).join(', ') }] : []),
+    ...(upcomingLeases.length > 0 ? [{ label: 'Leases expiring soon', value: upcomingLeases.map(t => `${t.name} (${t.leaseEnd ? t.leaseEnd.toLocaleDateString() : 'No lease on file'})`).join(', ') }] : []),
     { label: 'Open tasks', value: `${propertyTasks.length}` },
   ];
 
@@ -333,6 +349,8 @@ const PropertyDetail = () => {
               setTenantForm(f => ({ ...f, unitId: defaultUnit }));
               setAddMode('new');
               setSelectedExistingId('');
+              setSelectedCoTenantIds([]);
+              setAdditionalTenants([]);
               setTenantSearch('');
               setShowAddTenant(v => !v);
             }}>
@@ -344,11 +362,94 @@ const PropertyDetail = () => {
           {showAddTenant && (() => {
             const existingCandidates = tenants.filter(t =>
               t.propertyId !== id &&
+              t.id !== selectedExistingId &&
+              !selectedCoTenantIds.includes(t.id) &&
               (tenantSearch.trim() === '' ||
                 t.name.toLowerCase().includes(tenantSearch.toLowerCase()) ||
                 t.email.toLowerCase().includes(tenantSearch.toLowerCase()))
             );
             const selectedTenant = tenants.find(t => t.id === selectedExistingId);
+            const selectedCoTenants = tenants.filter(t => selectedCoTenantIds.includes(t.id));
+            const existingTenantPicker = (
+              <div className="space-y-1">
+                <Label className="text-xs">{addMode === 'existing' && !selectedExistingId ? 'Select Tenant *' : 'Existing Co-tenants'}</Label>
+                {selectedCoTenants.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedCoTenants.map(t => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setSelectedCoTenantIds(ids => ids.filter(existingId => existingId !== t.id))}
+                        className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-1 text-[11px] hover:bg-muted/80"
+                      >
+                        {t.name}
+                        <X className="h-3 w-3" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <Input
+                  className="h-8 text-sm rounded-lg"
+                  placeholder="Search existing tenants…"
+                  value={tenantSearch}
+                  onChange={e => setTenantSearch(e.target.value)}
+                />
+                {tenantSearch.trim() !== '' && (
+                  <div className="rounded-lg border bg-card shadow-sm max-h-40 overflow-y-auto">
+                    {existingCandidates.length === 0 ? (
+                      <p className="text-xs text-muted-foreground px-3 py-2">No tenants found</p>
+                    ) : (
+                      existingCandidates.map(t => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => {
+                            if (addMode === 'existing' && !selectedExistingId) {
+                              setSelectedExistingId(t.id);
+                            } else {
+                              setSelectedCoTenantIds(ids => [...ids, t.id]);
+                            }
+                            setTenantSearch('');
+                          }}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-muted/50 flex items-center justify-between"
+                        >
+                          <span className="font-medium">{t.name}</span>
+                          <span className="text-xs text-muted-foreground">{t.email}</span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+            const additionalTenantRows = addMode === 'new' ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs">Additional New Co-tenants</Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 gap-1 text-[11px]"
+                    onClick={() => setAdditionalTenants(rows => [...rows, { firstName: '', lastName: '', email: '', phone: '' }])}
+                  >
+                    <Plus className="h-3 w-3" />
+                    Add row
+                  </Button>
+                </div>
+                {additionalTenants.map((tenant, index) => (
+                  <div key={index} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_1fr_auto] gap-2 rounded-lg border p-2">
+                    <Input className="h-8 text-sm" placeholder="First" value={tenant.firstName} onChange={e => setAdditionalTenants(rows => rows.map((row, i) => i === index ? { ...row, firstName: e.target.value } : row))} />
+                    <Input className="h-8 text-sm" placeholder="Last" value={tenant.lastName} onChange={e => setAdditionalTenants(rows => rows.map((row, i) => i === index ? { ...row, lastName: e.target.value } : row))} />
+                    <Input className="h-8 text-sm" placeholder="Email" type="email" value={tenant.email} onChange={e => setAdditionalTenants(rows => rows.map((row, i) => i === index ? { ...row, email: e.target.value } : row))} />
+                    <Input className="h-8 text-sm" placeholder="Phone" type="tel" value={tenant.phone} onChange={e => setAdditionalTenants(rows => rows.map((row, i) => i === index ? { ...row, phone: e.target.value } : row))} />
+                    <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => setAdditionalTenants(rows => rows.filter((_, i) => i !== index))}>
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null;
             const leaseFields = (
               <>
                 {!isSingleFamily && property.unitList && property.unitList.length > 0 && (
@@ -390,7 +491,7 @@ const PropertyDetail = () => {
                     <button
                       key={m}
                       type="button"
-                      onClick={() => { setAddMode(m); setSelectedExistingId(''); setTenantSearch(''); }}
+                      onClick={() => { setAddMode(m); setSelectedExistingId(''); setSelectedCoTenantIds([]); setAdditionalTenants([]); setTenantSearch(''); }}
                       className={`flex-1 py-1.5 capitalize transition-colors ${addMode === m ? 'bg-primary text-primary-foreground font-medium' : 'hover:bg-muted/50 text-muted-foreground'}`}
                     >
                       {m === 'new' ? 'New Tenant' : 'Existing Tenant'}
@@ -421,6 +522,8 @@ const PropertyDetail = () => {
                           <Input className="h-8 text-sm rounded-lg" type="tel" value={tenantForm.phone} onChange={e => setTenantForm(f => ({ ...f, phone: e.target.value }))} />
                         </div>
                       </div>
+                      {existingTenantPicker}
+                      {additionalTenantRows}
                       {leaseFields}
                     </>
                   ) : (
@@ -435,35 +538,10 @@ const PropertyDetail = () => {
                             </button>
                           </div>
                         ) : (
-                          <>
-                            <Input
-                              className="h-8 text-sm rounded-lg"
-                              placeholder="Search by name or email…"
-                              value={tenantSearch}
-                              onChange={e => setTenantSearch(e.target.value)}
-                            />
-                            {tenantSearch.trim() !== '' && (
-                              <div className="rounded-lg border bg-card shadow-sm max-h-40 overflow-y-auto">
-                                {existingCandidates.length === 0 ? (
-                                  <p className="text-xs text-muted-foreground px-3 py-2">No tenants found</p>
-                                ) : (
-                                  existingCandidates.map(t => (
-                                    <button
-                                      key={t.id}
-                                      type="button"
-                                      onClick={() => { setSelectedExistingId(t.id); setTenantSearch(''); }}
-                                      className="w-full text-left px-3 py-2 text-sm hover:bg-muted/50 flex items-center justify-between"
-                                    >
-                                      <span className="font-medium">{t.name}</span>
-                                      <span className="text-xs text-muted-foreground">{t.email}</span>
-                                    </button>
-                                  ))
-                                )}
-                              </div>
-                            )}
-                          </>
+                          existingTenantPicker
                         )}
                       </div>
+                      {selectedTenant && existingTenantPicker}
                       {leaseFields}
                     </>
                   )}
@@ -487,7 +565,7 @@ const PropertyDetail = () => {
                   <Card className="p-4 rounded-xl flex items-center justify-between hover:shadow-md transition-shadow cursor-pointer">
                     <div>
                       <p className="text-sm font-medium">{t.name}</p>
-                      <p className="text-xs text-muted-foreground">Unit {t.unit} · Lease ends {t.leaseEnd.toLocaleDateString()}</p>
+                      <p className="text-xs text-muted-foreground">Unit {t.unit} · {t.leaseEnd ? `Lease ends ${t.leaseEnd.toLocaleDateString()}` : 'No lease on file'}</p>
                     </div>
                     <ChevronRight className="h-4 w-4 text-muted-foreground" />
                   </Card>
@@ -506,7 +584,7 @@ const PropertyDetail = () => {
                   <Card className="p-4 rounded-xl flex items-center justify-between hover:shadow-md transition-shadow cursor-pointer opacity-60">
                     <div>
                       <p className="text-sm font-medium">{t.name}</p>
-                      <p className="text-xs text-muted-foreground">Unit {t.unit} · Lease ended {t.leaseEnd.toLocaleDateString()}</p>
+                      <p className="text-xs text-muted-foreground">Unit {t.unit} · {t.leaseEnd ? `Lease ended ${t.leaseEnd.toLocaleDateString()}` : 'No lease on file'}</p>
                     </div>
                     <ChevronRight className="h-4 w-4 text-muted-foreground" />
                   </Card>

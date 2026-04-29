@@ -72,6 +72,7 @@ fragment TaskFields on TaskType {
     conversationType
     lastMessageAt
     messageCount
+    unreadCount
     participants {
       name
       participantType
@@ -114,6 +115,10 @@ query Houses {
         uid
         name
       }
+      tenants {
+        uid
+        name
+      }
     }
   }
 }
@@ -144,6 +149,10 @@ query Tenants {
       rentAmount
       startDate
       endDate
+      tenants {
+        uid
+        name
+      }
     }
   }
 }
@@ -430,6 +439,13 @@ mutation UpdateTaskGoal($uid: Int!, $goal: String!) {
 
 mutation MarkTaskSeen($uid: Int!) {
   markTaskSeen(uid: $uid) {
+    uid
+    unreadCount
+  }
+}
+
+mutation MarkConversationSeen($uid: String!) {
+  markConversationSeen(uid: $uid) {
     uid
     unreadCount
   }

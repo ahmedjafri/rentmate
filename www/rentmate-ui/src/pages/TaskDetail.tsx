@@ -15,6 +15,7 @@ import { ChatPanel, performTaskDismiss, type EmbeddedTaskThreadSelection } from 
 import { ConvRow, ConvSummary } from '@/components/chat/ConvRow';
 import { ProgressSteps } from '@/components/chat/ProgressSteps';
 import { markTaskSeen, sendMessage, updateTask as updateTaskMutation, updateTaskGoal, updateTaskStatus } from '@/graphql/client';
+import { CONVERSATION_READ_EVENT, getReadConversationId } from '@/lib/conversationReadEvents';
 
 const CATEGORY_OPTIONS = [
   'rent',
@@ -53,7 +54,7 @@ function linkedToConvSummary(lc: LinkedConversation): ConvSummary {
     lastMessageSenderName: null,
     propertyName: null,
     participantCount: lc.participants?.length ?? 0,
-    unreadCount: 0,
+    unreadCount: lc.unreadCount ?? 0,
   };
 }
 
@@ -526,6 +527,8 @@ export default function TaskDetail() {
   const openedRef = useRef<string | null>(null);
   const seenTaskRef = useRef<string | null>(null);
   const suggestionId = searchParams.get('suggestion');
+  const conversationId = searchParams.get('conversation');
+  const messageId = searchParams.get('message');
 
   const task = useMemo(
     () => actionDeskTasks.find(t => String(t.id) === String(id)),
@@ -541,15 +544,15 @@ export default function TaskDetail() {
   // Close it on unmount so the slide-out doesn't pop back into other routes.
   useEffect(() => {
     if (!task) return;
-    const openKey = `${task.id}:${suggestionId ?? ''}`;
+    const openKey = `${task.id}:${suggestionId ?? ''}:${conversationId ?? ''}:${messageId ?? ''}`;
     if (openedRef.current === openKey) return;
     openedRef.current = openKey;
-    openChat({ taskId: task.id, suggestionId });
+    openChat({ taskId: task.id, suggestionId, conversationId });
     return () => {
       openedRef.current = null;
       closeChat();
     };
-  }, [task?.id, suggestionId, openChat, closeChat]);
+  }, [task?.id, suggestionId, conversationId, messageId, openChat, closeChat]);
 
   // Reset the opened guard when the task id changes so navigation between
   // tasks still triggers openChat.
@@ -558,6 +561,13 @@ export default function TaskDetail() {
   }, [id]);
 
   useEffect(() => {
+    if (
+      conversationId
+      && (task?.linkedConversations ?? []).some(conversation => conversation.uid === conversationId)
+    ) {
+      setSelectedThread({ kind: 'conversation', id: conversationId, messageId });
+      return;
+    }
     const targetConversationId = activeSuggestion?.targetConversationId;
     if (
       targetConversationId
@@ -567,7 +577,7 @@ export default function TaskDetail() {
       return;
     }
     setSelectedThread({ kind: 'ai' });
-  }, [activeSuggestion?.targetConversationId, task?.id, task?.linkedConversations]);
+  }, [activeSuggestion?.targetConversationId, conversationId, messageId, task?.id, task?.linkedConversations]);
 
   useEffect(() => {
     if (!task) return;
@@ -581,6 +591,23 @@ export default function TaskDetail() {
       // rehydrate the server value if the mutation truly failed.
     });
   }, [task?.id, task?.unreadCount, updateTask]);
+
+  useEffect(() => {
+    if (!task) return;
+    const onConversationRead = (event: Event) => {
+      const conversationId = getReadConversationId(event);
+      if (!conversationId) return;
+      const linkedConversations = task.linkedConversations ?? [];
+      if (!linkedConversations.some(lc => lc.uid === conversationId && (lc.unreadCount ?? 0) > 0)) return;
+      updateTask(task.id, {
+        linkedConversations: linkedConversations.map(lc => (
+          lc.uid === conversationId ? { ...lc, unreadCount: 0 } : lc
+        )),
+      });
+    };
+    window.addEventListener(CONVERSATION_READ_EVENT, onConversationRead);
+    return () => window.removeEventListener(CONVERSATION_READ_EVENT, onConversationRead);
+  }, [task, updateTask]);
 
   useEffect(() => {
     if (selectedThread.kind !== 'conversation') return;

@@ -29,6 +29,7 @@ export interface LinkedConversation {
   conversationType: string;
   lastMessageAt?: string | null;
   messageCount: number;
+  unreadCount?: number;
   participants: ConversationParticipant[];
 }
 
@@ -179,7 +180,7 @@ export interface Tenant {
   unit: string;
   isActive: boolean;
   propertyId: string;
-  leaseEnd: Date;
+  leaseEnd: Date | null;
   rentAmount: number;
   paymentStatus: 'current' | 'late' | 'overdue';
   context?: string;
@@ -215,6 +216,8 @@ export interface NotificationItem {
   body?: string | null;
   taskId?: string | null;
   conversationId?: string | null;
+  conversationUid?: string | null;
+  messageId?: string | null;
   createdAt: Date;
   readAt?: Date | null;
   archivedAt?: Date | null;

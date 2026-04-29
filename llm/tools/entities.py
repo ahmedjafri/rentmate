@@ -5,9 +5,13 @@ from typing import Any
 
 from backends.local_auth import resolve_account_id, resolve_org_id
 from db.models import MessageType
-
-from llm.tools._common import Tool, ToolMode, _action_card_field, _queue_chat_message
-
+from llm.tools._common import (
+    Tool,
+    ToolMode,
+    _action_card_field,
+    _check_placeholder_ids,
+    _queue_chat_message,
+)
 
 _PLACEHOLDER_NAME_TOKENS = {
     "tenant",
@@ -77,7 +81,6 @@ class CreatePropertyTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
-        from db.session import SessionLocal
         from gql.services.property_service import PropertyService
         from gql.services.settings_service import (
             get_onboarding_state,
@@ -216,8 +219,10 @@ class CreateTenantTool(Tool):
         return (
             "Create a new tenant. Pass whatever information you have — only "
             "first_name and last_name are required. If property_id and unit_id "
-            "are provided the tenant is linked to that unit. If lease dates and "
-            "rent are also provided a full lease record is created. Any extra "
+            "or unit_label are provided the tenant is linked to that unit. If "
+            "lease dates and rent are also provided a full lease record is "
+            "created. If the property has exactly one unit, the unit can be "
+            "inferred. Any extra "
             "context (e.g. pet policy, move-in notes, partial lease details) "
             "can be passed in the 'notes' field and saved to the tenant's "
             "permanent context."
@@ -235,6 +240,7 @@ class CreateTenantTool(Tool):
                 "phone": {"type": "string", "description": "Phone number"},
                 "property_id": {"type": "string", "description": "Property ID to attach lease to"},
                 "unit_id": {"type": "string", "description": "Unit ID within the property"},
+                "unit_label": {"type": "string", "description": "Unit label within the property, if unit_id is not known"},
                 "lease_start": {"type": "string", "description": "Lease start date (YYYY-MM-DD)"},
                 "lease_end": {"type": "string", "description": "Lease end date (YYYY-MM-DD)"},
                 "rent_amount": {"type": "number", "description": "Monthly rent amount"},
@@ -243,9 +249,15 @@ class CreateTenantTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [
+            ("property_id", "lookup_properties"),
+            ("unit_id", "lookup_properties"),
+        ])
+        if err:
+            return err
+
         from db.models import Tenant as SqlTenant, User
         from db.models.account import create_shadow_user
-        from db.session import SessionLocal
 
         first_name = kwargs["first_name"]
         last_name = kwargs["last_name"]
@@ -265,8 +277,9 @@ class CreateTenantTool(Tool):
                 import uuid
                 from datetime import UTC, datetime
 
+                from sqlalchemy import func, select
+
                 # Check for existing tenant by name
-                from sqlalchemy import func
                 existing = (
                     db.query(SqlTenant)
                     .join(User, SqlTenant.user_id == User.id)
@@ -281,6 +294,110 @@ class CreateTenantTool(Tool):
                         "status": "already_exists",
                         "tenant_id": str(existing.external_id),
                         "message": f"Tenant {first_name} {last_name} already exists.",
+                    })
+
+                from db.models import Property as SqlProperty, Unit as SqlUnit
+
+                property_id = (kwargs.get("property_id") or "").strip() or None
+                unit_id = (kwargs.get("unit_id") or "").strip() or None
+                unit_label = (kwargs.get("unit_label") or "").strip() or None
+                has_full_lease_terms = bool(kwargs.get("lease_start") and kwargs.get("lease_end"))
+                property_row = None
+                unit = None
+
+                if property_id and (unit_id or unit_label or has_full_lease_terms):
+                    property_row = db.execute(
+                        select(SqlProperty).where(
+                            SqlProperty.id == property_id,
+                            SqlProperty.org_id == resolve_org_id(),
+                            SqlProperty.creator_id == resolve_account_id(),
+                        )
+                    ).scalar_one_or_none()
+                    if not property_row:
+                        return json.dumps({
+                            "status": "error",
+                            "message": f"Property {property_id} not found. Look up the property first, then retry with a valid property_id.",
+                        })
+
+                    if unit_id:
+                        unit = db.execute(
+                            select(SqlUnit).where(
+                                SqlUnit.id == unit_id,
+                                SqlUnit.property_id == property_id,
+                                SqlUnit.org_id == resolve_org_id(),
+                                SqlUnit.creator_id == resolve_account_id(),
+                            )
+                        ).scalar_one_or_none()
+                        if not unit and has_full_lease_terms:
+                            return json.dumps({
+                                "status": "error",
+                                "message": f"Unit {unit_id} was not found on property {property_id}. Ask the manager for the correct unit.",
+                            })
+                    elif unit_label:
+                        unit = db.execute(
+                            select(SqlUnit).where(
+                                SqlUnit.property_id == property_id,
+                                SqlUnit.org_id == resolve_org_id(),
+                                SqlUnit.creator_id == resolve_account_id(),
+                                func.lower(func.trim(SqlUnit.label)) == unit_label.lower(),
+                            )
+                        ).scalar_one_or_none()
+                        if not unit:
+                            unit = SqlUnit(
+                                id=str(uuid.uuid4()),
+                                org_id=resolve_org_id(),
+                                creator_id=resolve_account_id(),
+                                property_id=property_id,
+                                label=unit_label,
+                                created_at=datetime.now(UTC),
+                            )
+                            db.add(unit)
+                            db.flush()
+                    elif has_full_lease_terms:
+                        units = db.execute(
+                            select(SqlUnit).where(
+                                SqlUnit.property_id == property_id,
+                                SqlUnit.org_id == resolve_org_id(),
+                                SqlUnit.creator_id == resolve_account_id(),
+                            ).order_by(SqlUnit.created_at)
+                        ).scalars().all()
+                        if len(units) == 1:
+                            unit = units[0]
+                        elif not units and property_row.property_type == "single_family":
+                            unit = SqlUnit(
+                                id=str(uuid.uuid4()),
+                                org_id=resolve_org_id(),
+                                creator_id=resolve_account_id(),
+                                property_id=property_id,
+                                label="Main",
+                                created_at=datetime.now(UTC),
+                            )
+                            db.add(unit)
+                            db.flush()
+                        elif len(units) > 1:
+                            labels = ", ".join(u.label for u in units)
+                            return json.dumps({
+                                "status": "error",
+                                "message": (
+                                    f"Property {property_id} has multiple units ({labels}). "
+                                    "Ask the manager which unit this lease belongs to, then retry with unit_id or unit_label."
+                                ),
+                            })
+                        else:
+                            return json.dumps({
+                                "status": "error",
+                                "message": (
+                                    f"Property {property_id} has no units and is not marked single_family. "
+                                    "Ask the manager whether this property is single-family or get the unit label before creating the lease."
+                                ),
+                            })
+                elif has_full_lease_terms:
+                    return json.dumps({
+                        "status": "error",
+                        "message": (
+                            "A lease cannot be created without a property and unit. "
+                            "Create or look up the property first, then retry with property_id and unit_id or unit_label."
+                        ),
                     })
 
                 # Always create the tenant first
@@ -308,29 +425,14 @@ class CreateTenantTool(Tool):
                     "message": f"Created tenant {first_name} {last_name}.",
                 }
 
-                # Link tenant to unit if property_id + unit_id provided
-                property_row = None
-                unit = None
-                if kwargs.get("property_id") and kwargs.get("unit_id"):
-                    from sqlalchemy import select
-
-                    from db.models import Property as SqlProperty, Unit as SqlUnit
-                    property_row = db.execute(
-                        select(SqlProperty).where(SqlProperty.id == kwargs["property_id"])
-                    ).scalar_one_or_none()
-                    unit = db.execute(
-                        select(SqlUnit).where(
-                            SqlUnit.id == kwargs["unit_id"],
-                            SqlUnit.property_id == kwargs["property_id"],
-                        )
-                    ).scalar_one_or_none()
-                    if unit:
-                        unit.tenant_id = tenant.id
-                        result["unit_label"] = unit.label
-                        result["message"] = f"Created tenant {first_name} {last_name} on {unit.label}."
+                if unit:
+                    unit.tenant_id = tenant.id
+                    result["unit_label"] = unit.label
+                    result["unit_id"] = str(unit.id)
+                    result["message"] = f"Created tenant {first_name} {last_name} on {unit.label}."
 
                 # Create lease if we have enough detail (dates required)
-                if unit and kwargs.get("lease_start") and kwargs.get("lease_end"):
+                if unit and has_full_lease_terms:
                     from datetime import date as _date
 
                     from db.models import Lease as SqlLease
@@ -339,7 +441,7 @@ class CreateTenantTool(Tool):
                         creator_id=resolve_account_id(),
                         tenant_id=tenant.id,
                         unit_id=unit.id,
-                        property_id=kwargs["property_id"],
+                        property_id=property_id,
                         start_date=_date.fromisoformat(kwargs["lease_start"]),
                         end_date=_date.fromisoformat(kwargs["lease_end"]),
                         rent_amount=kwargs.get("rent_amount", 0),
@@ -347,6 +449,7 @@ class CreateTenantTool(Tool):
                         created_at=datetime.now(UTC),
                     )
                     db.add(lease)
+                    db.flush()
                     result["lease_id"] = str(lease.id)
                     result["message"] = f"Created tenant {first_name} {last_name} with lease on {unit.label}."
 
@@ -489,9 +592,13 @@ class LookupTenantsTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [("property_id", "lookup_properties")])
+        if err:
+            return err
+
         from datetime import date
 
-        from db.models import Lease, Tenant
+        from db.models import Tenant
         from db.session import SessionLocal
 
         query = (kwargs.get("query") or "").strip().lower()
@@ -512,7 +619,7 @@ class LookupTenantsTool(Tool):
                 if query and query not in full_name.lower() and query not in email.lower():
                     continue
 
-                leases = db.query(Lease).filter_by(tenant_id=tenant.id).all()
+                leases = list(tenant.leases)
                 if property_id and not any(str(l.property_id) == property_id for l in leases):
                     continue
                 active_leases = [l for l in leases if l.end_date >= today]
@@ -584,6 +691,10 @@ class LookupPropertiesTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [("property_id", "lookup_properties")])
+        if err:
+            return err
+
         from db.models import Property
         from db.queries import format_address
         from db.session import SessionLocal

@@ -6,7 +6,6 @@ import { Badge } from '@/components/ui/badge';
 import { Link, useNavigate } from 'react-router-dom';
 import { Building2, Users, Wrench, ShieldCheck, Bot, Clock, MessageCircle, Lock, Plus, ClipboardList } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
-import { TaskParticipantType, categoryColors, categoryLabels } from '@/data/mockData';
 import { cn } from '@/lib/utils';
 import { ChatWorkspaceLayout } from '@/components/chat/ChatWorkspaceLayout';
 import { ConversationListPane } from '@/components/chat/ConversationListPane';
@@ -14,13 +13,6 @@ import { useConversations } from '@/hooks/useConversations';
 import { actOnSuggestion, deleteConversation } from '@/graphql/client';
 import { toast } from 'sonner';
 import { SuggestionCard } from './ActionDesk';
-
-const participantIcon: Record<TaskParticipantType, React.ElementType> = {
-  agent: Bot,
-  tenant: Users,
-  vendor: Wrench,
-  manager: Users,
-};
 
 const Index = () => {
   const navigate = useNavigate();
@@ -213,9 +205,6 @@ const Index = () => {
                         <ClipboardList className="h-3 w-3" />
                         Task #{task.id}
                       </Badge>
-                      <Badge variant="secondary" className={cn('text-[10px] rounded-lg', categoryColors[task.category])}>
-                        {categoryLabels[task.category]}
-                      </Badge>
                       {task.unreadCount > 0 && (
                         <Badge className="h-4 px-1.5 text-[10px] bg-primary text-primary-foreground">
                           {task.unreadCount} new
@@ -243,27 +232,7 @@ const Index = () => {
                     </div>
                   </div>
 
-                  <div className="mt-2 flex items-center justify-between">
-                    <div className="flex items-center gap-1">
-                      {task.participants.map((p, i) => {
-                        const Icon = participantIcon[p.type];
-                        return (
-                          <div
-                            key={i}
-                            className={cn(
-                              'flex h-4 w-4 items-center justify-center rounded-full text-[9px]',
-                              p.type === 'agent' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'
-                            )}
-                            title={`${p.name} (${p.type})`}
-                          >
-                            <Icon className="h-2.5 w-2.5" />
-                          </div>
-                        );
-                      })}
-                      <span className="text-[9px] text-muted-foreground ml-1">
-                        {task.participants.map(p => p.name.split(' ')[0]).join(', ')}
-                      </span>
-                    </div>
+                  <div className="mt-2 flex items-center justify-end">
                     {property && (
                       <span className="text-[9px] text-muted-foreground">{property.name || property.address}</span>
                     )}

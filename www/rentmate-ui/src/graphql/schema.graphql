@@ -13,6 +13,7 @@ input AddLeaseForTenantInput {
   leaseStart: String!
   leaseEnd: String!
   rentAmount: Float!
+  tenantIds: [String!]! = []
 }
 
 type AuthPayload {
@@ -134,6 +135,8 @@ input CreateTenantWithLeaseInput {
   rentAmount: Float!
   email: String = null
   phone: String = null
+  existingTenantIds: [String!]! = []
+  additionalTenants: [NewTenantForLeaseInput!]! = []
 }
 
 input CreateVendorInput {
@@ -201,6 +204,7 @@ type LeaseType {
   endDate: String!
   rentAmount: Float!
   tenant: TenantType
+  tenants: [TenantType!]!
   house: HouseType
 }
 
@@ -210,6 +214,7 @@ type LinkedConversationType {
   conversationType: ConversationType!
   lastMessageAt: String
   messageCount: Int!
+  unreadCount: Int!
   participants: [ConversationParticipantType!]!
 }
 
@@ -265,6 +270,9 @@ type Mutation {
 
   """Mark a task as seen in the tasks view"""
   markTaskSeen(uid: Int!): TaskType!
+
+  """Mark a conversation as seen by the current manager"""
+  markConversationSeen(uid: String!): ConversationSummaryType!
 
   """Archive (soft-delete) a conversation"""
   deleteConversation(uid: String!): Boolean!
@@ -332,6 +340,13 @@ type Mutation {
   Agent-drafted reply for a conversation in an external chat tool, viewed via the chrome extension. When ``externalThreadId`` is provided the thread is mirrored into rentmate as a read-only conversation so the AgentRun is groupable in DevTools and re-clicking ``Suggest`` doesn't duplicate messages.
   """
   suggestReply(input: SuggestReplyInput!): SuggestReplyResult!
+}
+
+input NewTenantForLeaseInput {
+  firstName: String!
+  lastName: String!
+  email: String = null
+  phone: String = null
 }
 
 type Query {

@@ -15,11 +15,12 @@ from db.models import (
     Task,
     User,
 )
+from gql.services import chat_service
 from gql.services.vendor_service import VendorService, get_vendor_login_email, vendor_has_account
 from handlers.deps import get_db
 from handlers.portals._common import (
-    notify_task_owner_of_portal_message,
     SendMessageBody,
+    notify_task_owner_of_portal_message,
     read_bearer_token,
     serialize_portal_conversation_row,
     serialize_task_list_row,
@@ -324,6 +325,8 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
         sent_at=now,
     )
     db.add(msg)
+    db.flush()
+    chat_service.create_unread_receipts_for_message(db, message=msg)
     task.last_message_at = now
     notify_task_owner_of_portal_message(
         db,
@@ -332,6 +335,7 @@ def vendor_send_message(task_id: str, body: SendMessageBody, request: Request):
         sender_label=vendor.name,
         body=body.body,
         actor_kind="vendor",
+        message_id=msg.id,
     )
     db.commit()
 
@@ -377,6 +381,8 @@ def vendor_send_conversation_message(conversation_id: int, body: SendMessageBody
         sent_at=now,
     )
     db.add(msg)
+    db.flush()
+    chat_service.create_unread_receipts_for_message(db, message=msg)
     if task is not None:
         task.last_message_at = now
     notify_task_owner_of_portal_message(
@@ -386,6 +392,7 @@ def vendor_send_conversation_message(conversation_id: int, body: SendMessageBody
         sender_label=vendor.name,
         body=body.body,
         actor_kind="vendor",
+        message_id=msg.id,
     )
     db.commit()
 

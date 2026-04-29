@@ -206,3 +206,5 @@ def test_vendor_portal_message_creates_pm_notification(db):
     assert notification.kind == "conversation_update"
     assert notification.title == "New vendor message"
     assert "Friday works for me." in (notification.body or "")
+    assert notification.extra
+    assert notification.extra.get("message_id") == response.json()["id"]

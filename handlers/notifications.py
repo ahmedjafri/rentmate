@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backends.local_auth import resolve_account_id
+from db.models import Conversation
 from gql.services.notification_service import NotificationService
 from handlers.deps import get_db, require_user
 
@@ -20,6 +21,8 @@ class NotificationResponse(BaseModel):
     body: str | None
     task_id: int | None
     conversation_id: int | None
+    conversation_uid: str | None
+    message_id: str | None
     created_at: datetime
     read_at: datetime | None
     archived_at: datetime | None
@@ -29,7 +32,15 @@ class NotificationResponse(BaseModel):
     extra: dict | None
 
 
-def _to_response(notification) -> NotificationResponse:
+def _to_response(db: Session, notification) -> NotificationResponse:
+    conversation_uid = None
+    extra = notification.extra or None
+    message_id = extra.get("message_id") if isinstance(extra, dict) else None
+    if notification.conversation_id is not None:
+        conversation_uid = db.query(Conversation.external_id).filter(
+            Conversation.org_id == notification.org_id,
+            Conversation.id == notification.conversation_id,
+        ).scalar()
     return NotificationResponse(
         uid=str(notification.external_id),
         kind=notification.kind,
@@ -39,13 +50,15 @@ def _to_response(notification) -> NotificationResponse:
         body=notification.body,
         task_id=notification.task_id,
         conversation_id=notification.conversation_id,
+        conversation_uid=str(conversation_uid) if conversation_uid is not None else None,
+        message_id=str(message_id) if message_id is not None else None,
         created_at=notification.created_at,
         read_at=notification.read_at,
         archived_at=notification.archived_at,
         sent_at=notification.sent_at,
         failed_at=notification.failed_at,
         failure_reason=notification.failure_reason,
-        extra=notification.extra,
+        extra=extra,
     )
 
 
@@ -61,7 +74,7 @@ async def list_notifications(
         recipient_user_id=resolve_account_id(),
         include_archived=include_archived,
     )
-    return [_to_response(row) for row in rows]
+    return [_to_response(db, row) for row in rows]
 
 
 @router.post("/notifications/{notification_id}/read", response_model=NotificationResponse)
@@ -80,7 +93,7 @@ async def mark_notification_read(
     if row is None:
         raise HTTPException(status_code=404, detail="Notification not found")
     db.commit()
-    return _to_response(row)
+    return _to_response(db, row)
 
 
 @router.post("/notifications/{notification_id}/unread", response_model=NotificationResponse)
@@ -99,7 +112,7 @@ async def mark_notification_unread(
     if row is None:
         raise HTTPException(status_code=404, detail="Notification not found")
     db.commit()
-    return _to_response(row)
+    return _to_response(db, row)
 
 
 @router.post("/notifications/{notification_id}/archive", response_model=NotificationResponse)
@@ -117,4 +130,4 @@ async def archive_notification(
     if row is None:
         raise HTTPException(status_code=404, detail="Notification not found")
     db.commit()
-    return _to_response(row)
+    return _to_response(db, row)

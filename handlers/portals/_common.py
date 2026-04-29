@@ -103,9 +103,11 @@ def notify_task_owner_of_portal_message(
     sender_label: str,
     body: str,
     actor_kind: str,
+    message_id: int | None = None,
 ) -> None:
     if task is None or not task.creator_id:
         return
+    extra = {"message_id": str(message_id)} if message_id is not None else None
     db.add(
         Notification(
             org_id=task.org_id,
@@ -118,6 +120,7 @@ def notify_task_owner_of_portal_message(
             delivery_status="recorded",
             title=f"New {actor_kind} message",
             body=f"{sender_label}: {body.strip()[:240]}",
+            extra=extra,
             created_at=datetime.now(UTC),
         )
     )
