@@ -8,7 +8,7 @@ DevTools without a data migration. A follow-up migration drops
 ``agent_traces`` once that historical replay value expires.
 
 Revision ID: d3f5a6b7c8d9
-Revises: c2f3e4d5a6b8
+Revises: c8d9e0f1a2b3
 Create Date: 2026-04-28
 """
 from typing import Sequence, Union
@@ -19,7 +19,11 @@ from sqlalchemy.dialects import postgresql
 
 
 revision: str = "d3f5a6b7c8d9"
-down_revision: Union[str, None] = "c2f3e4d5a6b8"
+# Originally chained to ``c2f3e4d5a6b8``; PR #51 (multi-tenant leases)
+# landed on main first with its own descendant ``c8d9e0f1a2b3``, which
+# left main with two parallel heads after this migration also merged.
+# Rechained to ``c8d9e0f1a2b3`` so alembic sees a single head again.
+down_revision: Union[str, None] = "c8d9e0f1a2b3"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
