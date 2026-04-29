@@ -9,6 +9,7 @@ from db.enums import SuggestionOption
 from llm.tools._common import (
     Tool,
     _auto_execute_suggestion,
+    _check_placeholder_ids,
     _create_suggestion,
     _load_tenant_by_public_id,
     _load_vendor_by_public_id,
@@ -129,6 +130,16 @@ class MessageExternalPersonTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        # ``entity_id`` is the lookup-resolved tenant or vendor UUID;
+        # checking it here catches the same hallucination pattern that
+        # bit ``add_tenant_to_lease``.
+        err = _check_placeholder_ids(kwargs, [
+            ("task_id", "list_tasks"),
+            ("entity_id", "lookup_tenants"),
+        ])
+        if err:
+            return err
+
         agent_supplied_task_id = kwargs.get("task_id") or None
         task_id = agent_supplied_task_id
         entity_id = _strip_entity_prefix(str(kwargs["entity_id"]))

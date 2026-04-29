@@ -178,6 +178,7 @@ class TestInfrastructureExposure:
 
         reply = result["reply"]
         tool_names = ["message_person", "attach_entity", "propose_task", "update_steps",
-                     "save_memory", "recall_memory", "lookup_vendors", "close_task", "set_mode"]
+                     "remember_about_entity", "add_task_note", "recall_memory",
+                     "lookup_vendors", "close_task", "set_mode"]
         for tool in tool_names:
             assert tool not in reply, f"Reply exposes tool name '{tool}': {reply[:200]}"

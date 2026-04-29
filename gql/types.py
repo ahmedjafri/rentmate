@@ -147,6 +147,14 @@ class UpdateTaskInput:
     urgency: typing.Optional[UrgencyEnum] = None
 
 @strawberry.input
+class NewTenantForLeaseInput:
+    first_name: str
+    last_name: str
+    email: typing.Optional[str] = None
+    phone: typing.Optional[str] = None
+
+
+@strawberry.input
 class CreateTenantWithLeaseInput:
     first_name: str
     last_name: str
@@ -157,6 +165,8 @@ class CreateTenantWithLeaseInput:
     rent_amount: float
     email: typing.Optional[str] = None
     phone: typing.Optional[str] = None
+    existing_tenant_ids: typing.List[str] = strawberry.field(default_factory=list)
+    additional_tenants: typing.List[NewTenantForLeaseInput] = strawberry.field(default_factory=list)
 
 @strawberry.input
 class CreatePropertyInput:
@@ -176,6 +186,7 @@ class AddLeaseForTenantInput:
     lease_start: str   # YYYY-MM-DD
     lease_end: str     # YYYY-MM-DD
     rent_amount: float
+    tenant_ids: typing.List[str] = strawberry.field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -236,14 +247,13 @@ class HouseType:
         monthly_revenue = 0.0
 
         for l in p.leases:
-            t = l.tenant
             is_active = l.end_date >= today if l.end_date else False
-            if t:
+            for t in getattr(l, "tenants", []) or ([l.tenant] if l.tenant else []):
                 t_key = str(t.external_id)
                 if t_key not in tenant_map:
                     tenant_map[t_key] = TenantType(uid=str(t.external_id), name=tenant_display_name(t))
-                if is_active and l.unit_id:
-                    active_unit_ids.add(l.unit_id)
+            if is_active and l.unit_id and (getattr(l, "tenants", None) or l.tenant):
+                active_unit_ids.add(l.unit_id)
             if is_active:
                 monthly_revenue += l.rent_amount or 0.0
             lease_items.append(LeaseType.from_sql(l))
@@ -351,17 +361,27 @@ class LeaseType:
     end_date: str
     rent_amount: float
     tenant: typing.Optional[TenantType] = None
+    tenants: typing.List[TenantType] = strawberry.field(default_factory=list)
     house: typing.Optional[HouseType] = None
 
     @classmethod
     def from_sql(cls, l: typing.Any) -> "LeaseType":
         from db.queries import format_address, tenant_display_name
+        tenants = list(getattr(l, "tenants", []) or [])
+        primary_tenant = l.tenant or (tenants[0] if tenants else None)
         return cls(
             uid=str(l.id),
             start_date=str(l.start_date),
             end_date=str(l.end_date),
             rent_amount=l.rent_amount,
-            tenant=TenantType(uid=str(l.tenant.external_id), name=tenant_display_name(l.tenant)) if l.tenant else None,
+            tenant=TenantType(uid=str(primary_tenant.external_id), name=tenant_display_name(primary_tenant)) if primary_tenant else None,
+            tenants=[
+                TenantType(uid=str(tenant.external_id), name=tenant_display_name(tenant))
+                for tenant in tenants
+            ] or (
+                [TenantType(uid=str(primary_tenant.external_id), name=tenant_display_name(primary_tenant))]
+                if primary_tenant else []
+            ),
             house=HouseType(
                 uid=str(l.property.id),
                 name=l.property.name or "",
@@ -652,9 +672,13 @@ class TaskType:
         messages = [ChatMessageType.from_sql(m) for m in all_msgs]
 
         tenant_name = None
-        if getattr(t, "lease", None) and t.lease.tenant:
-            ten = t.lease.tenant
-            tenant_name = f"{ten.user.first_name} {ten.user.last_name}".strip()
+        if getattr(t, "lease", None):
+            tenants = list(getattr(t.lease, "tenants", []) or [])
+            if tenants:
+                tenant_name = ", ".join(f"{ten.user.first_name} {ten.user.last_name}".strip() for ten in tenants if ten.user)
+            elif t.lease.tenant:
+                ten = t.lease.tenant
+                tenant_name = f"{ten.user.first_name} {ten.user.last_name}".strip()
 
         unit_label = None
         if getattr(t, "unit", None):

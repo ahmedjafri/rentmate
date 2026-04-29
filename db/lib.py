@@ -16,6 +16,7 @@ from .models import (
     ConversationParticipant,
     ConversationType,
     Lease,
+    LeaseTenant,
     Message,
     MessageReceipt,
     ParticipantType,
@@ -886,7 +887,8 @@ def apply_document_extraction(
 
         existing_lease = (
             db.query(Lease)
-            .filter(Lease.tenant_id == tenant.id, Lease.property_id == prop.id)
+            .join(LeaseTenant)
+            .filter(LeaseTenant.tenant_id == tenant.id, Lease.property_id == prop.id)
             .order_by(Lease.start_date.desc())
             .first()
         )

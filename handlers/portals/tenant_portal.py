@@ -5,7 +5,17 @@ from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from db.models import Conversation, ConversationParticipant, Lease, Message, MessageType, ParticipantType, Task, Tenant
+from db.models import (
+    Conversation,
+    ConversationParticipant,
+    Lease,
+    LeaseTenant,
+    Message,
+    MessageType,
+    ParticipantType,
+    Task,
+    Tenant,
+)
 from gql.services import chat_service
 from gql.services.tenant_service import TenantService
 from handlers.deps import get_db
@@ -60,7 +70,7 @@ def _tenant_tasks(db, tenant_external_id: str) -> list:
 
     # Via lease → unit → task
     leases = db.execute(
-        select(Lease).where(Lease.tenant_id == tenant.id)
+        select(Lease).join(LeaseTenant).where(LeaseTenant.tenant_id == tenant.id)
     ).scalars().all()
     unit_ids = {l.unit_id for l in leases if l.unit_id}
     property_ids = {l.property_id for l in leases if l.property_id}
@@ -277,7 +287,9 @@ def _verify_tenant_task(db, task_id: str, tenant_external_id: str) -> Task:
     # Check via unit lease
     if task.unit_id:
         lease = db.execute(
-            select(Lease).where(Lease.tenant_id == tenant.id, Lease.unit_id == task.unit_id)
+            select(Lease)
+            .join(LeaseTenant)
+            .where(LeaseTenant.tenant_id == tenant.id, Lease.unit_id == task.unit_id)
         ).scalars().first()
         if lease:
             return task
@@ -285,7 +297,9 @@ def _verify_tenant_task(db, task_id: str, tenant_external_id: str) -> Task:
     # Check via property lease (task without unit_id)
     if task.property_id:
         lease = db.execute(
-            select(Lease).where(Lease.tenant_id == tenant.id, Lease.property_id == task.property_id)
+            select(Lease)
+            .join(LeaseTenant)
+            .where(LeaseTenant.tenant_id == tenant.id, Lease.property_id == task.property_id)
         ).scalars().first()
         if lease:
             return task

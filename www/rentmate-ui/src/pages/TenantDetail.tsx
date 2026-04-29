@@ -4,7 +4,7 @@ import { useApp } from '@/context/AppContext';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EntityContextCard, propertyTopics } from '@/components/context/EntityContextCard';
-import { ArrowLeft, MapPin, Bot, Wrench, User, Clock, MessageCircle, Zap, ShieldCheck, Hand, Lock, Mail, Calendar, Link as LinkIcon, Copy, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, MapPin, Bot, Wrench, User, Clock, MessageCircle, Zap, ShieldCheck, Hand, Lock, Mail, Calendar, Link as LinkIcon, Copy, CheckCircle2, Building2, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
@@ -86,7 +86,9 @@ const TenantDetail = () => {
 
   const property = properties.find(p => p.id === tenant.propertyId);
   const tenantTasks = actionDeskTasks.filter(t => t.status === 'active' && t.chatThread.some(m => m.senderName?.includes(tenant.name.split(' ')[0])));
-  const daysUntilLeaseEnd = Math.round((tenant.leaseEnd.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+  const daysUntilLeaseEnd = tenant.leaseEnd
+    ? Math.round((tenant.leaseEnd.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    : null;
 
   const autoContext = [
     { label: 'Name', value: tenant.name },
@@ -95,7 +97,12 @@ const TenantDetail = () => {
     { label: 'Unit', value: tenant.unit },
     { label: 'Rent', value: `$${tenant.rentAmount.toLocaleString()}/mo` },
     { label: 'Payment status', value: tenant.paymentStatus },
-    { label: 'Lease ends', value: `${tenant.leaseEnd.toLocaleDateString()} (${daysUntilLeaseEnd > 0 ? `${daysUntilLeaseEnd} days` : 'expired'})` },
+    {
+      label: 'Lease ends',
+      value: tenant.leaseEnd
+        ? `${tenant.leaseEnd.toLocaleDateString()} (${daysUntilLeaseEnd && daysUntilLeaseEnd > 0 ? `${daysUntilLeaseEnd} days` : 'expired'})`
+        : 'No lease on file',
+    },
   ];
 
   return (
@@ -112,6 +119,45 @@ const TenantDetail = () => {
         </div>
       </div>
 
+      {/* Property reference — clickable, routes to the property page so
+          PMs can jump straight to the building this tenant rents at.
+          Falls back silently if the tenant isn't linked to a known
+          property (shadow data, deleted parent, etc.). */}
+      {property && (
+        <Link
+          to={`/properties/${property.id}`}
+          state={{ from: 'tenant', tenantId: tenant.id, tenantName: tenant.name }}
+          className="block"
+        >
+          <Card className="p-4 rounded-xl hover:shadow-md transition-shadow cursor-pointer">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                <Building2 className="h-5 w-5 text-primary" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-medium truncate">
+                    {property.name || property.address}
+                  </span>
+                  {tenant.unit && (
+                    <Badge variant="secondary" className="text-[10px] rounded-md">
+                      Unit {tenant.unit}
+                    </Badge>
+                  )}
+                </div>
+                {property.name && property.address && property.address !== property.name && (
+                  <p className="text-xs text-muted-foreground flex items-center gap-1 truncate mt-0.5">
+                    <MapPin className="h-3 w-3 shrink-0" />
+                    {property.address}
+                  </p>
+                )}
+              </div>
+              <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+            </div>
+          </Card>
+        </Link>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3">
         <EntityContextCard entityId={tenant.id} entityName={tenant.name} entityType="tenant" agentContext={tenant.context} onAgentContextSaved={(ctx) => updateTenant(tenant.id, { context: ctx })} expectedTopics={tenantTopics} autoContext={autoContext} />
@@ -120,15 +166,15 @@ const TenantDetail = () => {
             <Calendar className="h-4 w-4 text-muted-foreground" />
             <span className="text-xs text-muted-foreground">Lease</span>
           </div>
-          {tenant.isActive ? (
+          {tenant.isActive && tenant.leaseEnd ? (
             <>
               <p className="text-xl font-bold">{daysUntilLeaseEnd}</p>
               <p className="text-[11px] text-muted-foreground">days remaining</p>
             </>
           ) : (
             <>
-              <p className="text-xl font-bold text-muted-foreground">Expired</p>
-              <p className="text-[11px] text-muted-foreground">{tenant.leaseEnd.toLocaleDateString()}</p>
+              <p className="text-xl font-bold text-muted-foreground">{tenant.leaseEnd ? 'Expired' : 'No lease'}</p>
+              <p className="text-[11px] text-muted-foreground">{tenant.leaseEnd ? tenant.leaseEnd.toLocaleDateString() : 'No lease on file'}</p>
             </>
           )}
         </Card>

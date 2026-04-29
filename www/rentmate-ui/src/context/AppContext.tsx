@@ -100,7 +100,7 @@ function coerceTask(t: ActionDeskTask): ActionDeskTask {
 }
 
 function coerceTenant(t: Tenant): Tenant {
-  return { ...t, leaseEnd: t.leaseEnd instanceof Date ? t.leaseEnd : new Date(t.leaseEnd as unknown as string) };
+  return { ...t, leaseEnd: t.leaseEnd ? (t.leaseEnd instanceof Date ? t.leaseEnd : new Date(t.leaseEnd as unknown as string)) : null };
 }
 
 function coerceNotification(n: NotificationItem): NotificationItem {

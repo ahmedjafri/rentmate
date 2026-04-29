@@ -302,8 +302,8 @@ def build_task_context_data(db: Session, task_id: str, query: str | None = None)
             .first()
         )
 
-    if lease and not tenant and lease.tenant_id:
-        tenant = db.query(Tenant).filter_by(id=lease.tenant_id).first()
+    if lease and not tenant:
+        tenant = (getattr(lease, "tenants", None) or [lease.tenant if lease.tenant else None])[0]
 
     factual_lines: list[str] = []
     if prop:

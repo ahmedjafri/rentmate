@@ -20,8 +20,7 @@ from datetime import date
 
 from sqlalchemy.orm import Session
 
-from db.models import Lease, Property, Tenant, User
-
+from db.models import Lease, LeaseTenant, Property, Tenant, User
 
 # Words that should never anchor entity extraction. Mostly stop-words
 # plus location/object nouns ("house", "apt") that tell us *what kind*
@@ -118,9 +117,11 @@ def extract_query_entities(db: Session, query: str, *, org_id: int | None = None
     tenants_matched: list[dict] = []
     for row in tenant_rows:
         if row["full"] and row["full"] in multis:
-            tenants_matched.append(row); continue
+            tenants_matched.append(row)
+            continue
         if row["first"] and row["first"] in singles:
-            tenants_matched.append(row); continue
+            tenants_matched.append(row)
+            continue
         if row["last"] and row["last"] in singles and last_name_counts[row["last"]] == 1:
             tenants_matched.append(row)
 
@@ -141,11 +142,16 @@ def extract_query_entities(db: Session, query: str, *, org_id: int | None = None
         last_name_counts_v[row["last"]] = last_name_counts_v.get(row["last"], 0) + 1
     for row in vendor_rows:
         if row["full"] and row["full"] in multis:
-            out.vendor_ids.add(row["external_id"]); out.matched_names.append(row["display"]); continue
+            out.vendor_ids.add(row["external_id"])
+            out.matched_names.append(row["display"])
+            continue
         if row["first"] and row["first"] in singles:
-            out.vendor_ids.add(row["external_id"]); out.matched_names.append(row["display"]); continue
+            out.vendor_ids.add(row["external_id"])
+            out.matched_names.append(row["display"])
+            continue
         if row["last"] and row["last"] in singles and last_name_counts_v[row["last"]] == 1:
-            out.vendor_ids.add(row["external_id"]); out.matched_names.append(row["display"])
+            out.vendor_ids.add(row["external_id"])
+            out.matched_names.append(row["display"])
 
     # ── properties ─────────────────────────────────────────────────────────
     for row in property_rows:
@@ -157,9 +163,13 @@ def extract_query_entities(db: Session, query: str, *, org_id: int | None = None
             for i in range(len(addr_tokens) - 1)
         }
         if row["nickname"] and row["nickname"] in multis:
-            out.property_ids.add(row["id"]); out.matched_names.append(row["display"]); continue
+            out.property_ids.add(row["id"])
+            out.matched_names.append(row["display"])
+            continue
         if addr_bigrams & multis:
-            out.property_ids.add(row["id"]); out.matched_names.append(row["display"]); continue
+            out.property_ids.add(row["id"])
+            out.matched_names.append(row["display"])
+            continue
         # Fallback: a unique address token (skip generic ones like "ave", "st")
         for token in addr_tokens:
             if (
@@ -168,7 +178,8 @@ def extract_query_entities(db: Session, query: str, *, org_id: int | None = None
                 and token not in {"road", "lane", "drive", "street", "avenue"}
                 and token in singles
             ):
-                out.property_ids.add(row["id"]); out.matched_names.append(row["display"])
+                out.property_ids.add(row["id"])
+                out.matched_names.append(row["display"])
                 break
 
     return out
@@ -252,7 +263,8 @@ def _active_lease_for_tenant(db: Session, tenant_id: int, *, today: date, org_id
     """
     leases = (
         db.query(Lease)
-        .filter(Lease.tenant_id == tenant_id, Lease.org_id == org_id)
+        .join(LeaseTenant)
+        .filter(LeaseTenant.tenant_id == tenant_id, Lease.org_id == org_id)
         .all()
     )
     active = [l for l in leases if l.end_date >= today]

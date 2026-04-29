@@ -115,6 +115,10 @@ query Houses {
         uid
         name
       }
+      tenants {
+        uid
+        name
+      }
     }
   }
 }
@@ -145,6 +149,10 @@ query Tenants {
       rentAmount
       startDate
       endDate
+      tenants {
+        uid
+        name
+      }
     }
   }
 }

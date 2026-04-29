@@ -56,7 +56,9 @@ function usePageContext() {
           `Tenant: ${t.name}`,
           p ? `Property: ${p.name || p.address}, Unit ${t.unit}` : `Unit: ${t.unit}`,
           `Rent: $${t.rentAmount.toLocaleString()}/mo (${t.paymentStatus})`,
-          `Lease ends: ${t.leaseEnd instanceof Date ? t.leaseEnd.toLocaleDateString() : new Date(t.leaseEnd as unknown as string).toLocaleDateString()}`,
+          t.leaseEnd
+            ? `Lease ends: ${t.leaseEnd instanceof Date ? t.leaseEnd.toLocaleDateString() : new Date(t.leaseEnd as unknown as string).toLocaleDateString()}`
+            : 'No lease on file',
           tasks.length ? `Related tasks: ${tasks.map(x => x.title).join('; ')}` : '',
         ].filter(Boolean).join('\n'),
       };

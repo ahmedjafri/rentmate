@@ -180,7 +180,7 @@ export interface Tenant {
   unit: string;
   isActive: boolean;
   propertyId: string;
-  leaseEnd: Date;
+  leaseEnd: Date | null;
   rentAmount: number;
   paymentStatus: 'current' | 'late' | 'overdue';
   context?: string;

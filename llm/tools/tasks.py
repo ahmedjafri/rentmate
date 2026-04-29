@@ -11,6 +11,7 @@ from gql.services.task_service import TaskProgressStep, dump_task_steps
 from llm.tools._common import (
     Tool,
     ToolMode,
+    _check_placeholder_ids,
     _create_suggestion,
     _load_vendor_by_public_id,
     _placeholder_message_block_error,
@@ -465,6 +466,10 @@ class ListTasksTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [("property_id", "lookup_properties")])
+        if err:
+            return err
+
         from db.models import Task
         from db.session import SessionLocal
 
@@ -566,6 +571,10 @@ class ProposeTaskTool(Tool):
             "Propose a new task for a genuinely separate issue. "
             "Only use propose_task for a genuinely separate issue that needs its own task. "
             "Never use propose_task when the user asked you to draft a notice, letter, or document directly in chat. "
+            "**Never use propose_task as a workaround for being blocked.** "
+            "If you can't complete the request because you're missing info, "
+            "lack a tool, or need a decision, call ``ask_manager`` instead — "
+            "do not file a task asking the manager to do the thing themselves. "
             "You MUST provide a vendor_id external UUID — use lookup_vendors first. "
             "You MUST provide a goal — one sentence stating what 'done' looks like, outcome-flavored and specific. "
             "You MUST provide steps — an ordered list of 3–6 progress steps "
@@ -630,6 +639,14 @@ class ProposeTaskTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [
+            ("vendor_id", "lookup_vendors"),
+            ("property_id", "lookup_properties"),
+            ("unit_id", "lookup_properties"),
+        ])
+        if err:
+            return err
+
         task_id = str(kwargs.get("task_id") or _resolve_task_id_from_active_conversation() or "")
         if _current_message_requests_direct_draft():
             return json.dumps({"status": "error", "message": _direct_draft_block_message()})
@@ -802,6 +819,9 @@ class CloseTaskTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [("task_id", "list_tasks")])
+        if err:
+            return err
         task_id = kwargs["task_id"]
 
         from datetime import UTC, datetime
@@ -867,6 +887,9 @@ class UpdateTaskProgressTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [("task_id", "list_tasks")])
+        if err:
+            return err
         agent_supplied_task_id = kwargs.get("task_id")
         task_id = agent_supplied_task_id
         step_key = (kwargs.get("step_key") or "").strip()
@@ -1053,6 +1076,15 @@ class CreateSuggestionTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [
+            ("task_id", "list_tasks"),
+            ("property_id", "lookup_properties"),
+            ("unit_id", "lookup_properties"),
+            ("document_id", None),
+        ])
+        if err:
+            return err
+
         task_id = str(kwargs.get("task_id") or _resolve_task_id_from_active_conversation() or "")
         if _current_message_requests_direct_draft():
             from llm.tracing import log_trace
@@ -1216,6 +1248,13 @@ class CreateRoutineTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [
+            ("property_id", "lookup_properties"),
+            ("unit_id", "lookup_properties"),
+        ])
+        if err:
+            return err
+
         from db.models import Routine
         from handlers.routines import human_schedule, next_run, parse_schedule
         from llm.tools._common import tool_session

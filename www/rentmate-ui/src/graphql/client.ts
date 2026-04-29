@@ -263,6 +263,7 @@ export function createTenantWithLease(input: CreateTenantWithLeaseInput) {
 
 export function addLeaseForTenant(input: {
   tenantId: string;
+  tenantIds?: string[];
   propertyId: string;
   unitId: string;
   leaseStart: string;

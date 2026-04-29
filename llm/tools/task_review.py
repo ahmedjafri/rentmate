@@ -6,6 +6,7 @@ from typing import Any
 
 from llm.tools._common import (
     Tool,
+    _check_placeholder_ids,
     _resolve_task_id_from_active_conversation,
     tool_session,
 )
@@ -76,6 +77,9 @@ class RecordTaskReviewTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [("task_id", "list_tasks")])
+        if err:
+            return err
         agent_supplied_task_id = str(kwargs.get("task_id") or "").strip() or None
         task_id = agent_supplied_task_id or ""
         status = (kwargs.get("status") or "").strip().lower()
@@ -178,9 +182,16 @@ class AskManagerTool(Tool):
     def description(self) -> str:
         return (
             "Post a question to the property manager in the task's AI "
-            "conversation. Use this when you need clarification, a "
-            "decision, or an approval to unblock the task. The message "
-            "appears in the manager's task chat; they reply there."
+            "conversation. Use this whenever you need clarification, a "
+            "decision, or an approval to unblock yourself — including "
+            "when you can't complete the request because info is "
+            "missing, an entity isn't in lookup results, you don't have "
+            "a tool for the action, or the manager's intent is "
+            "ambiguous. **This is the right escape hatch for "
+            "blockers — do NOT call ``propose_task`` or "
+            "``create_suggestion`` to ask the manager to do something "
+            "themselves.** The message appears in the manager's task "
+            "chat; they reply there."
         )
 
     @property
@@ -205,6 +216,9 @@ class AskManagerTool(Tool):
         }
 
     async def execute(self, **kwargs: Any) -> str:
+        err = _check_placeholder_ids(kwargs, [("task_id", "list_tasks")])
+        if err:
+            return err
         agent_supplied_task_id = str(kwargs.get("task_id") or "").strip() or None
         task_id = agent_supplied_task_id or ""
         question = (kwargs.get("question") or "").strip()

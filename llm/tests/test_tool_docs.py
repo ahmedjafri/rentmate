@@ -5,7 +5,7 @@ from llm.tools import (
     LookupVendorsTool,
     MessageExternalPersonTool,
     ProposeTaskTool,
-    SaveMemoryTool,
+    RememberAboutEntityTool,
 )
 from llm.tools._common import ToolCategory
 
@@ -46,7 +46,7 @@ def test_read_only_tool_lands_in_read_section():
 def test_default_read_write_lands_in_immediate_section():
     md = render_tools_markdown()
     immediate_block = md.split("**Immediate tools**", 1)[1].split("**Write tools**", 1)[0]
-    assert "`save_memory`" in immediate_block
+    assert "`remember_about_entity`" in immediate_block
 
 
 def test_short_description_trims_to_first_sentence():
@@ -61,4 +61,4 @@ def test_categories_match_explicit_overrides():
     assert ProposeTaskTool().category == ToolCategory.REVIEW
     assert MessageExternalPersonTool().category == ToolCategory.REVIEW
     assert LookupVendorsTool().category == ToolCategory.READ
-    assert SaveMemoryTool().category == ToolCategory.IMMEDIATE
+    assert RememberAboutEntityTool().category == ToolCategory.IMMEDIATE

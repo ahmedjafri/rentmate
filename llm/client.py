@@ -131,7 +131,8 @@ _TOOL_LABELS = {
     "close_task": "Closing task",
     "message_person": "Sending message",
     "create_vendor": "Creating vendor",
-    "save_memory": "Saving note",
+    "remember_about_entity": "Saving note",
+    "add_task_note": "Adding task note",
     "recall_memory": "Checking memory",
     "edit_memory": "Editing memory",
     "create_property": "Creating property",
@@ -585,13 +586,17 @@ async def chat_with_agent(
                     hint = f" ({args['vendor_type']})"
                 elif tool_name == "propose_task" and args.get("title"):
                     hint = f": {args['title'][:60]}"
-                elif tool_name == "save_memory":
-                    et = args.get("entity_type", "general")
-                    el = args.get("entity_label", "")
-                    if el:
-                        hint = f" → {et}: {el}"
-                    elif et != "general":
+                elif tool_name == "remember_about_entity":
+                    et = args.get("entity_type", "")
+                    nk = args.get("note_kind", "")
+                    if et and nk:
+                        hint = f" → {et} ({nk})"
+                    elif et:
                         hint = f" → {et}"
+                elif tool_name == "add_task_note":
+                    note = args.get("note", "")
+                    if note:
+                        hint = f": {note[:60]}"
                 elif tool_name == "recall_memory":
                     et = args.get("entity_type")
                     if et:

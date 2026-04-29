@@ -13,6 +13,7 @@ input AddLeaseForTenantInput {
   leaseStart: String!
   leaseEnd: String!
   rentAmount: Float!
+  tenantIds: [String!]! = []
 }
 
 type AuthPayload {
@@ -128,6 +129,8 @@ input CreateTenantWithLeaseInput {
   rentAmount: Float!
   email: String = null
   phone: String = null
+  existingTenantIds: [String!]! = []
+  additionalTenants: [NewTenantForLeaseInput!]! = []
 }
 
 input CreateVendorInput {
@@ -195,6 +198,7 @@ type LeaseType {
   endDate: String!
   rentAmount: Float!
   tenant: TenantType
+  tenants: [TenantType!]!
   house: HouseType
 }
 
@@ -325,6 +329,13 @@ type Mutation {
 
   """Spawn a Task from an existing conversation, linking lineage"""
   spawnTask(input: SpawnTaskInput!): TaskType!
+}
+
+input NewTenantForLeaseInput {
+  firstName: String!
+  lastName: String!
+  email: String = null
+  phone: String = null
 }
 
 type Query {

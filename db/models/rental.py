@@ -8,8 +8,10 @@ from sqlalchemy import (
     Float,
     ForeignKeyConstraint,
     Integer,
+    PrimaryKeyConstraint,
     String,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.orm import relationship
 
@@ -92,6 +94,33 @@ class Unit(Base, OrgId, PrimaryId, HasCreatorId, HasContext):
     )
 
 
+class LeaseTenant(Base, OrgId):
+    """Association between a lease and each tenant on that lease."""
+
+    __tablename__ = "lease_tenants"
+
+    lease_id = Column(String(36), nullable=False)
+    tenant_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+
+    lease = relationship("Lease", back_populates="tenant_links", overlaps="lease_links,tenant")
+    tenant = relationship("Tenant", back_populates="lease_links", overlaps="lease,tenant_links")
+
+    __table_args__ = (
+        PrimaryKeyConstraint("org_id", "lease_id", "tenant_id", name="pk_lease_tenants"),
+        ForeignKeyConstraint(
+            ["org_id", "lease_id"],
+            ["leases.org_id", "leases.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "tenant_id"],
+            ["tenants.org_id", "tenants.id"],
+            ondelete="CASCADE",
+        ),
+    )
+
+
 class Tenant(Base, OrgId, SmallPrimaryId, HasCreatorId, HasContext):
     """A tenant/contact."""
 
@@ -103,10 +132,17 @@ class Tenant(Base, OrgId, SmallPrimaryId, HasCreatorId, HasContext):
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
     user = relationship("User", foreign_keys=[user_id])
-    leases = relationship(
-        "Lease",
+    lease_links = relationship(
+        "LeaseTenant",
         back_populates="tenant",
         cascade="all, delete-orphan",
+        overlaps="lease,tenant_links",
+    )
+    leases = relationship(
+        "Lease",
+        secondary="lease_tenants",
+        back_populates="tenants",
+        viewonly=True,
         overlaps="property,unit,leases",
     )
 
@@ -144,9 +180,21 @@ class Lease(Base, OrgId, PrimaryId, HasCreatorId):
 
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
+    tenant_links = relationship(
+        "LeaseTenant",
+        back_populates="lease",
+        cascade="all, delete-orphan",
+        overlaps="lease_links,tenant",
+    )
+    tenants = relationship(
+        "Tenant",
+        secondary="lease_tenants",
+        back_populates="leases",
+        viewonly=True,
+        overlaps="property,unit,leases",
+    )
     tenant = relationship(
         "Tenant",
-        back_populates="leases",
         foreign_keys=[tenant_id],
         overlaps="property,unit,leases",
     )
@@ -184,4 +232,19 @@ class Lease(Base, OrgId, PrimaryId, HasCreatorId):
             ["properties.org_id", "properties.id"],
             ondelete="CASCADE",
         ),
+    )
+
+
+@event.listens_for(Lease, "after_insert")
+def _insert_primary_lease_tenant(_mapper, connection, target: Lease) -> None:
+    """Keep legacy ``Lease(tenant_id=...)`` writes visible through ``Lease.tenants``."""
+    if target.tenant_id is None:
+        return
+    connection.execute(
+        LeaseTenant.__table__.insert().values(
+            org_id=target.org_id,
+            lease_id=target.id,
+            tenant_id=target.tenant_id,
+            created_at=target.created_at,
+        )
     )

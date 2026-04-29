@@ -11,6 +11,7 @@ from db.models import (
     Document,
     DocumentTag,
     EntityNote,
+    Lease,
     Message,
     MessageType,
     Notification,
@@ -36,7 +37,8 @@ from llm.tools import (
     MessageExternalPersonTool,
     ProposeTaskTool,
     RecallMemoryTool,
-    SaveMemoryTool,
+    AddTaskNoteTool,
+    RememberAboutEntityTool,
     UpdateTaskProgressTool,
     active_conversation_id,
     current_user_message,
@@ -124,6 +126,143 @@ def test_create_tenant_returns_external_id(db):
     assert payload["status"] == "ok"
     tenant = db.query(Tenant).filter_by(external_id=payload["tenant_id"]).one()
     assert tenant.user.email == "tina@example.com"
+
+
+def _seed_tool_property(db, *, property_type="multi_family", unit_labels=None):
+    prop = Property(
+        org_id=1,
+        creator_id=1,
+        address_line1="123 Lease Tool St",
+        property_type=property_type,
+        source="manual",
+    )
+    db.add(prop)
+    db.flush()
+    units = []
+    for label in unit_labels or []:
+        unit = Unit(
+            org_id=1,
+            creator_id=1,
+            property_id=prop.id,
+            label=label,
+        )
+        db.add(unit)
+        db.flush()
+        units.append(unit)
+    return prop, units
+
+
+def test_create_tenant_with_lease_infers_only_unit(db):
+    prop, units = _seed_tool_property(db, unit_labels=["Main"])
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            CreateTenantTool(),
+            first_name="Rachel",
+            last_name="Welch",
+            property_id=prop.id,
+            lease_start="2025-10-02",
+            lease_end="2026-10-02",
+            rent_amount=3200,
+        ))
+
+    assert payload["status"] == "ok"
+    assert payload["unit_id"] == units[0].id
+    tenant = db.query(Tenant).filter_by(external_id=payload["tenant_id"]).one()
+    lease = db.query(Lease).filter_by(tenant_id=tenant.id).one()
+    assert lease.property_id == prop.id
+    assert lease.unit_id == units[0].id
+    assert str(lease.end_date) == "2026-10-02"
+
+
+def test_create_tenant_with_lease_creates_main_unit_for_single_family(db):
+    prop, _ = _seed_tool_property(db, property_type="single_family")
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            CreateTenantTool(),
+            first_name="Ashlee",
+            last_name="Beers",
+            property_id=prop.id,
+            lease_start="2025-10-02",
+            lease_end="2026-10-02",
+            rent_amount=3200,
+        ))
+
+    assert payload["status"] == "ok"
+    unit = db.query(Unit).filter_by(property_id=prop.id, label="Main").one()
+    tenant = db.query(Tenant).filter_by(external_id=payload["tenant_id"]).one()
+    lease = db.query(Lease).filter_by(tenant_id=tenant.id).one()
+    assert lease.unit_id == unit.id
+    assert str(lease.end_date) == "2026-10-02"
+
+
+def test_create_tenant_with_lease_rejects_multifamily_without_unit(db):
+    prop, _ = _seed_tool_property(db, property_type="multi_family")
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            CreateTenantTool(),
+            first_name="Stephany",
+            last_name="Angulo",
+            property_id=prop.id,
+            lease_start="2025-10-02",
+            lease_end="2026-10-02",
+            rent_amount=3200,
+        ))
+
+    assert payload["status"] == "error"
+    assert "unit label" in payload["message"]
+    assert db.query(Tenant).count() == 0
+    assert db.query(Lease).count() == 0
+
+
+def test_create_tenant_with_lease_rejects_ambiguous_units(db):
+    prop, _ = _seed_tool_property(db, unit_labels=["A", "B"])
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            CreateTenantTool(),
+            first_name="Rachel",
+            last_name="Welch",
+            property_id=prop.id,
+            lease_start="2025-10-02",
+            lease_end="2026-10-02",
+            rent_amount=3200,
+        ))
+
+    assert payload["status"] == "error"
+    assert "multiple units" in payload["message"]
+    assert db.query(Tenant).count() == 0
+    assert db.query(Lease).count() == 0
+
+
+def test_create_tenant_with_lease_creates_unit_from_label(db):
+    prop, _ = _seed_tool_property(db, property_type="multi_family")
+
+    with patch("db.session.SessionLocal.session_factory", return_value=db), \
+         patch.object(db, "close", lambda: None):
+        payload = json.loads(_run_tool(
+            CreateTenantTool(),
+            first_name="Rachel",
+            last_name="Welch",
+            property_id=prop.id,
+            unit_label="1A",
+            lease_start="2025-10-02",
+            lease_end="2026-10-02",
+            rent_amount=3200,
+        ))
+
+    assert payload["status"] == "ok"
+    unit = db.query(Unit).filter_by(property_id=prop.id, label="1A").one()
+    tenant = db.query(Tenant).filter_by(external_id=payload["tenant_id"]).one()
+    lease = db.query(Lease).filter_by(tenant_id=tenant.id).one()
+    assert lease.unit_id == unit.id
+    assert str(lease.end_date) == "2026-10-02"
 
 
 def test_create_tenant_rejects_placeholder_name(db):
@@ -1478,7 +1617,11 @@ def test_create_suggestion_tool_blocks_followup_after_notice_served(db):
     assert "Do not create a new suggestion or task" in payload["message"]
 
 
-def test_save_memory_private_entity_note_uses_current_account(db):
+def test_remember_about_entity_private_uses_current_account(db):
+    """Bug history: this test used to pass ``entity_id=property_row.id``
+    (the internal pk). The new tool routes through
+    ``_load_entity_by_public_id`` which only resolves by ``external_id``,
+    so we now pass the external UUID — matching production agent calls."""
     property_owner = User(
         org_id=1,
         creator_id=1,
@@ -1504,16 +1647,15 @@ def test_save_memory_private_entity_note_uses_current_account(db):
          patch.object(db, "close", lambda: None), \
          patch("llm.tools.memory.resolve_account_id", return_value=property_owner.id):
         payload = json.loads(_run_tool(
-            SaveMemoryTool(),
-            content="Owner prefers weekend vendor visits only.",
-            scope="entity",
+            RememberAboutEntityTool(),
             entity_type="property",
-            entity_id=property_row.id,
-            entity_label="123 Test St",
+            entity_id=property_row.id,  # external UUID, not internal pk
+            note_kind="preference",
+            content="Owner prefers weekend vendor visits only; weekday access is not authorized.",
             visibility="private",
         ))
 
-    assert payload["status"] == "ok"
+    assert payload["status"] == "ok", payload
     note = db.query(EntityNote).filter_by(
         creator_id=property_owner.id,
         entity_type="property",
@@ -1548,7 +1690,7 @@ def test_recall_memory_private_entity_note_uses_current_account(db):
     db.add(EntityNote(
         creator_id=property_owner.id,
         entity_type="property",
-        entity_id=property_row.id,
+        entity_id=property_row.id,  # store under external_id (matches retrieval)
         content="Private preference: use the side gate.",
     ))
     db.commit()
@@ -1627,9 +1769,19 @@ _READ_WRITE_TOOL_CASES = [
         id="message_person",
     ),
     pytest.param(
-        lambda: __import__("llm.tools", fromlist=["SaveMemoryTool"]).SaveMemoryTool(),
-        {"content": "Sim note", "scope": "task", "task_id": "sim-task"},
-        id="save_memory",
+        lambda: __import__("llm.tools", fromlist=["AddTaskNoteTool"]).AddTaskNoteTool(),
+        {"task_id": "9999", "note": "Sim progress note"},
+        id="add_task_note",
+    ),
+    pytest.param(
+        lambda: __import__("llm.tools", fromlist=["RememberAboutEntityTool"]).RememberAboutEntityTool(),
+        {
+            "entity_type": "property",
+            "entity_id": "00000000-0000-0000-0000-000000000001",
+            "note_kind": "preference",
+            "content": "Owner prefers weekend vendor visits; weekday access is not authorized.",
+        },
+        id="remember_about_entity",
     ),
     pytest.param(
         lambda: __import__("llm.tools", fromlist=["EditMemoryTool"]).EditMemoryTool(),

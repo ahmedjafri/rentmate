@@ -12,9 +12,8 @@ from contextlib import contextmanager
 from enum import Enum
 from typing import Any
 
-from backends.local_auth import resolve_account_id, resolve_org_id
-from db.id_utils import normalize_optional_id
 from db.enums import AgentSource, SuggestionOption, Urgency
+from db.id_utils import normalize_optional_id
 from db.models import MessageType
 
 logger = logging.getLogger("rentmate.llm.tools")
@@ -245,8 +244,7 @@ def _load_vendor_by_public_id(db: Any, vendor_id: str):
 
 
 def _load_tenant_by_public_id(db: Any, tenant_id: str):
-    from db.models import Tenant
-    from db.models import User
+    from db.models import Tenant, User
 
     tenant_id = normalize_optional_id(tenant_id)
     if tenant_id is None:
@@ -274,11 +272,11 @@ def _resolve_task_tenant(db: Any, task_id: str):
                 return tenant
         lease = db.query(Lease).filter_by(unit_id=task.unit_id).order_by(Lease.start_date.desc()).first()
         if lease:
-            return db.query(Tenant).filter_by(id=lease.tenant_id).first()
+            return (getattr(lease, "tenants", None) or [lease.tenant if lease.tenant else None])[0]
     if getattr(task, "property_id", None):
         lease = db.query(Lease).filter_by(property_id=task.property_id).order_by(Lease.start_date.desc()).first()
         if lease:
-            return db.query(Tenant).filter_by(id=lease.tenant_id).first()
+            return (getattr(lease, "tenants", None) or [lease.tenant if lease.tenant else None])[0]
     return None
 
 
@@ -306,7 +304,7 @@ def _load_entity_by_public_id(db: Any, entity_type: str, entity_id: str):
 
 
 def _sanitize_tenant_outbound_draft(db: Any, *, task_id: str, draft_message: str) -> str:
-    from db.models import Conversation, ParticipantType, Task, User
+    from db.models import ParticipantType, Task, User
 
     draft = str(draft_message or "")
     if not draft:
@@ -370,6 +368,81 @@ def _sanitize_vendor_outbound_draft(db: Any, *, task_id: str, draft_message: str
     if db.query(Task).filter_by(id=str(task_id)).first() is None:
         return draft
     return sanitized
+
+
+# Common shapes the model emits when it didn't bother looking up the real
+# id — bare token names, ``[bracketed]`` placeholders, ``<angled>`` ones,
+# the literal "from_context" suffix used by some prompt examples, etc.
+# We reject these at tool-execute time with a message that nudges the
+# agent to call the matching ``lookup_*`` tool first.
+_PLACEHOLDER_ID_TOKENS: frozenset[str] = frozenset({
+    "id", "uid", "uuid",
+    "lease_id", "tenant_id", "property_id", "unit_id", "vendor_id",
+    "task_id", "document_id", "suggestion_id", "user_id",
+    "lease_id_from_context", "tenant_id_from_context",
+    "property_id_from_context", "unit_id_from_context",
+    "your_lease_id", "your_tenant_id", "your_property_id",
+})
+
+
+def _check_placeholder_ids(
+    kwargs: dict[str, Any],
+    fields: "list[tuple[str, str | None]]",
+) -> str | None:
+    """Bulk version of ``_reject_placeholder_id`` for a tool's
+    ``execute`` entry point. Returns a JSON-encoded error payload (the
+    string the tool should ``return`` immediately) if any of the named
+    kwargs is a placeholder, otherwise ``None``.
+
+    ``fields`` is a list of ``(arg_name, lookup_tool)`` pairs. List- or
+    tuple-valued args (e.g. ``tenant_ids``) are checked element-wise.
+    """
+    for name, lookup in fields:
+        raw = kwargs.get(name)
+        values: list[Any]
+        if isinstance(raw, (list, tuple)):
+            values = list(raw)
+        else:
+            values = [raw]
+        for value in values:
+            err = _reject_placeholder_id(value, name=name, lookup_tool=lookup)
+            if err:
+                return json.dumps({"status": "error", "message": err})
+    return None
+
+
+def _reject_placeholder_id(value: str | None, *, name: str, lookup_tool: str | None = None) -> str | None:
+    """Return an error message if *value* looks like a hallucinated
+    placeholder rather than a real id. ``None``/``""`` is allowed —
+    callers handle the "missing" case with their own message.
+
+    Catches:
+    - bracketed placeholders (``[lease_id]``, ``<tenant_id>``)
+    - bare token names (``lease_id``, ``lease_id_from_context``)
+    - anything containing ``"from_context"`` or ``"from context"``
+    - stub strings the model invents during onboarding (``"your_lease_id"``)
+    """
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    stripped = raw.strip("[]<>{}()`'\" ").lower()
+    if not stripped:
+        return None
+    if stripped in _PLACEHOLDER_ID_TOKENS:
+        suffix = f" Call ``{lookup_tool}`` first to resolve a real id." if lookup_tool else ""
+        return (
+            f"{name}={value!r} looks like a placeholder, not a real id."
+            f"{suffix}"
+        )
+    if "from_context" in stripped or "from context" in stripped:
+        suffix = f" Call ``{lookup_tool}`` first to resolve a real id." if lookup_tool else ""
+        return (
+            f"{name}={value!r} looks like a placeholder, not a real id."
+            f"{suffix}"
+        )
+    return None
 
 
 def _find_unresolved_placeholders(*content_blocks: str | None) -> list[str]:
