@@ -29,7 +29,7 @@ from llm.model_config import resolve_model_config
 from llm.registry import agent_registry
 from llm.rentmate_policy_provider import RentmatePolicyProvider
 from llm.runs import accumulate_run_totals, derive_run_metadata, start_run
-from llm.tools import current_user_message
+from llm.tools import current_request_context, current_user_message
 from llm.tracing import log_trace, make_trace_envelope
 
 AGENT_URL = os.getenv("RENTMATE_AGENT_URL")  # e.g. https://agent.rentmate.com
@@ -94,8 +94,8 @@ def _load_onboarding_prompt(*, session_key: str) -> str:
     if not str(session_key).startswith("chat:"):
         return ""
     try:
-        from db.session import SessionLocal
         from db.models import Property
+        from db.session import SessionLocal
         from gql.services.settings_service import get_onboarding_state
 
         db = SessionLocal()
@@ -551,6 +551,7 @@ async def chat_with_agent(
     if conversation_history and conversation_history[-1]["role"] == "user":
         user_message = conversation_history.pop()["content"]
     user_message_token = current_user_message.set(user_message)
+    request_context_token = current_request_context.set(trace_context)
 
     # Extract system message and conversation history. Pass user_message
     # into the bundle builder so persistent-memory retrieval is biased
@@ -576,9 +577,6 @@ async def chat_with_agent(
     def _tool_progress(event_type: str, tool_name: str, preview: str | None, args: dict | None, **kwargs):
         label = _TOOL_LABELS.get(tool_name, tool_name)
         trace_detail = current_trace_context.get() or trace_context or {}
-        trace_conversation_id = (
-            str(trace_detail.get("conversation_id") or "") if isinstance(trace_detail, dict) else ""
-        ) or _trace_conversation_id
         if event_type == "tool.started":
             hint = ""
             if args:
@@ -672,9 +670,6 @@ async def chat_with_agent(
         try:
             label = _TOOL_LABELS.get(function_name, function_name)
             trace_detail = current_trace_context.get() or trace_context or {}
-            trace_conversation_id = (
-                str(trace_detail.get("conversation_id") or "") if isinstance(trace_detail, dict) else ""
-            ) or _trace_conversation_id
 
             result_text = function_result if isinstance(function_result, str) else str(function_result or "")
             is_error = False
@@ -827,6 +822,7 @@ async def chat_with_agent(
         result = await _run_with_progress()
     finally:
         current_user_message.reset(user_message_token)
+        current_request_context.reset(request_context_token)
 
     if isinstance(result, dict):
         print(f"[agent] api_calls={result.get('api_calls', '?')} "
@@ -951,13 +947,14 @@ async def _local_fallback(
     trace_context: dict[str, Any] | None = None,
 ) -> AgentResponse:
     """Run the agent locally (dev mode)."""
-    from llm.tools import current_user_message, pending_suggestion_messages
+    from llm.tools import current_request_context, current_user_message, pending_suggestion_messages
 
     token = pending_suggestion_messages.set([])
     failed_tools_token = current_failed_tools.set([])
     completed_tools_token = current_completed_tools.set([])
     latest_user = next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")
     user_token = current_user_message.set(latest_user)
+    request_context_token = current_request_context.set(trace_context)
     trace_token = current_trace_context.set(trace_context)
     fallback_token = None
     try:
@@ -1128,6 +1125,7 @@ async def _local_fallback(
         if fallback_token is not None:
             reset_fallback_request_context(fallback_token)
         current_user_message.reset(user_token)
+        current_request_context.reset(request_context_token)
         current_trace_context.reset(trace_token)
         current_failed_tools.reset(failed_tools_token)
         current_completed_tools.reset(completed_tools_token)

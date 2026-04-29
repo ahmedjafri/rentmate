@@ -106,7 +106,13 @@ export type ConversationSummaryType = {
   updatedAt: Scalars['String']['output'];
 };
 
+export type ConversationTurnInput = {
+  sender: Scalars['String']['input'];
+  text: Scalars['String']['input'];
+};
+
 export type ConversationType =
+  | 'MIRRORED_CHAT'
   | 'SUGGESTION_AI'
   | 'TASK_AI'
   | 'TENANT'
@@ -291,6 +297,8 @@ export type Mutation = {
   simulateRoutine: Scalars['String']['output'];
   /** Spawn a Task from an existing conversation, linking lineage */
   spawnTask: TaskType;
+  /** Agent-drafted reply for a conversation in an external chat tool, viewed via the chrome extension. When ``externalThreadId`` is provided the thread is mirrored into rentmate as a read-only conversation so the AgentRun is groupable in DevTools and re-clicking ``Suggest`` doesn't duplicate messages. */
+  suggestReply: SuggestReplyResult;
   /** Update the agent context for any entity (property, unit, tenant, vendor) */
   updateEntityContext: Scalars['Boolean']['output'];
   /** Update a property's name, address, or type */
@@ -445,6 +453,11 @@ export type MutationSpawnTaskArgs = {
 };
 
 
+export type MutationSuggestReplyArgs = {
+  input: SuggestReplyInput;
+};
+
+
 export type MutationUpdateEntityContextArgs = {
   context: Scalars['String']['input'];
   entityId: Scalars['String']['input'];
@@ -521,6 +534,8 @@ export type Query = {
   routine: Maybe<RoutineType>;
   /** Returns all routines */
   routines: Array<RoutineType>;
+  /** Fuzzy-match tenants by name / email / phone. Top 3 ranked. */
+  searchTenants: Array<TenantSearchResult>;
   /** Returns suggestions, optionally filtered by status and/or document */
   suggestions: Array<SuggestionType>;
   /** Returns a single task by uid, including its full message thread */
@@ -571,6 +586,11 @@ export type QueryRoutineArgs = {
 
 export type QueryRoutinesArgs = {
   enabled?: InputMaybe<Scalars['Boolean']['input']>;
+};
+
+
+export type QuerySearchTenantsArgs = {
+  query: Scalars['String']['input'];
 };
 
 
@@ -632,6 +652,25 @@ export type SpawnTaskInput = {
   source: TaskSource;
   taskMode: TaskMode;
   urgency: InputMaybe<Urgency>;
+};
+
+export type SuggestReplyInput = {
+  conversationHistory: Array<ConversationTurnInput>;
+  draftText: InputMaybe<Scalars['String']['input']>;
+  externalThreadId: InputMaybe<Scalars['String']['input']>;
+  headerDescription: InputMaybe<Scalars['String']['input']>;
+  headerTitle: InputMaybe<Scalars['String']['input']>;
+  propertyId: InputMaybe<Scalars['String']['input']>;
+  source: InputMaybe<Scalars['String']['input']>;
+  tenantId: InputMaybe<Scalars['String']['input']>;
+};
+
+export type SuggestReplyResult = {
+  conversationExternalId: Maybe<Scalars['String']['output']>;
+  error: Maybe<Scalars['String']['output']>;
+  fallback: Scalars['Boolean']['output'];
+  matchedTenant: Maybe<TenantSearchResult>;
+  suggestion: Scalars['String']['output'];
 };
 
 export type SuggestionSource =
@@ -739,6 +778,16 @@ export type TaskType = {
   unreadCount: Scalars['Int']['output'];
   urgency: Maybe<Urgency>;
   vendorAssigned: Maybe<Scalars['String']['output']>;
+};
+
+export type TenantSearchResult = {
+  email: Maybe<Scalars['String']['output']>;
+  name: Scalars['String']['output'];
+  phone: Maybe<Scalars['String']['output']>;
+  propertyId: Maybe<Scalars['String']['output']>;
+  score: Scalars['Int']['output'];
+  tenantId: Scalars['String']['output'];
+  unitLabel: Maybe<Scalars['String']['output']>;
 };
 
 export type TenantType = {

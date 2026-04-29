@@ -295,7 +295,14 @@ class TenantType:
     extra_properties: typing.List[ExtraPropertyType] = strawberry.field(default_factory=list)
 
     @classmethod
-    def from_new(cls, tenant: typing.Any, *, unit: typing.Any, lease: typing.Any) -> "TenantType":
+    def from_new(cls, tenant: typing.Any, unit: typing.Any, lease: typing.Any) -> "TenantType":
+        # Positional args here match how the GraphQL resolvers unpack the
+        # ``(tenant, unit, lease)`` tuple returned by
+        # ``TenantService.create_tenant_with_lease`` /
+        # ``add_lease_for_tenant`` — keep them positional so the call
+        # sites (``gql/schema.py:create_tenant_with_lease`` and
+        # ``add_lease_for_tenant``) don't need to dance around a
+        # keyword-only marker, mirroring ``HouseType.from_new``.
         return cls(
             uid=str(tenant.external_id),
             name=f"{tenant.user.first_name} {tenant.user.last_name}",
@@ -1197,3 +1204,84 @@ class ConversationSummaryType:
             task_id=task_id,
             task_title=task_title,
         )
+
+
+# ---------------------------------------------------------------------------
+# Chrome extension surface (external chat platform bridge)
+# ---------------------------------------------------------------------------
+
+
+@strawberry.type
+class TenantSearchResult:
+    """A fuzzy-matched tenant returned by ``Query.searchTenants``.
+
+    ``score`` is a 0-100 hint for the caller — 100 means an exact email or
+    phone match, 50 means the query was a substring of the full name, 25
+    means it matched first or last name only.
+    """
+    tenant_id: str
+    name: str
+    score: int
+    email: typing.Optional[str] = None
+    phone: typing.Optional[str] = None
+    property_id: typing.Optional[str] = None
+    unit_label: typing.Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "TenantSearchResult":
+        return cls(
+            tenant_id=payload["tenant_id"],
+            name=payload["name"],
+            score=int(payload.get("score") or 0),
+            email=payload.get("email"),
+            phone=payload.get("phone"),
+            property_id=payload.get("property_id"),
+            unit_label=payload.get("unit_label"),
+        )
+
+
+@strawberry.input
+class ConversationTurnInput:
+    sender: str
+    text: str
+
+
+@strawberry.input
+class SuggestReplyInput:
+    """Payload the chrome extension sends for a reply draft."""
+    conversation_history: typing.List[ConversationTurnInput]
+    header_title: typing.Optional[str] = None
+    header_description: typing.Optional[str] = None
+    tenant_id: typing.Optional[str] = None
+    property_id: typing.Optional[str] = None
+    # Stable identifier for the external chat thread (typically the
+    # ``window.location.pathname`` at the time of scraping). Used to
+    # mirror the thread as a read-only rentmate Conversation so the
+    # AgentRun is grouped under one row in DevTools and so re-clicking
+    # ``Suggest`` for the same thread doesn't duplicate messages.
+    external_thread_id: typing.Optional[str] = None
+    # Text the PM has already typed into the source platform's reply
+    # box. When set, the extension button reads "Refine" and the agent
+    # is asked to polish the draft (clarity, tone, missing context)
+    # instead of composing a fresh reply.
+    draft_text: typing.Optional[str] = None
+    # Optional source platform identifier stored on the mirror
+    # conversation's ``extra.source`` for analytics and future
+    # per-platform behavior. Defaults server-side when omitted.
+    source: typing.Optional[str] = None
+
+
+@strawberry.type
+class SuggestReplyResult:
+    suggestion: str
+    matched_tenant: typing.Optional[TenantSearchResult] = None
+    # Set when the LLM call failed and ``suggestion`` is the canned
+    # placeholder. The chrome extension shows ``error`` verbatim in a
+    # banner so a misconfigured hosted LLM is visible immediately,
+    # rather than silently shipping fake-looking drafts.
+    error: typing.Optional[str] = None
+    fallback: bool = False
+    # External UUID of the read-only mirror Conversation backing this
+    # draft. The extension surfaces this as a deep-link to DevTools so
+    # PMs can inspect the agent run and the mirrored history.
+    conversation_external_id: typing.Optional[str] = None

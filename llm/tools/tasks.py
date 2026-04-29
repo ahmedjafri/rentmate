@@ -19,6 +19,7 @@ from llm.tools._common import (
     _recent_user_messages,
     _resolve_task_id_from_active_conversation,
     _sanitize_tenant_outbound_draft,
+    current_request_context,
     current_user_message,
 )
 
@@ -374,6 +375,69 @@ def _current_task_notice_service_reported(task_id: str) -> bool:
         db.close()
 
 
+def _trace_retrieval_items(context: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(context, dict):
+        return []
+    candidates = [
+        context.get("retrieval"),
+        (context.get("context") or {}).get("retrieval") if isinstance(context.get("context"), dict) else None,
+    ]
+    items: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if isinstance(candidate, dict) and isinstance(candidate.get("items"), list):
+            items.extend(item for item in candidate["items"] if isinstance(item, dict))
+    return items
+
+
+def _first_context_id(context: dict[str, Any] | None, key: str) -> str | None:
+    if not isinstance(context, dict):
+        return None
+    for candidate in [
+        context,
+        context.get("request"),
+        context.get("retrieval"),
+        (context.get("retrieval") or {}).get("request") if isinstance(context.get("retrieval"), dict) else None,
+        (context.get("context") or {}).get("retrieval", {}).get("request")
+        if isinstance(context.get("context"), dict)
+        and isinstance((context.get("context") or {}).get("retrieval"), dict)
+        else None,
+    ]:
+        if isinstance(candidate, dict):
+            value = (candidate.get(key) or "").strip() if isinstance(candidate.get(key), str) else candidate.get(key)
+            if value:
+                return str(value)
+    return None
+
+
+def _infer_task_location_from_request_context() -> tuple[str | None, str | None]:
+    """Infer property/unit from server-side retrieval metadata when the LLM omits IDs."""
+    context = current_request_context.get()
+    property_id = _first_context_id(context, "property_id")
+    unit_id = _first_context_id(context, "unit_id")
+    if property_id or unit_id:
+        return property_id, unit_id
+
+    property_ids: list[str] = []
+    unit_ids: list[str] = []
+    for item in _trace_retrieval_items(context):
+        if item.get("source_type") not in {"lease", "property", "unit", "tenant"}:
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        item_property_id = metadata.get("property_id")
+        item_unit_id = metadata.get("unit_id")
+        if item_property_id:
+            property_ids.append(str(item_property_id))
+        if item_unit_id:
+            unit_ids.append(str(item_unit_id))
+
+    unique_property_ids = list(dict.fromkeys(property_ids))
+    unique_unit_ids = list(dict.fromkeys(unit_ids))
+    return (
+        unique_property_ids[0] if len(unique_property_ids) == 1 else None,
+        unique_unit_ids[0] if len(unique_unit_ids) == 1 else None,
+    )
+
+
 def _same_task_handoff_block_message() -> str:
     return (
         "Do not create a new suggestion or task for this. Stay in the current task, "
@@ -611,7 +675,8 @@ class ProposeTaskTool(Tool):
                 "description": {"type": "string", "description": "Detailed context for the task"},
                 "vendor_id": {"type": "string", "description": "External UUID of the vendor to assign (use lookup_vendors to find this)"},
                 "draft_message": {"type": "string", "description": "Draft message to send to the vendor on approval"},
-                "property_id": {"type": "string", "description": "Property ID (if applicable)"},
+                "property_id": {"type": "string", "description": "Property ID (if applicable). Use the resolved property ID from context or lookup_properties."},
+                "unit_id": {"type": "string", "description": "Unit ID (if applicable). Use the resolved unit ID from context or lookup_properties."},
                 "task_id": {"type": "string", "description": "Originating task ID (if applicable)"},
                 "risk_score": {
                     "type": "integer",
@@ -677,7 +742,7 @@ class ProposeTaskTool(Tool):
                 ),
             })
 
-        from db.models import Property
+        from db.models import Property, Unit
         from db.session import SessionLocal
         db = SessionLocal.session_factory()
         try:
@@ -703,6 +768,10 @@ class ProposeTaskTool(Tool):
             # plausible-sounding property_ids ("the bothell house") would
             # otherwise create suggestions for properties that don't exist.
             property_id = (kwargs.get("property_id") or "").strip() or None
+            unit_id = (kwargs.get("unit_id") or "").strip() or None
+            inferred_property_id, inferred_unit_id = _infer_task_location_from_request_context()
+            property_id = property_id or inferred_property_id
+            unit_id = unit_id or inferred_unit_id
             if property_id:
                 prop = db.query(Property).filter(
                     Property.id == property_id,
@@ -718,6 +787,29 @@ class ProposeTaskTool(Tool):
                             "property_id — never invent one."
                         ),
                     })
+            if unit_id:
+                unit = db.query(Unit).filter(
+                    Unit.id == unit_id,
+                    Unit.org_id == resolve_org_id(),
+                ).first()
+                if not unit:
+                    return json.dumps({
+                        "status": "error",
+                        "message": (
+                            f"Unit {unit_id} not found. Call `lookup_properties` "
+                            "and use a returned unit_id — never invent one."
+                        ),
+                    })
+                if property_id and unit.property_id and str(unit.property_id) != str(property_id):
+                    return json.dumps({
+                        "status": "error",
+                        "message": (
+                            f"Unit {unit_id} belongs to property {unit.property_id}, "
+                            f"not property {property_id}. Use matching property_id/unit_id values."
+                        ),
+                    })
+                if not property_id and unit.property_id:
+                    property_id = str(unit.property_id)
         finally:
             db.close()
 
@@ -776,7 +868,8 @@ class ProposeTaskTool(Tool):
             action_payload=action_payload,
             options=options,
             task_id=kwargs.get("task_id") or task_id or None,
-            property_id=kwargs.get("property_id"),
+            property_id=property_id,
+            unit_id=unit_id,
             risk_score=risk,
             suggestion_type=kwargs["category"],
         )

@@ -139,6 +139,10 @@ current_user_message: contextvars.ContextVar[str | None] = contextvars.ContextVa
     "current_user_message", default=None,
 )
 
+current_request_context: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "current_request_context", default=None,
+)
+
 # When set, tools classified as read-write short-circuit inside the
 # dispatcher: the inputs are appended here and ``execute`` is skipped.
 # Read-only tools still run normally. See ``ToolMode`` + ``is_simulating``.

@@ -87,12 +87,18 @@ type ConversationSummaryType {
   taskTitle: String
 }
 
+input ConversationTurnInput {
+  sender: String!
+  text: String!
+}
+
 enum ConversationType {
   TENANT
   VENDOR
   USER_AI
   TASK_AI
   SUGGESTION_AI
+  MIRRORED_CHAT
 }
 
 input CreatePropertyInput {
@@ -329,6 +335,11 @@ type Mutation {
 
   """Spawn a Task from an existing conversation, linking lineage"""
   spawnTask(input: SpawnTaskInput!): TaskType!
+
+  """
+  Agent-drafted reply for a conversation in an external chat tool, viewed via the chrome extension. When ``externalThreadId`` is provided the thread is mirrored into rentmate as a read-only conversation so the AgentRun is groupable in DevTools and re-clicking ``Suggest`` doesn't duplicate messages.
+  """
+  suggestReply(input: SuggestReplyInput!): SuggestReplyResult!
 }
 
 input NewTenantForLeaseInput {
@@ -386,6 +397,9 @@ type Query {
 
   """Returns conversations by type (tenant/vendor/user_ai/task_ai)"""
   conversations(conversationType: ConversationType!, limit: Int! = 50, offset: Int! = 0): [ConversationSummaryType!]!
+
+  """Fuzzy-match tenants by name / email / phone. Top 3 ranked."""
+  searchTenants(query: String!): [TenantSearchResult!]!
 }
 
 enum RoutineState {
@@ -429,6 +443,25 @@ input SpawnTaskInput {
   priority: TaskPriority = null
   taskMode: TaskMode! = AUTONOMOUS
   source: TaskSource! = MANUAL
+}
+
+input SuggestReplyInput {
+  conversationHistory: [ConversationTurnInput!]!
+  headerTitle: String = null
+  headerDescription: String = null
+  tenantId: String = null
+  propertyId: String = null
+  externalThreadId: String = null
+  draftText: String = null
+  source: String = null
+}
+
+type SuggestReplyResult {
+  suggestion: String!
+  matchedTenant: TenantSearchResult
+  error: String
+  fallback: Boolean!
+  conversationExternalId: String
 }
 
 enum SuggestionSource {
@@ -542,6 +575,16 @@ type TaskType {
   lastReviewSummary: String
   lastReviewNextStep: String
   unreadCount: Int!
+}
+
+type TenantSearchResult {
+  tenantId: String!
+  name: String!
+  score: Int!
+  email: String
+  phone: String
+  propertyId: String
+  unitLabel: String
 }
 
 type TenantType {

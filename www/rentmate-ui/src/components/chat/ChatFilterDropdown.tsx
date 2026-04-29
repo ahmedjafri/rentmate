@@ -16,10 +16,11 @@ import type { TabKey } from './ConvRow';
 export type ChatFilter = 'all' | TabKey;
 
 const FILTER_OPTIONS: { value: ChatFilter; label: string }[] = [
-  { value: 'all',     label: 'All' },
-  { value: 'user_ai', label: 'RentMate' },
-  { value: 'tenant',  label: 'Tenants' },
-  { value: 'vendor',  label: 'Vendors' },
+  { value: 'all',                label: 'All' },
+  { value: 'user_ai',            label: 'RentMate' },
+  { value: 'tenant',             label: 'Tenants' },
+  { value: 'vendor',             label: 'Vendors' },
+  { value: 'mirrored_chat', label: 'Mirrored' },
 ];
 
 const FILTER_LABELS: Record<ChatFilter, string> = Object.fromEntries(

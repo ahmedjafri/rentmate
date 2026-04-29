@@ -14,6 +14,7 @@ from llm.tools._common import (
     ToolCategory,
     ToolMode,
     active_conversation_id,
+    current_request_context,
     current_user_message,
     pending_suggestion_messages,
     simulation_suggestions,
@@ -46,7 +47,6 @@ from llm.tools.memory import (
 from llm.tools.messaging import MessageExternalPersonTool
 from llm.tools.onboarding import UpdateOnboardingTool
 from llm.tools.task_review import AskManagerTool, RecordTaskReviewTool
-from llm.tools.time_tools import HasHappenedTool
 from llm.tools.tasks import (
     CloseTaskTool,
     CreateRoutineTool,
@@ -55,6 +55,7 @@ from llm.tools.tasks import (
     ProposeTaskTool,
     UpdateTaskProgressTool,
 )
+from llm.tools.time_tools import HasHappenedTool
 from llm.tools.vendors import CreateVendorTool, LookupVendorsTool
 
 __all__ = [
@@ -62,6 +63,7 @@ __all__ = [
     "ToolCategory",
     "ToolMode",
     "active_conversation_id",
+    "current_request_context",
     "current_user_message",
     "pending_suggestion_messages",
     "simulation_suggestions",

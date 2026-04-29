@@ -299,14 +299,17 @@ export function ChatPanel({
   // DB-backed conversation messages (for conversationId-based chats)
   const [convMessages, setConvMessages] = useState<ChatMessage[]>([]);
   const [convTaskLink, setConvTaskLink] = useState<{ taskId: string; taskTitle: string | null } | null>(null);
+  const [activeConvType, setActiveConvType] = useState<string | null>(null);
   const activeConversationId = chatPanel.conversationId;
 
-  // Fetch the conversation's task linkage so the middle pane can show a
-  // "Task #N — <title>" header when the loaded conversation belongs to a
-  // task. Cleared when no conversation is open.
+  // Fetch the conversation's task linkage + conversation_type so the
+  // middle pane can show a "Task #N — <title>" header when the loaded
+  // conversation belongs to a task, and so we can disable the input for
+  // read-only mirror conversations (external chat thread snapshots).
   useEffect(() => {
     if (!activeConversationId || activeTask) {
       setConvTaskLink(null);
+      setActiveConvType(null);
       return;
     }
     let cancelled = false;
@@ -319,12 +322,24 @@ export function ChatPanel({
         } else {
           setConvTaskLink(null);
         }
+        setActiveConvType(conv?.conversationType ?? null);
       })
       .catch(() => {
-        if (!cancelled) setConvTaskLink(null);
+        if (!cancelled) {
+          setConvTaskLink(null);
+          setActiveConvType(null);
+        }
       });
     return () => { cancelled = true; };
   }, [activeConversationId, activeTask]);
+
+  // Mirror conversations are read-only snapshots of threads from
+  // external chat platforms — replies happen on the source platform,
+  // not in rentmate. Disable the composer and surface a banner so PMs
+  // aren't confused why their messages bounce off the read-only guard
+  // in ``chat_service.send_message``.
+  const isReadOnlyConv = activeConvType === 'mirrored_chat'
+    || activeConvType === 'MIRRORED_CHAT';
 
   useEffect(() => {
     if (activeTask || (activeSuggestion && !activeConversationId)) { setConvMessages([]); return; }
@@ -1358,7 +1373,14 @@ export function ChatPanel({
                     )}
                   </div>
                 )}
+                {isReadOnlyConv ? (
+                <div className="px-4 py-3 text-xs text-muted-foreground bg-muted/40 border-t flex items-center gap-2">
+                  <span className="font-medium">Read-only.</span>
+                  <span>This thread is mirrored from another platform — send your reply there.</span>
+                </div>
+              ) : (
                 <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} lastSentMessage={lastSentMessage} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
+              )}
               </div>
             )}
           </TabsContent>
@@ -1685,7 +1707,14 @@ export function ChatPanel({
                   }}
                 />
               )}
-              <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} lastSentMessage={lastSentMessage} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
+              {isReadOnlyConv ? (
+                <div className="px-4 py-3 text-xs text-muted-foreground bg-muted/40 border-t flex items-center gap-2">
+                  <span className="font-medium">Read-only.</span>
+                  <span>This thread is mirrored from another platform — send your reply there.</span>
+                </div>
+              ) : (
+                <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} lastSentMessage={lastSentMessage} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
+              )}
             </>
           ) : (
             <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} lastSentMessage={lastSentMessage} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
