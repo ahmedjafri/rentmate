@@ -1,7 +1,7 @@
 """add lease tenants association
 
 Revision ID: c8d9e0f1a2b3
-Revises: b4d8e9f0a1c2
+Revises: c2f3e4d5a6b8
 Create Date: 2026-04-29 00:00:00.000000
 """
 
@@ -10,7 +10,9 @@ import sqlalchemy as sa
 
 
 revision = "c8d9e0f1a2b3"
-down_revision = "b4d8e9f0a1c2"
+# Chained after the agent-memory backfill (which landed via main while
+# this branch was open) so alembic sees a single head.
+down_revision = "c2f3e4d5a6b8"
 branch_labels = None
 depends_on = None
 
