@@ -9,6 +9,7 @@ import {
 import { useApiData } from '@/hooks/useApiData';
 import { updateTask as updateTaskMutation } from '@/graphql/client';
 import { authFetch } from '@/lib/auth';
+import { CONVERSATION_READ_EVENT } from '@/lib/conversationReadEvents';
 import { toast } from 'sonner';
 
 /** UUID v4 that works in both secure and non-secure contexts (HTTP on LAN IPs). */
@@ -200,6 +201,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     void fetchNotifications();
+  }, [fetchNotifications]);
+
+  // Refetch the global notifications list whenever a chat is marked
+  // read so the app-shell badge decrements alongside the per-chat
+  // unread count (which useConversations already handles via the
+  // same event). Without this the badge stays stale until the next
+  // route change or hard refresh.
+  useEffect(() => {
+    const onConversationRead = () => { void fetchNotifications(); };
+    window.addEventListener(CONVERSATION_READ_EVENT, onConversationRead);
+    return () => window.removeEventListener(CONVERSATION_READ_EVENT, onConversationRead);
   }, [fetchNotifications]);
 
   const [documents, setDocuments] = useState<ManagedDocument[]>([]);

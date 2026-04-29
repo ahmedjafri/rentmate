@@ -91,10 +91,16 @@ TASKS = [
     {
         "title": "Leaking kitchen faucet — Unit 1A",
         "goal": "Fix the faucet drip with a trusted plumber this week and confirm the repair with Marcus.",
+        # Final step is the outcome-verification one — matches the
+        # ``confirm/verify ... works/fixed/repaired/completed`` shape that
+        # ``ProposeTaskTool`` now requires. Without it the dashboard
+        # progress bar would tick to 100% (3/3) before the actual repair
+        # happens, which is the bug the gate prevents at propose-time.
         "steps": [
             {"key": "triage", "label": "Review the faucet issue details", "status": "done"},
             {"key": "schedule_vendor", "label": "Schedule Rivera Plumbing", "status": "done"},
             {"key": "confirm_tenant", "label": "Confirm access window with Marcus", "status": "active"},
+            {"key": "verify_repair", "label": "Confirm the faucet repair is completed", "status": "pending"},
         ],
         "category": "MAINTENANCE", "urgency": "MEDIUM", "status": "ACTIVE",
         "prop_idx": 0, "unit_idx": 0,
@@ -126,7 +132,7 @@ TASKS = [
         "steps": [
             {"key": "review_request", "label": "Review Ryan's portal-link request", "status": "done"},
             {"key": "share_link", "label": "Send the updated payment portal link", "status": "active"},
-            {"key": "confirm_payment", "label": "Confirm next month's payment plan", "status": "pending"},
+            {"key": "confirm_payment", "label": "Confirm next month's payment is completed", "status": "pending"},
         ],
         "category": "RENT", "urgency": "LOW", "status": "ACTIVE",
         "prop_idx": 1, "unit_idx": 1,
@@ -180,6 +186,7 @@ TASKS = [
             {"key": "schedule_inspection", "label": "Schedule HVAC inspection with Park Climate Systems", "status": "active"},
             {"key": "coordinate_access", "label": "Coordinate access for all Pinecrest units", "status": "pending"},
             {"key": "file_report", "label": "File the inspection report", "status": "pending"},
+            {"key": "verify_inspection", "label": "Confirm HVAC inspection completed", "status": "pending"},
         ],
         "category": "MAINTENANCE", "urgency": "LOW", "status": "ACTIVE",
         "prop_idx": 1, "unit_idx": None,
@@ -199,7 +206,7 @@ TASKS = [
         "steps": [
             {"key": "repair_fan", "label": "Repair the bathroom fan", "status": "done"},
             {"key": "test_fan", "label": "Test fan operation", "status": "done"},
-            {"key": "close_task", "label": "Document completion for turnover", "status": "done"},
+            {"key": "verify_fan", "label": "Confirm bathroom fan works for turnover", "status": "done"},
         ],
         "category": "MAINTENANCE", "urgency": "LOW", "status": "RESOLVED",
         "prop_idx": 2, "unit_idx": 1,
@@ -214,6 +221,7 @@ TASKS = [
             {"key": "collect_quotes", "label": "Collect landscaper quotes", "status": "done"},
             {"key": "compare_vendors", "label": "Compare bids and timing", "status": "active"},
             {"key": "book_cleanup", "label": "Book the selected landscaper", "status": "pending"},
+            {"key": "verify_cleanup", "label": "Confirm spring cleanup completed", "status": "pending"},
         ],
         "category": "MAINTENANCE", "urgency": "LOW", "status": "ACTIVE",
         "prop_idx": 0, "unit_idx": None,
