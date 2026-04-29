@@ -282,7 +282,7 @@ const Index = () => {
     </div>
   );
 
-  return <ChatWorkspaceLayout leftRail={leftRail} rightRail={rightRail} />;
+  return <ChatWorkspaceLayout leftRail={leftRail} rightRail={rightRail} mobileDefaultPane="right" />;
 };
 
 export default Index;
