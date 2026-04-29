@@ -284,7 +284,14 @@ class TenantType:
     extra_properties: typing.List[ExtraPropertyType] = strawberry.field(default_factory=list)
 
     @classmethod
-    def from_new(cls, tenant: typing.Any, *, unit: typing.Any, lease: typing.Any) -> "TenantType":
+    def from_new(cls, tenant: typing.Any, unit: typing.Any, lease: typing.Any) -> "TenantType":
+        # Positional args here match how the GraphQL resolvers unpack the
+        # ``(tenant, unit, lease)`` tuple returned by
+        # ``TenantService.create_tenant_with_lease`` /
+        # ``add_lease_for_tenant`` — keep them positional so the call
+        # sites (``gql/schema.py:create_tenant_with_lease`` and
+        # ``add_lease_for_tenant``) don't need to dance around a
+        # keyword-only marker, mirroring ``HouseType.from_new``.
         return cls(
             uid=str(tenant.external_id),
             name=f"{tenant.user.first_name} {tenant.user.last_name}",
