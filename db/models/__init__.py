@@ -26,6 +26,7 @@ from db.enums import (
 from .account import User
 from .agent_memory import AgentMemory
 from .agent_run import AgentRun, AgentRunFlag, AgentRunReview
+from .agent_step import AgentStep
 from .agent_trace import AgentTrace
 
 # AutomationRevision removed — replaced by Routine
@@ -77,6 +78,7 @@ __all__ = [
     "AgentRun",
     "AgentRunFlag",
     "AgentRunReview",
+    "AgentStep",
     "AgentTrace",
     "MemoryItem",
     "AppSetting",

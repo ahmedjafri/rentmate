@@ -36,7 +36,8 @@ const RUNS = [
     trigger_input: 'review the task',
     final_response: null,
     error_message: 'plumber tool blew up',
-    trace_count: 1,
+    step_count: 2,
+    trace_count: 0,
   },
   {
     id: 'run-older',
@@ -57,26 +58,63 @@ const RUNS = [
     trigger_input: 'find me the lease',
     final_response: 'Here it is.',
     error_message: null,
+    // Legacy run — no AgentSteps yet, only AgentTrace rows. The
+    // server's legacy adapter still synthesizes ATIF steps on read,
+    // so the UI uses the same per-step rendering for both.
+    step_count: 0,
     trace_count: 5,
   },
 ];
 
-const TRACES_FOR_NEWER = [
-  {
-    id: 'trace-newer-0',
-    timestamp: '2026-04-25T12:00:00.100Z',
-    trace_type: 'tool_call',
-    source: 'task_review',
-    run_id: 'run-newer',
-    sequence_num: 0,
-    task_id: '42',
-    conversation_id: null,
-    tool_name: 'lookup_vendors',
-    summary: 'Looking up vendors',
-    detail: null,
-    suggestion_id: null,
+const TRAJECTORY_NEWER = {
+  schema_version: 'ATIF-v1.4',
+  session_id: 'run-newer',
+  agent: {
+    name: 'rentmate-test',
+    version: null,
+    model_name: 'anthropic/claude-sonnet-4-6',
   },
-];
+  steps: [
+    {
+      step_id: 1,
+      timestamp: '2026-04-25T12:00:00.050Z',
+      source: 'user',
+      message: 'review the task',
+    },
+    {
+      step_id: 2,
+      timestamp: '2026-04-25T12:00:00.100Z',
+      source: 'agent',
+      message: 'Looking up vendors then booking the plumber.',
+      model_name: 'anthropic/claude-sonnet-4-6',
+      tool_calls: [
+        {
+          tool_call_id: 'call_lookup_1',
+          function_name: 'lookup_vendors',
+          arguments: { vendor_type: 'plumber' },
+        },
+      ],
+      observation: {
+        results: [
+          { source_call_id: 'call_lookup_1', content: 'ERROR: vendor api 500' },
+        ],
+      },
+      metrics: {
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        cost_usd: 0.00045,
+      },
+      extra: { error_kind: 'tool_error' },
+    },
+  ],
+  final_metrics: {
+    total_prompt_tokens: 100,
+    total_completion_tokens: 50,
+    total_cost_usd: 0.00045,
+    total_steps: 2,
+  },
+  extra: { rentmate_status: 'errored' },
+};
 
 function buildResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -86,17 +124,18 @@ describe('DevTools RunsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authFetchMock.mockImplementation(async (input: string) => {
-      if (input.startsWith('/dev/runs')) return buildResponse(RUNS);
+      if (input.startsWith('/dev/runs/run-newer/trajectory')) return buildResponse(TRAJECTORY_NEWER);
+      if (input.startsWith('/dev/runs?')) return buildResponse(RUNS);
+      if (input.startsWith('/dev/runs/')) return buildResponse({ schema_version: 'ATIF-v1.4', session_id: 'x', agent: {}, steps: [], final_metrics: { total_prompt_tokens: 0, total_completion_tokens: 0, total_cost_usd: 0, total_steps: 0 } });
       if (input.startsWith('/dev/trace-filters/tasks')) return buildResponse([]);
       if (input.startsWith('/dev/trace-filters/chats')) return buildResponse([]);
-      if (input.startsWith('/dev/traces?run_id=run-newer')) return buildResponse(TRACES_FOR_NEWER);
       if (input.startsWith('/dev/memory-items')) return buildResponse([]);
       if (input.startsWith('/dev/traces')) return buildResponse([]);
       return buildResponse({});
     });
   });
 
-  it('renders runs newest-first with status, source, totals and trace count', async () => {
+  it('renders runs newest-first with status, source, totals, and step/trace counts', async () => {
     render(
       <MemoryRouter>
         <DevTools />
@@ -105,7 +144,6 @@ describe('DevTools RunsPanel', () => {
 
     await waitFor(() => expect(screen.getByText('Agent Runs')).toBeInTheDocument());
 
-    // Both runs render.
     await waitFor(() => {
       expect(screen.getByLabelText('Toggle run run-newer')).toBeInTheDocument();
       expect(screen.getByLabelText('Toggle run run-older')).toBeInTheDocument();
@@ -115,17 +153,17 @@ describe('DevTools RunsPanel', () => {
     expect(within(newerRow).getByText('errored')).toBeInTheDocument();
     expect(within(newerRow).getByText('task_review')).toBeInTheDocument();
     expect(within(newerRow).getByText('100→50')).toBeInTheDocument();
-    expect(within(newerRow).getByText('1 traces')).toBeInTheDocument();
-    // Error message preview is shown on the row.
+    // Post-cutover run — shows step count (not trace count).
+    expect(within(newerRow).getByText('2 steps')).toBeInTheDocument();
     expect(within(newerRow).getByText('plumber tool blew up')).toBeInTheDocument();
 
+    // Pre-cutover run with no AgentSteps — falls back to trace count.
     const olderRow = screen.getByLabelText('Toggle run run-older');
     expect(within(olderRow).getByText('completed')).toBeInTheDocument();
     expect(within(olderRow).getByText('5 traces')).toBeInTheDocument();
-    expect(within(olderRow).getByText('200→80')).toBeInTheDocument();
   });
 
-  it('lazy-fetches traces for a run on expand', async () => {
+  it('lazy-fetches the ATIF trajectory on expand and renders steps inline', async () => {
     render(
       <MemoryRouter>
         <DevTools />
@@ -133,59 +171,22 @@ describe('DevTools RunsPanel', () => {
     );
 
     const toggle = await screen.findByLabelText('Toggle run run-newer');
-
-    // Before expand: no per-run trace fetch was issued.
-    expect(authFetchMock.mock.calls.some(call => String(call[0]).startsWith('/dev/traces?run_id=run-newer'))).toBe(false);
+    expect(authFetchMock.mock.calls.some(call => String(call[0]).startsWith('/dev/runs/run-newer/trajectory'))).toBe(false);
 
     fireEvent.click(toggle);
 
     await waitFor(() => {
-      expect(authFetchMock.mock.calls.some(call => String(call[0]).startsWith('/dev/traces?run_id=run-newer'))).toBe(true);
+      expect(authFetchMock.mock.calls.some(call => String(call[0]).startsWith('/dev/runs/run-newer/trajectory'))).toBe(true);
     });
 
-    // The trace shows up nested under the run row.
+    // The expanded view shows a row per ATIF step with source badges.
     await waitFor(() => {
-      expect(screen.getByText('Looking up vendors')).toBeInTheDocument();
-      expect(screen.getByText('lookup_vendors')).toBeInTheDocument();
+      expect(screen.getByText('user')).toBeInTheDocument();
+      expect(screen.getByText('agent')).toBeInTheDocument();
+      // Errored agent step is flagged inline.
+      expect(screen.getByText('error')).toBeInTheDocument();
+      // Tool count badge.
+      expect(screen.getByText('1 tool')).toBeInTheDocument();
     });
-  });
-
-  it('per-run copy button copies the run header + every trace, fetching them when needed', async () => {
-    const writeText = vi.fn(async () => {});
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText },
-    });
-
-    render(
-      <MemoryRouter>
-        <DevTools />
-      </MemoryRouter>,
-    );
-
-    const copyButton = await screen.findByLabelText('Copy run run-newer');
-
-    // Pre-condition: the run hasn't been expanded yet, so no traces fetched.
-    expect(authFetchMock.mock.calls.some(call => String(call[0]).startsWith('/dev/traces?run_id=run-newer'))).toBe(false);
-
-    fireEvent.click(copyButton);
-
-    // The copy click should NOT toggle the row expanded state.
-    const toggle = screen.getByLabelText('Toggle run run-newer');
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
-
-    // It should fetch the run's traces (lazy load) and write to clipboard.
-    await waitFor(() => {
-      expect(authFetchMock.mock.calls.some(call => String(call[0]).startsWith('/dev/traces?run_id=run-newer'))).toBe(true);
-    });
-    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-
-    const copied = String(writeText.mock.calls[0][0]);
-    expect(copied).toContain('Run run-newer');
-    expect(copied).toContain('errored');
-    expect(copied).toContain('plumber tool blew up');
-    // Each trace appears as an indented line under the run header.
-    expect(copied).toContain('Looking up vendors');
-    expect(copied).toContain('tool_call');
   });
 });

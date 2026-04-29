@@ -3,6 +3,11 @@
 Each row belongs to exactly one ``AgentRun`` (composite ``(org_id, run_id)`` FK).
 Grouping keys (``task_id``, ``conversation_id``) live on the run, not here —
 filter via JOIN.
+
+# TODO(atif): drop this table once pre-cutover runs no longer need
+# rendering. Post-cutover writers go to ``agent_steps`` via
+# ``llm/trajectory.py``; legacy rows are read by
+# ``_synthesize_steps_from_traces`` to keep historical DevTools views.
 """
 from sqlalchemy import (
     Column,
