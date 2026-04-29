@@ -111,6 +111,7 @@ export type ConversationTurnInput = {
 };
 
 export type ConversationType =
+  | 'MIRRORED_CHAT'
   | 'SUGGESTION_AI'
   | 'TASK_AI'
   | 'TENANT'
@@ -289,7 +290,7 @@ export type Mutation = {
   simulateRoutine: Scalars['String']['output'];
   /** Spawn a Task from an existing conversation, linking lineage */
   spawnTask: TaskType;
-  /** One-shot agent-drafted reply for a TenantCloud conversation viewed in the chrome extension. Pure read on rentmate data — no DB writes. */
+  /** Agent-drafted reply for a conversation in an external chat tool, viewed via the chrome extension. When ``externalThreadId`` is provided the thread is mirrored into rentmate as a read-only conversation so the AgentRun is groupable in DevTools and re-clicking ``Suggest`` doesn't duplicate messages. */
   suggestReply: SuggestReplyResult;
   /** Update the agent context for any entity (property, unit, tenant, vendor) */
   updateEntityContext: Scalars['Boolean']['output'];
@@ -636,13 +637,17 @@ export type SpawnTaskInput = {
 
 export type SuggestReplyInput = {
   conversationHistory: Array<ConversationTurnInput>;
+  draftText: InputMaybe<Scalars['String']['input']>;
+  externalThreadId: InputMaybe<Scalars['String']['input']>;
   headerDescription: InputMaybe<Scalars['String']['input']>;
   headerTitle: InputMaybe<Scalars['String']['input']>;
   propertyId: InputMaybe<Scalars['String']['input']>;
+  source: InputMaybe<Scalars['String']['input']>;
   tenantId: InputMaybe<Scalars['String']['input']>;
 };
 
 export type SuggestReplyResult = {
+  conversationExternalId: Maybe<Scalars['String']['output']>;
   error: Maybe<Scalars['String']['output']>;
   fallback: Scalars['Boolean']['output'];
   matchedTenant: Maybe<TenantSearchResult>;

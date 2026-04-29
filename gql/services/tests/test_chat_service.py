@@ -148,7 +148,7 @@ def test_build_agent_message_history_labels_task_ai_conversation_as_internal_pm_
     history = chat_service.build_agent_message_history(
         db,
         conv_id=convo.id,
-        user_message="The payment URL should be available in TenantCloud.",
+        user_message="The payment URL should be available in the tenant portal.",
         context="task context",
     )
 
@@ -191,7 +191,7 @@ def test_build_agent_message_history_labels_tenant_conversation_as_tenant_facing
     history = chat_service.build_agent_message_history(
         db,
         conv_id=convo.id,
-        user_message="Can I pay through TenantCloud?",
+        user_message="Can I pay through the tenant portal?",
         context="task context",
     )
 

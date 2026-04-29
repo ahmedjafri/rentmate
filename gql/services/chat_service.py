@@ -413,6 +413,12 @@ def send_autonomous_message(
     ).first()
     if not convo:
         raise ValueError(f"Conversation {conversation_id} not found")
+    if convo.conversation_type == ConversationType.MIRRORED_CHAT:
+        from gql.services.extension_service import MirrorConversationReadOnly
+        raise MirrorConversationReadOnly(
+            f"Conversation {conversation_id} mirrors an external chat thread; "
+            "replies must be sent on the source platform."
+        )
 
     msg = Message(
         org_id=resolve_org_id(),
@@ -547,6 +553,13 @@ def send_message(
     sent_at: datetime | None = None,
 ) -> Message:
     """Add a message to any conversation by conversation_id."""
+    convo = db.query(Conversation).filter_by(id=conversation_id).first()
+    if convo is not None and convo.conversation_type == ConversationType.MIRRORED_CHAT:
+        from gql.services.extension_service import MirrorConversationReadOnly
+        raise MirrorConversationReadOnly(
+            f"Conversation {conversation_id} mirrors an external chat thread; "
+            "replies must be sent on the source platform."
+        )
     now = sent_at or datetime.now(UTC)
     msg = Message(
         org_id=resolve_org_id(),

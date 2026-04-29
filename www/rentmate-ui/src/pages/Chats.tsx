@@ -25,23 +25,30 @@ const Chats = () => {
     openChat({ suggestionId });
   }, [openChat, suggestionId, suggestions]);
 
-  // Always fetch all three buckets so flipping the filter is instant —
+  // Always fetch all four buckets so flipping the filter is instant —
   // the cost is one extra round-trip up front and lets us merge for the
   // "All" view without re-querying.
   const ai = useConversations('user_ai');
   const tenants = useConversations('tenant');
   const vendors = useConversations('vendor');
+  const mirrored = useConversations('mirrored_chat');
 
   const sources: Record<ChatFilter, ReturnType<typeof useConversations>> = {
     all: ai, // placeholder, overridden below
     user_ai: ai,
     tenant: tenants,
     vendor: vendors,
+    mirrored_chat: mirrored,
   };
 
   const conversations = useMemo(() => {
     if (filter === 'all') {
-      return [...ai.conversations, ...tenants.conversations, ...vendors.conversations].sort(
+      return [
+        ...ai.conversations,
+        ...tenants.conversations,
+        ...vendors.conversations,
+        ...mirrored.conversations,
+      ].sort(
         (a, b) => {
           const at = a.lastMessageAt ?? a.updatedAt;
           const bt = b.lastMessageAt ?? b.updatedAt;
@@ -50,11 +57,18 @@ const Chats = () => {
       );
     }
     return sources[filter].conversations;
-  }, [filter, ai.conversations, tenants.conversations, vendors.conversations, sources]);
+  }, [
+    filter,
+    ai.conversations,
+    tenants.conversations,
+    vendors.conversations,
+    mirrored.conversations,
+    sources,
+  ]);
 
   const loading =
     filter === 'all'
-      ? ai.loading || tenants.loading || vendors.loading
+      ? ai.loading || tenants.loading || vendors.loading || mirrored.loading
       : sources[filter].loading;
 
   // Removing a conversation needs to drop it from whichever list owns it.
@@ -62,6 +76,7 @@ const Chats = () => {
     ai.removeConversation(uid);
     tenants.removeConversation(uid);
     vendors.removeConversation(uid);
+    mirrored.removeConversation(uid);
   };
 
   const leftRail = (

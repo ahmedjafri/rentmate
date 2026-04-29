@@ -1179,7 +1179,7 @@ class ConversationSummaryType:
 
 
 # ---------------------------------------------------------------------------
-# Chrome extension surface (TenantCloud bridge)
+# Chrome extension surface (external chat platform bridge)
 # ---------------------------------------------------------------------------
 
 
@@ -1220,12 +1220,27 @@ class ConversationTurnInput:
 
 @strawberry.input
 class SuggestReplyInput:
-    """Payload the chrome extension sends for a one-shot reply draft."""
+    """Payload the chrome extension sends for a reply draft."""
     conversation_history: typing.List[ConversationTurnInput]
     header_title: typing.Optional[str] = None
     header_description: typing.Optional[str] = None
     tenant_id: typing.Optional[str] = None
     property_id: typing.Optional[str] = None
+    # Stable identifier for the external chat thread (typically the
+    # ``window.location.pathname`` at the time of scraping). Used to
+    # mirror the thread as a read-only rentmate Conversation so the
+    # AgentRun is grouped under one row in DevTools and so re-clicking
+    # ``Suggest`` for the same thread doesn't duplicate messages.
+    external_thread_id: typing.Optional[str] = None
+    # Text the PM has already typed into the source platform's reply
+    # box. When set, the extension button reads "Refine" and the agent
+    # is asked to polish the draft (clarity, tone, missing context)
+    # instead of composing a fresh reply.
+    draft_text: typing.Optional[str] = None
+    # Optional source platform identifier stored on the mirror
+    # conversation's ``extra.source`` for analytics and future
+    # per-platform behavior. Defaults server-side when omitted.
+    source: typing.Optional[str] = None
 
 
 @strawberry.type
@@ -1238,3 +1253,7 @@ class SuggestReplyResult:
     # rather than silently shipping fake-looking drafts.
     error: typing.Optional[str] = None
     fallback: bool = False
+    # External UUID of the read-only mirror Conversation backing this
+    # draft. The extension surfaces this as a deep-link to DevTools so
+    # PMs can inspect the agent run and the mirrored history.
+    conversation_external_id: typing.Optional[str] = None
