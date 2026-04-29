@@ -1,4 +1,5 @@
 """Unit tests for the query entity extractor."""
+import uuid
 from datetime import date
 
 import pytest
@@ -59,8 +60,12 @@ def _add_unit(db, prop: Property, label: str, unit_id: str | None = None) -> Uni
 
 
 def _add_lease(db, tenant: Tenant, unit: Unit, prop: Property, *, end: date) -> Lease:
+    # Lease.id is ``String(36)``; the previous ``f"lease-{tenant.id}-{unit.id}"``
+    # format collided with the cap when unit.id encoded a long property name
+    # ("lease-105-unit-prop-500-Meadow-Way-1B" = 37 chars). UUID-based id
+    # keeps the fixture stable regardless of property/unit naming.
     lease = Lease(
-        id=f"lease-{tenant.id}-{unit.id}",
+        id=str(uuid.uuid4()),
         org_id=1,
         creator_id=1,
         tenant_id=tenant.id,

@@ -83,9 +83,16 @@ def test_assign_vendor_wires_vendor_conversation_and_metadata(db):
 
     assert ext_convo is not None
     assert ext_convo.conversation_type == ConversationType.VENDOR
-    assert len(participants) == 1
-    assert participants[0].user_id == vendor.id
-    assert participants[0].participant_type == ParticipantType.EXTERNAL_CONTACT
+    # ``get_or_create_external_conversation`` now also adds the manager
+    # as a participant (so they get unread receipts on inbound vendor
+    # messages), so the conversation has 2 rows: the vendor + the
+    # manager. Filter to the vendor participant for the assertions
+    # below.
+    vendor_participants = [
+        p for p in participants if p.participant_type == ParticipantType.EXTERNAL_CONTACT
+    ]
+    assert len(vendor_participants) == 1
+    assert vendor_participants[0].user_id == vendor.id
     assert (ai_convo.extra or {})["assigned_vendor_id"] == vendor.id
     assert (ai_convo.extra or {})["assigned_vendor_name"] == vendor.name
 
