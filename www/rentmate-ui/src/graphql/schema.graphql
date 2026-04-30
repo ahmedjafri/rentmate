@@ -92,11 +92,14 @@ type ConversationSummaryType {
   participantLabel: String
   taskId: String
   taskTitle: String
+  mirrorSource: String
+  headerDescription: String
 }
 
 input ConversationTurnInput {
   sender: String!
   text: String!
+  isPm: Boolean = null
 }
 
 enum ConversationType {

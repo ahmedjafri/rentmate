@@ -72,6 +72,19 @@ function isAiConversationType(conversationType: string | null | undefined): bool
   return conversationType === 'task_ai' || conversationType === 'suggestion_ai' || conversationType === 'user_ai';
 }
 
+function MirrorOriginBanner({ mirrorOrigin }: { mirrorOrigin: { source: string | null; headerDescription: string | null } | null }) {
+  const label = mirrorOrigin?.headerDescription || mirrorOrigin?.source || 'another platform';
+  return (
+    <div className="px-4 py-3 text-xs bg-muted/40 border-t space-y-0.5">
+      <p className="text-muted-foreground">
+        <span className="font-medium text-foreground">Read-only</span>
+        {' · '}Mirrored from <span className="font-medium text-foreground">{label}</span>
+      </p>
+      <p className="text-muted-foreground">Reply on the source platform — messages sent here won't be delivered.</p>
+    </div>
+  );
+}
+
 function getTaskAiConversationId(task: ActionDeskTask | null | undefined): string | null {
   if (!task) return null;
   if (task.aiConversationId) return task.aiConversationId;
@@ -299,6 +312,7 @@ export function ChatPanel({
   const [convMessages, setConvMessages] = useState<ChatMessage[]>([]);
   const [convTaskLink, setConvTaskLink] = useState<{ taskId: string; taskTitle: string | null } | null>(null);
   const [activeConvType, setActiveConvType] = useState<string | null>(null);
+  const [mirrorOrigin, setMirrorOrigin] = useState<{ source: string | null; headerDescription: string | null } | null>(null);
   const activeConversationId = chatPanel.conversationId;
 
   const {
@@ -323,6 +337,7 @@ export function ChatPanel({
     if (!activeConversationId || activeTask) {
       setConvTaskLink(null);
       setActiveConvType(null);
+      setMirrorOrigin(null);
       return;
     }
     let cancelled = false;
@@ -336,11 +351,17 @@ export function ChatPanel({
           setConvTaskLink(null);
         }
         setActiveConvType(conv?.conversationType ?? null);
+        if (conv?.conversationType === 'MIRRORED_CHAT' || conv?.conversationType === 'mirrored_chat') {
+          setMirrorOrigin({ source: conv.mirrorSource ?? null, headerDescription: conv.headerDescription ?? null });
+        } else {
+          setMirrorOrigin(null);
+        }
       })
       .catch(() => {
         if (!cancelled) {
           setConvTaskLink(null);
           setActiveConvType(null);
+          setMirrorOrigin(null);
         }
       });
     return () => { cancelled = true; };
@@ -1395,10 +1416,7 @@ export function ChatPanel({
                   </div>
                 )}
                 {isReadOnlyConv ? (
-                <div className="px-4 py-3 text-xs text-muted-foreground bg-muted/40 border-t flex items-center gap-2">
-                  <span className="font-medium">Read-only.</span>
-                  <span>This thread is mirrored from another platform — send your reply there.</span>
-                </div>
+                <MirrorOriginBanner mirrorOrigin={mirrorOrigin} />
               ) : (
                 <ChatInput ref={chatInputRef} onSend={handleSend} onInsertCleared={handleInsertCleared} placeholder={placeholder} lastSentMessage={lastSentMessage} disabled={isTyping} uploadFile={uploadFile} attachments={pendingAttachments} setAttachments={setPendingAttachments} />
               )}

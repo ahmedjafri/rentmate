@@ -835,7 +835,7 @@ class Mutation(AuthMutation):
         result = await draft_reply(
             _session(info),
             conversation_history=[
-                {"sender": turn.sender, "text": turn.text}
+                {"sender": turn.sender, "text": turn.text, "is_pm": turn.is_pm}
                 for turn in (input.conversation_history or [])
             ],
             header_title=input.header_title,
