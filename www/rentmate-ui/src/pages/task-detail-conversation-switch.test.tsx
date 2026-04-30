@@ -247,6 +247,28 @@ describe('TaskDetail conversation switching', () => {
     });
   });
 
+  it('renders mobile tabs for the task detail panes in dashboard order', async () => {
+    const task = makeTask();
+    appStore.setState(makeAppState(task));
+
+    render(
+      <MemoryRouter initialEntries={['/tasks/task-1']} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <Routes>
+          <Route path="/tasks/:id" element={<TaskDetail />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('AI thread ready')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('task-detail-tab-list')).toHaveTextContent('Chat List');
+    expect(screen.getByTestId('task-detail-tab-chat')).toHaveTextContent('Chat');
+    expect(screen.getByTestId('task-detail-tab-task')).toHaveTextContent('Task');
+    expect(screen.getByTestId('task-detail-tab-chat')).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('lets the manager switch from tenant chat back to the AI thread', async () => {
     const task = makeTask();
     appStore.setState(makeAppState(task));
@@ -268,7 +290,7 @@ describe('TaskDetail conversation switching', () => {
       expect(screen.getByText('Hi from tenant')).toBeInTheDocument();
     });
 
-    const leftRail = container.querySelector('div.grid > aside');
+    const leftRail = container.querySelector('aside');
     expect(leftRail).toBeTruthy();
     const rentMateBadges = within(leftRail as HTMLElement).getAllByText('RentMate');
     fireEvent.click(rentMateBadges[0]);
@@ -381,7 +403,7 @@ describe('TaskDetail conversation switching', () => {
       expect(screen.getByText('Hi from tenant')).toBeInTheDocument();
     });
 
-    const leftRail = container.querySelector('div.grid > aside');
+    const leftRail = container.querySelector('aside');
     expect(leftRail).toBeTruthy();
     const rentMateBadges = within(leftRail as HTMLElement).getAllByText('RentMate');
     fireEvent.click(rentMateBadges[0]);
@@ -430,7 +452,7 @@ describe('TaskDetail conversation switching', () => {
       expect(screen.getByText('Hi from tenant')).toBeInTheDocument();
     });
 
-    const leftRail = container.querySelector('div.grid > aside');
+    const leftRail = container.querySelector('aside');
     expect(leftRail).toBeTruthy();
     const rentMateBadges = within(leftRail as HTMLElement).getAllByText('RentMate');
     fireEvent.click(rentMateBadges[0]);
