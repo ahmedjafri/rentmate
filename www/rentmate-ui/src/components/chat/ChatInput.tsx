@@ -247,7 +247,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(({ onSend, disabled,
         </div>
       )}
       {/* Input row */}
-      <div className="flex items-end gap-2 p-3">
+      <div className="flex items-end gap-2 px-3 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))] md:pb-3">
         {uploadFile && (
           <>
             <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} accept=".pdf,.doc,.docx,.txt,.csv,.xls,.xlsx,.jpg,.jpeg,.png" />

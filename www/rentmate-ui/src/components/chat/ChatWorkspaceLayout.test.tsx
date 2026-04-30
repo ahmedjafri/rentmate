@@ -54,10 +54,16 @@ describe('ChatWorkspaceLayout — mobile tab navigation', () => {
   it('renders a mobile tab bar with one entry per available pane', () => {
     renderLayout({ withRightRail: true });
 
-    // Three tabs when a right rail is provided (Home + Chats + RentMate).
+    // Three tabs when a right rail is provided, in the same logical order
+    // as the desktop panes.
     expect(screen.getByTestId('workspace-tab-right')).toBeInTheDocument();
     expect(screen.getByTestId('workspace-tab-left')).toBeInTheDocument();
     expect(screen.getByTestId('workspace-tab-middle')).toBeInTheDocument();
+    expect(screen.getAllByRole('button').map(button => button.textContent)).toEqual([
+      'Chat List',
+      'Chat',
+      'Action Desk',
+    ]);
   });
 
   it('omits the right-rail tab when no right rail is supplied', () => {

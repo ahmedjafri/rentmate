@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Bot, LayoutDashboard, MessageCircle } from 'lucide-react';
+import { Bot, MessageCircle, ShieldCheck } from 'lucide-react';
 
 import { ChatPanel } from './ChatPanel';
 import { useApp } from '@/context/AppContext';
@@ -14,9 +14,9 @@ type PaneOption = {
 };
 
 const PANE_OPTIONS: Record<Pane, PaneOption> = {
-  left: { key: 'left', label: 'Chats', icon: MessageCircle },
-  middle: { key: 'middle', label: 'RentMate', icon: Bot },
-  right: { key: 'right', label: 'Home', icon: LayoutDashboard },
+  left: { key: 'left', label: 'Chat List', icon: MessageCircle },
+  middle: { key: 'middle', label: 'Chat', icon: Bot },
+  right: { key: 'right', label: 'Action Desk', icon: ShieldCheck },
 };
 
 /**
@@ -55,7 +55,7 @@ export function ChatWorkspaceLayout({
   }, [chatPanel.conversationId, chatPanel.taskId, chatPanel.suggestionId]);
 
   const tabs: PaneOption[] = rightRail
-    ? [PANE_OPTIONS.right, PANE_OPTIONS.left, PANE_OPTIONS.middle]
+    ? [PANE_OPTIONS.left, PANE_OPTIONS.middle, PANE_OPTIONS.right]
     : [PANE_OPTIONS.left, PANE_OPTIONS.middle];
 
   return (
