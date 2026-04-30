@@ -17,21 +17,21 @@ import { SuggestionCard } from './ActionDesk';
 const Index = () => {
   const navigate = useNavigate();
   const { properties, tenants, vendors, actionDeskTasks, suggestions, updateSuggestionStatus, refreshData, openChat, closeChat, chatPanel, isLoading } = useApp();
-  const { conversations: aiConvs, loading: aiLoading, refresh: refreshAi, removeConversation: removeAiConv } = useConversations('user_ai', 20);
-  const { conversations: tenantConvs, loading: tenantLoading, refresh: refreshTenants, removeConversation: removeTenantConv } = useConversations('tenant', 20);
-  const { conversations: vendorConvs, loading: vendorLoading, refresh: refreshVendors, removeConversation: removeVendorConv } = useConversations('vendor', 20);
+  const { conversations: aiConvs, loading: aiLoading, removeConversation: removeAiConv } = useConversations('user_ai', 20);
+  const { conversations: tenantConvs, loading: tenantLoading, removeConversation: removeTenantConv } = useConversations('tenant', 20);
+  const { conversations: vendorConvs, loading: vendorLoading, removeConversation: removeVendorConv } = useConversations('vendor', 20);
+  const { conversations: mirroredConvs, loading: mirroredLoading, removeConversation: removeMirroredConv } = useConversations('mirrored_chat', 20);
 
-  const convsLoading = aiLoading || tenantLoading || vendorLoading;
+  const convsLoading = aiLoading || tenantLoading || vendorLoading || mirroredLoading;
   const allConversations = useMemo(() =>
-    [...aiConvs, ...tenantConvs, ...vendorConvs].sort((a, b) => {
+    [...aiConvs, ...tenantConvs, ...vendorConvs, ...mirroredConvs].sort((a, b) => {
       const aTime = a.lastMessageAt ?? a.updatedAt;
       const bTime = b.lastMessageAt ?? b.updatedAt;
       return new Date(bTime).getTime() - new Date(aTime).getTime();
     }).slice(0, 30),
-    [aiConvs, tenantConvs, vendorConvs]
+    [aiConvs, tenantConvs, vendorConvs, mirroredConvs]
   );
-  const refreshAllConvs = () => { refreshAi(); refreshTenants(); refreshVendors(); };
-  const removeConversation = (uid: string) => { removeAiConv(uid); removeTenantConv(uid); removeVendorConv(uid); };
+  const removeConversation = (uid: string) => { removeAiConv(uid); removeTenantConv(uid); removeVendorConv(uid); removeMirroredConv(uid); };
   const [showNewChat, setShowNewChat] = useState(false);
 
   const totalUnits = properties.reduce((a, p) => a + p.units, 0);
@@ -282,7 +282,7 @@ const Index = () => {
     </div>
   );
 
-  return <ChatWorkspaceLayout leftRail={leftRail} rightRail={rightRail} />;
+  return <ChatWorkspaceLayout leftRail={leftRail} rightRail={rightRail} mobileDefaultPane="right" />;
 };
 
 export default Index;

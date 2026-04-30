@@ -2727,22 +2727,32 @@ def test_record_task_review_writes_columns_and_trace(db):
     db.add(task)
     db.flush()
 
+    trace_context = {
+        "flow": "task_review",
+        "task_id": str(task.id),
+        "context": {"text": "seeded task context"},
+        "retrieval": {"results": [{"id": "vendor-1"}]},
+    }
     with patch("db.session.SessionLocal.session_factory", return_value=db), \
          patch.object(db, "close", lambda: None):
-        with start_run(
-            source="task_review",
-            task_id=str(task.id),
-            agent_version="rentmate-test",
-            execution_path="local",
-            trigger_input="review me",
-        ):
-            payload = json.loads(_run_tool(
-                RecordTaskReviewTool(),
+        context_token = current_request_context.set(trace_context)
+        try:
+            with start_run(
+                source="task_review",
                 task_id=str(task.id),
-                status="needs_action",
-                summary="Waiting on plumber quote; follow up in 24h.",
-                next_step="Ping vendor for quote status.",
-            ))
+                agent_version="rentmate-test",
+                execution_path="local",
+                trigger_input="review me",
+            ):
+                payload = json.loads(_run_tool(
+                    RecordTaskReviewTool(),
+                    task_id=str(task.id),
+                    status="needs_action",
+                    summary="Waiting on plumber quote; follow up in 24h.",
+                    next_step="Ping vendor for quote status.",
+                ))
+        finally:
+            current_request_context.reset(context_token)
 
     assert payload["status"] == "ok"
     db.refresh(task)
@@ -2762,6 +2772,9 @@ def test_record_task_review_writes_columns_and_trace(db):
     )
     assert len(traces) == 1
     assert traces[0].summary == "Waiting on plumber quote; follow up in 24h."
+    detail = json.loads(traces[0].detail)
+    assert detail["trace_context"]["context"]["text"] == "seeded task context"
+    assert detail["trace_context"]["retrieval"] == trace_context["retrieval"]
 
 
 def test_ask_manager_posts_to_task_ai_conversation(db):

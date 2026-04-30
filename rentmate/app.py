@@ -43,6 +43,15 @@ _SCHEMA_MIGRATE_COMMANDS = [_DEFAULT_SCHEMA_MIGRATE_COMMAND]
 _SCHEMA_MIGRATE_CWD = _PACKAGE_ROOT
 _DEV_BOOTSTRAP_EMAIL = "test@test.com"
 _DEV_BOOTSTRAP_PASSWORD = "test"
+_BACKGROUND_LOOP_LOCK_NAMESPACE = 0x524D
+_BACKGROUND_LOOP_LOCKS = {
+    "routine_loop": 1,
+    "reply_scanner_loop": 2,
+    "quo_poll_loop": 3,
+    "task_review_loop": 4,
+    "simulator_loop": 5,
+}
+_BACKGROUND_LOOP_LOCK_RETRY_SECONDS = 30
 
 logging.basicConfig(
     level=logging.INFO,
@@ -176,6 +185,59 @@ def _repair_enum_rows() -> None:
         print(f"Skipping enum row repair because database is unavailable: {exc}")
 
 
+async def _run_singleton_background_loop(name: str, lock_id: int, loop_factory):
+    """Run one background loop per Postgres database.
+
+    Every Cloud Run instance starts this lightweight supervisor. Only the
+    instance holding the advisory lock runs the real loop; standby instances
+    retry periodically and take over after Postgres releases a dead leader's
+    connection.
+    """
+    if engine.dialect.name != "postgresql":
+        await loop_factory()
+        return
+
+    logger = logging.getLogger("rentmate.startup")
+    try:
+        retry_seconds = int(os.getenv("RENTMATE_BACKGROUND_LOCK_RETRY_SECONDS", _BACKGROUND_LOOP_LOCK_RETRY_SECONDS))
+    except ValueError:
+        retry_seconds = _BACKGROUND_LOOP_LOCK_RETRY_SECONDS
+    retry_seconds = max(1, retry_seconds)
+
+    while True:
+        try:
+            with engine.connect() as conn:
+                acquired = conn.execute(
+                    text("SELECT pg_try_advisory_lock(:namespace, :lock_id)"),
+                    {"namespace": _BACKGROUND_LOOP_LOCK_NAMESPACE, "lock_id": lock_id},
+                ).scalar()
+                if not acquired:
+                    logger.info(
+                        "background loop %s standby; another instance holds the lock",
+                        name,
+                    )
+                    await asyncio.sleep(retry_seconds)
+                    continue
+
+                logger.info("background loop %s acquired singleton lock", name)
+                try:
+                    await loop_factory()
+                finally:
+                    try:
+                        conn.execute(
+                            text("SELECT pg_advisory_unlock(:namespace, :lock_id)"),
+                            {"namespace": _BACKGROUND_LOOP_LOCK_NAMESPACE, "lock_id": lock_id},
+                        )
+                    except SQLAlchemyError:
+                        logger.exception("background loop %s failed to release singleton lock", name)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("background loop %s supervisor crashed; retrying", name)
+
+        await asyncio.sleep(retry_seconds)
+
+
 def _ensure_dev_bootstrap_account(db) -> None:
     """Create the default local-dev owner account if the database has no users."""
     if os.getenv("RENTMATE_ENV") != "development":
@@ -243,8 +305,8 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        startup_check = os.getenv("STARTUP_CHECK", "").strip().lower()
-        skip_db_bootstrap = startup_check in {"skip", "0", "false", "off"}
+        startup_tasks = os.getenv("RENTMATE_STARTUP_TASKS", "").strip().lower()
+        skip_db_bootstrap = startup_tasks in {"skip", "0", "false", "off"}
 
         async def _init_db():
             await asyncio.to_thread(_ensure_schema)
@@ -310,19 +372,39 @@ def create_app(
             from handlers.routines import routine_loop, seed_default_routines
 
             seed_default_routines()
-            asyncio.create_task(routine_loop())
+            asyncio.create_task(_run_singleton_background_loop(
+                "routine_loop",
+                _BACKGROUND_LOOP_LOCKS["routine_loop"],
+                routine_loop,
+            ))
 
             from handlers.reply_scanner import reply_scanner_loop
             from handlers.quo_poller import quo_poll_loop
             from handlers.task_review import task_review_loop
 
-            asyncio.create_task(reply_scanner_loop())
-            asyncio.create_task(quo_poll_loop())
-            asyncio.create_task(task_review_loop())
+            asyncio.create_task(_run_singleton_background_loop(
+                "reply_scanner_loop",
+                _BACKGROUND_LOOP_LOCKS["reply_scanner_loop"],
+                reply_scanner_loop,
+            ))
+            asyncio.create_task(_run_singleton_background_loop(
+                "quo_poll_loop",
+                _BACKGROUND_LOOP_LOCKS["quo_poll_loop"],
+                quo_poll_loop,
+            ))
+            asyncio.create_task(_run_singleton_background_loop(
+                "task_review_loop",
+                _BACKGROUND_LOOP_LOCKS["task_review_loop"],
+                task_review_loop,
+            ))
 
             if os.getenv("RENTMATE_DEMO_SIMULATOR") == "1":
                 from demo.simulator import simulator_loop
-                asyncio.create_task(simulator_loop())
+                asyncio.create_task(_run_singleton_background_loop(
+                    "simulator_loop",
+                    _BACKGROUND_LOOP_LOCKS["simulator_loop"],
+                    simulator_loop,
+                ))
                 print("[demo] tenant/vendor simulator enabled")
 
         data_dir = os.getenv("RENTMATE_DATA_DIR", "./data")

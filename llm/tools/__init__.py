@@ -57,6 +57,7 @@ from llm.tools.tasks import (
 )
 from llm.tools.time_tools import HasHappenedTool
 from llm.tools.vendors import CreateVendorTool, LookupVendorsTool
+from llm.tools.web_search import WebSearchTool
 
 __all__ = [
     "Tool",
@@ -97,4 +98,5 @@ __all__ = [
     "UpdateLeaseTool",
     "UpdateTaskProgressTool",
     "UpdateOnboardingTool",
+    "WebSearchTool",
 ]

@@ -8,6 +8,7 @@ from llm.tools._common import (
     Tool,
     _check_placeholder_ids,
     _resolve_task_id_from_active_conversation,
+    current_request_context,
     tool_session,
 )
 
@@ -17,6 +18,56 @@ logger = logging.getLogger(__name__)
 _VALID_STATUSES: frozenset[str] = frozenset({
     "on_track", "needs_action", "blocked", "waiting",
 })
+
+
+def record_task_review_result(
+    *,
+    task_id: str,
+    status: str,
+    summary: str,
+    next_step: str | None = None,
+    trace_context: dict[str, Any] | None = None,
+) -> datetime | None:
+    """Persist review columns and log the matching trace row.
+
+    The tool and the task-review loop fallback share this path so every
+    persisted review captures the same server-side run context.
+    """
+    from db.models import Task as TaskModel
+
+    now = datetime.now(UTC)
+    with tool_session() as db:
+        task = db.query(TaskModel).filter_by(id=task_id).first()
+        if not task:
+            return None
+        task.last_reviewed_at = now
+        task.last_review_status = status
+        task.last_review_summary = summary
+        task.last_review_next_step = next_step
+
+    detail: dict[str, Any] = {
+        "status": status,
+        "summary": summary,
+        "next_step": next_step,
+    }
+    run_context = (
+        trace_context if trace_context is not None else current_request_context.get()
+    )
+    if run_context is not None:
+        detail["trace_context"] = run_context
+
+    # Log a mirror AgentTrace row for history. log_trace runs in its own
+    # savepoint and never raises, so a trace failure won't undo the
+    # column update above.
+    from llm.tracing import log_trace
+    log_trace(
+        "task_review",
+        "task_review",
+        summary[:500],
+        tool_name="record_task_review",
+        detail=detail,
+    )
+    return now
 
 
 class RecordTaskReviewTool(Tool):
@@ -125,36 +176,17 @@ class RecordTaskReviewTool(Tool):
         if not summary:
             return json.dumps({"status": "error", "message": "summary is required"})
 
-        from db.models import Task as TaskModel
-
-        now = datetime.now(UTC)
-        with tool_session() as db:
-            task = db.query(TaskModel).filter_by(id=task_id).first()
-            if not task:
-                return json.dumps({
-                    "status": "error",
-                    "message": f"Task {task_id} not found",
-                })
-            task.last_reviewed_at = now
-            task.last_review_status = status
-            task.last_review_summary = summary
-            task.last_review_next_step = next_step
-
-        # Log a mirror AgentTrace row for history. log_trace runs in its own
-        # savepoint and never raises, so a trace failure won't undo the
-        # column update above.
-        from llm.tracing import log_trace
-        log_trace(
-            "task_review",
-            "task_review",
-            summary[:500],
-            tool_name="record_task_review",
-            detail={
-                "status": status,
-                "summary": summary,
-                "next_step": next_step,
-            },
+        now = record_task_review_result(
+            task_id=task_id,
+            status=status,
+            summary=summary,
+            next_step=next_step,
         )
+        if now is None:
+            return json.dumps({
+                "status": "error",
+                "message": f"Task {task_id} not found",
+            })
 
         return json.dumps({
             "status": "ok",

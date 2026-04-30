@@ -49,7 +49,7 @@ vi.mock('@/components/chat/ChatFilterDropdown', async () => {
     }) => (
       <div data-testid="filter-dropdown">
         <span data-testid="filter-value">{value}</span>
-        {(['all', 'user_ai', 'tenant', 'vendor'] as const).map((option) => (
+        {(['all', 'user_ai', 'tenant', 'vendor', 'mirrored_chat'] as const).map((option) => (
           <button
             key={option}
             type="button"
@@ -113,12 +113,13 @@ describe('Chats page', () => {
     expect(screen.queryByText(/Action Desk/i)).not.toBeInTheDocument();
   });
 
-  it('queries all three conversation buckets so filter changes are instant', () => {
+  it('queries all conversation buckets so filter changes are instant', () => {
     renderChats();
     const types = useConversationsMock.mock.calls.map((args) => args[0]);
     expect(types).toContain('user_ai');
     expect(types).toContain('tenant');
     expect(types).toContain('vendor');
+    expect(types).toContain('mirrored_chat');
   });
 
   it('mounts the filter dropdown in the header with All as the default value', () => {
@@ -133,6 +134,7 @@ describe('Chats page', () => {
     expect(screen.getByText(/Chat user_ai-1/)).toBeInTheDocument();
     expect(screen.getByText(/Chat tenant-1/)).toBeInTheDocument();
     expect(screen.getByText(/Chat vendor-1/)).toBeInTheDocument();
+    expect(screen.getByText(/Chat mirrored_chat-1/)).toBeInTheDocument();
   });
 
   it('shows unread indicators for conversations with unread messages', () => {

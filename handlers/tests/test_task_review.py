@@ -280,6 +280,69 @@ class TestReviewPersistsToAIConversation:
         refreshed = self.db.query(Task).filter_by(id=task.id).one()
         assert refreshed.last_message_at is None
 
+    def test_review_fallback_records_when_agent_omits_tool_call(self):
+        import json as _json
+
+        from db.models import AgentRun, AgentTrace
+
+        task = _make_task(self.db, title="missing-tool", with_ai_conversation=True)
+        self.db.expunge(task)
+
+        async def _fake_call_agent_without_review(*args, **kwargs):
+            on_progress = kwargs.get("on_progress")
+            if on_progress is not None:
+                await on_progress("Read context but skipped record_task_review")
+            return _FakeReply("done without structured review")
+
+        stub_context = _stub_task_context("## Task context\nfallback seeded")
+
+        from handlers import task_review as mod
+
+        with patch(
+            "llm.client.call_agent",
+            new=AsyncMock(side_effect=_fake_call_agent_without_review),
+        ), patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"), \
+             patch("llm.context.build_task_context_data", return_value=stub_context):
+            asyncio.run(mod._review_one_task(task))
+
+        self.db.expire_all()
+        refreshed = self.db.query(Task).filter_by(id=task.id).one()
+        assert refreshed.last_review_status == "blocked"
+        assert refreshed.last_review_summary == (
+            "The task review agent completed a run but did not record a "
+            "structured review decision."
+        )
+        assert refreshed.last_review_next_step == (
+            "Inspect the agent run trace and rerun the task review."
+        )
+        assert refreshed.last_reviewed_at is not None
+
+        messages = (
+            self.db.query(Message)
+            .filter_by(conversation_id=task.ai_conversation_id)
+            .order_by(Message.sent_at.asc())
+            .all()
+        )
+        assert messages[-1].message_type == MessageType.ACTION
+        assert messages[-1].meta["review_card"]["status"] == "blocked"
+
+        trace = (
+            self.db.query(AgentTrace)
+            .join(
+                AgentRun,
+                (AgentTrace.org_id == AgentRun.org_id) & (AgentTrace.run_id == AgentRun.id),
+            )
+            .filter(
+                AgentRun.task_id == str(task.id),
+                AgentTrace.tool_name == "record_task_review",
+            )
+            .one()
+        )
+        detail = _json.loads(trace.detail)
+        assert detail["status"] == "blocked"
+        assert detail["trace_context"]["context"]["text"].startswith("## Task context")
+        assert detail["trace_context"]["retrieval"] == stub_context["retrieval"]
+
     def test_review_logs_llm_request_trace_with_context_and_retrieval(self):
         """The trace UI surfaces system prompt + context sections + retrieval
         for routines; task_review must match so the same panel shows the
