@@ -346,6 +346,50 @@ def _task_review_trace_detail(
     )
 
 
+def _review_timestamp_is_fresh(reviewed_at: datetime | None, started_at: datetime) -> bool:
+    if reviewed_at is None:
+        return False
+    if reviewed_at.tzinfo is None:
+        reviewed_at = reviewed_at.replace(tzinfo=UTC)
+    return reviewed_at >= started_at
+
+
+def _ensure_review_recorded(
+    *,
+    task_id: int,
+    review_started_at: datetime,
+    trace_context: dict[str, Any],
+) -> None:
+    from db.models import Task as TaskModel
+    from db.session import SessionLocal
+    from llm.tools.task_review import record_task_review_result
+
+    db = SessionLocal()
+    try:
+        fresh = db.query(TaskModel).filter_by(id=task_id).first()
+        if (
+            fresh is not None
+            and fresh.last_review_status
+            and _review_timestamp_is_fresh(fresh.last_reviewed_at, review_started_at)
+        ):
+            return
+    finally:
+        db.close()
+
+    summary = (
+        "The task review agent completed a run but did not record a "
+        "structured review decision."
+    )
+    next_step = "Inspect the agent run trace and rerun the task review."
+    record_task_review_result(
+        task_id=str(task_id),
+        status="blocked",
+        summary=summary,
+        next_step=next_step,
+        trace_context=trace_context,
+    )
+
+
 async def _review_one_task(
     task,
     *,
@@ -396,6 +440,7 @@ async def _review_one_task(
 
         context_text = context_data.get("text") or ""
         session_key = f"task_review:{task.id}"
+        review_started_at = datetime.now(UTC)
         trace_detail = _task_review_trace_detail(
             session_key=session_key,
             task_id=str(task.id),
@@ -439,6 +484,11 @@ async def _review_one_task(
                     context_data=context_data,
                     reply=resp.reply,
                 ),
+            )
+            _ensure_review_recorded(
+                task_id=task.id,
+                review_started_at=review_started_at,
+                trace_context=trace_detail,
             )
             _persist_review_summary_to_ai_conversation(
                 task_id=task.id,

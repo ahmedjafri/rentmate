@@ -49,7 +49,7 @@ function linkedToConvSummary(lc: LinkedConversation): ConvSummary {
     // contact's name so multiple vendors on one task stay distinguishable.
     title: isAi ? null : contact?.name ?? lc.label,
     lastMessageAt: lc.lastMessageAt ?? null,
-    updatedAt: lc.lastMessageAt ?? new Date(0).toISOString(),
+    updatedAt: lc.lastMessageAt ?? '',
     lastMessageBody: null,
     lastMessageSenderName: null,
     propertyName: null,
