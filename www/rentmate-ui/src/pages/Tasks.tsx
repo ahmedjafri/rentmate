@@ -417,6 +417,37 @@ const Tasks = () => {
             )}
           </div>
         )}
+        {task.steps && task.steps.length > 0 && (() => {
+          const doneCount = task.steps.filter(s => s.status === 'done').length;
+          const activeStep = task.steps.find(s => s.status === 'active');
+          const totalSteps = task.steps.length;
+          return (
+            <div className="mt-2">
+              <div className="flex items-center gap-0.5" aria-label={`Progress: ${doneCount} of ${totalSteps} steps complete`}>
+                {task.steps.map(step => (
+                  <div
+                    key={step.key}
+                    title={`${step.label}${step.note ? ` — ${step.note}` : ''} (${step.status})`}
+                    className={cn(
+                      'h-1 flex-1 rounded-full transition-colors',
+                      step.status === 'done' && 'bg-primary',
+                      step.status === 'active' && 'bg-primary/60 animate-pulse',
+                      step.status === 'pending' && 'bg-muted',
+                    )}
+                  />
+                ))}
+              </div>
+              <div className="mt-1 flex items-center justify-between text-[9px] text-muted-foreground">
+                <span className="min-w-0 truncate">
+                  {doneCount}/{totalSteps} steps
+                  {activeStep && (
+                    <span className="text-foreground/80"> · {activeStep.label}</span>
+                  )}
+                </span>
+              </div>
+            </div>
+          );
+        })()}
       </Card>
     );
   };
