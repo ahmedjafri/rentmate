@@ -28,6 +28,8 @@ def test_render_document_wraps_html_and_returns_pdf_bytes():
     assert "<title>14-Day Notice</title>" in rendered.html
     assert "Prepared By RentMate" in rendered.html
     assert "RentMate" in rendered.html
+    assert '<svg class="brand-icon"' in rendered.html
+    assert 'fill="#2680D9"' in rendered.html
     assert "<h2>Notice</h2>" in rendered.html
 
 

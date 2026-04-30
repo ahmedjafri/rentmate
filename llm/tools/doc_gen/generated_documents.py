@@ -17,6 +17,16 @@ class RenderedDocument:
     renderer: str
 
 
+_RENTMATE_ICON_SVG = """
+<svg class="brand-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true" role="img">
+  <rect width="64" height="64" rx="14" fill="#2680D9"/>
+  <path fill="#ffffff" d="M32 13 L12 30 L12 33 L15 33 L15 51 L27 51 L27 38 L37 38 L37 51 L49 51 L49 33 L52 33 L52 30 Z"/>
+  <circle cx="48" cy="18" r="6" fill="#ffffff"/>
+  <circle cx="48" cy="18" r="3.5" fill="#2680D9"/>
+</svg>
+""".strip()
+
+
 def _normalize_whitespace(value: str) -> str:
     return value.replace("\r\n", "\n").replace("\r", "\n")
 
@@ -117,14 +127,15 @@ def _build_html_document(*, title: str, body_html: str) -> str:
               .brand-mark {{
                 width: 24px;
                 height: 24px;
-                border: 1px solid var(--rm-line);
-                background: var(--rm-soft);
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                font-weight: 700;
-                font-size: 10px;
-                letter-spacing: 0.08em;
+              }}
+
+              .brand-icon {{
+                width: 24px;
+                height: 24px;
+                display: block;
               }}
 
               .brand-name {{
@@ -217,7 +228,7 @@ def _build_html_document(*, title: str, body_html: str) -> str:
           </head>
           <body>
             <header>
-              <span class="brand-mark" aria-hidden="true">RM</span>
+              <span class="brand-mark">{_RENTMATE_ICON_SVG}</span>
               <span class="brand-name">RentMate</span>
             </header>
             <main>
