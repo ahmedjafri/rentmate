@@ -4,7 +4,7 @@ import { PageLoader } from '@/components/ui/page-loader';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Link, useNavigate } from 'react-router-dom';
-import { Building2, Users, Wrench, ShieldCheck, Bot, Clock, MessageCircle, Lock, Plus, ClipboardList } from 'lucide-react';
+import { Building2, Users, Wrench, ShieldCheck, Clock, MessageCircle, Lock, Plus, ClipboardList } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { ChatWorkspaceLayout } from '@/components/chat/ChatWorkspaceLayout';
@@ -124,19 +124,6 @@ const Index = () => {
 
   const rightRail = (
     <div className="p-4 space-y-4">
-      {/* Welcome */}
-      <div className="flex items-center gap-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10">
-          <Bot className="h-4 w-4 text-primary" />
-        </div>
-        <div>
-          <h1 className="text-lg font-bold">{new Date().getHours() < 12 ? 'Good morning!' : new Date().getHours() < 17 ? 'Good afternoon!' : 'Good evening!'}</h1>
-          <p className="text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">{needsAttention.length + pendingSuggestions.length} items</span> need attention
-          </p>
-        </div>
-      </div>
-
       {/* Stats */}
       <div className="grid grid-cols-3 gap-2">
         {stats.map((stat) => {
@@ -198,36 +185,36 @@ const Index = () => {
               const property = task.propertyId ? properties.find(p => p.id === task.propertyId) : null;
 
               return (
-                <Card key={task.id} className="p-3 rounded-xl hover:shadow-md transition-shadow cursor-pointer" onClick={() => navigate(`/tasks/${task.id}`)}>
-                  <div className="flex items-start justify-between gap-2 mb-1.5">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <Badge variant="secondary" className="text-[10px] rounded-lg gap-1 bg-muted text-muted-foreground">
-                        <ClipboardList className="h-3 w-3" />
+                <Card key={task.id} className="p-2.5 rounded-lg hover:shadow-md transition-shadow cursor-pointer" onClick={() => navigate(`/tasks/${task.id}`)}>
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <Badge variant="secondary" className="h-4 px-1.5 text-[9px] rounded-md gap-1 bg-muted text-muted-foreground">
+                        <ClipboardList className="h-2.5 w-2.5" />
                         Task #{task.id}
                       </Badge>
                       {task.unreadCount > 0 && (
-                        <Badge className="h-4 px-1.5 text-[10px] bg-primary text-primary-foreground">
+                        <Badge className="h-4 px-1.5 text-[9px] bg-primary text-primary-foreground">
                           {task.unreadCount} new
                         </Badge>
                       )}
                       {task.confidential && (
-                        <Badge variant="secondary" className="text-[10px] rounded-lg gap-1 bg-destructive/10 text-destructive">
-                          <Lock className="h-3 w-3" />
+                        <Badge variant="secondary" className="h-4 px-1.5 text-[9px] rounded-md gap-1 bg-destructive/10 text-destructive">
+                          <Lock className="h-2.5 w-2.5" />
                         </Badge>
                       )}
                     </div>
-                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground shrink-0">
-                      <Clock className="h-3 w-3" />
+                    <div className="flex items-center gap-1 text-[9px] text-muted-foreground shrink-0">
+                      <Clock className="h-2.5 w-2.5" />
                       {formatDistanceToNow(new Date(task.lastMessageAt), { addSuffix: true })}
                     </div>
                   </div>
 
-                  <h3 className="font-semibold text-xs mb-1">{task.title}</h3>
+                  <h3 className="font-semibold text-[11px] leading-4 mb-1 line-clamp-2">{task.title}</h3>
 
-                  <div className="flex items-start gap-2 mt-1.5 bg-muted/40 rounded-lg p-2">
-                    <MessageCircle className="h-3 w-3 text-muted-foreground mt-0.5 shrink-0" />
+                  <div className="flex items-start gap-1.5 mt-1 bg-muted/40 rounded-md px-2 py-1.5">
+                    <MessageCircle className="h-2.5 w-2.5 text-muted-foreground mt-0.5 shrink-0" />
                     <div className="min-w-0">
-                      <span className="text-[10px] font-medium text-muted-foreground">{task.lastMessageBy}</span>
+                      <span className="text-[9px] font-medium text-muted-foreground">{task.lastMessageBy}</span>
                       <p className="text-[11px] text-foreground line-clamp-2">{task.lastMessage}</p>
                     </div>
                   </div>
@@ -241,7 +228,7 @@ const Index = () => {
                     const activeStep = task.steps.find(s => s.status === 'active');
                     const totalSteps = task.steps.length;
                     return (
-                      <div className="mt-2">
+                      <div className="mt-1.5">
                         <div className="flex items-center gap-0.5" aria-label={`Progress: ${doneCount} of ${totalSteps} steps complete`}>
                           {task.steps.map(step => (
                             <div
@@ -268,7 +255,7 @@ const Index = () => {
                     );
                   })()}
 
-                  <div className="mt-2 flex items-center justify-end">
+                  <div className="mt-1.5 flex items-center justify-end">
                     {property && (
                       <span className="text-[9px] text-muted-foreground">{property.name || property.address}</span>
                     )}

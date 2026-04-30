@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Eye, Loader2, Target } from 'lucide-react';
+import { ArrowLeft, Bot, Eye, Loader2, MessageCircle, Target } from 'lucide-react';
 import { formatDistanceToNow, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -27,6 +27,7 @@ const CATEGORY_OPTIONS = [
 
 const URGENCY_OPTIONS = ['low', 'medium', 'high', 'critical'] as const;
 const STATUS_OPTIONS = ['active', 'paused', 'resolved', 'cancelled'] as const;
+type TaskDetailPane = 'list' | 'chat' | 'task';
 
 function sentenceCase(value: string): string {
   return value
@@ -535,6 +536,7 @@ export default function TaskDetail() {
     [actionDeskTasks, id],
   );
   const [selectedThread, setSelectedThread] = useState<EmbeddedTaskThreadSelection>({ kind: 'ai' });
+  const [mobilePane, setMobilePane] = useState<TaskDetailPane>('chat');
   const activeSuggestion = useMemo(
     () => suggestionId ? suggestions.find(s => s.id === suggestionId) : null,
     [suggestionId, suggestions],
@@ -637,6 +639,26 @@ export default function TaskDetail() {
     );
   }
 
+  const selectAiThread = () => {
+    setSelectedThread({ kind: 'ai' });
+    setMobilePane('chat');
+  };
+
+  const selectConversationThread = (convId: string) => {
+    setSelectedThread({ kind: 'conversation', id: convId });
+    setMobilePane('chat');
+  };
+
+  const mobileTabs: Array<{
+    key: TaskDetailPane;
+    label: string;
+    icon: typeof MessageCircle;
+  }> = [
+    { key: 'list', label: 'Chat List', icon: MessageCircle },
+    { key: 'chat', label: 'Chat', icon: Bot },
+    { key: 'task', label: 'Task', icon: Target },
+  ];
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center gap-2 px-4 py-2 border-b">
@@ -650,20 +672,62 @@ export default function TaskDetail() {
           <Badge variant="outline" className="text-[10px] font-mono">Task #{task.taskNumber}</Badge>
         )}
       </div>
-      <div className="grid grid-cols-[280px_minmax(0,1fr)_360px] flex-1 min-h-0">
-        <aside className="border-r min-h-0 overflow-hidden">
+      <div className="md:hidden flex shrink-0 border-b bg-card/40 backdrop-blur-sm">
+        {mobileTabs.map(tab => {
+          const Icon = tab.icon;
+          const active = mobilePane === tab.key;
+          return (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setMobilePane(tab.key)}
+              aria-pressed={active}
+              data-testid={`task-detail-tab-${tab.key}`}
+              className={cn(
+                'flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
+                active
+                  ? 'border-b-2 border-primary text-foreground'
+                  : 'border-b-2 border-transparent text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex flex-col flex-1 min-h-0 md:grid md:grid-cols-[280px_minmax(0,1fr)_360px]">
+        <aside
+          className={cn(
+            'border-r min-h-0 overflow-hidden',
+            mobilePane === 'list' ? 'block flex-1' : 'hidden',
+            'md:block md:h-full',
+          )}
+        >
           <TaskConversationList
             task={task}
             selectedThread={selectedThread}
-            onSelectAi={() => setSelectedThread({ kind: 'ai' })}
-            onSelectConversation={convId => setSelectedThread({ kind: 'conversation', id: convId })}
+            onSelectAi={selectAiThread}
+            onSelectConversation={selectConversationThread}
           />
         </aside>
-        <main className="min-h-0 overflow-hidden">
+        <main
+          className={cn(
+            'min-h-0 overflow-hidden',
+            mobilePane === 'chat' ? 'block flex-1' : 'hidden',
+            'md:block md:h-full',
+          )}
+        >
           <ChatPanel embedded embeddedTaskSelection={selectedThread} />
         </main>
-        <aside className="border-l min-h-0 overflow-hidden">
-          <TaskGoalPanel task={task} onSelectAi={() => setSelectedThread({ kind: 'ai' })} />
+        <aside
+          className={cn(
+            'border-l min-h-0 overflow-hidden',
+            mobilePane === 'task' ? 'block flex-1' : 'hidden',
+            'md:block md:h-full',
+          )}
+        >
+          <TaskGoalPanel task={task} onSelectAi={selectAiThread} />
         </aside>
       </div>
     </div>
