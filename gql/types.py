@@ -720,7 +720,12 @@ class TaskType:
         if ai_convo:
             linked.append(LinkedConversationType.from_sql(ai_convo, "AI"))
         parent_convo = getattr(t, "parent_conversation", None)
-        ext_convos = list(getattr(t, "external_conversations", []) or [])
+        if parent_convo is not None and getattr(parent_convo, "is_archived", False):
+            parent_convo = None
+        ext_convos = [
+            c for c in list(getattr(t, "external_conversations", []) or [])
+            if not getattr(c, "is_archived", False)
+        ]
         parent_id = parent_convo.id if parent_convo else None
 
         # Collect external + parent conversations so we can disambiguate labels
