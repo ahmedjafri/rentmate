@@ -36,4 +36,5 @@ RUN poetry run python -c "import fastapi, sqlalchemy" \
 # Default: start the server so the test runner can probe it
 ENV LLM_API_KEY=sk-test-install-smoke
 ENV STARTUP_CHECK=skip
+ENV RENTMATE_STARTUP_TASKS=skip
 CMD ["npm", "start"]
