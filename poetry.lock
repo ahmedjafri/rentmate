@@ -3489,6 +3489,23 @@ quart = ["quart (>=0.19.3)"]
 sanic = ["sanic (>=20.12.2)"]
 
 [[package]]
+name = "tavily-python"
+version = "0.7.24"
+description = "Python wrapper for the Tavily API"
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "tavily_python-0.7.24-py3-none-any.whl", hash = "sha256:1a750108de42c4b0b46e4c1b7b64aeaf7fad7d7bac9167927edce0081fe166c9"},
+    {file = "tavily_python-0.7.24.tar.gz", hash = "sha256:6c8954193c6472231e813fe50cbd07806bd86c7228957675eb45875a44d58296"},
+]
+
+[package.dependencies]
+httpx = "*"
+requests = "*"
+tiktoken = ">=0.5.1"
+
+[[package]]
 name = "testcontainers"
 version = "4.14.2"
 description = "Python library for throwaway instances of anything that can run in a Docker container"
@@ -4094,4 +4111,4 @@ test = ["pytest"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.12"
-content-hash = "6d01480af8e8c23ac7a1d8706a24cd93748faa03199c067fff2158b44df108e5"
+content-hash = "2d603772d45958f7317541047866bd8db0e62ce2a5615f283538260f9f164bc7"

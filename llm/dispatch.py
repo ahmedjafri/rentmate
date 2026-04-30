@@ -44,6 +44,7 @@ from llm.tools import (
     UpdateLeaseTool,
     UpdateOnboardingTool,
     UpdateTaskProgressTool,
+    WebSearchTool,
 )
 from llm.tools._common import ToolMode, is_simulating, record_simulated_action
 
@@ -64,6 +65,7 @@ _TOOL_CLASSES: tuple[type[Tool], ...] = (
     ReadDocumentTool, AnalyzeDocumentTool,
     AskManagerTool, RecordTaskReviewTool,
     UpdateOnboardingTool,
+    WebSearchTool,
 )
 
 

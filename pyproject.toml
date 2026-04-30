@@ -50,6 +50,7 @@ bcrypt = "^5.0.0"
 weasyprint = "^66.0"
 grpcio = "^1.76.0"
 alembic = "^1.17.1"
+tavily-python = "^0.7.24"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.0"
