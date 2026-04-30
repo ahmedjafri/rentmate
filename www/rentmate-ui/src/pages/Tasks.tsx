@@ -152,7 +152,7 @@ function SmartSearch({ chips, onChipsChange, tasks, properties, tenants }: Smart
           <span
             key={chip.id}
             className={cn(
-              'inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md text-xs font-medium shrink-0',
+              'inline-flex min-w-0 max-w-full items-center gap-1 pl-2 pr-1 py-0.5 rounded-md text-xs font-medium shrink-0',
               chip.type === 'property' && 'bg-primary/10 text-primary',
               chip.type === 'tenant' && 'bg-green-800 text-green-100',
               chip.type === 'text' && 'bg-muted text-muted-foreground',
@@ -160,7 +160,7 @@ function SmartSearch({ chips, onChipsChange, tasks, properties, tenants }: Smart
           >
             {chip.type === 'property' && <Building2 className="h-3 w-3 shrink-0" />}
             {chip.type === 'tenant' && <User className="h-3 w-3 shrink-0" />}
-            {chip.label}
+            <span className="truncate">{chip.label}</span>
             <button
               type="button"
               onClick={e => { e.stopPropagation(); removeChip(chip.id); }}
@@ -172,7 +172,7 @@ function SmartSearch({ chips, onChipsChange, tasks, properties, tenants }: Smart
         ))}
         <input
           ref={inputRef}
-          className="flex-1 min-w-32 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          className="flex-1 min-w-24 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           placeholder={chips.length === 0 ? 'Search by task, tenant, or property...' : 'Add filter...'}
           value={input}
           onChange={e => { setInput(e.target.value); setOpen(true); }}
@@ -350,7 +350,7 @@ const Tasks = () => {
 
     return (
       <Card key={task.id} className={cn("px-3 py-2.5 rounded-xl hover:shadow-md transition-shadow cursor-pointer", chatPanel.isOpen && chatPanel.taskId === task.id && "ring-2 ring-primary/40")} onClick={() => navigate(`/tasks/${task.id}`)}>
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
           <div className="flex items-center gap-1.5 flex-wrap min-w-0">
             <Badge variant="secondary" className={cn('text-[10px] rounded-lg gap-1 shrink-0', mode.className)}>
               <ModeIcon className="h-3 w-3" />
@@ -374,15 +374,15 @@ const Tasks = () => {
           <span className="text-[10px] text-muted-foreground shrink-0">{formatMessageTime(task.lastMessageAt)}</span>
         </div>
 
-        <div className="flex items-center justify-between gap-2 mt-1.5">
-          <div className="flex items-center gap-1.5 min-w-0">
+        <div className="flex flex-col gap-1 mt-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+          <div className="flex items-start gap-1.5 min-w-0">
             {task.taskNumber != null && (
-              <span className="text-[10px] font-mono text-muted-foreground shrink-0">#{task.taskNumber}</span>
+              <span className="text-[10px] font-mono text-muted-foreground shrink-0 leading-5">#{task.taskNumber}</span>
             )}
-            <h3 className="font-medium text-sm truncate">{task.title}</h3>
+            <h3 className="font-medium text-sm min-w-0 break-words sm:truncate">{task.title}</h3>
           </div>
           {property && (
-            <span className="text-[10px] text-muted-foreground shrink-0">{property.name || property.address}</span>
+            <span className="text-[10px] text-muted-foreground min-w-0 break-words sm:truncate sm:text-right">{property.name || property.address}</span>
           )}
         </div>
         {task.parentConversationId && (
@@ -424,28 +424,28 @@ const Tasks = () => {
   if (isLoading) return <PageLoader />;
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-5">
-      <div className="flex items-start justify-between gap-4">
+    <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div>
           <h1 className="text-2xl font-bold">Tasks</h1>
           <p className="text-sm text-muted-foreground">
             {activeCount} active · {needsAttentionCount} need attention
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap justify-end">
+        <div className="grid grid-cols-1 gap-2 sm:flex sm:items-center sm:flex-wrap sm:justify-end">
           <MultiSelect
             options={statusOptions}
             selected={statusFilters}
             onChange={setStatusFilters}
             placeholder="All Statuses"
-            width="w-40"
+            width="w-full sm:w-40"
           />
           <MultiSelect
             options={categoryOptions}
             selected={categoryFilters}
             onChange={setCategoryFilters}
             placeholder="All Categories"
-            width="w-44"
+            width="w-full sm:w-44"
           />
         </div>
       </div>
@@ -558,17 +558,17 @@ const Tasks = () => {
             const StatusIcon = task.status === 'resolved' ? CheckCircle2 : task.status === 'cancelled' ? XCircle : PauseCircle;
             return (
               <Card key={task.id} className={cn("p-4 rounded-xl opacity-70 cursor-pointer hover:opacity-85 transition-opacity", chatPanel.isOpen && chatPanel.taskId === task.id && "ring-2 ring-primary/40 opacity-100")} onClick={() => navigate(`/tasks/${task.id}`)}>
-                <div className="flex items-start justify-between gap-3 mb-1">
-                  <div className="flex items-center gap-2">
+                <div className="flex flex-col gap-2 mb-1 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+                  <div className="flex items-start gap-2 min-w-0">
                     <StatusIcon className={cn('h-4 w-4', task.status === 'resolved' ? 'text-accent' : task.status === 'cancelled' ? 'text-destructive' : 'text-muted-foreground')} />
-                    <h3 className="font-medium text-sm">{task.title}</h3>
+                    <h3 className="font-medium text-sm min-w-0 break-words">{task.title}</h3>
                   </div>
-                  <Badge variant="secondary" className={cn('text-[10px] rounded-lg gap-1', completedMode.className)}>
+                  <Badge variant="secondary" className={cn('text-[10px] rounded-lg gap-1 w-fit shrink-0', completedMode.className)}>
                     <CompletedModeIcon className="h-3 w-3" />
                     {completedMode.label}
                   </Badge>
                 </div>
-                <p className="text-xs text-muted-foreground ml-6">{task.lastMessage}</p>
+                <p className="text-xs text-muted-foreground sm:ml-6 break-words">{task.lastMessage}</p>
               </Card>
             );
           })}
