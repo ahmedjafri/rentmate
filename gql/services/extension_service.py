@@ -154,7 +154,9 @@ def _resolve_tenant_for_reply(db: Any, tenant_id: str | None) -> dict[str, Any] 
     return None
 
 
-def _is_pm_sender(sender: str | None) -> bool:
+def _is_pm_sender(sender: str | None, *, is_pm: bool | None = None) -> bool:
+    if is_pm is not None:
+        return is_pm
     return (sender or "").strip().lower() in _PM_SENDER_TOKENS
 
 
@@ -289,7 +291,7 @@ def _sync_mirror_messages(
         if not text:
             continue
         sender = (turn.get("sender") or "").strip() or "Tenant"
-        is_pm = _is_pm_sender(sender)
+        is_pm = _is_pm_sender(sender, is_pm=turn.get("is_pm"))
         msg = Message(
             org_id=resolve_org_id(),
             conversation_id=conv.id,

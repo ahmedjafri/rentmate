@@ -223,6 +223,8 @@ query GetConversation($uid: String!) {
     taskId
     taskTitle
     participantLabel
+    mirrorSource
+    headerDescription
   }
 }
 

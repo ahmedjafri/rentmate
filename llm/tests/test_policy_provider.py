@@ -47,3 +47,12 @@ def test_prefetch_returns_information_gaps_policy(tmp_path):
     text = provider.prefetch("I do not have the late fee amount on file and need to check with the property manager.")
     assert "Information Gaps Policy" in text
     assert "Do not call `close_task`" in text
+
+
+def test_prefetch_returns_fire_911_safety_policy(tmp_path):
+    provider = RentmatePolicyProvider()
+    provider.initialize(session_id="abc", hermes_home=str(tmp_path))
+    text = provider.prefetch("There is a fire at Meadow Lane. What is the status on 911?")
+    assert "Safety Policy" in text
+    assert "RentMate cannot call 911" in text
+    assert "Escalate active fires" in text

@@ -269,6 +269,34 @@ class TestTasksQuery:
         rows = {row["uid"]: row for row in result.data["tasks"]}
         assert rows[task.id]["lastMessageAt"] == f"{parent_msg.sent_at.isoformat()}Z"
 
+    def test_tasks_omits_archived_linked_conversations(self, db):
+        task = _mk_task(db, subject="Gutter cleaning")
+        ext_conv = task.external_conversations[0]
+        _add_message(db, ext_conv, body="Old vendor thread", sender_type=ParticipantType.EXTERNAL_CONTACT)
+        ext_uid = str(ext_conv.external_id)
+        ext_conv.is_archived = True
+        db.commit()
+
+        result = schema.execute_sync(
+            """
+            {
+              tasks {
+                uid
+                lastMessageAt
+                externalConversationIds
+                linkedConversations { uid }
+              }
+            }
+            """,
+            context_value=_gql_context(db),
+        )
+
+        assert result.errors is None
+        row = next(row for row in result.data["tasks"] if row["uid"] == task.id)
+        assert ext_uid not in row["externalConversationIds"]
+        assert ext_uid not in [conv["uid"] for conv in row["linkedConversations"]]
+        assert row["lastMessageAt"] is None
+
     def test_tasks_filter_by_category(self, db):
         _mk_task(db, subject="Rent overdue", category="rent")
         maint = _mk_task(db, subject="Broken pipe", category="maintenance")

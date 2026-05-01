@@ -134,6 +134,7 @@ POLICIES: tuple[PolicyRule, ...] = (
         keywords=(
             "suicide", "self-harm", "self harm", "kill myself", "emergency", "gas smell",
             "flood", "burst pipe", "no heat", "shock", "electrical", "danger",
+            "fire", "911", "emergency crews", "emergency responders",
             "can't take this anymore", "cant take this anymore", "no point in going on",
         ),
     ),

@@ -720,7 +720,12 @@ class TaskType:
         if ai_convo:
             linked.append(LinkedConversationType.from_sql(ai_convo, "AI"))
         parent_convo = getattr(t, "parent_conversation", None)
-        ext_convos = list(getattr(t, "external_conversations", []) or [])
+        if parent_convo is not None and getattr(parent_convo, "is_archived", False):
+            parent_convo = None
+        ext_convos = [
+            c for c in list(getattr(t, "external_conversations", []) or [])
+            if not getattr(c, "is_archived", False)
+        ]
         parent_id = parent_convo.id if parent_convo else None
 
         # Collect external + parent conversations so we can disambiguate labels
@@ -1170,6 +1175,9 @@ class ConversationSummaryType:
     # surfaced so the chat list can show a "Task #N" badge.
     task_id: typing.Optional[str] = None
     task_title: typing.Optional[str] = None
+    # Mirror-conversation origin fields — only populated for MIRRORED_CHAT.
+    mirror_source: typing.Optional[str] = None
+    header_description: typing.Optional[str] = None
 
     @classmethod
     def from_sql(cls, c: typing.Any) -> "ConversationSummaryType":
@@ -1202,6 +1210,7 @@ class ConversationSummaryType:
             task_id = str(parent_task.id)
             task_title = parent_task.title
 
+        extra = c.extra or {} if c.conversation_type == "mirrored_chat" else {}
         return cls(
             uid=str(c.external_id),
             conversation_type=c.conversation_type or "tenant",
@@ -1216,6 +1225,8 @@ class ConversationSummaryType:
             participant_label=participant_label,
             task_id=task_id,
             task_title=task_title,
+            mirror_source=extra.get("source") or None,
+            header_description=extra.get("header_description") or None,
         )
 
 
@@ -1257,6 +1268,11 @@ class TenantSearchResult:
 class ConversationTurnInput:
     sender: str
     text: str
+    # Optional explicit PM flag set by the chrome extension when it can
+    # detect message directionality from the source platform's DOM (e.g.
+    # right-aligned / "outgoing" class). When provided it overrides the
+    # fallback token-matching heuristic (_PM_SENDER_TOKENS).
+    is_pm: typing.Optional[bool] = None
 
 
 @strawberry.input
