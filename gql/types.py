@@ -31,7 +31,7 @@ from db.models import (
     Tenant,
     User,
 )
-from gql.services import chat_service
+from services import chat_service
 
 TaskCategoryEnum = strawberry.enum(TaskCategory, name="TaskCategory")
 TaskModeEnum = strawberry.enum(TaskMode, name="TaskMode")
@@ -343,7 +343,7 @@ class TenantType:
             ExtraPropertyType(key=str(k), value=str(v))
             for k, v in (t.extra or {}).items()
         ]
-        from gql.services.tenant_service import TenantService
+        from services.tenant_service import TenantService
         return cls(
             uid=str(t.external_id),
             name=tenant_display_name(t),
@@ -454,7 +454,7 @@ class ChatMessageType:
 
     @classmethod
     def from_sql(cls, msg: typing.Any) -> "ChatMessageType":
-        from gql.services.chat_service import parse_message_meta
+        from services.chat_service import parse_message_meta
 
         raw_st = getattr(msg, "sender_type", None)
         st_value = raw_st.value if hasattr(raw_st, "value") else str(raw_st) if raw_st else None
@@ -606,7 +606,7 @@ class TaskType:
     @classmethod
     def from_sql(cls, t: typing.Any) -> "TaskType":
         from db.models import ParticipantType as PT
-        from gql.services.chat_service import parse_conversation_extra
+        from services.chat_service import parse_conversation_extra
 
         def _cmp_dt(value: typing.Any) -> typing.Any:
             if isinstance(value, _datetime) and value.tzinfo is not None:
@@ -1119,7 +1119,7 @@ class VendorType:
 
     @classmethod
     def from_sql(cls, v) -> "VendorType":
-        from gql.services.vendor_service import VendorService
+        from services.vendor_service import VendorService
         return cls(
             uid=str(v.external_id),
             name=v.name,

@@ -33,7 +33,7 @@ def _make_session_factory(engine):
 
 
 async def _mock_require_user(request=None):
-    from backends.local_auth import set_request_context
+    from integrations.local_auth import set_request_context
 
     set_request_context(account_id=1, org_id=1)
     return {"id": "eval-user", "email": "eval@example.com", "account_id": 1}
@@ -48,7 +48,7 @@ async def _test_app(session_factory):
         patch("rentmate.app.SessionLocal", session_factory),
         patch("handlers.deps.SessionLocal", session_factory),
         patch("handlers.chat.SessionLocal", session_factory),
-        patch("gql.services.settings_service.is_llm_configured", return_value=True),
+        patch("services.settings_service.is_llm_configured", return_value=True),
         patch("handlers.chat.require_user", AsyncMock(side_effect=_mock_require_user)),
         patch("handlers.documents.require_user", AsyncMock(side_effect=_mock_require_user)),
     ):
@@ -147,7 +147,7 @@ def test_missing_tenant_lease_creates_property_once_and_requests_name(session_fa
         return pdf_bytes
 
     async def _run():
-        with patch("backends.wire.storage_backend.download", side_effect=fake_download):
+        with patch("integrations.wire.storage_backend.download", side_effect=fake_download):
             async with _test_app(session_factory) as client:
                 upload_message = (
                     "Uploaded sample_lease_missing_tenant.pdf\n\n"

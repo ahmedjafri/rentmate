@@ -12,11 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import MetaData
-from sqlalchemy import inspect as sa_inspect, text
+from sqlalchemy import MetaData, inspect as sa_inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 from strawberry.fastapi import GraphQLRouter
 
+from agent.registry import agent_registry
 from db.models import Base
 from gql.schema import schema
 from handlers import (
@@ -27,13 +27,12 @@ from handlers import (
     notifications,
     settings,
 )
-from handlers.portals import tenant_invite, tenant_portal, vendor_invite, vendor_portal
 from handlers.deps import SessionLocal, engine
+from handlers.portals import tenant_invite, tenant_portal, vendor_invite, vendor_portal
 from handlers.routines import router as routine_router
+from handlers.settings import load_integrations
 from handlers.streams import router as streams_router
 from handlers.task_review import router as task_review_router
-from handlers.settings import load_integrations
-from llm.registry import agent_registry
 from memory_watchdog import set_memory_backstop, start_memory_monitor
 
 _PACKAGE_ROOT = Path(__file__).resolve().parent.parent
@@ -243,8 +242,8 @@ def _ensure_dev_bootstrap_account(db) -> None:
     if os.getenv("RENTMATE_ENV") != "development":
         return
 
-    from backends.local_auth import _hash_password
     from db.models import User
+    from integrations.local_auth import _hash_password
 
     if db.query(User).first():
         return
@@ -262,8 +261,8 @@ def _ensure_dev_bootstrap_account(db) -> None:
 
 
 async def get_context(request: Request):
-    from backends.local_auth import set_request_context
-    from backends.wire import auth_backend
+    from integrations.local_auth import set_request_context
+    from integrations.wire import auth_backend
 
     auth_header = request.headers.get("Authorization", "")
     token = auth_header.replace("Bearer ", "").strip()
@@ -327,7 +326,7 @@ def create_app(
 
         _repair_enum_rows()
 
-        from gql.services.settings_service import load_agent_integrations_into_env, load_llm_into_env
+        from services.settings_service import load_agent_integrations_into_env, load_llm_into_env
 
         load_llm_into_env()
         load_agent_integrations_into_env()
@@ -337,8 +336,8 @@ def create_app(
         else:
             db = SessionLocal()
             try:
-                from backends.local_auth import set_request_context
                 from db.models import Document as DocModel, User
+                from integrations.local_auth import set_request_context
 
                 _ensure_dev_bootstrap_account(db)
                 acct = db.query(User).first()
@@ -360,7 +359,7 @@ def create_app(
                 if stuck:
                     db.commit()
                     print(f"Re-queuing {len(stuck)} stuck document(s)…")
-                    from llm.document_processor import process_document
+                    from agent.document_processor import process_document
 
                     for doc in stuck:
                         asyncio.create_task(process_document(doc.id))
@@ -378,8 +377,8 @@ def create_app(
                 routine_loop,
             ))
 
-            from handlers.reply_scanner import reply_scanner_loop
             from handlers.quo_poller import quo_poll_loop
+            from handlers.reply_scanner import reply_scanner_loop
             from handlers.task_review import task_review_loop
 
             asyncio.create_task(_run_singleton_background_loop(
@@ -408,7 +407,7 @@ def create_app(
                 print("[demo] tenant/vendor simulator enabled")
 
         data_dir = os.getenv("RENTMATE_DATA_DIR", "./data")
-        from backends.local_storage import ensure_runtime_storage_contract
+        from integrations.local_storage import ensure_runtime_storage_contract
 
         data_dir, _ = ensure_runtime_storage_contract()
         set_memory_backstop()
@@ -468,7 +467,7 @@ def create_app(
 
     @app.middleware("http")
     async def db_session_middleware(request: Request, call_next):
-        from backends.local_auth import _current_account_id, _current_org_id
+        from integrations.local_auth import _current_account_id, _current_org_id
 
         _current_account_id.set(None)
         _current_org_id.set(None)

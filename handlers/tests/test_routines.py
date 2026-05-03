@@ -8,12 +8,12 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from backends.local_auth import get_org_external_id, set_request_context
 from db.enums import RoutineState
 from db.models import AgentTrace, Routine, Suggestion
-from gql.services.number_allocator import NumberAllocator
 from handlers.deps import get_db
+from integrations.local_auth import get_org_external_id, set_request_context
 from main import app
+from services.number_allocator import NumberAllocator
 
 
 def make_token():
@@ -74,9 +74,9 @@ class TestRoutineSimulation(unittest.TestCase):
 
     def test_simulate_streams_done_event_without_detached_instance_error(self):
         with (
-            patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"),
-            patch("llm.context.load_account_context", return_value="ctx"),
-            patch("llm.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
+            patch("agent.registry.agent_registry.ensure_agent", return_value="agent-1"),
+            patch("agent.context.load_account_context", return_value="ctx"),
+            patch("agent.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
         ):
             async def _fake_call_agent(*args, **kwargs):
                 on_progress = kwargs.get("on_progress")
@@ -103,12 +103,12 @@ class TestRoutineSimulation(unittest.TestCase):
 
     def test_simulate_returns_suggestions_it_would_create(self):
         with (
-            patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"),
-            patch("llm.context.load_account_context", return_value="ctx"),
-            patch("llm.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
+            patch("agent.registry.agent_registry.ensure_agent", return_value="agent-1"),
+            patch("agent.context.load_account_context", return_value="ctx"),
+            patch("agent.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
         ):
             async def _fake_call_agent(*args, **kwargs):
-                from llm.tools import simulation_suggestions
+                from agent.tools import simulation_suggestions
 
                 pending = simulation_suggestions.get()
                 assert pending is not None
@@ -162,9 +162,9 @@ class TestRoutineSimulation(unittest.TestCase):
 
     def test_simulate_parses_reply_bullets_into_suggestions(self):
         with (
-            patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"),
-            patch("llm.context.load_account_context", return_value="ctx"),
-            patch("llm.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
+            patch("agent.registry.agent_registry.ensure_agent", return_value="agent-1"),
+            patch("agent.context.load_account_context", return_value="ctx"),
+            patch("agent.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
         ):
             async def _fake_call_agent(*args, **kwargs):
                 return type("Resp", (), {
@@ -193,12 +193,12 @@ class TestRoutineSimulation(unittest.TestCase):
         before_count = self.db.query(Suggestion).count()
 
         with (
-            patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"),
-            patch("llm.context.load_account_context", return_value="ctx"),
-            patch("llm.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
+            patch("agent.registry.agent_registry.ensure_agent", return_value="agent-1"),
+            patch("agent.context.load_account_context", return_value="ctx"),
+            patch("agent.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
         ):
             async def _fake_call_agent(*args, **kwargs):
-                from llm.tools import simulation_suggestions
+                from agent.tools import simulation_suggestions
 
                 pending = simulation_suggestions.get()
                 assert pending is not None
@@ -221,9 +221,9 @@ class TestRoutineSimulation(unittest.TestCase):
         self.db.expunge(detached)
 
         with (
-            patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"),
-            patch("llm.context.load_account_context", return_value="ctx"),
-            patch("llm.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
+            patch("agent.registry.agent_registry.ensure_agent", return_value="agent-1"),
+            patch("agent.context.load_account_context", return_value="ctx"),
+            patch("agent.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
         ):
             async def _fake_call_agent(*args, **kwargs):
                 return type("Resp", (), {"reply": "ran", "side_effects": []})()
@@ -241,9 +241,9 @@ class TestRoutineSimulation(unittest.TestCase):
         self.db.expunge(detached)
 
         with (
-            patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"),
-            patch("llm.context.load_account_context", return_value="ctx"),
-            patch("llm.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
+            patch("agent.registry.agent_registry.ensure_agent", return_value="agent-1"),
+            patch("agent.context.load_account_context", return_value="ctx"),
+            patch("agent.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
         ):
             async def _fake_call_agent(*args, **kwargs):
                 return type("Resp", (), {"reply": "simulated run", "side_effects": []})()
@@ -271,9 +271,9 @@ class TestRoutineSimulation(unittest.TestCase):
 
     def test_run_streams_progress_and_updates_task(self):
         with (
-            patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"),
-            patch("llm.context.load_account_context", return_value="ctx"),
-            patch("llm.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
+            patch("agent.registry.agent_registry.ensure_agent", return_value="agent-1"),
+            patch("agent.context.load_account_context", return_value="ctx"),
+            patch("agent.client.call_agent", new_callable=AsyncMock) as mock_call_agent,
         ):
             async def _fake_call_agent(*args, **kwargs):
                 on_progress = kwargs.get("on_progress")
@@ -313,8 +313,8 @@ class TestSeedDefaultRoutines(unittest.TestCase):
     """
 
     def setUp(self):
-        from backends.local_auth import DEFAULT_ORG_ID
         from db.models import User
+        from integrations.local_auth import DEFAULT_ORG_ID
 
         # SessionLocal is monkey-patched by the test harness to return self.db,
         # so the seed function will operate on this session.

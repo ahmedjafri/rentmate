@@ -4,13 +4,14 @@ import json
 import logging
 import re
 from datetime import UTC, datetime, timedelta
+
 from croniter import croniter
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from agent.tracing import log_trace, make_trace_envelope
 from db.enums import RoutineState
 from handlers.deps import require_user
-from llm.tracing import log_trace, make_trace_envelope
 
 router = APIRouter()
 
@@ -245,7 +246,7 @@ def seed_default_routines():
             },
         ]
 
-        from gql.services.number_allocator import NumberAllocator
+        from services.number_allocator import NumberAllocator
         now = datetime.now(UTC)
         org_id = account.org_id
         created = 0
@@ -383,10 +384,10 @@ async def execute_routine(
     `prompt_override` lets callers (e.g. simulation) supply a modified prompt
     without mutating the stored row.
     """
-    from backends.local_auth import set_request_context
-    from llm.client import call_agent
-    from llm.context import load_account_context
-    from llm.registry import agent_registry
+    from agent.client import call_agent
+    from agent.context import load_account_context
+    from agent.registry import agent_registry
+    from integrations.local_auth import set_request_context
 
     task_id = routine.id
     creator_id = routine.creator_id
@@ -419,7 +420,7 @@ async def execute_routine(
             prompt=prompt,
             context=context,
         )
-        from llm.runs import derive_run_metadata, start_run
+        from agent.runs import derive_run_metadata, start_run
         with start_run(
             **derive_run_metadata(
                 session_key=session_key,
@@ -456,7 +457,7 @@ async def execute_routine(
             )
             return resp.reply
     finally:
-        from backends.local_auth import reset_request_context
+        from integrations.local_auth import reset_request_context
         reset_request_context(tokens)
 
 
@@ -469,7 +470,7 @@ def _routine_not_found_stream() -> StreamingResponse:
 
 def _load_routine_snapshot(routine_id: int) -> dict | None:
     from db.session import SessionLocal
-    from gql.services.routine_service import RoutineService
+    from services.routine_service import RoutineService
 
     db = SessionLocal()
     try:
@@ -493,10 +494,10 @@ def _stream_routine_response(snapshot: dict, *, simulate: bool) -> StreamingResp
     prompt = snapshot["prompt"]
 
     async def generate():
-        from backends.local_auth import reset_request_context, set_request_context
+        from agent.tools import simulation_suggestions
         from db.models import Routine
         from db.session import SessionLocal
-        from llm.tools import simulation_suggestions
+        from integrations.local_auth import reset_request_context, set_request_context
 
         tokens = set_request_context(account_id=creator_id, org_id=org_id)
         sim_token = simulation_suggestions.set([]) if simulate else None
@@ -508,7 +509,7 @@ def _stream_routine_response(snapshot: dict, *, simulate: bool) -> StreamingResp
 
             async def _run():
                 try:
-                    from gql.services.routine_service import RoutineService
+                    from services.routine_service import RoutineService
                     fetch_db = SessionLocal()
                     try:
                         hb = RoutineService.get_by_id(fetch_db, routine_id)

@@ -1,6 +1,6 @@
 from db.models import Suggestion, User
 from gql.schema import schema
-from gql.services.number_allocator import NumberAllocator
+from services.number_allocator import NumberAllocator
 
 
 def _context(db, user=None):

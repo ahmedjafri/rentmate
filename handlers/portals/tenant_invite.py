@@ -2,8 +2,8 @@
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from gql.services.tenant_service import TenantService
 from handlers.deps import get_db
+from services.tenant_service import TenantService
 
 router = APIRouter(prefix="/api/tenant-token")
 

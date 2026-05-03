@@ -3,11 +3,11 @@ from fastapi.testclient import TestClient
 
 from db.enums import TaskCategory, TaskSource, Urgency
 from db.models import Notification, User
-from gql.services import chat_service
-from gql.services.task_service import TaskService
-from gql.services.vendor_service import VendorService, get_vendor_login_email
 from gql.types import CreateTaskInput, CreateVendorInput
 from main import app
+from services import chat_service
+from services.task_service import TaskService
+from services.vendor_service import VendorService, get_vendor_login_email
 
 
 def _vendor_headers(db):

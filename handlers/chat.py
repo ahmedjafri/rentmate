@@ -17,8 +17,15 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from backends.local_auth import reset_request_context, resolve_account_id, set_request_context
-from backends.wire import sms_router
+from agent.context import (
+    build_task_context,
+    build_task_context_data,
+    load_account_context_data,
+)
+from agent.registry import agent_registry
+from agent.side_effects import process_side_effects
+from agent.tools import active_conversation_id, pending_suggestion_messages
+from agent.tracing import log_trace, make_trace_envelope
 from db.enums import TaskSource
 from db.lib import (
     get_or_create_user_ai_conversation,
@@ -36,18 +43,11 @@ from db.models import (
     Task,
 )
 from db.session import SessionLocal
-from gql.services import chat_service
-from gql.services.notification_service import NotificationRequest, NotificationService
 from handlers.deps import get_db, require_user
-from llm.context import (
-    build_task_context,
-    build_task_context_data,
-    load_account_context_data,
-)
-from llm.registry import agent_registry
-from llm.side_effects import process_side_effects
-from llm.tools import active_conversation_id, pending_suggestion_messages
-from llm.tracing import log_trace, make_trace_envelope
+from integrations.local_auth import reset_request_context, resolve_account_id, set_request_context
+from integrations.wire import sms_router
+from services import chat_service
+from services.notification_service import NotificationRequest, NotificationService
 
 router = APIRouter()
 
@@ -195,7 +195,6 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
     _creator_id, entity, direction, entity_type = resolved
 
     # Set account context so entity creation resolves creator_id correctly
-    from backends.local_auth import set_request_context
     set_request_context(account_id=_creator_id, org_id=getattr(entity, "org_id", None))
 
     if direction != "inbound":
@@ -258,7 +257,7 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
     )
     db.commit()
 
-    from llm.client import call_agent
+    from agent.client import call_agent
     context = build_task_context(db, conv.id, query=body)
     messages = chat_service.build_agent_message_history(db, conv_id=conv.id, user_message=body, context=context, exclude_last=True)
 
@@ -420,7 +419,7 @@ async def chat_endpoint(
         messages_payload = chat_service.build_agent_message_history(db, conv_id=conv_id, user_message=body.message, context=context)
 
     # ── Guard: LLM must be configured ───────────────────────────────────
-    from gql.services.settings_service import is_llm_configured
+    from services.settings_service import is_llm_configured
     if not is_llm_configured():
         if _hosted_mode():
             no_llm_reply = (
@@ -462,7 +461,7 @@ async def chat_endpoint(
                 await sub.put(entry)
 
         async def run_and_persist() -> tuple[str, str, list[dict]]:
-            from llm.client import call_agent
+            from agent.client import call_agent
             token = active_conversation_id.set(conv_id)
             try:
                 # Persist user message BEFORE running the agent so it gets an
@@ -609,7 +608,7 @@ async def chat_endpoint(
                 done_payload['effect_messages'] = effect_msgs
             # Include onboarding state so frontend can update progress without re-fetching
             try:
-                from gql.services.settings_service import get_onboarding_state as _get_ob
+                from services.settings_service import get_onboarding_state as _get_ob
                 _ob_db = _SL()
                 try:
                     _ob_state = _get_ob(_ob_db)
@@ -702,8 +701,7 @@ def agent_task_autoreply(task_id: str, hint: str | None = None) -> str | None:
 
 def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | None:
 
-    from backends.local_auth import reset_request_context, set_request_context
-    from llm.client import call_agent
+    from agent.client import call_agent
 
     db = SessionLocal.session_factory()
     request_context_token = None
@@ -982,7 +980,7 @@ async def assess_task_endpoint(
                 await sub.put(entry)
 
         async def run_and_persist() -> tuple[str | None, str | None, list[dict]]:
-            from llm.client import call_agent
+            from agent.client import call_agent
             token = active_conversation_id.set(conv_id)
             try:
                 # NOTE: We do NOT persist a user message — the assess prompt is
@@ -1208,7 +1206,7 @@ async def get_onboarding_state_endpoint(request: Request, db: Session = Depends(
     """Return current onboarding state, or null if the account already has data."""
     await require_user(request)
     from db.models import Document, Property, Tenant
-    from gql.services.settings_service import get_onboarding_state, init_onboarding, is_llm_configured
+    from services.settings_service import get_onboarding_state, init_onboarding, is_llm_configured
 
     llm_configured = True if _hosted_mode() else is_llm_configured()
     state = get_onboarding_state(db)
@@ -1237,7 +1235,7 @@ async def get_onboarding_state_endpoint(request: Request, db: Session = Depends(
 async def dismiss_onboarding_endpoint(request: Request, db: Session = Depends(get_db)):
     """Dismiss onboarding permanently."""
     await require_user(request)
-    from gql.services.settings_service import dismiss_onboarding
+    from services.settings_service import dismiss_onboarding
 
     state = dismiss_onboarding(db)
     db.commit()

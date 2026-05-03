@@ -48,11 +48,12 @@ COPY --from=builder /usr/local /usr/local
 COPY alembic.ini ./
 COPY main.py ./
 COPY memory_watchdog.py ./
-COPY backends ./backends
+COPY integrations ./integrations
 COPY db ./db
 COPY gql ./gql
 COPY handlers ./handlers
-COPY llm ./llm
+COPY agent ./agent
+COPY services ./services
 COPY rentmate ./rentmate
 
 # Environment variable for dev

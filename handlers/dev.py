@@ -13,19 +13,19 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from db.models import (
-    Conversation,
-    Suggestion,
-    Task,
-)
-from handlers.deps import get_db, require_user
-from llm.retrieval import (
+from agent.retrieval import (
     PgVectorMemoryIndex,
     RetrievalRequest,
     list_memory_items,
     retrieve_context,
     sync_memory_index,
 )
+from db.models import (
+    Conversation,
+    Suggestion,
+    Task,
+)
+from handlers.deps import get_db, require_user
 
 router = APIRouter()
 
@@ -387,7 +387,7 @@ async def get_run_trajectory(
     ``llm/trajectory.py:to_trajectory``.
     """
     await require_user(request)
-    from llm.trajectory import to_trajectory
+    from agent.trajectory import to_trajectory
 
     trajectory = to_trajectory(db, run_id)
     if trajectory is None:

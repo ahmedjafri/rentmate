@@ -8,7 +8,6 @@ the test suite fast.
 from __future__ import annotations
 
 import asyncio
-import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,7 +27,7 @@ from db.models import (
 
 @pytest.fixture(autouse=True)
 def _request_context():
-    from backends.local_auth import reset_request_context, set_request_context
+    from integrations.local_auth import reset_request_context, set_request_context
     token = set_request_context(account_id=1, org_id=1)
     yield
     reset_request_context(token)
@@ -418,7 +417,7 @@ def test_schedule_reply_triggers_autoreply_when_task_present(db):
     from db.enums import TaskStatus
     from db.models import Task
     from demo import simulator
-    from gql.services.number_allocator import NumberAllocator
+    from services.number_allocator import NumberAllocator
 
     user, _ = _seed_tenant(db)
     task = Task(

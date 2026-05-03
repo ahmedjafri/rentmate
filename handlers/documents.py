@@ -6,11 +6,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from backends.local_auth import resolve_account_id, resolve_org_id
-from backends.wire import storage_backend
 from db.models import Document
-from gql.services.document_service import dump_document_extraction_meta
 from handlers.deps import get_db, require_user
+from integrations.local_auth import resolve_account_id, resolve_org_id
+from integrations.wire import storage_backend
+from services.document_service import dump_document_extraction_meta
 
 router = APIRouter()
 
@@ -58,7 +58,7 @@ async def upload_document(
     db.commit()
 
     if not skip_extraction:
-        from llm.document_processor import process_document
+        from agent.document_processor import process_document
         background_tasks.add_task(process_document, doc_id)
 
     return {"document_id": doc_id}
@@ -92,7 +92,7 @@ async def reprocess_document(
     doc.processed_at = None
     db.commit()
 
-    from llm.document_processor import process_document
+    from agent.document_processor import process_document
     background_tasks.add_task(process_document, document_id)
 
     return {"ok": True, "document_id": document_id}
@@ -177,7 +177,7 @@ async def delete_document(
     except Exception as e:
         print(f"[delete_document] storage delete failed (ignored): {e}")
     try:
-        from backends.wire import vector_backend
+        from integrations.wire import vector_backend
         vector_backend.delete_document(document_id)
     except Exception as e:
         print(f"[delete_document] vector delete failed (ignored): {e}")

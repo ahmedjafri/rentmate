@@ -5,7 +5,9 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from gql.services.settings_service import (  # noqa: F401 — re-exported
+from agent.model_config import resolve_model_config
+from handlers.deps import require_user
+from services.settings_service import (  # noqa: F401 — re-exported
     get_action_policy_settings,
     get_agent_integrations,
     get_integrations,
@@ -16,8 +18,6 @@ from gql.services.settings_service import (  # noqa: F401 — re-exported
     save_integrations,
     save_llm_settings,
 )
-from handlers.deps import require_user
-from llm.model_config import resolve_model_config
 
 router = APIRouter()
 
@@ -126,11 +126,11 @@ async def update_settings(body: SettingsBody, request: Request):
             model=body.model,
             base_url=body.base_url,
         )
-        from llm import llm as llm_module
+        from agent import llm as llm_module
         llm_module.reconfigure()
         # Mark onboarding step done if active
-        from gql.services.settings_service import get_onboarding_state, is_llm_configured, update_onboarding_step
         from handlers.deps import SessionLocal as _SL
+        from services.settings_service import get_onboarding_state, is_llm_configured, update_onboarding_step
         if body.api_key and is_llm_configured():
             _db = _SL()
             try:
@@ -306,7 +306,7 @@ async def update_integrations(body: IntegrationsBody, request: Request):
 
     save_integrations(stored)
 
-    from llm.registry import agent_registry
+    from agent.registry import agent_registry
     await agent_registry.restart_channels_async(stored)
 
     return {"ok": True}
@@ -342,7 +342,7 @@ async def update_agent_integrations(body: AgentIntegrationsBody, request: Reques
     )
 
     # Restart the agent loop so it picks up the new config
-    from llm.registry import agent_registry
+    from agent.registry import agent_registry
     agent_registry.stop_gateway()
     agent_registry.start_gateway()
 
@@ -360,8 +360,8 @@ _AGENT_FILENAMES = {f["filename"] for f in _AGENT_FILES}
 
 
 def _agent_workspace() -> Path:
-    from backends.local_auth import _lookup_account_id
-    from llm.registry import get_agent_data_dir
+    from agent.registry import get_agent_data_dir
+    from integrations.local_auth import _lookup_account_id
     return get_agent_data_dir() / str(_lookup_account_id())
 
 

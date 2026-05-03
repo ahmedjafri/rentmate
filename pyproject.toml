@@ -9,8 +9,9 @@ packages = [
   { include = "db" },
   { include = "gql" },
   { include = "handlers" },
-  { include = "backends" },
-  { include = "llm" },
+  { include = "integrations" },
+  { include = "agent" },
+  { include = "services" },
   { include = "demo" },
 ]
 include = [
@@ -23,9 +24,9 @@ include = [
   { path = "db/migrations/**", format = ["sdist", "wheel"] },
   { path = "db/tests/**", format = ["sdist", "wheel"] },
   { path = "gql/tests/**", format = ["sdist", "wheel"] },
-  { path = "gql/services/tests/**", format = ["sdist", "wheel"] },
+  { path = "services/tests/**", format = ["sdist", "wheel"] },
   { path = "handlers/tests/**", format = ["sdist", "wheel"] },
-  { path = "llm/tests/**", format = ["sdist", "wheel"] },
+  { path = "agent/tests/**", format = ["sdist", "wheel"] },
   { path = "scripts/**", format = ["sdist", "wheel"] },
   { path = "tests/**", format = ["sdist", "wheel"] },
   { path = "www/rentmate-ui/src/**", format = ["sdist", "wheel"] },
@@ -105,8 +106,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "handlers/automations.py" = ["F841"]
 "handlers/chat.py" = ["F841"]
-"llm/registry.py" = ["F841"]
-"llm/agent_action.py" = ["E402"]
+"agent/registry.py" = ["F841"]
+"agent/agent_action.py" = ["E402"]
 "scripts/*" = ["E402"]
 "conftest.py" = ["E402"]
 "tests/*" = ["F841", "E402"]    # unused vars in tests are fine
@@ -115,7 +116,7 @@ ignore = [
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
-known-first-party = ["db", "gql", "handlers", "llm", "backends", "evals"]
+known-first-party = ["db", "gql", "handlers", "agent", "integrations", "services", "evals"]
 
 [build-system]
 requires = ["poetry-core"]

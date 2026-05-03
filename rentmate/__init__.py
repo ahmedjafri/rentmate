@@ -1,7 +1,7 @@
 import importlib
 import sys
 
-for _name in ("db", "gql", "handlers", "backends", "llm"):
+for _name in ("db", "gql", "handlers", "integrations", "agent", "services"):
     _module = importlib.import_module(_name)
     sys.modules[f"{__name__}.{_name}"] = _module
 

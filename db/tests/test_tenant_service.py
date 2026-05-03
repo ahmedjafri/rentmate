@@ -5,8 +5,8 @@ from datetime import UTC, date, datetime
 import pytest
 
 from db.models import Property, Tenant, Unit, User
-from gql.services.tenant_service import TenantService
 from gql.types import AddLeaseForTenantInput, CreateTenantWithLeaseInput
+from services.tenant_service import TenantService
 
 
 def _mk_property(db):

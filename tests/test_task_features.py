@@ -38,7 +38,7 @@ from db.models import (
     User,
 )
 from gql.schema import schema
-from gql.services.number_allocator import NumberAllocator
+from services.number_allocator import NumberAllocator
 
 DEFAULT_ACCOUNT_ID = 1
 
@@ -1460,8 +1460,8 @@ class TestTaskNumberNeverReused:
     """Task numbers must monotonically increase even when tasks are deleted."""
 
     def test_task_number_not_reused_after_deletion(self, db):
-        from gql.services.task_service import TaskService
         from gql.types import CreateTaskInput
+        from services.task_service import TaskService
 
         inp = CreateTaskInput(title="Task A", goal="Complete task A successfully.", source=TaskSource.MANUAL)
         task_a = TaskService.create_task(db, inp)
@@ -1480,8 +1480,8 @@ class TestTaskNumberNeverReused:
         assert task_c.id == 3
 
     def test_task_number_survives_all_tasks_deleted(self, db):
-        from gql.services.task_service import TaskService
         from gql.types import CreateTaskInput
+        from services.task_service import TaskService
 
         t1 = TaskService.create_task(db, CreateTaskInput(title="T1", goal="Complete T1 successfully.", source=TaskSource.MANUAL))
         assert t1.id == 1

@@ -10,11 +10,9 @@ from contextlib import contextmanager
 from datetime import date
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from backends.local_auth import reset_request_context, set_request_context
 from db.models import Lease, Property, Tenant, Unit, User
 from gql.schema import schema
+from integrations.local_auth import reset_request_context, set_request_context
 
 
 def _execute(*args, **kwargs):

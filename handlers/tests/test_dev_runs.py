@@ -8,9 +8,9 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from backends.local_auth import get_org_external_id, set_request_context
 from db.models import AgentRun, AgentTrace
 from handlers.deps import get_db
+from integrations.local_auth import get_org_external_id, set_request_context
 from main import app
 
 

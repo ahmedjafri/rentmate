@@ -10,13 +10,22 @@ Exercises the supported path:
 from datetime import UTC, datetime
 
 from db.enums import SuggestionStatus, TaskCategory, TaskSource, Urgency
-from db.models import Conversation, ConversationParticipant, ConversationType, ParticipantType, Suggestion, Task, Tenant, User
+from db.models import (
+    Conversation,
+    ConversationParticipant,
+    ConversationType,
+    ParticipantType,
+    Suggestion,
+    Task,
+    Tenant,
+    User,
+)
 from gql.schema import schema
-from gql.services.number_allocator import NumberAllocator
-from gql.services.task_service import TaskService
-from gql.services.task_suggestions import MessagePersonSuggestionExecutor
-from gql.services.vendor_service import VendorService
 from gql.types import CreateTaskInput, CreateVendorInput
+from services.number_allocator import NumberAllocator
+from services.task_service import TaskService
+from services.task_suggestions import MessagePersonSuggestionExecutor
+from services.vendor_service import VendorService
 
 FAKE_USER = {"id": 1, "uid": "user-external-123", "email": "admin@test.com"}
 

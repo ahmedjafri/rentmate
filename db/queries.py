@@ -10,9 +10,9 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from backends.local_auth import resolve_account_id
 from db.enums import TaskCategory, TaskSource, TaskStatus
 from db.models import Conversation, ConversationParticipant, Lease, Message, Property, Task, Tenant, User
+from integrations.local_auth import resolve_account_id
 
 # ---------------------------------------------------------------------------
 # Formatting helpers (pure functions over ORM models)

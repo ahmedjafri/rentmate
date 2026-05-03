@@ -39,8 +39,8 @@ from db.models import (
 )
 from db.models.account import create_shadow_user
 from evals.conftest import _extract_latest_outbound_message
-from gql.services.number_allocator import NumberAllocator
-from gql.services.task_service import TaskProgressStep, dump_task_steps
+from services.number_allocator import NumberAllocator
+from services.task_service import TaskProgressStep, dump_task_steps
 
 # ── constants ────────────────────────────────────────────────────────────────
 
@@ -160,8 +160,8 @@ def scenario(db):
     db.flush()
 
     # Vendor
-    from gql.services.vendor_service import VendorService
     from gql.types import CreateVendorInput
+    from services.vendor_service import VendorService
     vendor = VendorService.create_vendor(
         db,
         CreateVendorInput(
@@ -233,7 +233,7 @@ def scenario(db):
 def mock_sms():
     """Capture SMS calls without sending."""
     with patch(
-        "gql.services.notification_service.NotificationService._send_sms",
+        "services.notification_service.NotificationService._send_sms",
         new_callable=AsyncMock,
     ) as mock:
         yield mock
@@ -243,7 +243,7 @@ def mock_sms():
 def autonomous_mode():
     """Force autonomous mode for all categories."""
     with patch(
-        "gql.services.settings_service.get_autonomy_for_category",
+        "services.settings_service.get_autonomy_for_category",
         return_value="autonomous",
     ):
         yield
@@ -254,7 +254,7 @@ def autonomous_mode():
 
 def _build_messages(db, task: Task, user_message: str) -> list[dict]:
     """Build the agent message payload from task context + conversation history."""
-    from llm.context import build_task_context
+    from agent.context import build_task_context
 
     context = build_task_context(db, task.id)
 
@@ -331,9 +331,9 @@ def _add_message(db, conv_id: str, sender_name: str, body: str,
 async def _run_agent_turn(db, task: Task, user_message: str) -> dict:
     """Run one agent turn and return structured results."""
     DEFAULT_USER_ID = "1"
-    from llm.client import call_agent
-    from llm.registry import agent_registry
-    from llm.tools import active_conversation_id, pending_suggestion_messages
+    from agent.client import call_agent
+    from agent.registry import agent_registry
+    from agent.tools import active_conversation_id, pending_suggestion_messages
 
     messages = _build_messages(db, task, user_message)
     agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
@@ -517,7 +517,7 @@ class TestGarageDoorLifecycle:
         tenant = scenario["tenant"]
 
         # Setup: simulate Turn 1 completed state — vendor attached with conversation
-        from gql.services import chat_service
+        from services import chat_service
         vendor_conv = chat_service.get_or_create_external_conversation(
             db,
             conversation_type=ConversationType.VENDOR,
@@ -592,7 +592,7 @@ class TestGarageDoorLifecycle:
         tenant = scenario["tenant"]
 
         # Setup: vendor conversation exists
-        from gql.services import chat_service
+        from services import chat_service
         vendor_conv = chat_service.get_or_create_external_conversation(
             db,
             conversation_type=ConversationType.VENDOR,
@@ -678,7 +678,7 @@ class TestGarageDoorLifecycle:
         tenant = scenario["tenant"]
 
         # Setup: both conversations exist
-        from gql.services import chat_service
+        from services import chat_service
         vendor_conv = chat_service.get_or_create_external_conversation(
             db,
             conversation_type=ConversationType.VENDOR,

@@ -10,8 +10,6 @@ import re
 import time
 import uuid
 from pathlib import Path
-from time import sleep
-
 
 _DEFAULT_EVAL_FAILURE_TOLERANCE = 3
 
@@ -54,7 +52,6 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 
-from backends.local_auth import reset_request_context, set_request_context
 from db.enums import TaskCategory, TaskMode, TaskSource, TaskStatus, Urgency
 from db.models import (
     Base,
@@ -72,7 +69,8 @@ from db.models import (
     User,
 )
 from db.models.account import create_shadow_user
-from gql.services.number_allocator import NumberAllocator
+from integrations.local_auth import reset_request_context, set_request_context
+from services.number_allocator import NumberAllocator
 
 DEFAULT_ACCOUNT_ID = 1
 
@@ -176,7 +174,7 @@ def pytest_runtest_makereport(item, call):
     if report.when != "call" or report.passed or not item.get_closest_marker("eval"):
         return
     try:
-        from llm.client import get_last_eval_debug_payload
+        from agent.client import get_last_eval_debug_payload
 
         payload = get_last_eval_debug_payload()
         report.sections.append(("Hermes Eval Context", _format_eval_debug_payload(payload)))
@@ -286,7 +284,7 @@ def db(Session, engine):
 @pytest.fixture
 def mock_sms():
     with patch(
-        "gql.services.notification_service.NotificationService._send_sms",
+        "services.notification_service.NotificationService._send_sms",
         new_callable=AsyncMock,
     ) as mock:
         yield mock
@@ -295,10 +293,10 @@ def mock_sms():
 @pytest.fixture
 def autonomous_mode():
     with patch(
-        "gql.services.settings_service.get_autonomy_for_category",
+        "services.settings_service.get_autonomy_for_category",
         return_value="autonomous",
     ), patch(
-        "llm.action_policy.outbound_message_allows_risk",
+        "agent.action_policy.outbound_message_allows_risk",
         return_value=False,
     ):
         yield
@@ -413,8 +411,8 @@ class ScenarioBuilder:
 
     def add_vendor(self, *, name="Handyman Rob", phone="206-555-0200",
                    vendor_type="Handyman", email=None):
-        from gql.services.vendor_service import VendorService
         from gql.types import CreateVendorInput
+        from services.vendor_service import VendorService
         if email is None:
             normalized_phone = "".join(ch.lower() for ch in phone if ch.isalnum()) or uuid.uuid4().hex[:8]
             normalized_name = "".join(ch.lower() for ch in name if ch.isalnum()) or "vendor"
@@ -490,7 +488,7 @@ def scenario_builder(db):
 
 def build_messages(db, task, user_message):
     """Build the agent message payload from task context + conversation history."""
-    from llm.context import build_task_context
+    from agent.context import build_task_context
 
     context = build_task_context(db, task.id)
     ai_msgs = [
@@ -538,9 +536,9 @@ def build_messages(db, task, user_message):
 async def run_agent_turn(db, task, user_message):
     """Run one agent turn and return structured results."""
     DEFAULT_USER_ID = "1"
-    from llm.client import call_agent
-    from llm.registry import agent_registry
-    from llm.tools import active_conversation_id, pending_suggestion_messages
+    from agent.client import call_agent
+    from agent.registry import agent_registry
+    from agent.tools import active_conversation_id, pending_suggestion_messages
 
     messages = build_messages(db, task, user_message)
     agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
@@ -586,7 +584,7 @@ def run_turn_sync(db, task, user_message):
     try:
         with patch("db.session.SessionLocal", mock_sl), \
              patch("handlers.deps.SessionLocal", mock_sl), \
-             patch("gql.services.settings_service.SessionLocal", mock_sl):
+             patch("services.settings_service.SessionLocal", mock_sl):
             return loop.run_until_complete(run_agent_turn(db, task, user_message))
     finally:
         loop.close()

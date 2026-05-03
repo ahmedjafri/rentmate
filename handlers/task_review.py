@@ -48,8 +48,8 @@ def _resolve_review_recipients(db, task) -> tuple[str, str]:
     external UUIDs the recipients use in ``message_person`` calls. Missing
     recipients render as "(none)".
     """
+    from agent.tools._common import _resolve_task_tenant
     from db.models import User
-    from llm.tools._common import _resolve_task_tenant
 
     tenant_line = "(none)"
     tenant = _resolve_task_tenant(db, str(task.id))
@@ -248,7 +248,7 @@ def _persist_review_summary_to_ai_conversation(
         Task as TaskModel,
     )
     from db.session import SessionLocal
-    from gql.services.chat_service import dump_message_meta
+    from services.chat_service import dump_message_meta
 
     db = SessionLocal()
     try:
@@ -314,7 +314,7 @@ def _task_review_trace_detail(
     so the trace UI surfaces context + retrieval for task reviews exactly
     the way it does for routine runs.
     """
-    from llm.tracing import make_trace_envelope
+    from agent.tracing import make_trace_envelope
 
     context_text = context_data.get("text") or ""
     context_sections = context_data.get("sections") or []
@@ -360,9 +360,9 @@ def _ensure_review_recorded(
     review_started_at: datetime,
     trace_context: dict[str, Any],
 ) -> None:
+    from agent.tools.task_review import record_task_review_result
     from db.models import Task as TaskModel
     from db.session import SessionLocal
-    from llm.tools.task_review import record_task_review_result
 
     db = SessionLocal()
     try:
@@ -406,11 +406,11 @@ async def _review_one_task(
     reasoning event as it fires (used by the SSE endpoint to relay live
     progress to the frontend).
     """
-    from backends.local_auth import reset_request_context, set_request_context
-    from llm.client import call_agent
-    from llm.context import build_task_context_data
-    from llm.registry import agent_registry
-    from llm.tracing import log_trace
+    from agent.client import call_agent
+    from agent.context import build_task_context_data
+    from agent.registry import agent_registry
+    from agent.tracing import log_trace
+    from integrations.local_auth import reset_request_context, set_request_context
 
     creator_id = task.creator_id
     org_id = getattr(task, "org_id", None)
@@ -447,7 +447,7 @@ async def _review_one_task(
             prompt=prompt,
             context_data=context_data,
         )
-        from llm.runs import derive_run_metadata, start_run
+        from agent.runs import derive_run_metadata, start_run
         with start_run(
             **derive_run_metadata(
                 session_key=session_key,

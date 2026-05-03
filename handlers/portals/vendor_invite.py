@@ -6,8 +6,8 @@ The frontend calls this API to exchange the token for a JWT.
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from gql.services.vendor_service import VendorService, get_vendor_login_email, vendor_has_account
 from handlers.deps import get_db
+from services.vendor_service import VendorService, get_vendor_login_email, vendor_has_account
 
 router = APIRouter(prefix="/api/vendor-token")
 

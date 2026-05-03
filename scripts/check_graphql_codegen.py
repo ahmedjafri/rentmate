@@ -4,9 +4,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-from gql.schema import schema
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from gql.schema import schema  # noqa: E402
+
 FRONTEND_DIR = REPO_ROOT / "www" / "rentmate-ui"
 GRAPHQL_DIR = FRONTEND_DIR / "src" / "graphql"
 

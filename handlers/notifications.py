@@ -4,10 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from backends.local_auth import resolve_account_id
 from db.models import Conversation
-from gql.services.notification_service import NotificationService
 from handlers.deps import get_db, require_user
+from integrations.local_auth import resolve_account_id
+from services.notification_service import NotificationService
 
 router = APIRouter()
 

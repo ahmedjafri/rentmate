@@ -29,10 +29,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.orm import scoped_session, sessionmaker
 
+from agent.client import AgentResponse
 from db.enums import TaskCategory, TaskMode, TaskStatus, Urgency
 from db.models import Base, Conversation, Message, MessageType, Task
-from gql.services.number_allocator import NumberAllocator
-from llm.client import AgentResponse
+from services.number_allocator import NumberAllocator
 
 # ─── DB helpers ──────────────────────────────────────────────────────────────
 
@@ -49,7 +49,7 @@ def _make_session_factory(engine):
 
 async def _mock_require_user(request=None):
     """Mock require_user that also sets the request-scoped account context."""
-    from backends.local_auth import set_request_context
+    from integrations.local_auth import set_request_context
     set_request_context(account_id=1)
     return {"id": "test-user", "email": "test@test.com", "account_id": 1}
 
@@ -68,7 +68,7 @@ async def _test_app(session_factory):
         patch("rentmate.app.SessionLocal", session_factory),
         patch("handlers.deps.SessionLocal", session_factory),
         patch("handlers.chat.SessionLocal", session_factory),
-        patch("gql.services.settings_service.is_llm_configured", return_value=True),
+        patch("services.settings_service.is_llm_configured", return_value=True),
         patch(
             "handlers.chat.require_user",
             AsyncMock(side_effect=_mock_require_user),
@@ -151,7 +151,7 @@ class TestGenericChat:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "llm.client.call_agent",
+                    "agent.client.call_agent",
                     AsyncMock(return_value=AgentResponse(reply="Hello from RentMate!")),
                 ):
                     async with client.stream(
@@ -178,7 +178,7 @@ class TestGenericChat:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "llm.client.call_agent",
+                    "agent.client.call_agent",
                     AsyncMock(return_value=AgentResponse(reply="Got it.")),
                 ):
                     async with client.stream(
@@ -203,7 +203,7 @@ class TestTaskChatSSE:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "llm.client.call_agent",
+                    "agent.client.call_agent",
                     AsyncMock(return_value=AgentResponse(reply="All good.")),
                 ):
                     async with client.stream(
@@ -229,7 +229,7 @@ class TestTaskChatSSE:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "llm.client.call_agent",
+                    "agent.client.call_agent",
                     AsyncMock(return_value=AgentResponse(reply=reply_text)),
                 ):
                     async with client.stream(
@@ -263,7 +263,7 @@ class TestTaskChatSSE:
 
         async def _run():
             async with _test_app(session_factory) as client:
-                with patch("llm.client.call_agent", side_effect=fake_agent):
+                with patch("agent.client.call_agent", side_effect=fake_agent):
                     async with client.stream(
                         "POST",
                         "/chat/send",
@@ -289,7 +289,7 @@ class TestTaskChatSSE:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "llm.client.call_agent",
+                    "agent.client.call_agent",
                     AsyncMock(side_effect=RuntimeError("LLM unavailable")),
                 ):
                     async with client.stream(
@@ -311,7 +311,7 @@ class TestTaskChatSSE:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "llm.client.call_agent",
+                    "agent.client.call_agent",
                     AsyncMock(return_value=AgentResponse(reply=reply_text)),
                 ):
                     async with client.stream(
@@ -354,7 +354,7 @@ class TestTaskChatSSE:
         async def _run():
             async with _test_app(session_factory) as client:
                 with patch(
-                    "llm.client.call_agent",
+                    "agent.client.call_agent",
                     AsyncMock(return_value=AgentResponse(reply="irrelevant")),
                 ):
                     resp = await client.post(

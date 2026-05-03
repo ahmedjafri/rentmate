@@ -9,9 +9,9 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from backends.local_auth import get_org_external_id, set_request_context
 from db.models import Document, DocumentTag, Property, User
 from handlers.deps import get_db
+from integrations.local_auth import get_org_external_id, set_request_context
 from main import app
 
 
@@ -202,7 +202,7 @@ class TestDownloadDocument(unittest.TestCase):
 
     def test_returns_file_bytes(self):
         _make_doc(self.db, doc_id="doc-download-1")
-        with patch("backends.wire.storage_backend.download", new_callable=AsyncMock, return_value=b"%PDF-1.4 test") as download_mock:
+        with patch("integrations.wire.storage_backend.download", new_callable=AsyncMock, return_value=b"%PDF-1.4 test") as download_mock:
             response = self.client.get("/api/document/doc-download-1/download", headers=AUTH)
         assert response.status_code == 200
         assert response.content == b"%PDF-1.4 test"
@@ -238,8 +238,8 @@ class TestDeleteDocument(unittest.TestCase):
     def test_deletes_document(self):
         _make_doc(self.db, doc_id="doc-del-1")
         with (
-            patch("backends.wire.storage_backend.delete", new_callable=AsyncMock),
-            patch("backends.wire.vector_backend.delete_document"),
+            patch("integrations.wire.storage_backend.delete", new_callable=AsyncMock),
+            patch("integrations.wire.vector_backend.delete_document"),
         ):
             response = self.client.delete("/api/document/doc-del-1", headers=AUTH)
         assert response.status_code == 200
@@ -249,8 +249,8 @@ class TestDeleteDocument(unittest.TestCase):
     def test_delete_ignores_storage_error(self):
         _make_doc(self.db, doc_id="doc-del-2")
         with (
-            patch("backends.wire.storage_backend.delete", new_callable=AsyncMock, side_effect=Exception("storage down")),
-            patch("backends.wire.vector_backend.delete_document"),
+            patch("integrations.wire.storage_backend.delete", new_callable=AsyncMock, side_effect=Exception("storage down")),
+            patch("integrations.wire.vector_backend.delete_document"),
         ):
             response = self.client.delete("/api/document/doc-del-2", headers=AUTH)
         assert response.status_code == 200
@@ -392,8 +392,8 @@ class TestUploadDocument(unittest.TestCase):
 
     def test_uploads_new_document(self):
         with (
-            patch("backends.wire.storage_backend.upload", new_callable=AsyncMock),
-            patch("llm.document_processor.process_document"),
+            patch("integrations.wire.storage_backend.upload", new_callable=AsyncMock),
+            patch("agent.document_processor.process_document"),
         ):
             response = self.client.post(
                 "/api/upload-document",

@@ -6,13 +6,23 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from backends.local_auth import get_org_external_id, set_request_context
+from agent.retrieval import PgVectorMemoryIndex
 from db.enums import RoutineState, TaskMode, TaskStatus
-from db.models import AgentMemory, AgentTrace, Conversation, Message, MessageType, ParticipantType, Property, Routine, Task
-from gql.services.number_allocator import NumberAllocator
+from db.models import (
+    AgentMemory,
+    AgentTrace,
+    Conversation,
+    Message,
+    MessageType,
+    ParticipantType,
+    Property,
+    Routine,
+    Task,
+)
 from handlers.deps import get_db
-from llm.retrieval import PgVectorMemoryIndex
+from integrations.local_auth import get_org_external_id, set_request_context
 from main import app
+from services.number_allocator import NumberAllocator
 
 
 def make_token():

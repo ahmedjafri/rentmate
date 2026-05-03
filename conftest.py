@@ -27,7 +27,7 @@ if _ENV_FILE.exists():
 @pytest.fixture(autouse=True)
 def _set_creator_context():
     """Set a default creator context for tests so entity creation works."""
-    from backends.local_auth import reset_request_context, set_request_context
+    from integrations.local_auth import reset_request_context, set_request_context
     tokens = set_request_context(account_id=1, org_id=1)
     yield
     reset_request_context(tokens)
@@ -40,7 +40,7 @@ def _no_llm_suggestion(request):
     if request.node.get_closest_marker("eval"):
         yield
         return
-    with patch("llm.suggest.generate_task_suggestion", return_value=None):
+    with patch("agent.suggest.generate_task_suggestion", return_value=None):
         yield
 
 

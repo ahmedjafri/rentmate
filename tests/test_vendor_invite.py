@@ -18,10 +18,10 @@ from fastapi import HTTPException
 
 from db.models import Conversation, User
 from gql.schema import schema
-from gql.services.task_service import TaskService
-from gql.services.vendor_service import VendorService
 from gql.types import CreateTaskInput, CreateVendorInput, VendorType
 from handlers.portals.vendor_invite import get_vendor_token
+from services.task_service import TaskService
+from services.vendor_service import VendorService
 
 FAKE_USER = {"id": "test-user-id", "email": "admin@test.com"}
 

@@ -4,14 +4,13 @@ Uses the sample rental agreement PDF and verifies the LLM extraction prompt
 captures not just basic fields but also the detailed context a property
 manager needs (financial terms, policies, safety systems, etc.).
 """
-import json
 import os
 from pathlib import Path
 
 import pytest
 
+from agent.document_processor import EXTRACTION_PROMPT
 from evals.llm_utils import completion_json
-from llm.document_processor import EXTRACTION_PROMPT
 
 _SAMPLE_PDF = Path(__file__).resolve().parent / "sample_rental_agreement.pdf"
 _MISSING_TENANT_PDF = Path(__file__).resolve().parent / "sample_lease_missing_tenant.pdf"
