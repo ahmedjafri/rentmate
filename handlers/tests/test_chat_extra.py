@@ -8,9 +8,9 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from backends.local_auth import get_org_external_id, set_request_context
+from agent.client import AgentResponse
 from handlers.deps import get_db
-from llm.client import AgentResponse
+from integrations.local_auth import get_org_external_id, set_request_context
 from main import app
 
 
@@ -64,8 +64,11 @@ class TestChatEndpoint(unittest.TestCase):
         app.dependency_overrides[get_db] = lambda: self.db
         self.require_user_patcher = patch("handlers.chat.require_user", side_effect=_fake_require_user)
         self.require_user_patcher.start()
+        self.llm_configured_patcher = patch("services.settings_service.is_llm_configured", return_value=True)
+        self.llm_configured_patcher.start()
 
     def tearDown(self):
+        self.llm_configured_patcher.stop()
         self.require_user_patcher.stop()
         app.dependency_overrides = {}
 
@@ -76,7 +79,7 @@ class TestChatEndpoint(unittest.TestCase):
     def test_returns_reply(self):
         with (
             patch("handlers.chat.load_account_context_data", return_value={"text": "Account context", "retrieval": None, "sections": []}),
-            patch("llm.client.call_agent", new_callable=AsyncMock, return_value=AgentResponse(reply="Hi there!")),
+            patch("agent.client.call_agent", new_callable=AsyncMock, return_value=AgentResponse(reply="Hi there!")),
         ):
             response = self.client.post(
                 "/chat/send",
@@ -92,7 +95,7 @@ class TestChatEndpoint(unittest.TestCase):
     def test_preserves_conversation_id(self):
         with (
             patch("handlers.chat.load_account_context_data", return_value={"text": "ctx", "retrieval": None, "sections": []}),
-            patch("llm.client.call_agent", new_callable=AsyncMock, return_value=AgentResponse(reply="reply")),
+            patch("agent.client.call_agent", new_callable=AsyncMock, return_value=AgentResponse(reply="reply")),
         ):
             response = self.client.post(
                 "/chat/send",
@@ -106,7 +109,7 @@ class TestChatEndpoint(unittest.TestCase):
     def test_agent_error_returns_error_event(self):
         with (
             patch("handlers.chat.load_account_context_data", return_value={"text": "ctx", "retrieval": None, "sections": []}),
-            patch("llm.client.call_agent", new_callable=AsyncMock, side_effect=RuntimeError("boom")),
+            patch("agent.client.call_agent", new_callable=AsyncMock, side_effect=RuntimeError("boom")),
         ):
             response = self.client.post(
                 "/chat/send",
@@ -128,7 +131,7 @@ class TestChatEndpoint(unittest.TestCase):
 
         with (
             patch("handlers.chat.load_account_context_data", return_value={"text": "system-ctx", "retrieval": None, "sections": []}),
-            patch("llm.client.call_agent", side_effect=_fake_chat),
+            patch("agent.client.call_agent", side_effect=_fake_chat),
         ):
             self.client.post(
                 "/chat/send",

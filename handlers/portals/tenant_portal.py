@@ -16,8 +16,6 @@ from db.models import (
     Task,
     Tenant,
 )
-from gql.services import chat_service
-from gql.services.tenant_service import TenantService
 from handlers.deps import get_db
 from handlers.portals._common import (
     SendMessageBody,
@@ -28,6 +26,8 @@ from handlers.portals._common import (
     serialize_visible_messages,
     trigger_task_autoreply,
 )
+from services import chat_service
+from services.tenant_service import TenantService
 
 router = APIRouter(prefix="/api/tenant")
 

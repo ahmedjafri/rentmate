@@ -50,7 +50,7 @@ def test_repair_enum_rows_normalizes_lowercase_urgency(isolated_engine):
 
     from db.enums import SuggestionStatus, TaskMode, TaskSource, TaskStatus, Urgency
     from db.models import Suggestion, Task, User
-    from gql.services.number_allocator import NumberAllocator
+    from services.number_allocator import NumberAllocator
 
     Session = sessionmaker(bind=eng)
     db = Session()
@@ -188,8 +188,8 @@ def test_dev_bootstrap_account_has_expected_credentials_and_seed_data(isolated_e
     import db.session as db_session
     import handlers.deps as deps
     import main as _main
-    from backends.local_auth import _check_password
     from db.models import Property, Task, User
+    from integrations.local_auth import _check_password
 
     eng = isolated_engine
     test_session_local = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=eng))
@@ -207,8 +207,8 @@ def test_dev_bootstrap_account_has_expected_credentials_and_seed_data(isolated_e
         patch.object(db_session, "engine", eng),
         patch.object(db_session, "SessionLocal", test_session_local),
         patch.dict(os.environ, {"RENTMATE_ENV": "development", "STARTUP_CHECK": ""}, clear=False),
-        patch("gql.services.settings_service.load_llm_into_env"),
-        patch("gql.services.settings_service.load_agent_integrations_into_env"),
+        patch("services.settings_service.load_llm_into_env"),
+        patch("services.settings_service.load_agent_integrations_into_env"),
         patch.object(_main._app, "load_integrations", return_value={}),
         patch.object(_main, "set_memory_backstop"),
         patch.object(_main, "start_memory_monitor"),
@@ -323,8 +323,8 @@ def test_app_lifespan_startup_no_crash(isolated_engine):
         patch.object(db_session, "engine", eng),
         patch.object(db_session, "SessionLocal", test_session_local),
         patch.dict(os.environ, {"RENTMATE_ENV": "development", "STARTUP_CHECK": ""}, clear=False),
-        patch("gql.services.settings_service.load_llm_into_env"),
-        patch("gql.services.settings_service.load_agent_integrations_into_env"),
+        patch("services.settings_service.load_llm_into_env"),
+        patch("services.settings_service.load_agent_integrations_into_env"),
         patch.object(_main._app, "load_integrations", return_value={}),
         patch.object(_main, "set_memory_backstop"),
         patch.object(_main, "start_memory_monitor"),
@@ -380,7 +380,7 @@ def test_startup_routine_creation_with_explicit_creator(isolated_engine):
     from sqlalchemy.orm import sessionmaker
 
     from db.models import Routine, User
-    from gql.services.number_allocator import NumberAllocator
+    from services.number_allocator import NumberAllocator
     Session = sessionmaker(bind=eng)
     db = Session()
     db.add(User(id=1, org_id=1, email="owner@example.com", active=True))

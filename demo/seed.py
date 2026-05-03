@@ -11,7 +11,6 @@ from datetime import UTC, date, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backends.local_auth import resolve_account_id, resolve_org_id
 from db.models import (
     Conversation,
     ConversationParticipant,
@@ -323,7 +322,7 @@ def _create_task_with_conversation(db, creator_id, org_id, task_def, props, tena
     if task_def.get("prop_idx") is not None and task_def.get("unit_idx") is not None:
         unit_id = props[task_def["prop_idx"]][1][task_def["unit_idx"]].id
 
-    from gql.services.number_allocator import NumberAllocator
+    from services.number_allocator import NumberAllocator
     next_id = NumberAllocator.allocate_next(db, entity_type="task", org_id=org_id)
 
     task = Task(

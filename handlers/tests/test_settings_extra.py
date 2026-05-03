@@ -7,9 +7,9 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from backends.local_auth import get_org_external_id, set_request_context
 from handlers.deps import get_db
 from handlers.settings import _list_agent_workspace_files, _mask_integrations
+from integrations.local_auth import get_org_external_id, set_request_context
 from main import app
 
 
@@ -90,7 +90,7 @@ class TestIntegrationsEndpoint(unittest.TestCase):
         with (
             patch("handlers.settings.load_integrations", return_value={}),
             patch("handlers.settings.save_integrations") as mock_save,
-            patch("llm.registry.agent_registry.restart_channels_async", new_callable=AsyncMock) as mock_restart,
+            patch("agent.registry.agent_registry.restart_channels_async", new_callable=AsyncMock) as mock_restart,
         ):
             response = self.client.post(
                 "/api/settings/integrations",
@@ -112,7 +112,7 @@ class TestIntegrationsEndpoint(unittest.TestCase):
         with (
             patch("handlers.settings.load_integrations", return_value=stored),
             patch("handlers.settings.save_integrations", side_effect=capture_save),
-            patch("llm.registry.agent_registry.restart_channels_async", new_callable=AsyncMock),
+            patch("agent.registry.agent_registry.restart_channels_async", new_callable=AsyncMock),
         ):
             self.client.post(
                 "/api/settings/integrations",
@@ -137,7 +137,7 @@ class TestIntegrationsEndpoint(unittest.TestCase):
 
     def test_post_settings_base_url(self):
         with (
-            patch("llm.llm.reconfigure"),
+            patch("agent.llm.reconfigure"),
             patch("handlers.settings.save_llm_settings"),
         ):
             response = self.client.post(

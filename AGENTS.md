@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 Guidance for coding agents (Claude Code, Copilot, etc.) working in this repo.
 
@@ -24,6 +24,15 @@ poetry run pytest -k "test_name"          # single test by name
 ```
 
 Tests use `testcontainers` to spin up a real Postgres instance — no manual DB setup required.
+
+### Python linting
+```bash
+poetry run ruff check .                    # Python lint rules, including import hygiene
+poetry run ruff check . --fix              # auto-fix safe issues such as import sorting
+poetry run python scripts/lint_kwargs.py   # repo-specific keyword-only argument checks
+```
+
+Python imports are enforced by ruff/isort rules: keep imports at the top of the file, remove unused imports, and let ruff sort/consolidate them. Do not add lazy imports inside functions; if an import cycle appears, refactor the dependency.
 
 ### Database migrations
 ```bash
@@ -67,13 +76,13 @@ Strict **handlers → services → models** layering:
 
 1. **Handlers** (`handlers/`, `gql/schema.py` mutations) — HTTP/GraphQL entry points. Responsible for auth, request validation, orchestrating service calls, creating/finding conversations, and managing transactions. Handlers decide *what* to do and in what order.
 
-2. **Services** (`gql/services/`) — Stateless business logic. Each service operates on the DB session it receives. Services must NOT create conversations or manage cross-entity orchestration — that belongs in the handler. Import services as modules (`from gql.services import chat_service`) not individual functions.
+2. **Services** (`services/`) — Stateless business logic. Each service operates on the DB session it receives. Services must NOT create conversations or manage cross-entity orchestration — that belongs in the handler. Import services as modules (`from services import chat_service`) not individual functions.
 
 3. **Models** (`db/models/`) — SQLAlchemy ORM definitions for PostgreSQL. Pure data layer, no business logic.
 
 Key rules:
 - Conversation creation/lookup always happens at the handler layer via `chat_service.get_or_create_external_conversation()`. Services like `TaskService.create_task()` create only the task and its AI conversation; the handler is responsible for the external conversation.
-- `db/lib.py` contains lower-level DB helpers (SMS recording, tenant upserts, inbound message routing) that predate the service layer. New business logic should go in `gql/services/`.
+- `db/lib.py` contains lower-level DB helpers (SMS recording, tenant upserts, inbound message routing) that predate the service layer. New business logic should go in `services/`.
 
 ### Backend detail
 
@@ -95,7 +104,7 @@ Key rules:
 
 **`db/dsl_runner.py`** — Property-Flow DSL interpreter for YAML automation scripts.
 
-**`gql/services/`** — Business logic services:
+**`services/`** — Business logic services:
 - `chat_service.py` — Conversation lookup/creation, autonomous messaging, typing indicators
 - `task_service.py` — Task CRUD, vendor assignment, message persistence
 - `sms_service.py` — SMS sending via Quo
@@ -116,14 +125,14 @@ Key rules:
 - `tenant_portal.py`, `vendor_portal.py` — Portal endpoints
 - `tenant_invite.py`, `vendor_invite.py` — Onboarding link handlers
 
-**`backends/`** — Pluggable backend abstractions:
+**`integrations/`** — Pluggable integration abstractions:
 - `wire.py` — Wiring for all backends
 - `local_auth.py` — Dev single-tenant auth
 - `local_storage.py` — Local filesystem storage
 - `litellm_vector.py` — Postgres pgvector-backed document embeddings
 - `single_tenant_sms.py` — Dev SMS routing
 
-**`llm/`** — AI agent:
+**`agent/`** — AI agent:
 - `client.py` — `chat_with_agent()` / `call_agent()` dispatch to local or hosted agent
 - `tools.py` — Agent tools: propose_task, close_task, message_person, attach_entity, lookup/create vendors, save/recall/edit memory, update_steps
 - `registry.py` — Agent registry, tool registration, gateway lifecycle, system prompt assembly
@@ -133,7 +142,7 @@ Key rules:
 - `tracing.py` — Logs agent operations for debugging
 - `document_processor.py` — PDF text extraction and LLM-based parsing
 
-**`llm/agent_mds/`** — Agent identity markdown copied into each runtime workspace:
+**`agent/agent_mds/`** — Agent identity markdown copied into each runtime workspace:
 - `SOUL.md` — Persona, responsibilities, hard constraints, escalation protocol
 - `SOUL.md` also includes the identity and onboarding guidance
 
@@ -176,7 +185,7 @@ These docs define product behavior and the automation DSL. **Keep them in sync w
 - Imports must be sorted and consolidated (isort rules).
 
 **Keyword-only parameters:**
-- Public functions (not `_` prefixed) in `db/`, `gql/`, `backends/`, `llm/`, `handlers/` with 3+ parameters (after self/cls) must use keyword-only arguments. Put `*,` after the first parameter:
+- Public functions (not `_` prefixed) in `db/`, `gql/`, `integrations/`, `agent/`, `services/`, `handlers/` with 3+ parameters (after self/cls) must use keyword-only arguments. Put `*,` after the first parameter:
   ```python
   # Good
   def fetch_tasks(db, *, category=None, status=None, source=None): ...
@@ -186,14 +195,14 @@ These docs define product behavior and the automation DSL. **Keep them in sync w
   ```
 
 **Private imports:**
-- Do not import private symbols (prefixed with `_`) from `db/`, `gql/`, `backends/`, `llm/` modules. If you need the functionality, make it public or refactor.
+- Do not import private symbols (prefixed with `_`) from `db/`, `gql/`, `integrations/`, `agent/`, `services/` modules. If you need the functionality, make it public or refactor.
 
 ### Key design patterns
 
-- Import service modules, not individual functions: `from gql.services import chat_service` then `chat_service.should_ai_respond(...)`.
+- Import service modules, not individual functions: `from services import chat_service` then `chat_service.should_ai_respond(...)`.
 - All data is multi-tenant: every query scoped to `account_id` from the authenticated user's `AccountUser` record.
 - Tests use per-test transaction rollback (savepoints) for isolation — do not call `db.commit()` inside test fixtures.
-- The agent system prompt is assembled primarily from `SOUL.md`, per-user `USER.md`, and `llm/.context/index.md`.
+- The agent system prompt is assembled primarily from `SOUL.md`, per-user `USER.md`, and `agent/.context/index.md`.
 - Frontend GraphQL type artifacts live in `www/rentmate-ui/src/graphql/`. Backend GraphQL changes are not done until `schema.graphql` and `generated.ts` are refreshed.
 
 ### Critical constraints

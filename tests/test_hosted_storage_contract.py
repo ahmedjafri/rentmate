@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from backends.local_storage import LocalStorageBackend
+from integrations.local_storage import LocalStorageBackend
 
 
 def test_local_storage_uses_local_filesystem_outside_hosted_cloud_run(tmp_path):
@@ -95,7 +95,7 @@ def test_agent_data_dir_rejects_missing_required_runtime_path(tmp_path):
         },
         clear=False,
     ):
-        from llm.registry import get_agent_data_dir
+        from agent.registry import get_agent_data_dir
 
         with pytest.raises(RuntimeError, match="Runtime storage path is missing"):
             get_agent_data_dir()
@@ -115,7 +115,7 @@ def test_agent_data_dir_uses_valid_required_paths(tmp_path):
         },
         clear=False,
     ):
-        from llm.registry import get_agent_data_dir, get_agent_workspace
+        from agent.registry import get_agent_data_dir, get_agent_workspace
 
         data_dir = get_agent_data_dir()
         workspace = get_agent_workspace("123")

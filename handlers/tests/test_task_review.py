@@ -22,7 +22,7 @@ from db.models import (
     ParticipantType,
     Task,
 )
-from gql.services.number_allocator import NumberAllocator
+from services.number_allocator import NumberAllocator
 
 
 def _make_task(db, *, title: str, status=TaskStatus.ACTIVE, last_reviewed_at=None, with_ai_conversation=False):
@@ -232,7 +232,7 @@ class TestReviewPersistsToAIConversation:
         from handlers import task_review as mod
 
         with patch(
-            "llm.client.call_agent",
+            "agent.client.call_agent",
             new=AsyncMock(
                 side_effect=_stub_call_agent_that_records_review(
                     "needs_action",
@@ -240,8 +240,8 @@ class TestReviewPersistsToAIConversation:
                     "Ping vendor for quote status.",
                 )
             ),
-        ), patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"), \
-             patch("llm.context.build_task_context_data", return_value=_stub_task_context()):
+        ), patch("agent.registry.agent_registry.ensure_agent", return_value="agent-1"), \
+             patch("agent.context.build_task_context_data", return_value=_stub_task_context()):
             asyncio.run(mod._review_one_task(task))
 
         self.db.expire_all()
@@ -299,10 +299,10 @@ class TestReviewPersistsToAIConversation:
         from handlers import task_review as mod
 
         with patch(
-            "llm.client.call_agent",
+            "agent.client.call_agent",
             new=AsyncMock(side_effect=_fake_call_agent_without_review),
-        ), patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"), \
-             patch("llm.context.build_task_context_data", return_value=stub_context):
+        ), patch("agent.registry.agent_registry.ensure_agent", return_value="agent-1"), \
+             patch("agent.context.build_task_context_data", return_value=stub_context):
             asyncio.run(mod._review_one_task(task))
 
         self.db.expire_all()
@@ -367,12 +367,12 @@ class TestReviewPersistsToAIConversation:
         from handlers import task_review as mod
 
         with patch(
-            "llm.client.call_agent",
+            "agent.client.call_agent",
             new=AsyncMock(
                 side_effect=_stub_call_agent_that_records_review("on_track", "fine", None)
             ),
-        ), patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"), \
-             patch("llm.context.build_task_context_data", return_value=stub_context):
+        ), patch("agent.registry.agent_registry.ensure_agent", return_value="agent-1"), \
+             patch("agent.context.build_task_context_data", return_value=stub_context):
             asyncio.run(mod._review_one_task(task))
 
         self.db.expire_all()
@@ -567,8 +567,8 @@ class TestReviewPersistsToAIConversation:
 
         from handlers import task_review as mod
 
-        with patch("llm.client.call_agent", new=AsyncMock(side_effect=_capture_call)), \
-             patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"):
+        with patch("agent.client.call_agent", new=AsyncMock(side_effect=_capture_call)), \
+             patch("agent.registry.agent_registry.ensure_agent", return_value="agent-1"):
             asyncio.run(mod._review_one_task(task))
 
         system_prompt = captured_messages["messages"][0]["content"]
@@ -666,12 +666,12 @@ class TestReviewPersistsToAIConversation:
         from handlers import task_review as mod
 
         with patch(
-            "llm.client.call_agent",
+            "agent.client.call_agent",
             new=AsyncMock(
                 side_effect=_stub_call_agent_that_records_review("on_track", "All good.", None)
             ),
-        ), patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"), \
-             patch("llm.context.build_task_context_data", return_value=_stub_task_context()):
+        ), patch("agent.registry.agent_registry.ensure_agent", return_value="agent-1"), \
+             patch("agent.context.build_task_context_data", return_value=_stub_task_context()):
             asyncio.run(mod._review_one_task(task))
 
         assert self.db.query(Message).count() == baseline_messages, (
@@ -688,8 +688,8 @@ class TestTriggerEndpoint(unittest.TestCase):
         from fastapi import HTTPException
         from fastapi.testclient import TestClient
 
-        from backends.local_auth import get_org_external_id, set_request_context
         from handlers.deps import get_db
+        from integrations.local_auth import get_org_external_id, set_request_context
         from main import app
 
         async def _fake_require_user(request):
@@ -727,9 +727,9 @@ class TestTriggerEndpoint(unittest.TestCase):
             return await stub(*args, **kwargs)
 
         with patch(
-            "llm.client.call_agent", new=AsyncMock(side_effect=_progress_emitting_stub),
-        ), patch("llm.registry.agent_registry.ensure_agent", return_value="agent-1"), \
-             patch("llm.context.build_task_context_data", return_value=_stub_task_context()):
+            "agent.client.call_agent", new=AsyncMock(side_effect=_progress_emitting_stub),
+        ), patch("agent.registry.agent_registry.ensure_agent", return_value="agent-1"), \
+             patch("agent.context.build_task_context_data", return_value=_stub_task_context()):
             with self.client.stream(
                 "POST", f"/api/tasks/{task.id}/review", headers=self.auth,
             ) as res:

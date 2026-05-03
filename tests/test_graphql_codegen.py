@@ -1,7 +1,8 @@
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 from scripts.check_graphql_codegen import _codegen_command
+
 
 def test_graphql_codegen_artifacts_are_current():
     result = subprocess.run(

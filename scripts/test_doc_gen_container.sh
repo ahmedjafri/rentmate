@@ -19,7 +19,7 @@ html = """<!DOCTYPE html>
 </html>
 """
 
-module_path = Path("/app/llm/tools/doc_gen/render_document_pdf.py")
+module_path = Path("/app/agent/tools/doc_gen/render_document_pdf.py")
 spec = importlib.util.spec_from_file_location("rentmate_doc_gen_renderer", module_path)
 renderer = importlib.util.module_from_spec(spec)
 assert spec and spec.loader

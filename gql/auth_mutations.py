@@ -2,7 +2,7 @@
 
 import strawberry
 
-from backends.wire import auth_backend
+from integrations.wire import auth_backend
 
 from .types import AuthPayload, LoginInput, UserType
 

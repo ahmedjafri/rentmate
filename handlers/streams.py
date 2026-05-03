@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
+from agent.agent_stream import subscribe_and_stream
+from agent.streams import stream_registry
 from handlers.deps import require_user
-from llm.agent_stream import subscribe_and_stream
-from llm.streams import stream_registry
 
 router = APIRouter()
 

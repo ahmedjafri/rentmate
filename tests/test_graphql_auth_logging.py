@@ -39,7 +39,7 @@ def test_graphql_context_logs_invalid_token_at_info(caplog, db):
         state=SimpleNamespace(db_session=db),
     )
 
-    with patch("backends.wire.auth_backend.validate_token", new=AsyncMock(side_effect=Exception("User not found"))):
+    with patch("integrations.wire.auth_backend.validate_token", new=AsyncMock(side_effect=Exception("User not found"))):
         context = asyncio.run(get_context(request))
 
     assert context == {"user": None, "db_session": db}

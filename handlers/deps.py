@@ -5,9 +5,9 @@ import re
 from fastapi import HTTPException, Request
 from sqlalchemy.orm import Session
 
-from backends.local_auth import set_request_context
-from backends.wire import auth_backend
 from db.session import SessionLocal, engine  # noqa: F401 — re-exported
+from integrations.local_auth import set_request_context
+from integrations.wire import auth_backend
 
 
 def get_db(request: Request) -> Session:

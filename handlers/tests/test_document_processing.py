@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.orm import Session
 
+from agent.document_processor import _split_text, process_document
 from db.models import Document
-from llm.document_processor import _split_text, process_document
 
 _SAMPLE_PDF = Path(__file__).resolve().parents[2] / "evals" / "sample_rental_agreement.pdf"
 
@@ -135,9 +135,9 @@ class TestProcessDocument:
         ]
 
         with (
-            patch("llm.document_processor._get_session_factory", return_value=self._session_factory()),
-            patch("llm.document_processor._set_progress"),
-            patch("backends.wire.storage_backend.download", new_callable=AsyncMock, return_value=pdf_bytes),
+            patch("agent.document_processor._get_session_factory", return_value=self._session_factory()),
+            patch("agent.document_processor._set_progress"),
+            patch("integrations.wire.storage_backend.download", new_callable=AsyncMock, return_value=pdf_bytes),
             patch("litellm.completion", return_value=fake_llm_response),
         ):
             asyncio.run(process_document(doc_id))
@@ -168,9 +168,9 @@ class TestProcessDocument:
         doc_id = self._create_doc()
 
         with (
-            patch("llm.document_processor._get_session_factory", return_value=self._session_factory()),
-            patch("llm.document_processor._set_progress"),
-            patch("backends.wire.storage_backend.download", new_callable=AsyncMock, side_effect=FileNotFoundError("gone")),
+            patch("agent.document_processor._get_session_factory", return_value=self._session_factory()),
+            patch("agent.document_processor._set_progress"),
+            patch("integrations.wire.storage_backend.download", new_callable=AsyncMock, side_effect=FileNotFoundError("gone")),
         ):
             with pytest.raises(FileNotFoundError, match="gone"):
                 asyncio.run(process_document(doc_id))
@@ -184,9 +184,9 @@ class TestProcessDocument:
         fake_llm.choices = [MagicMock(message=MagicMock(content='{"leases": [{"tenant_first_name": "Test"}]}'))]
 
         with (
-            patch("llm.document_processor._get_session_factory", return_value=self._session_factory()),
-            patch("llm.document_processor._set_progress"),
-            patch("backends.wire.storage_backend.download", new_callable=AsyncMock, return_value=pdf_bytes),
+            patch("agent.document_processor._get_session_factory", return_value=self._session_factory()),
+            patch("agent.document_processor._set_progress"),
+            patch("integrations.wire.storage_backend.download", new_callable=AsyncMock, return_value=pdf_bytes),
             patch("litellm.completion", return_value=fake_llm),
         ):
             asyncio.run(process_document(doc_id))

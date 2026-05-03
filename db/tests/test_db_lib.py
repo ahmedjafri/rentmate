@@ -150,7 +150,7 @@ def test_record_sms_from_quo_routes_inbound_messages(db):
     mock_router.resolve.return_value = ("default-account", tenant, "inbound")
 
     with (
-        patch("backends.wire.sms_router", mock_router),
+        patch("integrations.wire.sms_router", mock_router),
         patch("db.lib.route_inbound_to_task", return_value=(conv, msg)) as route_mock,
     ):
         result_msg, result_conv = record_sms_from_quo(
@@ -173,7 +173,7 @@ def test_record_sms_from_quo_records_outbound_messages_without_routing(db):
     mock_router.resolve.return_value = ("default-account", tenant, "outbound")
 
     with (
-        patch("backends.wire.sms_router", mock_router),
+        patch("integrations.wire.sms_router", mock_router),
         patch("db.lib.get_or_create_conversation_for_tenant", return_value=conv) as conv_mock,
         patch("db.lib.add_message", return_value=msg) as add_message_mock,
     ):
@@ -195,7 +195,7 @@ def test_record_sms_from_quo_returns_none_when_router_cannot_resolve(db):
     mock_router = MagicMock()
     mock_router.resolve.return_value = None
 
-    with patch("backends.wire.sms_router", mock_router):
+    with patch("integrations.wire.sms_router", mock_router):
         result = record_sms_from_quo(
             db=db,
             from_number="+15550005555",

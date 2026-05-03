@@ -40,7 +40,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 def generate_for_case(case: EvalCase) -> str | None:
     """Call the vendor outreach generator with data from the eval case."""
-    from llm.vendor_outreach import generate_vendor_outreach
+    from agent.vendor_outreach import generate_vendor_outreach
 
     task = case.task or {}
     # Extract vendor name from context if present

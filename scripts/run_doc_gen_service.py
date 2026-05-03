@@ -1,7 +1,12 @@
 from __future__ import annotations
 
-from backends.runtime_config import load_runtime_config
-from llm.doc_gen_runtime import build_doc_gen_grpc_server
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from agent.doc_gen_runtime import build_doc_gen_grpc_server  # noqa: E402
+from integrations.runtime_config import load_runtime_config  # noqa: E402
 
 
 def main() -> None:

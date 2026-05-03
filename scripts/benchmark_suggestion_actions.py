@@ -5,18 +5,22 @@ from __future__ import annotations
 
 import argparse
 import statistics
+import sys
 from collections import defaultdict
+from pathlib import Path
 from time import perf_counter
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from testcontainers.postgres import PostgresContainer
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from backends.local_auth import reset_request_context, set_request_context
-from db.enums import AgentSource, SuggestionOption, TaskCategory, Urgency
-from db.models import Base, User
-from gql.services import suggestion_service
-from gql.services.task_suggestions import CreateTaskSuggestionExecutor
+from sqlalchemy import create_engine  # noqa: E402
+from sqlalchemy.orm import sessionmaker  # noqa: E402
+from testcontainers.postgres import PostgresContainer  # noqa: E402
+
+from db.enums import AgentSource, SuggestionOption, TaskCategory, Urgency  # noqa: E402
+from db.models import Base, User  # noqa: E402
+from integrations.local_auth import reset_request_context, set_request_context  # noqa: E402
+from services import suggestion_service  # noqa: E402
+from services.task_suggestions import CreateTaskSuggestionExecutor  # noqa: E402
 
 
 def _seed_db(session_factory) -> str:

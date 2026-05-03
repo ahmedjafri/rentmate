@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from backends.local_auth import reset_request_context, resolve_account_id, resolve_org_id, set_request_context
 from db.enums import TaskStatus
 from db.models import Conversation, ConversationType, Task
-from gql.services.number_allocator import NumberAllocator
 from handlers.chat import _agent_task_autoreply_inner
+from integrations.local_auth import reset_request_context, resolve_account_id, resolve_org_id, set_request_context
+from services.number_allocator import NumberAllocator
 
 
 def _seed_task(db, *, creator_id=1, org_id=1):

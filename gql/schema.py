@@ -7,7 +7,6 @@ from graphql import GraphQLError
 from strawberry.schema.config import StrawberryConfig
 from strawberry.types import Info
 
-from backends.local_auth import resolve_account_id, resolve_org_id
 from db.lib import spawn_task_from_conversation as _spawn_task
 from db.queries import (
     fetch_conversations,
@@ -19,14 +18,15 @@ from db.queries import (
     fetch_tenants,
     fetch_vendors,
 )
+from integrations.local_auth import resolve_account_id, resolve_org_id
+from services import chat_service
+from services.document_service import DocumentService
+from services.property_service import PropertyService
+from services.task_service import TaskProgressStep, TaskService, dump_task_steps
+from services.tenant_service import TenantService
+from services.vendor_service import VendorService
 
 from .auth_mutations import Mutation as AuthMutation
-from .services import chat_service
-from .services.document_service import DocumentService
-from .services.property_service import PropertyService
-from .services.task_service import TaskProgressStep, TaskService, dump_task_steps
-from .services.tenant_service import TenantService
-from .services.vendor_service import VendorService
 from .types import (
     VENDOR_TYPES,
     AddDocumentTagInput,
@@ -256,7 +256,7 @@ class Query:
 
     @strawberry.field(description="Fuzzy-match tenants by name / email / phone. Top 3 ranked.")
     def search_tenants(self, info: Info, *, query: str) -> typing.List[TenantSearchResult]:
-        from gql.services.extension_service import rank_tenants
+        from services.extension_service import rank_tenants
         _current_user(info)
         return [TenantSearchResult.from_dict(r) for r in rank_tenants(_session(info), query)]
 
@@ -356,8 +356,8 @@ class Mutation(AuthMutation):
         _current_user(info)
         db = _session(info)
         from db.models import ConversationType, Task
-        from gql.services.notification_service import NotificationRequest, NotificationService
-        from gql.services.vendor_service import get_vendor_by_external_id
+        from services.notification_service import NotificationRequest, NotificationService
+        from services.vendor_service import get_vendor_by_external_id
 
         vendor = get_vendor_by_external_id(db, vendor_id)
         if not vendor:
@@ -576,8 +576,8 @@ class Mutation(AuthMutation):
 
         from db.enums import RoutineState
         from db.models import Routine
-        from gql.services.number_allocator import NumberAllocator
         from handlers.routines import human_schedule, next_run, parse_schedule
+        from services.number_allocator import NumberAllocator
 
         db = _session(info)
         cron_expr = parse_schedule(schedule)
@@ -738,7 +738,7 @@ class Mutation(AuthMutation):
         from sqlalchemy import select as sa_select
 
         from db.models import ConversationType, Task as TaskModel
-        from gql.services.vendor_service import get_vendor_by_external_id
+        from services.vendor_service import get_vendor_by_external_id
         task = db.execute(
             sa_select(TaskModel).where(
                 TaskModel.id == task_id,
@@ -790,7 +790,7 @@ class Mutation(AuthMutation):
     ) -> SuggestionType:
         _current_user(info)
         db = _session(info)
-        from gql.services.task_suggestions import SuggestionExecutor
+        from services.task_suggestions import SuggestionExecutor
         executor = SuggestionExecutor.for_suggestion(db, uid)
         suggestion, _task = executor.execute(uid, action, edited_body=edited_body)
         db.commit()
@@ -830,7 +830,7 @@ class Mutation(AuthMutation):
         "re-clicking ``Suggest`` doesn't duplicate messages."
     ))
     async def suggest_reply(self, info: Info, *, input: SuggestReplyInput) -> SuggestReplyResult:
-        from gql.services.extension_service import draft_reply
+        from services.extension_service import draft_reply
         _current_user(info)
         result = await draft_reply(
             _session(info),

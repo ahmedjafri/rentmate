@@ -124,10 +124,10 @@ FastAPI backend (main.py)
   ├── /quo-webhook        — Inbound SMS from Quo
   └── /*                  — React SPA (www/rentmate-ui/dist/)
 
-backends/
+integrations/
   ├── local_auth.py       — JWT auth with per-account bcrypt passwords
   ├── local_storage.py    — Filesystem document storage
-  └── wire.py             — Backend wiring
+  └── wire.py             — Integration wiring
 
 db/
   ├── models/             — SQLAlchemy ORM (PostgreSQL)
@@ -136,9 +136,11 @@ db/
 
 gql/
   ├── schema.py           — GraphQL queries and mutations
-  └── services/           — Business logic (chat, tasks, settings, etc.)
+  └── types.py            — Strawberry GraphQL types
 
-llm/
+services/                 — Business logic (chat, tasks, settings, etc.)
+
+agent/
   ├── client.py           — Agent execution + tool progress bridging
   ├── doc_gen_runtime.py  — Local vs gRPC document-generation abstraction
   ├── registry.py         — Agent registry, tool registration, system prompt

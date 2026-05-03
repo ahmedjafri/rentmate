@@ -6,7 +6,7 @@ from db.models import User
 @pytest.fixture(autouse=True)
 def _set_creator_context():
     """Override the root test fixture with the current auth signature."""
-    from backends.local_auth import reset_request_context, set_request_context
+    from integrations.local_auth import reset_request_context, set_request_context
 
     tokens = set_request_context(account_id=1, org_id=1)
     try:

@@ -15,8 +15,6 @@ from db.models import (
     Task,
     User,
 )
-from gql.services import chat_service
-from gql.services.vendor_service import VendorService, get_vendor_login_email, vendor_has_account
 from handlers.deps import get_db
 from handlers.portals._common import (
     SendMessageBody,
@@ -27,6 +25,8 @@ from handlers.portals._common import (
     serialize_visible_messages,
     trigger_task_autoreply,
 )
+from services import chat_service
+from services.vendor_service import VendorService, get_vendor_login_email, vendor_has_account
 
 router = APIRouter(prefix="/api/vendor")
 

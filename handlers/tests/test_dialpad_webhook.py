@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from agent.action_policy import ActionDecision
+from agent.client import AgentResponse
 from db.models import (
     Conversation,
     ConversationParticipant,
@@ -16,8 +18,6 @@ from db.models import (
 from db.utils import normalize_phone
 from handlers.chat import is_in_whitelist
 from handlers.deps import get_db
-from llm.client import AgentResponse
-from llm.action_policy import ActionDecision
 from main import app
 
 MOCK_AGENT_REPLY = "This is a mock response."
@@ -53,7 +53,7 @@ class TestQuoWebhook(unittest.TestCase):
         self.db.flush()
 
     @patch('handlers.chat.NotificationService.notify', new_callable=AsyncMock)
-    @patch('llm.client.call_agent', new_callable=AsyncMock)
+    @patch('agent.client.call_agent', new_callable=AsyncMock)
     @patch('handlers.chat.agent_registry.ensure_agent', return_value=MOCK_AGENT_ID)
     def test_handle_new_message_with_mocked_agent(
         self, mock_ensure, mock_chat, mock_notify
@@ -74,7 +74,7 @@ class TestQuoWebhook(unittest.TestCase):
             },
         }
 
-        with patch('backends.wire.sms_router', mock_sms_router), \
+        with patch('integrations.wire.sms_router', mock_sms_router), \
              patch('handlers.chat.PHONE_WHITELIST', [self.from_number]):
             response = self.client.post("/quo-webhook", json=payload)
 
@@ -116,7 +116,7 @@ class TestQuoWebhook(unittest.TestCase):
         app.dependency_overrides = {}
 
     @patch('handlers.chat.NotificationService.notify', new_callable=AsyncMock)
-    @patch('llm.client.call_agent', new_callable=AsyncMock)
+    @patch('agent.client.call_agent', new_callable=AsyncMock)
     @patch('handlers.chat.agent_registry.ensure_agent', return_value=MOCK_AGENT_ID)
     def test_handle_new_message_creates_suggestion_when_policy_blocks_send(
         self, mock_ensure, mock_chat, mock_notify
@@ -136,9 +136,9 @@ class TestQuoWebhook(unittest.TestCase):
             },
         }
 
-        with patch('backends.wire.sms_router', mock_sms_router), \
+        with patch('integrations.wire.sms_router', mock_sms_router), \
              patch('handlers.chat.PHONE_WHITELIST', [self.from_number]), \
-             patch('llm.action_policy.evaluate_action_candidate', return_value=ActionDecision(False, "blocked", 2)):
+             patch('agent.action_policy.evaluate_action_candidate', return_value=ActionDecision(False, "blocked", 2)):
             response = self.client.post("/quo-webhook", json=payload)
 
         assert response.status_code == 200
@@ -165,7 +165,7 @@ class TestQuoWebhook(unittest.TestCase):
         app.dependency_overrides = {}
 
     @patch('handlers.chat.NotificationService.notify', new_callable=AsyncMock)
-    @patch('llm.client.call_agent', new_callable=AsyncMock)
+    @patch('agent.client.call_agent', new_callable=AsyncMock)
     @patch('handlers.chat.agent_registry.ensure_agent', return_value=MOCK_AGENT_ID)
     def test_handle_existing_message_with_mocked_agent(
         self, mock_ensure, mock_chat, mock_notify
@@ -185,7 +185,7 @@ class TestQuoWebhook(unittest.TestCase):
             },
         }
 
-        with patch('backends.wire.sms_router', mock_sms_router), \
+        with patch('integrations.wire.sms_router', mock_sms_router), \
              patch('handlers.chat.PHONE_WHITELIST', [self.from_number]):
             self.client.post("/quo-webhook", json=payload)
 

@@ -8,8 +8,8 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from backends.local_auth import get_org_external_id, set_request_context
 from handlers.deps import get_db
+from integrations.local_auth import get_org_external_id, set_request_context
 from main import app
 
 
@@ -94,12 +94,12 @@ class TestSettingsEndpoint(unittest.TestCase):
     # POST /api/settings
     # ------------------------------------------------------------------
 
-    @patch("llm.llm.reconfigure")
+    @patch("agent.llm.reconfigure")
     def test_post_settings_updates_env_and_reconfigures(self, mock_reconf):
         with (
             patch("handlers.settings.save_llm_settings"),
-            patch("gql.services.settings_service.get_onboarding_state", return_value=None),
-            patch("gql.services.settings_service.is_llm_configured", return_value=True),
+            patch("services.settings_service.get_onboarding_state", return_value=None),
+            patch("services.settings_service.is_llm_configured", return_value=True),
         ):
             response = self.client.post(
                 "/api/settings",

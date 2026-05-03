@@ -136,7 +136,7 @@ async def _generate_reply(
     so a flaky LLM never crashes the simulator."""
     import litellm
 
-    from llm.model_config import build_litellm_request_kwargs
+    from agent.model_config import build_litellm_request_kwargs
 
     system, user_content = _build_prompt(
         user=user,
@@ -248,10 +248,8 @@ def _find_pending_targets(db: Any) -> list[dict[str, Any]]:
     """
     from db.models import (
         Conversation,
-        ConversationParticipant,
         ParticipantType,
     )
-
     from demo.personalities import is_seeded_phone
 
     convs = db.execute(
@@ -314,11 +312,10 @@ async def _schedule_reply(target: dict[str, Any]) -> None:
     Always fetches a fresh DB session inside the task so it doesn't hold
     a session across a 5-30s sleep.
     """
-    from backends.local_auth import set_request_context, reset_request_context
     from db.models import Conversation, User
     from db.session import SessionLocal
-
     from demo.personalities import get_personality_by_phone
+    from integrations.local_auth import reset_request_context, set_request_context
 
     delay = random.uniform(_JITTER_MIN_SECONDS, _JITTER_MAX_SECONDS)
 

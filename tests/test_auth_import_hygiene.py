@@ -3,16 +3,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = [
-    ROOT / "llm" / "tools" / "__init__.py",
-    ROOT / "llm" / "tools" / "_common.py",
-    ROOT / "llm" / "tools" / "documents.py",
-    ROOT / "llm" / "tools" / "entities.py",
-    ROOT / "llm" / "tools" / "memory.py",
-    ROOT / "llm" / "tools" / "messaging.py",
-    ROOT / "llm" / "tools" / "onboarding.py",
-    ROOT / "llm" / "tools" / "tasks.py",
-    ROOT / "llm" / "tools" / "vendors.py",
-    ROOT / "llm" / "context.py",
+    ROOT / "agent" / "tools" / "__init__.py",
+    ROOT / "agent" / "tools" / "_common.py",
+    ROOT / "agent" / "tools" / "documents.py",
+    ROOT / "agent" / "tools" / "entities.py",
+    ROOT / "agent" / "tools" / "memory.py",
+    ROOT / "agent" / "tools" / "messaging.py",
+    ROOT / "agent" / "tools" / "onboarding.py",
+    ROOT / "agent" / "tools" / "tasks.py",
+    ROOT / "agent" / "tools" / "vendors.py",
+    ROOT / "agent" / "context.py",
     ROOT / "handlers" / "dev.py",
     ROOT / "db" / "queries.py",
 ]
@@ -29,7 +29,7 @@ def _function_scope_auth_imports(path: Path) -> list[tuple[str, int, str]]:
         for inner in ast.walk(node):
             if not isinstance(inner, ast.ImportFrom):
                 continue
-            if inner.module != "backends.local_auth":
+            if inner.module != "integrations.local_auth":
                 continue
             imported = {alias.name for alias in inner.names}
             bad = imported & AUTH_NAMES

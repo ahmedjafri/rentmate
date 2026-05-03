@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from llm.litellm_utils import completion_json_with_retries
+from agent.litellm_utils import completion_json_with_retries
 
 
 def completion_json(

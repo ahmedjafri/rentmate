@@ -8,7 +8,7 @@ from typing import List, Optional
 from sqlalchemy import func, select as sa_select
 from sqlalchemy.orm import Session, joinedload
 
-from backends.local_auth import resolve_account_id
+from integrations.local_auth import resolve_account_id
 
 from .enums import ChannelType, TaskMode, TaskSource, TaskStatus, parse_task_mode, parse_urgency
 from .models import (
@@ -410,7 +410,7 @@ def route_inbound_to_task(
             task_created = True
 
     if task_created or conv is None:
-        from gql.services.number_allocator import NumberAllocator
+        from services.number_allocator import NumberAllocator
         task = Task(
             id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
             creator_id=resolved_creator_id,
@@ -482,7 +482,7 @@ def record_sms_from_quo(
     Resolves tenant via SMS router, routes to a task via route_inbound_to_task,
     and returns (message, conversation) for the caller to drive the agent.
     """
-    from backends.wire import sms_router
+    from integrations.wire import sms_router
 
     resolved = sms_router.resolve(db, from_number, to_number)
     if not resolved:
@@ -649,7 +649,7 @@ def spawn_task_from_conversation(
 
     now = datetime.now(UTC)
 
-    from gql.services.number_allocator import NumberAllocator
+    from services.number_allocator import NumberAllocator
     task = Task(
         id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
         creator_id=creator_id,

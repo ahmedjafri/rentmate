@@ -13,8 +13,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from backends.local_auth import resolve_account_id
-from backends.wire import storage_backend
 from db.models import (
     AgentMemory,
     AgentTrace,
@@ -24,18 +22,20 @@ from db.models import (
     Document,
     DocumentTag,
     EntityNote,
+    IdSequence,
     Lease,
     Message,
     MessageReceipt,
     Property,
     Routine,
-    IdSequence,
     Suggestion,
     Task,
     Tenant,
     Unit,
 )
 from handlers.deps import get_db, require_user
+from integrations.local_auth import resolve_account_id
+from integrations.wire import storage_backend
 
 router = APIRouter()
 

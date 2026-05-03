@@ -1,6 +1,5 @@
 from datetime import UTC, datetime
 
-from backends.local_auth import reset_request_context, set_request_context
 from db.models import (
     Conversation,
     ConversationParticipant,
@@ -13,6 +12,7 @@ from db.models import (
     User,
 )
 from gql.schema import schema
+from integrations.local_auth import reset_request_context, set_request_context
 
 FAKE_USER = {"id": 1, "uid": "user-external-123", "email": "admin@test.com"}
 

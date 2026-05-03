@@ -11,10 +11,9 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from backends.local_auth import get_org_external_id, set_request_context
+from agent.streams import StreamEvent, stream_registry
 from handlers.deps import get_db
-from llm.invocation import invoke_agent
-from llm.streams import StreamEvent, stream_registry
+from integrations.local_auth import get_org_external_id, set_request_context
 from main import app
 
 

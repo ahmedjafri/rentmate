@@ -18,7 +18,7 @@ from evals.conftest import (
     get_tool_calls,
     run_turn_sync,
 )
-from gql.services.task_service import TaskProgressStep, dump_task_steps
+from services.task_service import TaskProgressStep, dump_task_steps
 
 
 @pytest.mark.eval
@@ -41,7 +41,7 @@ class TestSchedulingProtocol:
         s = sb.build()
 
         # Setup: vendor conversation exists with vendor reply
-        from gql.services import chat_service
+        from services import chat_service
         vendor_conv = chat_service.get_or_create_external_conversation(
             db, conversation_type=ConversationType.VENDOR,
             subject="Fix broken window", vendor_id=str(vendor.id),
@@ -84,7 +84,7 @@ class TestSchedulingProtocol:
             context_body="Need spring cleanup quote and coordination for common areas.",
         )
 
-        from gql.services import chat_service
+        from services import chat_service
         vendor_conv = chat_service.get_or_create_external_conversation(
             db,
             conversation_type=ConversationType.VENDOR,
@@ -162,7 +162,7 @@ class TestSchedulingProtocol:
         ])
         db.flush()
 
-        from gql.services import chat_service
+        from services import chat_service
         vendor_conv = chat_service.get_or_create_external_conversation(
             db,
             conversation_type=ConversationType.VENDOR,

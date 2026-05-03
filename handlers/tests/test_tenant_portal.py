@@ -1,14 +1,13 @@
-from datetime import UTC, date, datetime
 
 from fastapi.testclient import TestClient
 
 from db.enums import TaskCategory, TaskSource, Urgency
-from db.models import ConversationType, Lease, Notification, User
-from gql.services import chat_service
-from gql.services.task_service import TaskService
-from gql.services.tenant_service import TenantService
+from db.models import ConversationType, Notification, User
 from gql.types import CreateTaskInput, CreateTenantWithLeaseInput
 from main import app
+from services import chat_service
+from services.task_service import TaskService
+from services.tenant_service import TenantService
 
 
 def _tenant_headers(db):
