@@ -10,11 +10,12 @@ if _env_file.exists():
             _k, _, _v = _line.partition("=")
             os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
 
-from contextlib import asynccontextmanager
+# Import after local .env hydration so app initialization sees those settings.
+from contextlib import asynccontextmanager  # noqa: E402
 
-import uvicorn
+import uvicorn  # noqa: E402
 
-import rentmate.app as _app
+import rentmate.app as _app  # noqa: E402
 
 SessionLocal = _app.SessionLocal
 agent_registry = _app.agent_registry

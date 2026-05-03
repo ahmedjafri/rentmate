@@ -64,8 +64,11 @@ class TestChatEndpoint(unittest.TestCase):
         app.dependency_overrides[get_db] = lambda: self.db
         self.require_user_patcher = patch("handlers.chat.require_user", side_effect=_fake_require_user)
         self.require_user_patcher.start()
+        self.llm_configured_patcher = patch("services.settings_service.is_llm_configured", return_value=True)
+        self.llm_configured_patcher.start()
 
     def tearDown(self):
+        self.llm_configured_patcher.stop()
         self.require_user_patcher.stop()
         app.dependency_overrides = {}
 

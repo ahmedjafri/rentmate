@@ -3,6 +3,7 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import re
 import threading
 import traceback
 import uuid
@@ -17,6 +18,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from agent import client as agent_client
 from agent.context import (
     build_task_context,
     build_task_context_data,
@@ -26,7 +28,7 @@ from agent.registry import agent_registry
 from agent.side_effects import process_side_effects
 from agent.tools import active_conversation_id, pending_suggestion_messages
 from agent.tracing import log_trace, make_trace_envelope
-from db.enums import TaskSource
+from db.enums import SuggestionStatus, TaskSource
 from db.lib import (
     get_or_create_user_ai_conversation,
     record_sms_from_quo,
@@ -37,16 +39,20 @@ from db.models import (
     Conversation,
     ConversationParticipant,
     ConversationType,
+    Document,
     Message,
     MessageType,
     ParticipantType,
+    Property,
+    Suggestion,
     Task,
+    Tenant,
 )
 from db.session import SessionLocal
 from handlers.deps import get_db, require_user
 from integrations.local_auth import reset_request_context, resolve_account_id, set_request_context
 from integrations.wire import sms_router
-from services import chat_service
+from services import chat_service, settings_service
 from services.notification_service import NotificationRequest, NotificationService
 
 router = APIRouter()
@@ -114,8 +120,7 @@ def _describe_agent_error(exc: Exception) -> str:
         raw = str(exc)
         url_hint = ""
         if "http" in raw:
-            import re as _re
-            m = _re.search(r"(https?://[^\s'\"]+)", raw)
+            m = re.search(r"(https?://[^\s'\"]+)", raw)
             if m:
                 url_hint = f" ({m.group(1)})"
         return (
@@ -257,14 +262,13 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
     )
     db.commit()
 
-    from agent.client import call_agent
     context = build_task_context(db, conv.id, query=body)
     messages = chat_service.build_agent_message_history(db, conv_id=conv.id, user_message=body, context=context, exclude_last=True)
 
     agent_id = agent_registry.ensure_agent(resolve_account_id(), db)
     session_key = f"sms:{conv.id}"
 
-    agent_resp = await call_agent(agent_id, session_key=session_key, messages=messages)
+    agent_resp = await agent_client.call_agent(agent_id, session_key=session_key, messages=messages)
 
     now = datetime.now(UTC)
     sent_directly, _ = chat_service.persist_policy_gated_tenant_reply(
@@ -419,8 +423,7 @@ async def chat_endpoint(
         messages_payload = chat_service.build_agent_message_history(db, conv_id=conv_id, user_message=body.message, context=context)
 
     # ── Guard: LLM must be configured ───────────────────────────────────
-    from services.settings_service import is_llm_configured
-    if not is_llm_configured():
+    if not settings_service.is_llm_configured():
         if _hosted_mode():
             no_llm_reply = (
                 "AI is currently unavailable for this hosted workspace. "
@@ -461,7 +464,6 @@ async def chat_endpoint(
                 await sub.put(entry)
 
         async def run_and_persist() -> tuple[str, str, list[dict]]:
-            from agent.client import call_agent
             token = active_conversation_id.set(conv_id)
             try:
                 # Persist user message BEFORE running the agent so it gets an
@@ -499,7 +501,7 @@ async def chat_endpoint(
                         conversation_id=conv_id,
                     ),
                 )
-                agent_resp = await call_agent(
+                agent_resp = await agent_client.call_agent(
                     agent_id,
                     session_key=session_key,
                     messages=messages_payload,
@@ -608,10 +610,9 @@ async def chat_endpoint(
                 done_payload['effect_messages'] = effect_msgs
             # Include onboarding state so frontend can update progress without re-fetching
             try:
-                from services.settings_service import get_onboarding_state as _get_ob
                 _ob_db = _SL()
                 try:
-                    _ob_state = _get_ob(_ob_db)
+                    _ob_state = settings_service.get_onboarding_state(_ob_db)
                     if _ob_state:
                         done_payload['onboarding'] = _ob_state
                 finally:
@@ -664,8 +665,6 @@ def _compute_autoreply_hash(task) -> str:
         # SuggestionStatus.PENDING with the same casing as the DB enum
         # (uppercase 'PENDING'); the previous raw SQL hard-coded the
         # lowercase Python value and crashed on the real Postgres enum.
-        from db.enums import SuggestionStatus
-        from db.models import Suggestion
         count = db.execute(
             select(func.count()).select_from(Suggestion).where(
                 Suggestion.task_id == task.id,
@@ -700,9 +699,6 @@ def agent_task_autoreply(task_id: str, hint: str | None = None) -> str | None:
         lock.release()
 
 def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | None:
-
-    from agent.client import call_agent
-
     db = SessionLocal.session_factory()
     request_context_token = None
     try:
@@ -789,7 +785,7 @@ def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | 
             _loop = asyncio.new_event_loop()
             try:
                 _agent_result[0] = _loop.run_until_complete(
-                    call_agent(agent_id, session_key=session_key, messages=messages_payload)
+                    agent_client.call_agent(agent_id, session_key=session_key, messages=messages_payload)
                 )
                 _agent_result[1] = pending_suggestion_messages.get() or []
             finally:
@@ -980,7 +976,6 @@ async def assess_task_endpoint(
                 await sub.put(entry)
 
         async def run_and_persist() -> tuple[str | None, str | None, list[dict]]:
-            from agent.client import call_agent
             token = active_conversation_id.set(conv_id)
             try:
                 # NOTE: We do NOT persist a user message — the assess prompt is
@@ -999,7 +994,7 @@ async def assess_task_endpoint(
                         conversation_id=conv_id,
                     ),
                 )
-                agent_resp = await call_agent(
+                agent_resp = await agent_client.call_agent(
                     agent_id,
                     session_key=session_key,
                     messages=messages_payload,
@@ -1205,11 +1200,9 @@ async def spawn_task_endpoint(
 async def get_onboarding_state_endpoint(request: Request, db: Session = Depends(get_db)):
     """Return current onboarding state, or null if the account already has data."""
     await require_user(request)
-    from db.models import Document, Property, Tenant
-    from services.settings_service import get_onboarding_state, init_onboarding, is_llm_configured
 
-    llm_configured = True if _hosted_mode() else is_llm_configured()
-    state = get_onboarding_state(db)
+    llm_configured = True if _hosted_mode() else settings_service.is_llm_configured()
+    state = settings_service.get_onboarding_state(db)
     if state is not None:
         # Backfill configure_llm step for existing onboarding states
         if "configure_llm" not in state.get("steps", {}):
@@ -1222,7 +1215,7 @@ async def get_onboarding_state_endpoint(request: Request, db: Session = Depends(
     tenant_count = db.query(Tenant).count()
     doc_count = db.query(Document).count()
     if prop_count == 0 and tenant_count == 0 and doc_count == 0:
-        state = init_onboarding(db)
+        state = settings_service.init_onboarding(db)
         if _hosted_mode():
             state["steps"]["configure_llm"] = "done"
         db.commit()
@@ -1235,9 +1228,8 @@ async def get_onboarding_state_endpoint(request: Request, db: Session = Depends(
 async def dismiss_onboarding_endpoint(request: Request, db: Session = Depends(get_db)):
     """Dismiss onboarding permanently."""
     await require_user(request)
-    from services.settings_service import dismiss_onboarding
 
-    state = dismiss_onboarding(db)
+    state = settings_service.dismiss_onboarding(db)
     db.commit()
     log_trace("onboarding", "chat", "Onboarding dismissed", detail=state)
     return {"onboarding": state}
