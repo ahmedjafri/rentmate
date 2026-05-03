@@ -13,6 +13,7 @@ from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from pydantic import BaseModel
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
@@ -639,6 +640,28 @@ _autoreply_locks: dict[str, threading.Lock] = {}
 _autoreply_locks_lock = threading.Lock()
 _autoreply_state: dict[str, str] = {}  # task_id → context hash from last run
 
+
+def _stop_litellm_logging_worker_for_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Stop LiteLLM's background logger before closing a private loop.
+
+    LiteLLM starts a process-global logging worker on the current event loop
+    when async completions run. Autoreply uses a short-lived private loop in a
+    worker thread, so we must stop that worker before closing the loop.
+    """
+    worker_task = getattr(GLOBAL_LOGGING_WORKER, "_worker_task", None)
+    if worker_task is None or worker_task.done():
+        return
+    try:
+        worker_loop = worker_task.get_loop()
+    except RuntimeError:
+        return
+    if worker_loop is not loop:
+        return
+
+    loop.run_until_complete(GLOBAL_LOGGING_WORKER.stop())
+    GLOBAL_LOGGING_WORKER._queue = None
+
+
 def _compute_autoreply_hash(task) -> str:
     """Hash task state + latest message timestamps using a short-lived session."""
 
@@ -789,6 +812,7 @@ def _agent_task_autoreply_inner(task_id: str, hint: str | None = None) -> str | 
                 )
                 _agent_result[1] = pending_suggestion_messages.get() or []
             finally:
+                _stop_litellm_logging_worker_for_loop(_loop)
                 _loop.close()
                 active_conversation_id.reset(_conv_token)
                 pending_suggestion_messages.reset(_pending_token)

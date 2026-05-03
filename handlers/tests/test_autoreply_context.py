@@ -9,8 +9,10 @@ call to ``resolve_account_id`` blew up with
 """
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import patch
 
+from agent.client import AgentResponse
 from db.enums import TaskStatus
 from db.models import Conversation, ConversationType, Task
 from handlers.chat import _agent_task_autoreply_inner
@@ -86,3 +88,41 @@ def test_autoreply_inner_resets_request_context_on_exit(db):
         assert resolve_org_id() == 999
     finally:
         reset_request_context(pre_token)
+
+
+def test_autoreply_inner_stops_litellm_logging_worker_before_closing_private_loop(db):
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    GLOBAL_LOGGING_WORKER._worker_task = None
+    GLOBAL_LOGGING_WORKER._queue = None
+
+    task = _seed_task(db, creator_id=1, org_id=1)
+    db.commit()
+
+    captured = {}
+
+    async def _fake_call_agent(*_args, **_kwargs):
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(asyncio.sleep(60))
+        worker_task = GLOBAL_LOGGING_WORKER._worker_task
+        captured["worker_loop"] = worker_task.get_loop()
+        captured["worker_started"] = not worker_task.done()
+        return AgentResponse(reply="[NO_RESPONSE]")
+
+    try:
+        with (
+            patch("handlers.chat.build_task_context", return_value="ctx"),
+            patch("handlers.chat._compute_autoreply_hash", return_value="new-hash"),
+            patch("handlers.chat._autoreply_state", {}),
+            patch("handlers.chat.agent_registry.ensure_agent", return_value="agent-1"),
+            patch("handlers.chat.agent_client.call_agent", side_effect=_fake_call_agent),
+        ):
+            result = _agent_task_autoreply_inner(str(task.id))
+
+        assert result is None
+        assert captured["worker_started"] is True
+        assert captured["worker_loop"].is_closed() is True
+        assert GLOBAL_LOGGING_WORKER._worker_task is None
+        assert GLOBAL_LOGGING_WORKER._queue is None
+    finally:
+        GLOBAL_LOGGING_WORKER._worker_task = None
+        GLOBAL_LOGGING_WORKER._queue = None
