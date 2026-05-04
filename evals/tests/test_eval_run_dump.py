@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from db.models import AgentRun, AgentTrace
+from db.models import AgentRun, AgentStep, AgentTrace
 
 
 @pytest.fixture(scope="module")
@@ -50,6 +50,18 @@ def test_dump_eval_runs_writes_file_with_runs_and_traces(db, _eval_conftest, tmp
         detail=json.dumps({"query": "bothell"}),
         timestamp=datetime.now(UTC),
     ))
+    db.add(AgentStep(
+        id=str(uuid.uuid4()),
+        org_id=1,
+        creator_id=1,
+        run_id=run.id,
+        step_id=1,
+        timestamp=datetime.now(UTC),
+        source="agent",
+        message="Looking up properties",
+        tool_calls=[{"tool_call_id": "call-1", "function_name": "lookup_properties", "arguments": {"query": "bothell"}}],
+        extra={},
+    ))
     db.flush()
 
     fake_item = types.SimpleNamespace(
@@ -74,6 +86,8 @@ def test_dump_eval_runs_writes_file_with_runs_and_traces(db, _eval_conftest, tmp
     assert len(dumped_run["traces"]) == 1
     assert dumped_run["traces"][0]["tool_name"] == "lookup_properties"
     assert dumped_run["traces"][0]["detail"] == json.dumps({"query": "bothell"})
+    assert dumped_run["steps"][0]["tool_calls"][0]["function_name"] == "lookup_properties"
+    assert dumped_run["atif_trajectory"]["steps"][0]["tool_calls"][0]["function_name"] == "lookup_properties"
 
 
 def test_dump_eval_runs_returns_none_when_no_runs(db, _eval_conftest, tmp_path, monkeypatch):
@@ -87,3 +101,26 @@ def test_dump_eval_runs_returns_none_when_db_fixture_missing(_eval_conftest, tmp
     monkeypatch.setattr(_eval_conftest, "_EVAL_RUN_DUMP_DIR", tmp_path)
     fake_item = types.SimpleNamespace(funcargs={}, name="x", nodeid="evals/x.py::x")
     assert _eval_conftest._dump_eval_runs(fake_item, types.SimpleNamespace()) is None
+
+
+def test_print_eval_agent_turn_shows_reply(_eval_conftest, capsys, monkeypatch):
+    monkeypatch.delenv("RENTMATE_EVAL_PRINT_AGENT_OUTPUT", raising=False)
+
+    _eval_conftest._print_eval_agent_turn(
+        "What should I do?",
+        {"reply": "Contacting the tenant now.", "side_effects": ["sms"], "pending_suggestions": []},
+    )
+
+    output = capsys.readouterr().out
+    assert "[eval agent turn]" in output
+    assert "user: What should I do?" in output
+    assert "agent: Contacting the tenant now." in output
+    assert "side_effects=1 pending_suggestions=0" in output
+
+
+def test_print_eval_agent_turn_can_be_disabled(_eval_conftest, capsys, monkeypatch):
+    monkeypatch.setenv("RENTMATE_EVAL_PRINT_AGENT_OUTPUT", "0")
+
+    _eval_conftest._print_eval_agent_turn("hello", {"reply": "hidden"})
+
+    assert capsys.readouterr().out == ""

@@ -9,43 +9,8 @@ import os
 import re
 import time
 import uuid
-from pathlib import Path
-
-_DEFAULT_EVAL_FAILURE_TOLERANCE = 3
-
-# Captured at configure-time so pytest_runtest_logreport (which doesn't
-# receive the config object directly) can record failures on it. Single
-# pytest process per session, so a module-level reference is safe.
-_TOLERANCE_CONFIG = None
-
-
-def pytest_addoption(parser):
-    parser.addoption(
-        "--eval-failure-tolerance",
-        action="store",
-        default=_DEFAULT_EVAL_FAILURE_TOLERANCE,
-        type=int,
-        help=(
-            "Number of @pytest.mark.eval test failures the session will "
-            f"tolerate before failing CI (default: {_DEFAULT_EVAL_FAILURE_TOLERANCE}). "
-            "Non-eval failures are never tolerated."
-        ),
-    )
-
-
-def pytest_configure(config):
-    global _TOLERANCE_CONFIG
-    _TOLERANCE_CONFIG = config
-    config._failed_eval_nodeids = []
-    config._failed_other_nodeids = []
-
-    agent_model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
-    judge_model = os.getenv("EVAL_JUDGE_MODEL") or agent_model
-    api_key = os.getenv("LLM_API_KEY", "")
-    masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else ("(set)" if api_key else "(NOT SET)")
-    base_url = os.getenv("LLM_BASE_URL") or "(default)"
-    print(f"\n[evals] agent_model={agent_model}, judge_model={judge_model}, base_url={base_url}, api_key={masked}")
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -69,6 +34,7 @@ from db.models import (
     User,
 )
 from db.models.account import create_shadow_user
+from evals.harness import append_jsonl, safe_id, utc_now_iso, weighted_score, write_json
 from integrations.local_auth import reset_request_context, set_request_context
 from services.number_allocator import NumberAllocator
 
@@ -77,6 +43,15 @@ DEFAULT_ACCOUNT_ID = 1
 # Keep eval runs aligned with CI and avoid parallel Chroma crashes.
 os.environ.setdefault("RENTMATE_DISABLE_VECTOR_INDEX", "1")
 os.environ.setdefault("RENTMATE_DISABLE_ASYNC_NOTIFICATIONS", "1")
+
+
+def pytest_configure(config):
+    agent_model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
+    judge_model = os.getenv("EVAL_JUDGE_MODEL") or agent_model
+    api_key = os.getenv("LLM_API_KEY", "")
+    masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else ("(set)" if api_key else "(NOT SET)")
+    base_url = os.getenv("LLM_BASE_URL") or "(default)"
+    print(f"\n[evals] agent_model={agent_model}, judge_model={judge_model}, base_url={base_url}, api_key={masked}")
 
 
 def _format_eval_debug_payload(payload: dict | None) -> str:
@@ -92,12 +67,109 @@ def _format_eval_debug_payload(payload: dict | None) -> str:
     ])
 
 
-_EVAL_RUN_DUMP_DIR = Path("/tmp/rentmate-eval-runs")
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_EVAL_RUN_DUMP_DIR = Path(os.getenv("RENTMATE_EVAL_ARTIFACT_ROOT", str(_REPO_ROOT / "eval-runs")))
+_FALSEY_ENV_VALUES = {"0", "false", "no", "off"}
+
+
+def _eval_agent_output_enabled() -> bool:
+    return os.getenv("RENTMATE_EVAL_PRINT_AGENT_OUTPUT", "1").lower() not in _FALSEY_ENV_VALUES
+
+
+def _print_eval_agent_turn(user_message: str, result: dict) -> None:
+    if not _eval_agent_output_enabled():
+        return
+
+    reply = str(result.get("reply") or "").strip()
+    side_effects = result.get("side_effects") or []
+    pending = result.get("pending_suggestions") or []
+
+    print("\n[eval agent turn]")
+    print(f"user: {user_message}")
+    print(f"agent: {reply or '(empty reply)'}")
+    if side_effects or pending:
+        print(f"side_effects={len(side_effects)} pending_suggestions={len(pending)}")
+
+
+def _latest_agent_step_message(run: dict) -> str:
+    steps = run.get("steps") or []
+    for step in reversed(steps):
+        if step.get("source") == "agent" and step.get("message"):
+            return str(step["message"])
+    return ""
+
+
+def _print_eval_agent_runs(case_id: str, trial_index: int, run_payload: dict) -> None:
+    if not _eval_agent_output_enabled():
+        return
+
+    for run in run_payload.get("runs", []):
+        final_response = str(run.get("final_response") or _latest_agent_step_message(run)).strip()
+        if not final_response:
+            continue
+        run_id = run.get("run_id") or "(unknown run)"
+        print(f"\n[eval agent final] {case_id} trial {trial_index} run {run_id}")
+        print(final_response)
+
+
+def _serialize_agent_run(run, traces, steps, trajectory) -> dict:
+    return {
+        "run_id": run.id,
+        "source": run.source,
+        "status": run.status,
+        "task_id": run.task_id,
+        "conversation_id": run.conversation_id,
+        "model": run.model,
+        "agent_version": run.agent_version,
+        "execution_path": run.execution_path,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "ended_at": run.ended_at.isoformat() if run.ended_at else None,
+        "iteration_count": run.iteration_count,
+        "input_tokens": run.total_input_tokens,
+        "output_tokens": run.total_output_tokens,
+        "cost_cents": run.total_cost_cents,
+        "trigger_input": run.trigger_input,
+        "final_response": run.final_response,
+        "error_message": run.error_message,
+        "metadata": run.run_metadata,
+        "traces": [
+            {
+                "sequence_num": t.sequence_num,
+                "timestamp": t.timestamp.isoformat() if t.timestamp else None,
+                "trace_type": t.trace_type,
+                "source": t.source,
+                "tool_name": t.tool_name,
+                "summary": t.summary,
+                "detail": t.detail,
+                "input_tokens": t.input_tokens,
+                "output_tokens": t.output_tokens,
+                "model": t.model,
+                "suggestion_id": t.suggestion_id,
+            }
+            for t in traces
+        ],
+        "steps": [
+            {
+                "step_id": s.step_id,
+                "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+                "source": s.source,
+                "message": s.message,
+                "model_name": s.model_name,
+                "reasoning_content": s.reasoning_content,
+                "tool_calls": s.tool_calls,
+                "observation": s.observation,
+                "metrics": s.metrics,
+                "extra": s.extra,
+            }
+            for s in steps
+        ],
+        "atif_trajectory": trajectory,
+    }
 
 
 def _dump_eval_runs(item, report) -> str | None:
     """Serialize every AgentRun + AgentTrace from the test's DB session
-    into ``/tmp/rentmate-eval-runs/<test>-<ts>.json`` and return the path.
+    into ``eval-runs/<test>-<ts>.json`` and return the path.
 
     Must run while the test's transactional session is still open (i.e.
     inside ``pytest_runtest_makereport`` for the ``call`` phase, before
@@ -107,7 +179,8 @@ def _dump_eval_runs(item, report) -> str | None:
     if db is None:
         return None
 
-    from db.models import AgentRun, AgentTrace
+    from agent.trajectory import to_trajectory
+    from db.models import AgentRun, AgentStep, AgentTrace
 
     runs = db.query(AgentRun).order_by(AgentRun.started_at).all()
     if not runs:
@@ -121,42 +194,13 @@ def _dump_eval_runs(item, report) -> str | None:
             .order_by(AgentTrace.sequence_num)
             .all()
         )
-        payload.append({
-            "run_id": run.id,
-            "source": run.source,
-            "status": run.status,
-            "task_id": run.task_id,
-            "conversation_id": run.conversation_id,
-            "model": run.model,
-            "agent_version": run.agent_version,
-            "execution_path": run.execution_path,
-            "started_at": run.started_at.isoformat() if run.started_at else None,
-            "ended_at": run.ended_at.isoformat() if run.ended_at else None,
-            "iteration_count": run.iteration_count,
-            "input_tokens": run.total_input_tokens,
-            "output_tokens": run.total_output_tokens,
-            "cost_cents": run.total_cost_cents,
-            "trigger_input": run.trigger_input,
-            "final_response": run.final_response,
-            "error_message": run.error_message,
-            "metadata": run.run_metadata,
-            "traces": [
-                {
-                    "sequence_num": t.sequence_num,
-                    "timestamp": t.timestamp.isoformat() if t.timestamp else None,
-                    "trace_type": t.trace_type,
-                    "source": t.source,
-                    "tool_name": t.tool_name,
-                    "summary": t.summary,
-                    "detail": t.detail,
-                    "input_tokens": t.input_tokens,
-                    "output_tokens": t.output_tokens,
-                    "model": t.model,
-                    "suggestion_id": t.suggestion_id,
-                }
-                for t in traces
-            ],
-        })
+        steps = (
+            db.query(AgentStep)
+            .filter(AgentStep.run_id == run.id)
+            .order_by(AgentStep.step_id)
+            .all()
+        )
+        payload.append(_serialize_agent_run(run, traces, steps, to_trajectory(db, run.id)))
 
     _EVAL_RUN_DUMP_DIR.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", item.name)
@@ -167,75 +211,101 @@ def _dump_eval_runs(item, report) -> str | None:
     return str(path)
 
 
+def _write_eval_trial_artifacts(item, report) -> str | None:
+    if not os.getenv("RENTMATE_EVAL_WRITE_ARTIFACTS"):
+        return None
+
+    root = Path(os.getenv("RENTMATE_EVAL_ARTIFACT_ROOT", str(_EVAL_RUN_DUMP_DIR)))
+    trial_index = int(os.getenv("RENTMATE_EVAL_TRIAL_INDEX", "1"))
+    trials = int(os.getenv("RENTMATE_EVAL_TRIALS", "1"))
+    case_id = item.nodeid
+    case_dir = root / safe_id(case_id)
+    trial_dir = case_dir / f"trial-{trial_index:03d}"
+    trial_dir.mkdir(parents=True, exist_ok=True)
+
+    run_dump_path = _dump_eval_runs(item, report)
+    run_payload = {"test": case_id, "runs": []}
+    if run_dump_path:
+        run_payload = json.loads(Path(run_dump_path).read_text())
+    write_json(trial_dir / "agent_runs.json", run_payload)
+    _print_eval_agent_runs(case_id, trial_index, run_payload)
+
+    trajectories = [
+        {
+            "run_id": run.get("run_id"),
+            "trajectory": run.get("atif_trajectory"),
+        }
+        for run in run_payload.get("runs", [])
+    ]
+    write_json(trial_dir / "atif_trajectory.json", {"test": case_id, "trajectories": trajectories})
+
+    failure = ""
+    if report.failed:
+        failure = getattr(report, "longreprtext", "") or str(report.longrepr)
+    score_results = (getattr(item, "funcargs", {}) or {}).get("eval_scores") or []
+    score_payload = [score.to_dict() for score in score_results]
+    score = weighted_score(score_results) if score_results else (1.0 if report.passed else 0.0)
+    row = {
+        "case_id": case_id,
+        "trial": trial_index,
+        "trials": trials,
+        "passed": bool(report.passed),
+        "score": score,
+        "scorers": score_payload,
+        "duration_seconds": float(getattr(report, "duration", 0.0) or 0.0),
+        "started_at": utc_now_iso(),
+        "nodeid": item.nodeid,
+        "failure": failure,
+        "artifact_dir": str(trial_dir),
+        "agent_runs_path": str(trial_dir / "agent_runs.json"),
+        "atif_path": str(trial_dir / "atif_trajectory.json"),
+    }
+    write_json(trial_dir / "scores.json", row)
+    write_json(trial_dir / "input.json", {"nodeid": item.nodeid, "keywords": sorted(str(k) for k in item.keywords)})
+    write_json(trial_dir / "output.json", {"passed": report.passed, "failed": report.failed, "failure": failure})
+    append_jsonl(root / "eval-results.jsonl", row)
+    return str(trial_dir)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
-    if report.when != "call" or report.passed or not item.get_closest_marker("eval"):
+    if report.when != "call" or not item.get_closest_marker("eval"):
         return
-    try:
-        from agent.client import get_last_eval_debug_payload
+    if report.skipped:
+        return
+    if report.failed:
+        try:
+            from agent.client import get_last_eval_debug_payload
 
-        payload = get_last_eval_debug_payload()
-        report.sections.append(("Hermes Eval Context", _format_eval_debug_payload(payload)))
-    except Exception as exc:  # noqa: BLE001
-        report.sections.append(("Hermes Eval Context", f"Failed to capture Hermes debug payload: {exc}"))
+            payload = get_last_eval_debug_payload()
+            report.sections.append(("Hermes Eval Context", _format_eval_debug_payload(payload)))
+        except Exception as exc:  # noqa: BLE001
+            report.sections.append(("Hermes Eval Context", f"Failed to capture Hermes debug payload: {exc}"))
 
     try:
-        dump_path = _dump_eval_runs(item, report)
-        if dump_path:
-            marker = f">>> Eval run dump: {dump_path}"
+        artifact_dir = _write_eval_trial_artifacts(item, report)
+        if artifact_dir:
+            marker = f">>> Eval trial artifact: {artifact_dir}"
             print(f"\n{marker}")
-            report.sections.append(("Eval Run Dump", marker))
+            report.sections.append(("Eval Trial Artifact", marker))
+        elif report.failed:
+            dump_path = _dump_eval_runs(item, report)
+            if dump_path:
+                marker = f">>> Eval run dump: {dump_path}"
+                print(f"\n{marker}")
+                report.sections.append(("Eval Run Dump", marker))
     except Exception as exc:  # noqa: BLE001
         report.sections.append(("Eval Run Dump", f"Failed to dump eval runs: {exc}"))
 
 
-def pytest_runtest_logreport(report):
-    """Bucket each failed call-phase report so the session-finish hook
-    can decide whether to tolerate it.
-
-    Fires on the controller for every worker's report, so it works in
-    both serial and ``pytest-xdist -n auto`` modes. ``report.keywords``
-    survives the cross-process pickle and contains the test's markers.
-    """
-    if report.when != "call" or not report.failed:
-        return
-    config = _TOLERANCE_CONFIG
-    if config is None:
-        return
-    if report.keywords.get("eval"):
-        config._failed_eval_nodeids.append(report.nodeid)
-    else:
-        config._failed_other_nodeids.append(report.nodeid)
-
-
-@pytest.hookimpl(trylast=True)
-def pytest_sessionfinish(session, exitstatus):
-    """Soften CI exit status when a small number of eval-marked tests
-    flaked. Anything else (collection errors, non-eval failures, or
-    failures over the budget) still fails the session.
-    """
-    if exitstatus == 0:
-        return
-    config = session.config
-    failed_eval = list(getattr(config, "_failed_eval_nodeids", []))
-    failed_other = list(getattr(config, "_failed_other_nodeids", []))
-    tolerance = config.getoption("--eval-failure-tolerance")
-
-    if failed_other or not failed_eval or len(failed_eval) > tolerance:
-        return
-
-    print(
-        f"\n[evals] tolerating {len(failed_eval)} eval failure(s) "
-        f"(<= {tolerance}); marking session as PASS:"
-    )
-    for nid in failed_eval:
-        print(f"  - {nid}")
-    session.exitstatus = 0
-
-
 # ── DB fixtures ──────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def eval_scores():
+    return []
 
 
 @pytest.fixture
@@ -585,7 +655,9 @@ def run_turn_sync(db, task, user_message):
         with patch("db.session.SessionLocal", mock_sl), \
              patch("handlers.deps.SessionLocal", mock_sl), \
              patch("services.settings_service.SessionLocal", mock_sl):
-            return loop.run_until_complete(run_agent_turn(db, task, user_message))
+            result = loop.run_until_complete(run_agent_turn(db, task, user_message))
+            _print_eval_agent_turn(user_message, result)
+            return result
     finally:
         loop.close()
 
