@@ -27,6 +27,7 @@ htmlcov/
 eval/*.pdf
 test-results/
 **/test-results/
+eval-runs/
 
 # Node / Frontend
 node_modules/
