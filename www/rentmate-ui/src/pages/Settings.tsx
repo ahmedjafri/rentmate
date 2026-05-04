@@ -74,6 +74,8 @@ interface AgentFile {
 
 interface SettingsPageProps {
   hideLlmConfig?: boolean;
+  hideChatIntegrations?: boolean;
+  hideAgentIntegrations?: boolean;
 }
 
 const AGENT_FILE_LABELS: Record<string, string> = {
@@ -90,7 +92,11 @@ function labelForAgentFile(filename: string): string {
   return AGENT_FILE_LABELS[filename] ?? filename;
 }
 
-export const SettingsPage = ({ hideLlmConfig = false }: SettingsPageProps) => {
+export const SettingsPage = ({
+  hideLlmConfig = false,
+  hideChatIntegrations = false,
+  hideAgentIntegrations = false,
+}: SettingsPageProps) => {
   const { actionPolicySettings, setActionPolicySettings } = useApp();
   const [llmConfig, setLlmConfig] = useState<LlmConfig>({ apiKey: '', model: '', baseUrl: '' });
   const [integrations, setIntegrations] = useState<IntegrationsState>({
@@ -123,76 +129,80 @@ export const SettingsPage = ({ hideLlmConfig = false }: SettingsPageProps) => {
         }
       })
       .catch(() => {});
-    authFetch('/api/settings/integrations')
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (data) {
-          setIntegrations(prev => ({
-            ...prev,
-            quo: {
-              enabled: data.quo?.enabled ?? false,
-              apiKey: data.quo?.api_key ?? '',
-              fromNumber: data.quo?.from_number ?? '',
-              phoneWhitelist: (data.quo?.phone_whitelist ?? []).join(', '),
-              webhookUrl: data.quo?.webhook_url ?? '',
-            },
-            telegram: {
-              enabled: data.telegram?.enabled ?? false,
-              token: data.telegram?.token ?? '',
-              botToken: '',
-              appToken: '',
-              allowFrom: (data.telegram?.allow_from ?? []).join('\n'),
-            },
-            whatsapp: {
-              enabled: data.whatsapp?.enabled ?? false,
-              token: data.whatsapp?.bridge_url ?? 'ws://localhost:3001',
-              botToken: '',
-              appToken: '',
-              allowFrom: (data.whatsapp?.allow_from ?? []).join('\n'),
-            },
-          }));
-        }
-      })
-      .catch(() => {});
-    authFetch('/api/settings/agent/integrations')
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (data) {
-          setAgentIntegrations({
-            braveApiKey: '',
-            webSearchEnabled: data.web_search_enabled ?? false,
-          });
-        }
-      })
-      .catch(() => {});
-    authFetch('/api/settings/integrations/quo/webhook')
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (data) {
-          setIntegrations(prev => ({
-            ...prev,
-            quo: {
-              ...prev.quo,
-              webhookUrl: data.webhook_url ?? prev.quo.webhookUrl,
-              webhookCanRegister: data.can_register ?? true,
-              webhookReason: data.reason ?? undefined,
-            },
-          }));
-        }
-      })
-      .catch(() => {});
-    authFetch('/api/settings/agent/files')
-      .then(r => r.ok ? r.json() : null)
-      .then((files: AgentFile[] | null) => {
-        if (files) {
-          setAgentFiles(files);
-          const contents: Record<string, string> = {};
-          for (const f of files) contents[f.filename] = f.content;
-          setAgentFileContents(contents);
-        }
-      })
-      .catch(() => {});
-  }, []);
+    if (!hideChatIntegrations) {
+      authFetch('/api/settings/integrations')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data) {
+            setIntegrations(prev => ({
+              ...prev,
+              quo: {
+                enabled: data.quo?.enabled ?? false,
+                apiKey: data.quo?.api_key ?? '',
+                fromNumber: data.quo?.from_number ?? '',
+                phoneWhitelist: (data.quo?.phone_whitelist ?? []).join(', '),
+                webhookUrl: data.quo?.webhook_url ?? '',
+              },
+              telegram: {
+                enabled: data.telegram?.enabled ?? false,
+                token: data.telegram?.token ?? '',
+                botToken: '',
+                appToken: '',
+                allowFrom: (data.telegram?.allow_from ?? []).join('\n'),
+              },
+              whatsapp: {
+                enabled: data.whatsapp?.enabled ?? false,
+                token: data.whatsapp?.bridge_url ?? 'ws://localhost:3001',
+                botToken: '',
+                appToken: '',
+                allowFrom: (data.whatsapp?.allow_from ?? []).join('\n'),
+              },
+            }));
+          }
+        })
+        .catch(() => {});
+      authFetch('/api/settings/integrations/quo/webhook')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data) {
+            setIntegrations(prev => ({
+              ...prev,
+              quo: {
+                ...prev.quo,
+                webhookUrl: data.webhook_url ?? prev.quo.webhookUrl,
+                webhookCanRegister: data.can_register ?? true,
+                webhookReason: data.reason ?? undefined,
+              },
+            }));
+          }
+        })
+        .catch(() => {});
+    }
+    if (!hideAgentIntegrations) {
+      authFetch('/api/settings/agent/integrations')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data) {
+            setAgentIntegrations({
+              braveApiKey: '',
+              webSearchEnabled: data.web_search_enabled ?? false,
+            });
+          }
+        })
+        .catch(() => {});
+      authFetch('/api/settings/agent/files')
+        .then(r => r.ok ? r.json() : null)
+        .then((files: AgentFile[] | null) => {
+          if (files) {
+            setAgentFiles(files);
+            const contents: Record<string, string> = {};
+            for (const f of files) contents[f.filename] = f.content;
+            setAgentFileContents(contents);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [hideChatIntegrations, hideAgentIntegrations]);
 
   const handleChange = (policyKey: keyof typeof actionPolicySettings, level: ActionPolicyLevel) => {
     setActionPolicySettings({ ...actionPolicySettings, [policyKey]: level });
@@ -427,6 +437,7 @@ export const SettingsPage = ({ hideLlmConfig = false }: SettingsPageProps) => {
       </Card>
 
       {/* Chat Integrations */}
+      {!hideChatIntegrations && (
       <Card className="p-6 rounded-xl">
         <div className="flex items-center gap-2 mb-1">
           <MessageSquare className="h-5 w-5 text-primary" />
@@ -652,8 +663,10 @@ export const SettingsPage = ({ hideLlmConfig = false }: SettingsPageProps) => {
 
         <Button onClick={handleSaveIntegrations} className="w-full mt-6">Save Chat Integrations</Button>
       </Card>
+      )}
 
       {/* Agent Integrations */}
+      {!hideAgentIntegrations && (
       <Card className="p-6 rounded-xl">
         <div className="flex items-center gap-2 mb-1">
           <Puzzle className="h-5 w-5 text-primary" />
@@ -703,9 +716,10 @@ export const SettingsPage = ({ hideLlmConfig = false }: SettingsPageProps) => {
 
         <Button onClick={handleSaveAgentIntegrations} className="w-full mt-6">Save Agent Integrations</Button>
       </Card>
+      )}
 
       {/* AI Agent workspace */}
-      {agentFiles.length > 0 && (
+      {!hideAgentIntegrations && agentFiles.length > 0 && (
         <Card className="p-6 rounded-xl">
           <div className="flex items-center gap-2 mb-1">
             <Bot className="h-5 w-5 text-primary" />
