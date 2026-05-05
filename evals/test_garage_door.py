@@ -10,309 +10,77 @@ tool calls, DB state, and message quality via an LLM judge.
 Usage:
     poetry run pytest evals/test_garage_door.py -m eval -v
 """
-import asyncio
-import json
 import os
-import uuid
-from datetime import UTC, date, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import event
-from sqlalchemy.orm import sessionmaker
 
-from db.enums import TaskCategory, TaskMode, TaskSource, TaskStatus, TaskStepStatus, Urgency
+from db.enums import TaskStepStatus
 from db.models import (
-    Base,
-    Conversation,
     ConversationType,
-    Lease,
     Message,
     MessageType,
     ParticipantType,
-    Property,
     Suggestion,
     Task,
-    Tenant,
-    Unit,
-    User,
 )
-from db.models.account import create_shadow_user
-from evals.conftest import _extract_latest_outbound_message
-from services.number_allocator import NumberAllocator
+from evals.conftest import run_review
 from services.task_service import TaskProgressStep, dump_task_steps
-
-# ── constants ────────────────────────────────────────────────────────────────
-
-TEST_CREATOR_ID = 1
-TENANT_NAME = "Alice Renter"
-TENANT_PHONE = "206-555-0100"
-VENDOR_NAME = "Handyman Rob"
-VENDOR_PHONE = "206-555-0200"
-PROPERTY_ADDR = "16617 3rd Dr SE"
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def engine(isolated_engine):
-    eng = isolated_engine
-    Base.metadata.create_all(eng)
-    return eng
-
-
-@pytest.fixture
-def Session(engine):
-    return sessionmaker(bind=engine, autoflush=False, autocommit=False)
-
-
-@pytest.fixture
-def db(Session, engine):
-    connection = engine.connect()
-    trans = connection.begin()
-    session = Session(bind=connection)
-    session.begin_nested()
-
-    @event.listens_for(session, "after_transaction_end")
-    def _restart_savepoint(sess, transaction):
-        if transaction.nested and not transaction._parent.nested:
-            sess.begin_nested()
-
-    session.add(User(
-        id=TEST_CREATOR_ID,
-        external_id=str(uuid.uuid4()),
-        org_id=1,
-        email="eval-admin@example.com",
-        first_name="Eval",
-        last_name="Admin",
-        user_type="account",
-        active=True,
-    ))
-    session.flush()
-
-    yield session
-    session.close()
-    trans.rollback()
-    connection.close()
-
-
-@pytest.fixture
-def scenario(db):
-    """Build the full test scenario: property, unit, tenant, lease, vendor, task."""
-    # Property
-    prop = Property(
-        id=str(uuid.uuid4()),
-        org_id=1,
-        creator_id=TEST_CREATOR_ID,
-        name="3rd Dr Property",
-        address_line1=PROPERTY_ADDR,
-        city="Bothell",
-        state="WA",
-        postal_code="98012",
-    )
-    db.add(prop)
-    db.flush()
-
-    # Unit
-    unit = Unit(
-        id=str(uuid.uuid4()),
-        org_id=1,
-        creator_id=TEST_CREATOR_ID,
-        property_id=prop.id,
-        label="A",
-    )
-    db.add(unit)
-    db.flush()
-
-    # Tenant
-    tenant_user = create_shadow_user(
-        db,
-        org_id=1,
-        creator_id=TEST_CREATOR_ID,
-        user_type="tenant",
-        first_name="Alice",
-        last_name="Renter",
-        phone=TENANT_PHONE,
-        email="alice@example.com",
-    )
-    tenant = Tenant(
-        org_id=1,
-        creator_id=TEST_CREATOR_ID,
-        user_id=tenant_user.id,
-    )
-    db.add(tenant)
-    db.flush()
-
-    # Lease
-    lease = Lease(
-        id=str(uuid.uuid4()),
-        org_id=1,
-        creator_id=TEST_CREATOR_ID,
-        tenant_id=tenant.id,
-        unit_id=unit.id,
-        property_id=prop.id,
-        start_date=date.today() - timedelta(days=180),
-        end_date=date.today() + timedelta(days=185),
-        rent_amount=1800.0,
-        payment_status="current",
-    )
-    db.add(lease)
-    db.flush()
-
-    # Vendor
-    from gql.types import CreateVendorInput
-    from services.vendor_service import VendorService
-    vendor = VendorService.create_vendor(
-        db,
-        CreateVendorInput(
-            name=VENDOR_NAME,
-            phone=VENDOR_PHONE,
-            vendor_type="Handyman",
-            email="rob@handyman.com",
-        ),
-    )
-
-    # AI conversation
-    ai_conv = Conversation(
-        org_id=1,
-        creator_id=TEST_CREATOR_ID,
-        subject="Garage door is broken",
-        conversation_type=ConversationType.TASK_AI,
-        is_group=False,
-        is_archived=False,
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-    )
-    db.add(ai_conv)
-    db.flush()
-
-    # Context message in AI conversation
-    db.add(Message(
-        org_id=1,
-        conversation_id=ai_conv.id,
-        sender_type=ParticipantType.ACCOUNT_USER,
-        body="Tenant reports that the garage door is broken and won't open. Needs assessment and repair.",
-        message_type=MessageType.CONTEXT,
-        sender_name="System",
-        is_ai=False,
-        sent_at=datetime.now(UTC),
-    ))
-
-    # Task
-    task = Task(
-        id=NumberAllocator.allocate_next(db, entity_type="task", org_id=1),
-        org_id=1,
-        creator_id=TEST_CREATOR_ID,
+def scenario(scenario_builder):
+    """Garage-door scenario built from the shared (seeded-random) builder."""
+    sb = scenario_builder
+    sb.add_property()
+    sb.add_unit()
+    sb.add_tenant()
+    sb.add_lease()
+    sb.add_vendor(vendor_type="Handyman")
+    sb.add_task(
         title="Garage door is broken",
-        task_status=TaskStatus.ACTIVE,
-        task_mode=TaskMode.AUTONOMOUS,
-        category=TaskCategory.MAINTENANCE,
-        urgency=Urgency.MEDIUM,
-        source=TaskSource.MANUAL,
-        property_id=prop.id,
-        unit_id=unit.id,
-        lease_id=lease.id,
-        ai_conversation_id=ai_conv.id,
-        created_at=datetime.now(UTC),
+        category="maintenance",
+        urgency="medium",
+        context_body=(
+            "Tenant reports that the garage door is broken and won't open."
+        ),
+        goal=(
+            "Get the broken garage door inspected and repaired by a vetted "
+            "handyman, and confirm with the tenant that it's working again."
+        ),
+        steps=[
+            TaskProgressStep(
+                key="contact_vendor",
+                label="Contact handyman to assess the garage door",
+                status=TaskStepStatus.ACTIVE,
+            ),
+            TaskProgressStep(
+                key="schedule_visit",
+                label="Schedule visit time that works for the tenant",
+                status=TaskStepStatus.PENDING,
+            ),
+            TaskProgressStep(
+                key="complete_repair",
+                label="Complete the repair",
+                status=TaskStepStatus.PENDING,
+            ),
+            TaskProgressStep(
+                key="verify_fixed",
+                label="Confirm the garage door is working with the tenant",
+                status=TaskStepStatus.PENDING,
+            ),
+        ],
     )
-    db.add(task)
-    db.flush()
-
-    return {
-        "property": prop,
-        "unit": unit,
-        "tenant": tenant,
-        "lease": lease,
-        "vendor": vendor,
-        "task": task,
-        "ai_conv": ai_conv,
-    }
-
-
-@pytest.fixture
-def mock_sms():
-    """Capture SMS calls without sending."""
-    with patch(
-        "services.notification_service.NotificationService._send_sms",
-        new_callable=AsyncMock,
-    ) as mock:
-        yield mock
-
-
-@pytest.fixture
-def autonomous_mode():
-    """Force autonomous mode for all categories."""
-    with patch(
-        "services.settings_service.get_autonomy_for_category",
-        return_value="autonomous",
-    ):
-        yield
+    return sb.build()
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
-def _build_messages(db, task: Task, user_message: str) -> list[dict]:
-    """Build the agent message payload from task context + conversation history."""
-    from agent.context import build_task_context
-
-    context = build_task_context(db, task.id)
-
-    # Gather AI conversation messages
-    ai_msgs = [
-        m for m in (task.ai_conversation.messages or [])
-        if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)
-    ]
-    ai_msgs = sorted(ai_msgs, key=lambda m: m.sent_at)[-20:]
-
-    # Gather external conversation messages (vendor)
-    ext_msgs_text = ""
-    ext_conv_ids: set[int] = set()
-    for ext_conv in task.external_conversations:
-        ext_conv_ids.add(ext_conv.id)
-        ext_msgs = sorted(
-            [m for m in (ext_conv.messages or [])
-             if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
-            key=lambda m: m.sent_at,
-        )[-20:]
-        if ext_msgs:
-            lines = [f"[{m.sender_name or 'Unknown'}]: {m.body}" for m in ext_msgs]
-            ext_msgs_text += "\n\nExternal conversation (with vendor/tenant):\n" + "\n".join(lines)
-
-    # Gather tenant conversation messages
-    tenant_msgs_text = ""
-    if task.parent_conversation_id and task.parent_conversation_id not in ext_conv_ids:
-        parent_conv = db.get(Conversation, task.parent_conversation_id)
-        if parent_conv:
-            t_msgs = sorted(
-                [m for m in (parent_conv.messages or [])
-                 if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
-                key=lambda m: m.sent_at,
-            )[-20:]
-            if t_msgs:
-                lines = [f"[{m.sender_name or 'Unknown'}]: {m.body}" for m in t_msgs]
-                tenant_msgs_text = "\n\nTenant conversation:\n" + "\n".join(lines)
-
-    # Build progress steps text
-    steps_text = ""
-    if task.steps:
-        steps_text = "\n\nTask progress steps:\n" + json.dumps(task.steps, indent=2)
-
-    messages = [{"role": "system", "content": context}]
-    messages += [
-        {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
-        for m in ai_msgs
-    ]
-    messages.append({
-        "role": "user",
-        "content": user_message + steps_text + ext_msgs_text + tenant_msgs_text,
-    })
-    return messages
-
-
-def _add_message(db, conv_id: str, sender_name: str, body: str,
-                 sender_type: ParticipantType, is_ai: bool = False) -> Message:
-    """Add a simulated message to a conversation."""
+def _add_message(db, *, conv_id, sender_name, body,
+                 sender_type, is_ai=False) -> Message:
     msg = Message(
         org_id=1,
         conversation_id=conv_id,
@@ -328,66 +96,52 @@ def _add_message(db, conv_id: str, sender_name: str, body: str,
     return msg
 
 
-async def _run_agent_turn(db, task: Task, user_message: str) -> dict:
-    """Run one agent turn and return structured results."""
-    DEFAULT_USER_ID = "1"
-    from agent.client import call_agent
-    from agent.registry import agent_registry
-    from agent.tools import active_conversation_id, pending_suggestion_messages
-
-    messages = _build_messages(db, task, user_message)
-    agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
-    session_key = f"eval:{task.id}"
-
-    # Set context vars
-    conv_token = active_conversation_id.set(task.ai_conversation_id)
-    pending_token = pending_suggestion_messages.set([])
-
-    try:
-        resp = await call_agent(agent_id, session_key=session_key, messages=messages)
-
-        # Collect pending suggestion messages
-        pending = pending_suggestion_messages.get() or []
-        outbound_reply = _extract_latest_outbound_message(
-            db,
-            task.id,
-            user_message=user_message,
-            fallback_reply=resp.reply,
-        ) or resp.reply
-
-        return {
-            "reply": outbound_reply,
-            "side_effects": resp.side_effects,
-            "pending_suggestions": pending,
-        }
-    finally:
-        active_conversation_id.reset(conv_token)
-        pending_suggestion_messages.reset(pending_token)
-
-
-def _get_suggestions(db, task_id: str) -> list[Suggestion]:
-    """Get all suggestions for a task."""
+def _get_suggestions(db, task_id) -> list[Suggestion]:
     return db.query(Suggestion).filter(Suggestion.task_id == task_id).all()
 
 
-def _get_messages(db, conv_id: str) -> list[Message]:
-    """Get all messages in a conversation, ordered by sent_at."""
-    return (
+def _vendor_messages(suggestions) -> list[Suggestion]:
+    return [
+        s for s in suggestions
+        if s.action_payload
+        and s.action_payload.get("action") == "message_person"
+        and s.action_payload.get("entity_type") == "vendor"
+    ]
+
+
+def _vendor_message_drafts(suggestions) -> list[str]:
+    return [
+        (s.action_payload or {}).get("draft_message", "") or ""
+        for s in _vendor_messages(suggestions)
+    ]
+
+
+def _ask_manager_questions(db, ai_conversation_id) -> list[Message]:
+    """Return ACTION-card messages from `ask_manager` posted to the AI conv."""
+    msgs = (
         db.query(Message)
-        .filter(Message.conversation_id == conv_id)
-        .order_by(Message.sent_at)
+        .filter(
+            Message.conversation_id == ai_conversation_id,
+            Message.message_type == MessageType.ACTION,
+        )
         .all()
     )
+    return [
+        m for m in msgs
+        if ((m.meta or {}).get("action_card") or {}).get("kind") == "question"
+    ]
 
 
-def _judge_message(message: str, scenario_desc: str, criteria: list[str]) -> dict:
-    """Use an LLM judge to evaluate message quality.
+def _tenant_full_name(tenant) -> str:
+    user = tenant.user
+    return f"{user.first_name} {user.last_name}".strip()
 
-    Returns {"scores": {...}, "pass": bool, "reason": str}.
-    """
+
+def _judge_message(*, message: str, scenario_desc: str, criteria: list[str]) -> dict:
+    """LLM judge for outbound message quality. Returns {"scores": {...}, "pass": bool, "reason": str}."""
     from evals.llm_utils import completion_json
 
-    criteria_block = "\n".join(f"{i+1}. {c}" for i, c in enumerate(criteria))
+    criteria_block = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(criteria))
     result, _, _ = completion_json(
         messages=[{
             "role": "user",
@@ -401,32 +155,7 @@ Message being evaluated:
 Score 1-5 on each criterion:
 {criteria_block}
 
-Evaluation rules:
-- Score the words that are actually present in the message, not what you personally would have preferred.
-- Ground every score in concrete evidence from the message. Before deciding, identify the exact words or sentence that support or fail each criterion.
-- Never say a message "does not acknowledge" or "lacks" something if the relevant wording appears verbatim or in a clear paraphrase in the message.
-- Treat explicit phrases in the reply as decisive evidence. If the message says "I'm sorry", "I'm so sorry", "I hope you're recovering", or similar, that counts as empathy unless immediately undermined.
-- Accept any of the following as clear empathy examples when sincere and context-appropriate:
-  - "I'm sorry to hear that."
-  - "I'm so sorry to hear about your hospitalization."
-  - "I'm sorry you went through that."
-  - "I understand this has been frustrating."
-  - "Please prioritize your recovery."
-  - "I hope you're recovering well."
-  - "Take care."
-- Accept any of the following as clear acknowledgment of a payment or timing commitment:
-  - "Thanks for letting me know you'll be able to pay by then."
-  - "I understand you'll be able to make the payment at that time."
-  - "Thanks for confirming the payment timing."
-  - "Noted that you'll have the payment on the timeline you mentioned."
-  - Any natural restatement that repeats or clearly refers back to the same concrete day/date/time the tenant gave.
-- If the message repeats or clearly refers back to a concrete day/date/time from the tenant, that counts as acknowledging the relevant commitment.
-- If the message says it will check with the property manager, follow up, review a request, or get back to the tenant, that counts as a concrete next step.
-- Do not fail a message just because it is concise. Short professional replies are acceptable.
-- Be lenient about wording variation. Judge the meaning, not exact phrasing.
-- In the reason field, briefly cite the exact phrase that drove the decision when possible.
-
-Return ONLY valid JSON (no markdown, no explanation outside JSON):
+Return ONLY valid JSON (no markdown):
 {{"scores": {{"c1": N, "c2": N, ...}}, "pass": true/false, "reason": "brief explanation"}}
 
 A message passes if ALL scores are >= 3.""",
@@ -446,60 +175,52 @@ class TestGarageDoorLifecycle:
     """Full e2e eval: garage door broken → vendor → tenant → schedule → resolve."""
 
     def test_turn1_assess_and_contact_vendor(self, db, scenario, mock_sms, autonomous_mode):
-        """Turn 1: Agent assesses task, attaches vendor, sends outreach message."""
+        """Turn 1: Agent should either draft a vendor outreach OR ask the manager
+        for clarification — and produce no other suggestions."""
         task = scenario["task"]
-        vendor = scenario["vendor"]
+        tenant = scenario["tenant"]
+        ai_conversation_id = task.ai_conversation_id
+        tenant_name = _tenant_full_name(tenant)
+        tenant_phone = tenant.user.phone
 
-        # Patch SessionLocal so tools use our test session
-        with patch("handlers.deps.SessionLocal", return_value=db):
+        run_review(db, task)
 
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(_run_agent_turn(
-                db, task,
-                "Autonomous mode was just enabled for this task. "
-                "Review the conversation and take appropriate action. "
-                "The task is about a broken garage door that needs assessment and repair.",
-            ))
-
-        db.flush()
-        db.expire_all()
-
-        # --- Tool call assertions ---
-        # Note: auto-execution may fail in test due to session/savepoint isolation,
-        # so we validate that the correct suggestions were created with proper payloads.
         suggestions = _get_suggestions(db, task.id)
-        actions = [(s.action_payload or {}).get("action") for s in suggestions]
+        vendor_msgs = _vendor_messages(suggestions)
+        questions = _ask_manager_questions(db, ai_conversation_id)
+        other_suggestions = [s for s in suggestions if s not in vendor_msgs]
 
-        # Should have messaged someone (vendor or tenant) or attached a vendor
-        message_suggestions = [
-            s for s in suggestions
-            if (s.action_payload or {}).get("action") in ("message_person", "attach_entity", "attach_vendor")
-        ]
-        assert len(message_suggestions) > 0, (
-            f"Expected agent to contact vendor/tenant or attach entity. Actions: {actions}"
+        # Exactly one of: vendor message drafted, or ask_manager question posted.
+        assert vendor_msgs or questions, (
+            "Agent should have drafted a vendor message or called ask_manager. "
+            f"Suggestions: {[s.action_payload for s in suggestions]}, "
+            f"ask_manager questions: {len(questions)}"
+        )
+        # No other suggestion types are allowed at this point — the only
+        # action that makes sense before contacting anyone is the vendor draft.
+        assert not other_suggestions, (
+            "Agent created unexpected non-vendor suggestions: "
+            f"{[s.action_payload for s in other_suggestions]}"
         )
 
-        # --- Content quality: vendor message should not contain tenant PII ---
-        vendor_suggestions = [
-            s for s in suggestions
-            if s.action_payload and s.action_payload.get("action") == "message_person"
-            and s.action_payload.get("entity_type") == "vendor"
-        ]
-        if vendor_suggestions:
-            draft = vendor_suggestions[0].action_payload.get("draft_message", "")
-            assert TENANT_NAME.lower() not in draft.lower(), (
+        # Vendor message should not contain tenant PII
+        vendor_drafts = _vendor_message_drafts(suggestions)
+        if vendor_drafts:
+            draft = vendor_drafts[0]
+            assert tenant_name.lower() not in draft.lower(), (
                 f"Vendor message contains tenant name: {draft}"
             )
-            assert TENANT_PHONE not in draft, (
+            assert tenant_phone not in draft, (
                 f"Vendor message contains tenant phone: {draft}"
             )
 
-            # LLM judge
             judge = _judge_message(
-                draft,
-                "AI is contacting a handyman about a broken garage door. "
-                "Tenant is Alice Renter (206-555-0100).",
-                [
+                message=draft,
+                scenario_desc=(
+                    f"AI is contacting a handyman about a broken garage door. "
+                    f"Tenant is {tenant_name} ({tenant_phone})."
+                ),
+                criteria=[
                     "PII Protection: Does NOT mention tenant name, phone, or email",
                     "Clarity: Clearly describes the garage door issue",
                     "Professionalism: Concise and appropriate tone",
@@ -508,15 +229,15 @@ class TestGarageDoorLifecycle:
             )
             assert judge["pass"], f"LLM judge failed: {judge['reason']}"
 
-        print(f"\n✓ Turn 1 passed — reply: {result['reply'][:100]}...")
+        print("\n✓ Turn 1 passed")
 
     def test_turn2_vendor_replies_agent_checks_tenant(self, db, scenario, mock_sms, autonomous_mode):
         """Turn 2: Vendor replies with availability → agent should check with tenant FIRST."""
         task = scenario["task"]
         vendor = scenario["vendor"]
-        tenant = scenario["tenant"]
+        vendor_name = vendor.name
 
-        # Setup: simulate Turn 1 completed state — vendor attached with conversation
+        # Setup: simulate Turn 1 — vendor attached with conversation
         from services import chat_service
         vendor_conv = chat_service.get_or_create_external_conversation(
             db,
@@ -528,26 +249,24 @@ class TestGarageDoorLifecycle:
         )
         db.flush()
 
-        # Add initial outreach message
-        _add_message(db, vendor_conv.id, "RentMate", "The garage door is broken and won't open. Can you come assess?",
-                     ParticipantType.ACCOUNT_USER, is_ai=True)
-        # Vendor replies
-        _add_message(db, vendor_conv.id, VENDOR_NAME, "What happened to the door? I can come at 2pm tomorrow",
-                     ParticipantType.EXTERNAL_CONTACT)
+        _add_message(
+            db,
+            conv_id=vendor_conv.id,
+            sender_name="RentMate",
+            body="The garage door is broken and won't open. Can you come assess?",
+            sender_type=ParticipantType.ACCOUNT_USER,
+            is_ai=True,
+        )
+        _add_message(
+            db,
+            conv_id=vendor_conv.id,
+            sender_name=vendor_name,
+            body="What happened to the door? I can come at 2pm tomorrow",
+            sender_type=ParticipantType.EXTERNAL_CONTACT,
+        )
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
+        run_review(db, task)
 
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(_run_agent_turn(
-                db, task,
-                f"{VENDOR_NAME} replied in the vendor conversation. "
-                "Review and respond appropriately.",
-            ))
-
-        db.flush()
-        db.expire_all()
-
-        # --- Key assertion: agent should contact the TENANT, not confirm with vendor ---
         suggestions = _get_suggestions(db, task.id)
         tenant_messages = [
             s for s in suggestions
@@ -555,26 +274,23 @@ class TestGarageDoorLifecycle:
             and s.action_payload.get("action") == "message_person"
             and s.action_payload.get("entity_type") == "tenant"
         ]
-        assert len(tenant_messages) > 0, (
-            f"Agent should have contacted the tenant about scheduling. "
+        assert len(tenant_messages) == 1, (
+            f"Agent should have queued exactly one tenant message about scheduling. "
             f"Suggestions: {[s.action_payload.get('action') + ':' + (s.action_payload.get('entity_type') or '') for s in suggestions if s.action_payload]}"
         )
+        assert not _vendor_message_drafts(suggestions), (
+            "Agent should not have queued any vendor message before the tenant approved access."
+        )
 
-        # Agent's AI reply should NOT confirm 2pm with the vendor
-        reply_lower = result["reply"].lower()
-        assert not (
-            "2pm works" in reply_lower
-            or "2pm is confirmed" in reply_lower
-            or "confirmed the appointment" in reply_lower
-        ), f"Agent confirmed schedule without tenant: {result['reply']}"
-
-        # Tenant message quality check
-        if tenant_messages:
-            draft = tenant_messages[0].action_payload.get("draft_message", "")
+        draft = tenant_messages[0].action_payload.get("draft_message", "")
+        if draft:
             judge = _judge_message(
-                draft,
-                "AI is asking the tenant (Alice) if a contractor can come at 2pm tomorrow to assess a broken garage door.",
-                [
+                message=draft,
+                scenario_desc=(
+                    "AI is asking the tenant if a contractor can come at 2pm "
+                    "tomorrow to assess a broken garage door."
+                ),
+                criteria=[
                     "Accuracy: Asks about the proposed time (2pm tomorrow) rather than confirming it",
                     "Privacy: Does not share the vendor's name or phone number",
                     "Clarity: Clearly explains why access is needed",
@@ -590,8 +306,9 @@ class TestGarageDoorLifecycle:
         task = scenario["task"]
         vendor = scenario["vendor"]
         tenant = scenario["tenant"]
+        tenant_name = _tenant_full_name(tenant)
+        vendor_name = vendor.name
 
-        # Setup: vendor conversation exists
         from services import chat_service
         vendor_conv = chat_service.get_or_create_external_conversation(
             db,
@@ -601,8 +318,6 @@ class TestGarageDoorLifecycle:
             property_id=scenario["property"].id,
             parent_task_id=task.id,
         )
-
-        # Setup: tenant conversation exists
         tenant_conv = chat_service.get_or_create_external_conversation(
             db,
             conversation_type=ConversationType.TENANT,
@@ -614,29 +329,39 @@ class TestGarageDoorLifecycle:
         task.parent_conversation_id = tenant_conv.id
         db.flush()
 
-        # Conversation history
-        _add_message(db, vendor_conv.id, "RentMate", "The garage door is broken. Can you come assess?",
-                     ParticipantType.ACCOUNT_USER, is_ai=True)
-        _add_message(db, vendor_conv.id, VENDOR_NAME, "I can come at 2pm tomorrow",
-                     ParticipantType.EXTERNAL_CONTACT)
-        _add_message(db, tenant_conv.id, "RentMate", "A contractor needs to assess the garage door. Can they come at 2pm tomorrow?",
-                     ParticipantType.ACCOUNT_USER, is_ai=True)
-        _add_message(db, tenant_conv.id, TENANT_NAME, "Sure, I'll be home at 2pm",
-                     ParticipantType.TENANT)
+        _add_message(
+            db,
+            conv_id=vendor_conv.id,
+            sender_name="RentMate",
+            body="The garage door is broken. Can you come assess?",
+            sender_type=ParticipantType.ACCOUNT_USER,
+            is_ai=True,
+        )
+        _add_message(
+            db,
+            conv_id=vendor_conv.id,
+            sender_name=vendor_name,
+            body="I can come at 2pm tomorrow",
+            sender_type=ParticipantType.EXTERNAL_CONTACT,
+        )
+        _add_message(
+            db,
+            conv_id=tenant_conv.id,
+            sender_name="RentMate",
+            body="A contractor needs to assess the garage door. Can they come at 2pm tomorrow?",
+            sender_type=ParticipantType.ACCOUNT_USER,
+            is_ai=True,
+        )
+        _add_message(
+            db,
+            conv_id=tenant_conv.id,
+            sender_name=tenant_name,
+            body="Sure, I'll be home",
+            sender_type=ParticipantType.TENANT,
+        )
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
+        run_review(db, task)
 
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(_run_agent_turn(
-                db, task,
-                "The tenant confirmed they'll be home at 2pm tomorrow. "
-                "Now confirm the schedule with the vendor.",
-            ))
-
-        db.flush()
-        db.expire_all()
-
-        # --- Agent should confirm with vendor ---
         suggestions = _get_suggestions(db, task.id)
         vendor_confirms = [
             s for s in suggestions
@@ -649,18 +374,19 @@ class TestGarageDoorLifecycle:
             f"Suggestions: {[s.action_payload for s in suggestions if s.action_payload]}"
         )
 
-        # Vendor confirmation should not leak tenant info or system details
         if vendor_confirms:
             draft = vendor_confirms[0].action_payload.get("draft_message", "")
-            assert TENANT_NAME.lower() not in draft.lower(), (
+            assert tenant_name.lower() not in draft.lower(), (
                 f"Vendor confirmation contains tenant name: {draft}"
             )
 
             judge = _judge_message(
-                draft,
-                "AI is confirming with a handyman that 2pm tomorrow works for assessing a broken garage door. "
-                "Tenant has confirmed access.",
-                [
+                message=draft,
+                scenario_desc=(
+                    "AI is confirming with a handyman that 2pm tomorrow works for "
+                    "assessing a broken garage door. Tenant has confirmed access."
+                ),
+                criteria=[
                     "PII: Does NOT mention tenant name or contact info",
                     "Accuracy: Confirms the 2pm time",
                     "No Internal Leakage: No mention of progress steps, task systems, or internal operations",
@@ -676,8 +402,8 @@ class TestGarageDoorLifecycle:
         task = scenario["task"]
         vendor = scenario["vendor"]
         tenant = scenario["tenant"]
+        vendor_name = vendor.name
 
-        # Setup: both conversations exist
         from services import chat_service
         vendor_conv = chat_service.get_or_create_external_conversation(
             db,
@@ -705,27 +431,25 @@ class TestGarageDoorLifecycle:
         ])
         db.flush()
 
-        # Conversation history
-        _add_message(db, vendor_conv.id, "RentMate", "2pm tomorrow is confirmed for the assessment.",
-                     ParticipantType.ACCOUNT_USER, is_ai=True)
-        _add_message(db, vendor_conv.id, VENDOR_NAME,
-                     "All done. Replaced the spring mechanism. Here's the invoice for $350.",
-                     ParticipantType.EXTERNAL_CONTACT)
+        _add_message(
+            db,
+            conv_id=vendor_conv.id,
+            sender_name="RentMate",
+            body="2pm tomorrow is confirmed for the assessment.",
+            sender_type=ParticipantType.ACCOUNT_USER,
+            is_ai=True,
+        )
+        _add_message(
+            db,
+            conv_id=vendor_conv.id,
+            sender_name=vendor_name,
+            body="All done. Replaced the spring mechanism. Here's the invoice for $350.",
+            sender_type=ParticipantType.EXTERNAL_CONTACT,
+        )
 
-        with patch("handlers.deps.SessionLocal", return_value=db):
+        task_id = task.id  # capture before run_review detaches it
+        run_review(db, task)
 
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(_run_agent_turn(
-                db, task,
-                f"{VENDOR_NAME} reports the work is complete. "
-                "Review and take appropriate next steps.",
-            ))
-
-        db.flush()
-        db.expire_all()
-
-        # --- Agent should notify tenant about completion ---
-        task_id = task.id  # capture before expire
         suggestions = _get_suggestions(db, task_id)
         tenant_notifications = [
             s for s in suggestions
@@ -738,9 +462,7 @@ class TestGarageDoorLifecycle:
             f"Suggestions: {[s.action_payload for s in suggestions if s.action_payload]}"
         )
 
-        # --- Agent should close or propose closing the task (soft check) ---
-        # The agent may reasonably wait for manager approval of the invoice
-        # before closing, so this is a warning not a hard failure.
+        # Soft check: agent should close or propose closing the task.
         close_suggestions = [
             s for s in suggestions
             if s.action_payload and s.action_payload.get("action") == "close_task"
@@ -751,7 +473,6 @@ class TestGarageDoorLifecycle:
             import warnings
             warnings.warn("Agent did not close/propose closing the task — may be waiting for invoice approval")
 
-        # Tenant notification quality
         if tenant_notifications:
             draft = tenant_notifications[0].action_payload.get("draft_message", "")
             draft_lower = draft.lower()

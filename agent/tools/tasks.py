@@ -294,6 +294,17 @@ def _is_in_task_manager_approval_request(
     if action_payload.get("action") == "request_file_upload":
         return False
 
+    # The task_suggestion_creation policy is the uncertainty dial: the
+    # primary gate runs in agent.dispatch via check_action_confidence.
+    # This pattern-based blocker is a secondary safety net for
+    # blocker-style suggestions where the agent forgot to lower its
+    # confidence — disabled under AGGRESSIVE.
+    from db.enums import ActionPolicyLevel
+    from services.settings_service import get_task_suggestion_creation_policy_level
+
+    if get_task_suggestion_creation_policy_level() == ActionPolicyLevel.AGGRESSIVE:
+        return False
+
     combined = "\n".join(
         part for part in [
             str(title or ""),
@@ -666,8 +677,19 @@ class ProposeTaskTool(Tool):
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "required": ["title", "category", "vendor_id", "goal", "steps"],
+            "required": ["title", "category", "vendor_id", "goal", "steps", "confidence"],
             "properties": {
+                "confidence": {
+                    "type": "number",
+                    "description": (
+                        "Your honest confidence (0.0–1.0) that the goal, steps, "
+                        "and vendor are correct and unambiguous. Score low when "
+                        "key details are inferred rather than stated, the vendor "
+                        "match is uncertain, or steps are vague. Calls below the "
+                        "current ask_manager threshold are rejected — call "
+                        "`ask_manager` to clarify and retry with higher confidence."
+                    ),
+                },
                 "title": {"type": "string", "description": "Short task title"},
                 "goal": {
                     "type": "string",
@@ -1182,8 +1204,19 @@ class CreateSuggestionTool(Tool):
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "required": ["title", "body", "suggestion_type", "risk_score"],
+            "required": ["title", "body", "suggestion_type", "risk_score", "confidence"],
             "properties": {
+                "confidence": {
+                    "type": "number",
+                    "description": (
+                        "Your honest confidence (0.0–1.0) that this suggestion is "
+                        "complete and correct — entities resolved, action_payload "
+                        "filled in, no missing context the manager will have to "
+                        "guess at. Score low when fields are inferred or vague. "
+                        "Calls below the current ask_manager threshold are "
+                        "rejected — call `ask_manager` to clarify and retry."
+                    ),
+                },
                 "title": {"type": "string", "description": "Short title for the suggestion"},
                 "body": {"type": "string", "description": "Detailed context and reasoning"},
                 "suggestion_type": {
@@ -1254,6 +1287,27 @@ class CreateSuggestionTool(Tool):
                 task_id=task_id,
                 action_payload=action_payload,
             )
+        action_name = (action_payload or {}).get("action")
+        if not isinstance(action_name, str) or not action_name.strip():
+            from agent.tracing import log_trace
+
+            message = (
+                "Suggestion rejected: every create_suggestion call must include "
+                "action_payload.action describing the executable action the "
+                "manager will accept (e.g. message_person, attach_entity, "
+                "request_file_upload). If you don't have a concrete action and "
+                "just need a decision or clarification, call ask_manager instead."
+            )
+            log_trace(
+                "suggestion_blocked_missing_action_payload",
+                "policy",
+                message,
+                detail={
+                    "title": kwargs["title"],
+                    "action_payload": action_payload or None,
+                },
+            )
+            return json.dumps({"status": "error", "message": message})
         if _is_in_task_manager_approval_request(
             task_id=task_id,
             title=kwargs["title"],

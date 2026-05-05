@@ -89,8 +89,17 @@ class CreateVendorTool(Tool):
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "required": ["name", "phone", "vendor_type"],
+            "required": ["name", "phone", "vendor_type", "confidence"],
             "properties": {
+                "confidence": {
+                    "type": "number",
+                    "description": (
+                        "Your honest confidence (0.0–1.0) that the name, "
+                        "phone, and vendor type are correct. Calls below "
+                        "the entity_changes threshold are rejected — call "
+                        "`ask_manager` to clarify, then retry."
+                    ),
+                },
                 "name": {"type": "string", "description": "Vendor's full name"},
                 "phone": {"type": "string", "description": "Vendor's phone number"},
                 "vendor_type": {"type": "string", "description": "Type of vendor (e.g. 'Plumber', 'Electrician', 'HVAC', 'General Contractor', 'Handyman', 'Landscaper', 'Locksmith', 'Roofer', 'Painter', 'Inspector')"},

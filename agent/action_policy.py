@@ -9,7 +9,7 @@ from services.settings_service import (
     entity_change_confidence_threshold,
     get_action_policy_settings,
     outbound_message_allows_risk,
-    should_prefer_suggestion_when_uncertain,
+    should_require_high_confidence_for_creation,
 )
 
 ActionClass = Literal["read", "entity_change", "outbound_message", "suggestion"]
@@ -75,9 +75,11 @@ def evaluate_action_candidate(candidate: ActionCandidate) -> ActionDecision:
         return ActionDecision(
             allowed=True,
             reason=(
-                "suggestion fallback preferred under uncertainty"
-                if should_prefer_suggestion_when_uncertain(settings["suggestion_fallback"])
-                else "suggestion fallback allowed only after higher-priority actions are blocked"
+                "high confidence required before creating tasks/suggestions"
+                if should_require_high_confidence_for_creation(
+                    settings["task_suggestion_creation"]
+                )
+                else "task/suggestion creation allowed at moderate confidence"
             ),
             preferred_rank=_ACTION_RANK["suggestion"],
         )

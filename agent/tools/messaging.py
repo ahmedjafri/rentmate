@@ -90,8 +90,19 @@ class MessageExternalPersonTool(Tool):
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "required": ["entity_id", "entity_type", "draft_message", "risk_level"],
+            "required": ["entity_id", "entity_type", "draft_message", "risk_level", "confidence"],
             "properties": {
+                "confidence": {
+                    "type": "number",
+                    "description": (
+                        "Your honest confidence (0.0–1.0) that this draft is "
+                        "accurate, addressed to the right recipient, and won't "
+                        "create confusion. Score low when entity match is "
+                        "uncertain, facts are inferred, or wording is risky. "
+                        "Calls below the current outbound_messages threshold "
+                        "are rejected — call `ask_manager` to clarify, then retry."
+                    ),
+                },
                 "task_id": {
                     "type": "string",
                     "description": (
