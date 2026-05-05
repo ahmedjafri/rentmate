@@ -6,8 +6,8 @@ All eval tests should use these instead of rolling their own.
 import asyncio
 import json
 import os
+import random
 import re
-import time
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 
-from db.enums import TaskCategory, TaskMode, TaskSource, TaskStatus, Urgency
+from db.enums import ActionPolicyLevel, TaskCategory, TaskMode, TaskSource, TaskStatus, Urgency
 from db.models import (
     Base,
     Conversation,
@@ -35,7 +35,6 @@ from db.models import (
 )
 from db.models.account import create_shadow_user
 from evals.harness import append_jsonl, safe_id, utc_now_iso, weighted_score, write_json
-from integrations.local_auth import reset_request_context, set_request_context
 from services.number_allocator import NumberAllocator
 
 DEFAULT_ACCOUNT_ID = 1
@@ -167,6 +166,158 @@ def _serialize_agent_run(run, traces, steps, trajectory) -> dict:
     }
 
 
+def _collect_side_effects(db) -> dict:
+    """Snapshot what the agent changed in the test DB.
+
+    Captures: suggestions queued, ask_manager questions posted, outbound
+    messages the agent drafted (in external conversations or the AI
+    conversation), and the rows present in the entity tables. Lets a
+    human reviewer see at a glance what the run actually did.
+    """
+    from db.models import (
+        Conversation,
+        Lease,
+        Message,
+        MessageType,
+        Property,
+        Suggestion,
+        Task,
+        Tenant,
+        Unit,
+        User,
+    )
+
+    suggestions = []
+    for s in db.query(Suggestion).order_by(Suggestion.created_at).all():
+        suggestions.append({
+            "id": s.id,
+            "task_id": s.task_id,
+            "title": s.title,
+            "status": getattr(s, "status", None),
+            "category": getattr(s, "category", None),
+            "risk_score": getattr(s, "risk_score", None),
+            "action_payload": s.action_payload,
+        })
+
+    ask_manager_questions = []
+    for m in (
+        db.query(Message)
+        .filter(Message.message_type == MessageType.ACTION)
+        .order_by(Message.sent_at)
+        .all()
+    ):
+        meta = m.meta or {}
+        card = meta.get("action_card") or {}
+        if card.get("kind") != "question":
+            continue
+        ask_manager_questions.append({
+            "conversation_id": m.conversation_id,
+            "sent_at": m.sent_at.isoformat() if m.sent_at else None,
+            "question": m.body,
+        })
+
+    # Agent-authored messages outside the AI conversation (i.e. drafts
+    # the agent actually sent into a vendor/tenant thread).
+    outbound_messages = []
+    for m in (
+        db.query(Message)
+        .filter(
+            Message.is_ai.is_(True),
+            Message.message_type.in_((MessageType.MESSAGE, MessageType.THREAD)),
+        )
+        .order_by(Message.sent_at)
+        .all()
+    ):
+        convo = db.query(Conversation).filter_by(id=m.conversation_id).first()
+        if convo is None:
+            continue
+        outbound_messages.append({
+            "conversation_id": m.conversation_id,
+            "conversation_type": (
+                convo.conversation_type.value
+                if hasattr(convo.conversation_type, "value")
+                else str(convo.conversation_type)
+            ),
+            "sent_at": m.sent_at.isoformat() if m.sent_at else None,
+            "sender_name": m.sender_name,
+            "body": m.body,
+        })
+
+    properties = [
+        {
+            "id": p.id,
+            "name": p.name,
+            "address": " ".join(filter(None, [p.address_line1, p.city, p.state, p.postal_code])),
+        }
+        for p in db.query(Property).order_by(Property.created_at).all()
+    ]
+    units = [
+        {"id": u.id, "label": u.label, "property_id": u.property_id}
+        for u in db.query(Unit).order_by(Unit.created_at).all()
+    ]
+
+    def _user_name(user_id):
+        if user_id is None:
+            return None
+        u = db.query(User).filter_by(id=user_id).first()
+        if u is None:
+            return None
+        return " ".join(filter(None, [u.first_name, u.last_name])) or u.email
+
+    tenants = []
+    for t in db.query(Tenant).all():
+        u = db.query(User).filter_by(id=t.user_id).first() if t.user_id else None
+        tenants.append({
+            "id": t.id,
+            "name": _user_name(t.user_id),
+            "phone": getattr(u, "phone", None),
+            "email": getattr(u, "email", None),
+        })
+
+    vendors = [
+        {"id": v.id, "name": v.name, "vendor_type": getattr(v, "vendor_type", None), "phone": getattr(v, "phone", None)}
+        for v in db.query(User).filter(User.user_type == "vendor").all()
+    ]
+
+    leases = [
+        {
+            "id": l.id,
+            "tenant_id": l.tenant_id,
+            "unit_id": l.unit_id,
+            "rent_amount": l.rent_amount,
+            "payment_status": l.payment_status,
+        }
+        for l in db.query(Lease).all()
+    ]
+
+    tasks = []
+    for t in db.query(Task).order_by(Task.created_at).all():
+        tasks.append({
+            "id": t.id,
+            "title": t.title,
+            "status": (t.task_status.value if hasattr(t.task_status, "value") else str(t.task_status)),
+            "goal": t.goal,
+            "steps": t.steps,
+            "last_review_status": getattr(t, "last_review_status", None),
+            "last_review_summary": getattr(t, "last_review_summary", None),
+            "last_review_next_step": getattr(t, "last_review_next_step", None),
+        })
+
+    return {
+        "suggestions": suggestions,
+        "ask_manager_questions": ask_manager_questions,
+        "outbound_messages": outbound_messages,
+        "tasks": tasks,
+        "entities": {
+            "properties": properties,
+            "units": units,
+            "tenants": tenants,
+            "vendors": vendors,
+            "leases": leases,
+        },
+    }
+
+
 def _dump_eval_runs(item, report) -> str | None:
     """Serialize every AgentRun + AgentTrace from the test's DB session
     into ``eval-runs/<test>-<ts>.json`` and return the path.
@@ -202,11 +353,21 @@ def _dump_eval_runs(item, report) -> str | None:
         )
         payload.append(_serialize_agent_run(run, traces, steps, to_trajectory(db, run.id)))
 
+    side_effects = _collect_side_effects(db)
+
     _EVAL_RUN_DUMP_DIR.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", item.name)
-    path = _EVAL_RUN_DUMP_DIR / f"{safe_name}-{int(time.time() * 1000)}.json"
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    path = _EVAL_RUN_DUMP_DIR / f"{safe_name}-{timestamp}.json"
     path.write_text(
-        json.dumps({"test": item.nodeid, "runs": payload}, indent=2, default=str),
+        json.dumps(
+            {
+                "test": item.nodeid,
+                "side_effects": side_effects,
+                "runs": payload,
+            },
+            indent=2, default=str,
+        ),
     )
     return str(path)
 
@@ -290,7 +451,10 @@ def pytest_runtest_makereport(item, call):
             marker = f">>> Eval trial artifact: {artifact_dir}"
             print(f"\n{marker}")
             report.sections.append(("Eval Trial Artifact", marker))
-        elif report.failed:
+        else:
+            # Dump on every eval run (pass or fail) — reviewers want to
+            # see what the agent did even on green so they can audit
+            # message drafts, suggestions, and side effects.
             dump_path = _dump_eval_runs(item, report)
             if dump_path:
                 marker = f">>> Eval run dump: {dump_path}"
@@ -362,12 +526,21 @@ def mock_sms():
 
 @pytest.fixture
 def autonomous_mode():
+    """Eval policy mix: act aggressively but keep outbound messages as
+    pending suggestions so tests can inspect the drafted message instead
+    of racing against auto-execution.
+    """
+    eval_policy = {
+        "entity_changes": ActionPolicyLevel.AGGRESSIVE,
+        "outbound_messages": ActionPolicyLevel.STRICT,
+        "task_suggestion_creation": ActionPolicyLevel.STRICT,
+    }
     with patch(
-        "services.settings_service.get_autonomy_for_category",
-        return_value="autonomous",
+        "services.settings_service.get_action_policy_settings",
+        return_value=eval_policy,
     ), patch(
-        "agent.action_policy.outbound_message_allows_risk",
-        return_value=False,
+        "agent.action_policy.get_action_policy_settings",
+        return_value=eval_policy,
     ):
         yield
 
@@ -375,12 +548,58 @@ def autonomous_mode():
 # ── Scenario builder ─────────────────────────────────────────────────────────
 
 
-class ScenarioBuilder:
-    """Builds a test scenario with property, unit, tenant, lease, vendor, and task."""
+# Pools used to randomize names / addresses / phones when callers don't pass
+# explicit values. Kept small and deliberate — large enough that adjacent
+# tests get distinct values, small enough that drifting eval failures stay
+# easy to recognize.
+_TENANT_FIRST_NAMES = (
+    "Alice", "Bryn", "Carol", "Devon", "Elena", "Felix", "Gita",
+    "Harvey", "Imani", "Jules", "Kara", "Lior", "Mira", "Nadia",
+)
+_TENANT_LAST_NAMES = (
+    "Reyes", "Patel", "Nguyen", "Carter", "Okafor", "Lindgren",
+    "Ramos", "Hayashi", "Brennan", "Schultz", "Yamada", "Volkov",
+)
+_VENDOR_FIRST_NAMES = (
+    "Rob", "Sam", "Pat", "Chris", "Jamie", "Morgan", "Taylor",
+    "Riley", "Jordan", "Avery",
+)
+_STREET_NAMES = (
+    "Oak Ave", "Pine St", "Maple Lane", "Cedar Blvd", "Birch Way",
+    "Willow Pl", "Aspen Dr", "Elm Ct", "Hawthorn Rd", "Sycamore St",
+)
+_PROPERTY_NAMES = (
+    "Cedar Court", "Maple Heights", "Riverstone", "Brookline",
+    "Northwoods", "The Bluffs", "Harbor View", "Lakeside", "Pinegrove",
+)
 
-    def __init__(self, db):
+
+def _seeded_rng_for(node_id: str) -> random.Random:
+    """Deterministic RNG seeded from the pytest test nodeid.
+
+    Same test → same scenario every run. Different tests → different
+    scenarios so memorization doesn't paper over real failures.
+    """
+    import hashlib
+
+    digest = hashlib.sha256((node_id or "fallback").encode()).digest()
+    seed = int.from_bytes(digest[:8], "big")
+    return random.Random(seed)
+
+
+class ScenarioBuilder:
+    """Builds a test scenario with property, unit, tenant, lease, vendor, and task.
+
+    Defaults that aren't passed explicitly are filled in from a seeded
+    RNG so two evals don't share the same "Alice Renter / 206-555-0100"
+    fingerprint. Tests should read names / phones / emails off the
+    returned entity objects (not module constants) when asserting.
+    """
+
+    def __init__(self, db, *, rng: random.Random | None = None):
         self.db = db
         self.entities = {}
+        self.rng = rng or random.Random()
 
     @staticmethod
     def _coerce_task_category(value):
@@ -406,8 +625,32 @@ class ScenarioBuilder:
             return value
         return Urgency[value.upper()]
 
-    def add_property(self, *, name="Test Property", address="123 Main St",
+    # ── randomized defaults ──────────────────────────────────────────────
+
+    def _random_phone(self) -> str:
+        return f"206-555-{self.rng.randint(1000, 9999):04d}"
+
+    def _random_address(self) -> str:
+        return f"{self.rng.randint(100, 9999)} {self.rng.choice(_STREET_NAMES)}"
+
+    def _random_tenant_name(self) -> tuple[str, str]:
+        return self.rng.choice(_TENANT_FIRST_NAMES), self.rng.choice(_TENANT_LAST_NAMES)
+
+    def _random_property_name(self) -> str:
+        return self.rng.choice(_PROPERTY_NAMES)
+
+    def _random_vendor_name(self, vendor_type: str) -> str:
+        first = self.rng.choice(_VENDOR_FIRST_NAMES)
+        return f"{first} the {vendor_type}"
+
+    # ── add_* methods ────────────────────────────────────────────────────
+
+    def add_property(self, *, name=None, address=None,
                      city="Seattle", state="WA", postal_code="98101"):
+        if address is None:
+            address = self._random_address()
+        if name is None:
+            name = self._random_property_name()
         prop = Property(
             id=str(uuid.uuid4()),
             org_id=1,
@@ -421,7 +664,9 @@ class ScenarioBuilder:
         self.entities["property"] = prop
         return prop
 
-    def add_unit(self, *, label="A", prop=None):
+    def add_unit(self, *, label=None, prop=None):
+        if label is None:
+            label = self.rng.choice(("A", "B", "1A", "2B", "3C", "Main"))
         prop = prop or self.entities.get("property")
         unit = Unit(
             id=str(uuid.uuid4()),
@@ -435,8 +680,16 @@ class ScenarioBuilder:
         self.entities["unit"] = unit
         return unit
 
-    def add_tenant(self, *, first_name="Alice", last_name="Renter",
-                   phone="206-555-0100", email="alice@example.com"):
+    def add_tenant(self, *, first_name=None, last_name=None,
+                   phone=None, email=None):
+        if first_name is None or last_name is None:
+            rand_first, rand_last = self._random_tenant_name()
+            first_name = first_name or rand_first
+            last_name = last_name or rand_last
+        if phone is None:
+            phone = self._random_phone()
+        if email is None:
+            email = f"{first_name.lower()}.{last_name.lower()}@example.com"
         shadow_user = create_shadow_user(
             self.db,
             org_id=1,
@@ -479,10 +732,14 @@ class ScenarioBuilder:
         self.entities["lease"] = lease
         return lease
 
-    def add_vendor(self, *, name="Handyman Rob", phone="206-555-0200",
+    def add_vendor(self, *, name=None, phone=None,
                    vendor_type="Handyman", email=None):
         from gql.types import CreateVendorInput
         from services.vendor_service import VendorService
+        if name is None:
+            name = self._random_vendor_name(vendor_type)
+        if phone is None:
+            phone = self._random_phone()
         if email is None:
             normalized_phone = "".join(ch.lower() for ch in phone if ch.isalnum()) or uuid.uuid4().hex[:8]
             normalized_name = "".join(ch.lower() for ch in name if ch.isalnum()) or "vendor"
@@ -494,9 +751,19 @@ class ScenarioBuilder:
         self.entities["vendor"] = vendor
         return vendor
 
-    def add_task(self, *, title="Test task", category="maintenance",
-                 urgency="medium", task_mode="autonomous", task_status="active",
-                 context_body=None):
+    def add_task(self, *, title, context_body, goal, steps,
+                 category="maintenance", urgency="medium",
+                 task_mode="autonomous", task_status="active"):
+        """Create a Task. ``title``, ``context_body``, ``goal``, and
+        ``steps`` are required — the production review path needs them
+        all to behave realistically.
+
+        ``steps`` accepts either pre-dumped dict rows or a list of
+        ``TaskProgressStep`` objects (which we dump here so callers can
+        write the natural shape).
+        """
+        from services.task_service import TaskProgressStep, dump_task_steps
+
         prop = self.entities.get("property")
         unit = self.entities.get("unit")
         lease = self.entities.get("lease")
@@ -512,20 +779,26 @@ class ScenarioBuilder:
         self.db.add(ai_conv)
         self.db.flush()
 
-        if context_body:
-            self.db.add(Message(
-                org_id=1,
-                conversation_id=ai_conv.id,
-                sender_type=ParticipantType.ACCOUNT_USER,
-                body=context_body, message_type=MessageType.CONTEXT,
-                sender_name="System", is_ai=False, sent_at=datetime.now(UTC),
-            ))
+        self.db.add(Message(
+            org_id=1,
+            conversation_id=ai_conv.id,
+            sender_type=ParticipantType.ACCOUNT_USER,
+            body=context_body, message_type=MessageType.CONTEXT,
+            sender_name="System", is_ai=False, sent_at=datetime.now(UTC),
+        ))
+
+        steps_value = (
+            dump_task_steps(steps) if steps and isinstance(steps[0], TaskProgressStep)
+            else steps
+        )
 
         task = Task(
             id=NumberAllocator.allocate_next(self.db, entity_type="task", org_id=1),
             org_id=1,
             creator_id=DEFAULT_ACCOUNT_ID,
             title=title,
+            goal=goal,
+            steps=steps_value,
             task_status=self._coerce_task_status(task_status),
             task_mode=self._coerce_task_mode(task_mode),
             category=self._coerce_task_category(category),
@@ -549,103 +822,29 @@ class ScenarioBuilder:
 
 
 @pytest.fixture
-def scenario_builder(db):
-    return ScenarioBuilder(db)
+def scenario_builder(db, request):
+    """Per-test ScenarioBuilder with an RNG seeded from the test nodeid."""
+    return ScenarioBuilder(db, rng=_seeded_rng_for(request.node.nodeid))
 
 
 # ── Agent runner ─────────────────────────────────────────────────────────────
 
 
-def build_messages(db, task, user_message):
-    """Build the agent message payload from task context + conversation history."""
-    from agent.context import build_task_context
+def run_review(db, task) -> None:
+    """Trigger a production task review against the test session.
 
-    context = build_task_context(db, task.id)
-    ai_msgs = [
-        m for m in (task.ai_conversation.messages or [])
-        if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)
-    ]
-    ai_msgs = sorted(ai_msgs, key=lambda m: m.sent_at)[-20:]
-
-    # Gather external conversation messages
-    ext_parts = []
-    ext_convos: list[tuple[object, str]] = []
-    for conv in task.external_conversations:
-        ext_convos.append((conv, "External"))
-    if task.parent_conversation_id:
-        parent_conv = db.get(Conversation, task.parent_conversation_id)
-        if parent_conv and parent_conv not in [c for c, _ in ext_convos]:
-            ext_convos.append((parent_conv, "Tenant"))
-    for conv, label in ext_convos:
-        ext_msgs = sorted(
-            [m for m in (conv.messages or [])
-             if m.message_type in (MessageType.MESSAGE, MessageType.THREAD)],
-            key=lambda m: m.sent_at,
-        )[-20:]
-        if ext_msgs:
-            lines = [f"[{m.sender_name or 'Unknown'}]: {m.body}" for m in ext_msgs]
-            ext_parts.append(f"\n\n{label} conversation:\n" + "\n".join(lines))
-
-    # Progress steps
-    steps_text = ""
-    if task.steps:
-        steps_text = "\n\nTask progress steps:\n" + json.dumps(task.steps, indent=2)
-
-    messages = [{"role": "system", "content": context}]
-    messages += [
-        {"role": "assistant" if m.is_ai else "user", "content": m.body or ""}
-        for m in ai_msgs
-    ]
-    messages.append({
-        "role": "user",
-        "content": user_message + steps_text + "".join(ext_parts),
-    })
-    return messages
-
-
-async def run_agent_turn(db, task, user_message):
-    """Run one agent turn and return structured results."""
-    DEFAULT_USER_ID = "1"
-    from agent.client import call_agent
-    from agent.registry import agent_registry
-    from agent.tools import active_conversation_id, pending_suggestion_messages
-
-    messages = build_messages(db, task, user_message)
-    agent_id = agent_registry.ensure_agent(DEFAULT_USER_ID, db)
-    session_key = f"eval:{task.id}"
-
-    ctx_token = set_request_context(account_id=DEFAULT_ACCOUNT_ID, org_id=1)
-    conv_token = active_conversation_id.set(task.ai_conversation_id)
-    pending_token = pending_suggestion_messages.set([])
-
-    try:
-        resp = await call_agent(agent_id, session_key=session_key, messages=messages)
-        pending = pending_suggestion_messages.get() or []
-        outbound_reply = _extract_latest_outbound_message(
-            db,
-            task.id,
-            user_message=user_message,
-            fallback_reply=resp.reply,
-        ) or resp.reply
-        return {
-            "reply": outbound_reply,
-            "side_effects": resp.side_effects,
-            "pending_suggestions": pending,
-        }
-    finally:
-        reset_request_context(ctx_token)
-        active_conversation_id.reset(conv_token)
-        pending_suggestion_messages.reset(pending_token)
-
-
-def run_turn_sync(db, task, user_message):
-    """Synchronous wrapper for run_agent_turn.
-
-    Automatically patches db.session.SessionLocal so tools use the test session.
+    Patches every SessionLocal binding the review path touches so the
+    agent's tools see our test database. This is the canonical way to
+    drive the agent in evals — it exercises the same prompt + dispatch
+    path that runs in production via the periodic review loop.
     """
     from unittest.mock import MagicMock
 
-    # Create a mock SessionLocal whose session_factory() returns the test db
+    from handlers.task_review import _review_one_task
+
+    db.flush()
+    db.expunge(task)
+
     mock_sl = MagicMock()
     mock_sl.session_factory.return_value = db
     mock_sl.return_value = db
@@ -655,11 +854,10 @@ def run_turn_sync(db, task, user_message):
         with patch("db.session.SessionLocal", mock_sl), \
              patch("handlers.deps.SessionLocal", mock_sl), \
              patch("services.settings_service.SessionLocal", mock_sl):
-            result = loop.run_until_complete(run_agent_turn(db, task, user_message))
-            _print_eval_agent_turn(user_message, result)
-            return result
+            loop.run_until_complete(_review_one_task(task))
     finally:
         loop.close()
+        db.expire_all()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

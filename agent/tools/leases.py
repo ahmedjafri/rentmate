@@ -70,9 +70,19 @@ class CreateLeaseTool(Tool):
             "type": "object",
             "required": [
                 "property_id", "unit_id", "tenant_ids",
-                "start_date", "end_date", "rent_amount",
+                "start_date", "end_date", "rent_amount", "confidence",
             ],
             "properties": {
+                "confidence": {
+                    "type": "number",
+                    "description": (
+                        "Your honest confidence (0.0–1.0) that the property, "
+                        "unit, tenants, dates, and rent are all correct. "
+                        "Score low when any field is inferred. Calls below "
+                        "the entity_changes threshold are rejected — call "
+                        "`ask_manager` to clarify, then retry."
+                    ),
+                },
                 "property_id": {
                     "type": "string",
                     "description": "Real property UUID from lookup_properties.",
@@ -245,8 +255,17 @@ class UpdateLeaseTool(Tool):
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "required": ["lease_id"],
+            "required": ["lease_id", "confidence"],
             "properties": {
+                "confidence": {
+                    "type": "number",
+                    "description": (
+                        "Your honest confidence (0.0–1.0) that this lease is "
+                        "the right one to mutate and the new values are "
+                        "correct. Calls below the entity_changes threshold "
+                        "are rejected — call `ask_manager` to clarify, then retry."
+                    ),
+                },
                 "lease_id": {
                     "type": "string",
                     "description": (

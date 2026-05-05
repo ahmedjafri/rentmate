@@ -108,6 +108,10 @@ async def dispatch(name: str, args: dict[str, Any] | None) -> str:
     READ_WRITE tools are blackholed when ``is_simulating()`` is true: their
     inputs are recorded and a synthetic success payload is returned without
     calling ``execute``. READ_ONLY tools always run.
+
+    Commit-style tools are passed through ``check_action_confidence`` first
+    so the ``ask_manager`` policy can intercept low-confidence calls and
+    redirect the agent to ``ask_manager``.
     """
     args = args or {}
     tool = _REGISTRY.get(name)
@@ -124,5 +128,18 @@ async def dispatch(name: str, args: dict[str, Any] | None) -> str:
             "simulation_id": sim_id,
             "message": f"(simulation) would call {tool.name}",
         })
+
+    from agent.uncertainty import check_action_confidence
+    confidence_block = check_action_confidence(tool_name=name, args=args)
+    if confidence_block is not None:
+        from agent.tracing import log_trace
+        log_trace(
+            "action_blocked_low_confidence",
+            "policy",
+            confidence_block,
+            tool_name=name,
+            detail={"confidence": args.get("confidence")},
+        )
+        return json.dumps({"status": "error", "message": confidence_block})
 
     return await tool.execute(**args)

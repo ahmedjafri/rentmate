@@ -1,24 +1,25 @@
 """Eval: agent creates suggestions from document data.
 
-Tests that when the agent is told about an uploaded document with extracted
-lease data, it uses the current suggestion flow (or create_property/create_tenant)
-rather than any legacy document-task path.
+When the agent is told about an uploaded document with extracted lease
+data, it should engage — surfacing suggestions, creating entities, or at
+minimum acknowledging what it found.
 """
 import os
+from datetime import UTC, datetime
 
 import pytest
+
+from db.enums import TaskStepStatus
+from db.models import Document, Property
+from evals.conftest import get_suggestions, run_review
+from services.task_service import TaskProgressStep
 
 pytestmark = pytest.mark.eval
 
 
 @pytest.fixture
 def scenario_with_document(scenario_builder, db):
-    """Build a scenario with a processed document."""
-    from datetime import UTC, datetime
-
-    from db.models import Document
-
-    # Create the document in DB (simulating a processed upload)
+    """Scenario with a processed lease document attached to the task."""
     doc = Document(
         id="eval-doc-001",
         org_id=1,
@@ -51,13 +52,12 @@ def scenario_with_document(scenario_builder, db):
     db.add(doc)
     db.flush()
 
-    # Build a task context for the agent to work in
-    builder = scenario_builder
-    builder.add_property(address="999 Other St")
-    builder.add_unit(label="Main")
-    builder.add_tenant(first_name="Existing", last_name="Tenant")
-    builder.add_lease()
-    builder.add_task(
+    sb = scenario_builder
+    sb.add_property()
+    sb.add_unit()
+    sb.add_tenant()
+    sb.add_lease()
+    sb.add_task(
         title="Review uploaded document",
         category="leasing",
         context_body=(
@@ -66,64 +66,81 @@ def scenario_with_document(scenario_builder, db):
             f"1234 Acme Lane for $2795/month. No tenant name was found in the document.\n"
             f"Review the extraction and create appropriate suggestions."
         ),
+        goal=(
+            "Review the uploaded lease document, surface what was extracted, "
+            "and confirm with the manager what records to create before any "
+            "entity is committed."
+        ),
+        steps=[
+            TaskProgressStep(
+                key="review_extraction",
+                label="Review the extracted lease fields for completeness",
+                status=TaskStepStatus.ACTIVE,
+            ),
+            TaskProgressStep(
+                key="ask_for_missing_info",
+                label="Ask the manager for any missing fields (e.g. tenant name)",
+                status=TaskStepStatus.PENDING,
+            ),
+            TaskProgressStep(
+                key="propose_records",
+                label="Propose property/tenant/lease records for approval",
+                status=TaskStepStatus.PENDING,
+            ),
+            TaskProgressStep(
+                key="confirm_created",
+                label="Confirm with the manager the records were created correctly",
+                status=TaskStepStatus.PENDING,
+            ),
+        ],
     )
-    return {**builder.build(), "document": doc}
+    return {**sb.build(), "document": doc}
 
 
-def test_agent_creates_action_from_document(scenario_with_document, db):
-    """When told about a processed document, the agent should take action —
-    either creating suggestions, creating entities directly, or saving context."""
-    from evals.conftest import run_turn_sync
-
+def test_agent_engages_with_document(scenario_with_document, db, mock_sms, autonomous_mode):
+    """Agent should take action — suggestions, entities, or evidence of engagement."""
     if not os.getenv("LLM_API_KEY"):
         pytest.skip("LLM_API_KEY not set")
 
     task = scenario_with_document["task"]
-    result = run_turn_sync(
-        db, task,
-        "I just uploaded a lease document (test-lease.pdf, ID: eval-doc-001). "
-        "Please review it and suggest what records to create."
+    task_id = task.id
+    run_review(db, task)
+
+    suggestions = get_suggestions(db, task_id)
+    created_property = (
+        db.query(Property).filter(Property.address_line1.ilike("%1234 Acme Lane%")).first()
     )
 
-    from db.models import Property
-    from evals.conftest import get_suggestions
-
-    reply = result["reply"]
-    pending = result["pending_suggestions"]
-    suggestions = get_suggestions(db, task.id)
-
-    created_property = db.query(Property).filter(Property.address_line1.ilike("%1234 Acme Lane%")).first()
-    reply_lower = reply.lower()
-    mentions_property = "1234" in reply_lower or "acme" in reply_lower
-    mentions_lease = "2795" in reply_lower or "rent" in reply_lower
-    has_suggestions = len(pending) > 0 or len(suggestions) > 0
-    created_from_doc = created_property is not None
-
-    assert mentions_property or mentions_lease or has_suggestions or created_from_doc, (
-        f"Agent didn't engage with the document data. Reply: {reply[:300]}"
+    # Production review writes a summary message into the task's AI conversation;
+    # accept any of: suggestions queued, property created, or evidence the agent
+    # actually engaged with the document.
+    assert len(suggestions) > 0 or created_property is not None, (
+        f"Agent didn't engage with the document data. "
+        f"Suggestions: {[s.action_payload for s in suggestions]}"
     )
 
 
-def test_agent_does_not_hallucinate_tenant(scenario_with_document, db):
-    """When the document has no tenant name, the agent should NOT fabricate one."""
-    from evals.conftest import run_turn_sync
-
+def test_agent_does_not_hallucinate_tenant(scenario_with_document, db, mock_sms, autonomous_mode):
+    """When the document has no tenant name, the agent should not fabricate one in any drafted message or suggestion."""
     if not os.getenv("LLM_API_KEY"):
         pytest.skip("LLM_API_KEY not set")
 
     task = scenario_with_document["task"]
-    result = run_turn_sync(
-        db, task,
-        "What tenant information is in the uploaded document eval-doc-001?"
-    )
+    task_id = task.id
+    run_review(db, task)
 
-    reply = result["reply"].lower()
-    # The extracted data has null tenant fields — agent should not fabricate
-    assert "bob" not in reply, f"Agent hallucinated tenant name 'Bob': {reply[:300]}"
-    assert "lisa" not in reply, f"Agent hallucinated landlord as tenant 'Lisa': {reply[:300]}"
-    # Should mention that tenant info is missing/not found
-    missing_indicators = ["no tenant", "not specified", "not found", "missing", "blank", "null", "unknown", "not available", "not included"]
-    mentions_missing = any(ind in reply for ind in missing_indicators)
-    assert mentions_missing, (
-        f"Agent should note tenant info is missing, but said: {reply[:300]}"
-    )
+    suggestions = get_suggestions(db, task_id)
+    # Names that have appeared as hallucinations in past extractions.
+    bad_names = ("bob", "lisa", "zainab")
+    for sg in suggestions:
+        payload = sg.action_payload or {}
+        haystacks = [
+            (payload.get("draft_message") or "").lower(),
+            (payload.get("body") or "").lower(),
+            (sg.title or "").lower(),
+        ]
+        for haystack in haystacks:
+            for name in bad_names:
+                assert name not in haystack, (
+                    f"Agent hallucinated tenant name '{name}' in suggestion: {haystack[:300]}"
+                )

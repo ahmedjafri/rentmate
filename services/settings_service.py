@@ -2,12 +2,11 @@
 import json
 import logging
 from datetime import UTC, datetime
-from typing import Literal
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from db.enums import SuggestionOption, TaskCategory
+from db.enums import ActionPolicyLevel, SuggestionOption, TaskCategory
 from db.models import AppSetting
 from db.models.base import Base
 from db.session import SessionLocal, engine
@@ -27,12 +26,10 @@ def _ensure_app_settings_table() -> None:
     except SQLAlchemyError as exc:
         logger.warning("Failed to ensure app_settings table exists yet: %s", exc)
 
-ActionPolicyLevel = Literal["strict", "balanced", "aggressive"]
-
 _DEFAULT_ACTION_POLICY: dict[str, ActionPolicyLevel] = {
-    "entity_changes": "balanced",
-    "outbound_messages": "balanced",
-    "suggestion_fallback": "balanced",
+    "entity_changes": ActionPolicyLevel.BALANCED,
+    "outbound_messages": ActionPolicyLevel.BALANCED,
+    "task_suggestion_creation": ActionPolicyLevel.BALANCED,
 }
 
 
@@ -105,10 +102,16 @@ def save_app_settings(data: dict) -> None:
 def get_action_policy_settings() -> dict[str, ActionPolicyLevel]:
     """Return the action-policy settings dict."""
     stored = get_setting("action_policy") or {}
+    # Accept legacy keys (``suggestion_fallback`` and ``ask_manager``) so
+    # existing rows keep working through the renames.
+    legacy_creation = stored.get("ask_manager") or stored.get("suggestion_fallback")
     return {
         "entity_changes": stored.get("entity_changes", _DEFAULT_ACTION_POLICY["entity_changes"]),
         "outbound_messages": stored.get("outbound_messages", _DEFAULT_ACTION_POLICY["outbound_messages"]),
-        "suggestion_fallback": stored.get("suggestion_fallback", _DEFAULT_ACTION_POLICY["suggestion_fallback"]),
+        "task_suggestion_creation": stored.get(
+            "task_suggestion_creation",
+            legacy_creation or _DEFAULT_ACTION_POLICY["task_suggestion_creation"],
+        ),
     }
 
 
@@ -120,21 +123,21 @@ def save_action_policy_settings(data: dict[str, ActionPolicyLevel]) -> None:
 
 
 _ENTITY_CONFIDENCE_THRESHOLDS: dict[ActionPolicyLevel, float] = {
-    "strict": 0.9,
-    "balanced": 0.75,
-    "aggressive": 0.6,
+    ActionPolicyLevel.STRICT: 0.9,
+    ActionPolicyLevel.BALANCED: 0.75,
+    ActionPolicyLevel.AGGRESSIVE: 0.6,
 }
 
 _MESSAGE_RISK_ALLOWLIST: dict[ActionPolicyLevel, set[str]] = {
-    "strict": set(),
-    "balanced": {"low", "medium"},
-    "aggressive": {"low", "medium", "high"},
+    ActionPolicyLevel.STRICT: set(),
+    ActionPolicyLevel.BALANCED: {"low", "medium"},
+    ActionPolicyLevel.AGGRESSIVE: {"low", "medium", "high"},
 }
 
-_SUGGESTION_FALLBACK_ALLOWANCE: dict[ActionPolicyLevel, str] = {
-    "strict": "prefer_suggestion_when_uncertain",
-    "balanced": "use_suggestion_when_blocked_or_ambiguous",
-    "aggressive": "use_suggestion_only_when_blocked",
+_TASK_SUGGESTION_CREATION_BEHAVIOR: dict[ActionPolicyLevel, str] = {
+    ActionPolicyLevel.STRICT: "require_high_confidence_before_creating",
+    ActionPolicyLevel.BALANCED: "require_moderate_confidence_before_creating",
+    ActionPolicyLevel.AGGRESSIVE: "create_unless_very_low_confidence",
 }
 
 
@@ -146,8 +149,8 @@ def get_outbound_message_policy_level() -> ActionPolicyLevel:
     return get_action_policy_settings()["outbound_messages"]
 
 
-def get_suggestion_fallback_policy_level() -> ActionPolicyLevel:
-    return get_action_policy_settings()["suggestion_fallback"]
+def get_task_suggestion_creation_policy_level() -> ActionPolicyLevel:
+    return get_action_policy_settings()["task_suggestion_creation"]
 
 
 def entity_change_confidence_threshold(level: ActionPolicyLevel | None = None) -> float:
@@ -161,8 +164,8 @@ def outbound_message_allows_risk(risk_level: str, level: ActionPolicyLevel | Non
     return normalized in _MESSAGE_RISK_ALLOWLIST[level or get_outbound_message_policy_level()]
 
 
-def should_prefer_suggestion_when_uncertain(level: ActionPolicyLevel | None = None) -> bool:
-    return (level or get_suggestion_fallback_policy_level()) == "strict"
+def should_require_high_confidence_for_creation(level: ActionPolicyLevel | None = None) -> bool:
+    return (level or get_task_suggestion_creation_policy_level()) == ActionPolicyLevel.STRICT
 
 
 def get_action_policy_summary() -> dict[str, str | float]:
@@ -171,8 +174,10 @@ def get_action_policy_summary() -> dict[str, str | float]:
         "entity_changes": settings["entity_changes"],
         "entity_confidence_threshold": entity_change_confidence_threshold(settings["entity_changes"]),
         "outbound_messages": settings["outbound_messages"],
-        "suggestion_fallback": settings["suggestion_fallback"],
-        "suggestion_fallback_mode": _SUGGESTION_FALLBACK_ALLOWANCE[settings["suggestion_fallback"]],
+        "task_suggestion_creation": settings["task_suggestion_creation"],
+        "task_suggestion_creation_behavior": _TASK_SUGGESTION_CREATION_BEHAVIOR[
+            settings["task_suggestion_creation"]
+        ],
     }
 
 

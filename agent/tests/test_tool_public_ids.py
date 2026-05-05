@@ -899,7 +899,7 @@ def test_message_person_tool_uses_external_tenant_id_in_payload(db):
          patch("services.settings_service.get_action_policy_settings", return_value={
              "entity_changes": "balanced",
              "outbound_messages": "strict",
-             "suggestion_fallback": "balanced",
+             "task_suggestion_creation": "balanced",
          }):
         payload = json.loads(_run_tool(
             MessageExternalPersonTool(),
@@ -1206,6 +1206,13 @@ def test_create_suggestion_tool_normalizes_blank_optional_ids_and_leaves_session
                 risk_score=8,
                 property_id="   ",
                 unit_id="",
+                action_payload={
+                    "action": "request_file_upload",
+                    "requested_file_kind": "document",
+                    "requested_file_label": "tenant lease",
+                    "instructions": "Upload the signed lease so we can create the tenant record.",
+                    "target_task_id": "1",
+                },
             ))
     finally:
         pending_suggestion_messages.reset(pending_token)
@@ -2022,7 +2029,7 @@ def test_message_person_routes_by_risk_and_policy(db, policy, risk, expects_revi
          patch("services.settings_service.get_action_policy_settings", return_value={
              "entity_changes": "balanced",
              "outbound_messages": policy,
-             "suggestion_fallback": "balanced",
+             "task_suggestion_creation": "balanced",
          }):
         payload = json.loads(_run_tool(
             MessageExternalPersonTool(),
@@ -2142,7 +2149,7 @@ def test_message_person_allows_repeat_send_when_we_already_messaged_recently(db)
          patch("services.settings_service.get_action_policy_settings", return_value={
              "entity_changes": "balanced",
              "outbound_messages": "balanced",
-             "suggestion_fallback": "balanced",
+             "task_suggestion_creation": "balanced",
          }):
         payload = json.loads(_run_tool(
             MessageExternalPersonTool(),
@@ -2213,7 +2220,7 @@ def test_message_person_allows_follow_up_after_tenant_reply(db):
          patch("services.settings_service.get_action_policy_settings", return_value={
              "entity_changes": "balanced",
              "outbound_messages": "balanced",
-             "suggestion_fallback": "balanced",
+             "task_suggestion_creation": "balanced",
          }):
         payload = json.loads(_run_tool(
             MessageExternalPersonTool(),
@@ -2236,7 +2243,7 @@ def test_message_person_rejects_unresolved_placeholders(db):
          patch("services.settings_service.get_action_policy_settings", return_value={
              "entity_changes": "balanced",
              "outbound_messages": "balanced",
-             "suggestion_fallback": "balanced",
+             "task_suggestion_creation": "balanced",
          }):
         payload = json.loads(_run_tool(
             MessageExternalPersonTool(),
@@ -2300,7 +2307,7 @@ def test_message_person_allows_scheduling_follow_up_without_reply(db):
          patch("services.settings_service.get_action_policy_settings", return_value={
              "entity_changes": "balanced",
              "outbound_messages": "balanced",
-             "suggestion_fallback": "balanced",
+             "task_suggestion_creation": "balanced",
          }):
         payload = json.loads(_run_tool(
             MessageExternalPersonTool(),
@@ -2377,7 +2384,7 @@ def test_message_person_allows_vendor_repeat_send_on_parent_conversation_thread(
          patch("services.settings_service.get_action_policy_settings", return_value={
              "entity_changes": "balanced",
              "outbound_messages": "balanced",
-             "suggestion_fallback": "balanced",
+             "task_suggestion_creation": "balanced",
          }):
         payload = json.loads(_run_tool(
             MessageExternalPersonTool(),
@@ -2406,7 +2413,7 @@ def test_message_person_without_task_creates_standalone_conversation(db):
          patch("services.settings_service.get_action_policy_settings", return_value={
              "entity_changes": "balanced",
              "outbound_messages": "balanced",
-             "suggestion_fallback": "balanced",
+             "task_suggestion_creation": "balanced",
          }):
         payload = json.loads(_run_tool(
             MessageExternalPersonTool(),
@@ -2448,7 +2455,7 @@ def test_message_person_without_task_review_path_stages_suggestion_only(db):
          patch("services.settings_service.get_action_policy_settings", return_value={
              "entity_changes": "balanced",
              "outbound_messages": "balanced",
-             "suggestion_fallback": "balanced",
+             "task_suggestion_creation": "balanced",
          }):
         payload = json.loads(_run_tool(
             MessageExternalPersonTool(),
@@ -2494,7 +2501,7 @@ def test_message_person_strips_entity_prefix_from_id(db):
          patch("services.settings_service.get_action_policy_settings", return_value={
              "entity_changes": "balanced",
              "outbound_messages": "balanced",
-             "suggestion_fallback": "balanced",
+             "task_suggestion_creation": "balanced",
          }):
         payload = json.loads(_run_tool(
             MessageExternalPersonTool(),
@@ -2541,7 +2548,7 @@ def test_message_person_inherits_task_id_from_active_conversation(db):
              patch("services.settings_service.get_action_policy_settings", return_value={
                  "entity_changes": "balanced",
                  "outbound_messages": "balanced",
-                 "suggestion_fallback": "balanced",
+                 "task_suggestion_creation": "balanced",
              }):
             payload = json.loads(_run_tool(
                 MessageExternalPersonTool(),
@@ -2593,7 +2600,7 @@ def test_message_person_overrides_wrong_task_id_with_active_conversation(db):
              patch("services.settings_service.get_action_policy_settings", return_value={
                  "entity_changes": "balanced",
                  "outbound_messages": "balanced",
-                 "suggestion_fallback": "balanced",
+                 "task_suggestion_creation": "balanced",
              }):
             payload = json.loads(_run_tool(
                 MessageExternalPersonTool(),
@@ -2630,7 +2637,7 @@ def test_accepting_standalone_message_suggestion_creates_conversation_and_sends(
          patch("services.settings_service.get_action_policy_settings", return_value={
              "entity_changes": "balanced",
              "outbound_messages": "balanced",
-             "suggestion_fallback": "balanced",
+             "task_suggestion_creation": "balanced",
          }):
         payload = json.loads(_run_tool(
             MessageExternalPersonTool(),
@@ -2679,7 +2686,7 @@ def test_task_scoped_tenant_message_auto_send_creates_conversation_and_persists_
          patch("services.settings_service.get_action_policy_settings", return_value={
              "entity_changes": "balanced",
              "outbound_messages": "balanced",
-             "suggestion_fallback": "balanced",
+             "task_suggestion_creation": "balanced",
          }):
         payload = json.loads(_run_tool(
             MessageExternalPersonTool(),

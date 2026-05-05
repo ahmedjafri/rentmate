@@ -26,9 +26,9 @@ const actionPolicies = [
     help: 'How risky a tenant or vendor message can be before the agent must route it to review instead of sending directly.',
   },
   {
-    key: 'suggestion_fallback',
-    label: 'Suggestion Fallback',
-    help: 'How quickly the agent falls back to a PM suggestion when it is uncertain or blocked from acting directly.',
+    key: 'task_suggestion_creation',
+    label: 'Task / Suggestion Creation',
+    help: 'How confident the agent must be before creating a task or suggestion. Below the threshold the agent is told to ask_manager instead.',
   },
 ] as const;
 

@@ -814,6 +814,14 @@ async def chat_with_agent(
         except ValueError:
             extra_completion_kwargs["temperature"] = 0.0
     extra_completion_kwargs["caching"] = False
+    # Per-call timeout so a stalled provider can't wedge the whole agent
+    # loop indefinitely. Override via LLM_REQUEST_TIMEOUT_SECONDS.
+    try:
+        extra_completion_kwargs["timeout"] = float(
+            os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "60")
+        )
+    except ValueError:
+        extra_completion_kwargs["timeout"] = 60.0
     extra_completion_kwargs["metadata"] = {
         "account_id": str(resolve_account_id()),
         "org_id": str(resolve_org_id() or ""),
@@ -825,7 +833,7 @@ async def chat_with_agent(
         system_message=system_message,
         account_id=resolve_account_id(),
         org_id=resolve_org_id(),
-        max_iterations=40,
+        max_iterations=20,
         tool_progress_callback=_tool_progress,
         tool_complete_callback=_tool_complete_cb,
         step_callback=_step_callback,

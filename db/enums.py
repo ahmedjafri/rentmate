@@ -111,6 +111,12 @@ class TaskStepStatus(str, enum.Enum):
     DONE = "done"
 
 
+class ActionPolicyLevel(str, enum.Enum):
+    STRICT = "strict"
+    BALANCED = "balanced"
+    AGGRESSIVE = "aggressive"
+
+
 # ─── Suggestion source (union) ───────────────────────────────────────────────
 
 @dataclass(frozen=True)

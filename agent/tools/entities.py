@@ -56,8 +56,18 @@ class CreatePropertyTool(Tool):
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "required": ["address"],
+            "required": ["address", "confidence"],
             "properties": {
+                "confidence": {
+                    "type": "number",
+                    "description": (
+                        "Your honest confidence (0.0–1.0) that the address, "
+                        "type, and unit shape are correct. Score low when "
+                        "fields are inferred from a vague document. Calls "
+                        "below the current entity_changes threshold are "
+                        "rejected — call `ask_manager` to clarify, then retry."
+                    ),
+                },
                 "address": {"type": "string", "description": "Street address of the property"},
                 "name": {"type": "string", "description": "Optional display name for the property"},
                 "city": {"type": "string", "description": "City"},
@@ -232,8 +242,18 @@ class CreateTenantTool(Tool):
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "required": ["first_name", "last_name"],
+            "required": ["first_name", "last_name", "confidence"],
             "properties": {
+                "confidence": {
+                    "type": "number",
+                    "description": (
+                        "Your honest confidence (0.0–1.0) that the name and "
+                        "any inferred lease/unit details are correct. Score "
+                        "low when fields are inferred from incomplete context. "
+                        "Calls below the entity_changes threshold are rejected — "
+                        "call `ask_manager` to clarify, then retry."
+                    ),
+                },
                 "first_name": {"type": "string", "description": "Tenant first name"},
                 "last_name": {"type": "string", "description": "Tenant last name"},
                 "email": {"type": "string", "description": "Email address"},
