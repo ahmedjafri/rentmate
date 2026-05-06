@@ -2,7 +2,6 @@
 import asyncio
 import json
 from datetime import UTC, datetime
-from unittest.mock import patch
 
 import pytest
 
@@ -17,14 +16,9 @@ _FAKE_NOW = datetime(2026, 4, 25, 21, 0, 0, tzinfo=UTC)
 
 
 @pytest.fixture
-def frozen_now():
-    class _FrozenDatetime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return _FAKE_NOW if tz is None else _FAKE_NOW.astimezone(tz)
-
-    with patch("agent.tools.time_tools.datetime", _FrozenDatetime):
-        yield _FAKE_NOW
+def frozen_now(monkeypatch):
+    monkeypatch.setenv("RENTMATE_EVAL_NOW_UTC", _FAKE_NOW.isoformat())
+    yield _FAKE_NOW
 
 
 def test_past_timestamp_with_offset(frozen_now):

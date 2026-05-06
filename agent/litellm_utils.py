@@ -2,12 +2,25 @@ from __future__ import annotations
 
 import json
 import os
+from enum import Enum
 from time import sleep
 from typing import Any
 
 import litellm
 
 from agent.model_config import build_litellm_request_kwargs, resolve_model_config
+
+
+class LLMLane(Enum):
+    """Which env-prefix to read for model/api_key/base_url.
+
+    ``MAIN`` reads ``LLM_*`` only — the reasoning agent and any
+    expensive path. ``CHEAP`` reads ``CHEAP_LLM_*`` with per-var fallback
+    to ``LLM_*`` — judge, persona simulator, classifier.
+    """
+
+    MAIN = "LLM_"
+    CHEAP = "CHEAP_LLM_"
 
 
 def _default_timeout_seconds() -> float:
@@ -18,6 +31,22 @@ def _default_timeout_seconds() -> float:
         return 45.0
 
 
+def _resolve_lane_env(lane: LLMLane) -> tuple[str | None, str | None, str | None]:
+    """Return ``(model, api_key, api_base)`` for the named lane.
+
+    The ``CHEAP`` lane (judge / persona simulator / classifier) reads
+    ``CHEAP_LLM_*`` first and falls back per-var to ``LLM_*``, so a user
+    with a single ``LLM_API_KEY`` only needs to set ``CHEAP_LLM_MODEL`` to
+    swap the cheap model. The ``MAIN`` lane reads ``LLM_*`` only.
+    """
+    prefix = lane.value
+
+    def _pick(name: str) -> str | None:
+        return os.getenv(f"{prefix}{name}") or os.getenv(f"LLM_{name}") or None
+
+    return _pick("MODEL"), _pick("API_KEY"), _pick("BASE_URL")
+
+
 def completion_with_retries(
     *,
     messages: list[dict[str, Any]],
@@ -26,15 +55,17 @@ def completion_with_retries(
     temperature: float = 0.0,
     retries: int = 2,
     timeout: float | None = None,
+    lane: LLMLane = LLMLane.MAIN,
     **extra_kwargs: Any,
 ) -> tuple[Any, str, str | None]:
-    chosen_model = model or os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
-    chosen_base = api_base if api_base is not None else (os.getenv("LLM_BASE_URL") or None)
+    lane_model, lane_api_key, lane_base = _resolve_lane_env(lane)
+    chosen_model = model or lane_model or "openai/gpt-4o-mini"
+    chosen_base = api_base if api_base is not None else lane_base
     resolved = resolve_model_config(model=chosen_model, api_base=chosen_base)
     request_kwargs = build_litellm_request_kwargs(
         model=chosen_model,
         api_base=chosen_base,
-        api_key=os.getenv("LLM_API_KEY"),
+        api_key=lane_api_key,
         app_name=os.getenv("OPENROUTER_APP_TITLE") or "RentMate",
         referer=os.getenv("OPENROUTER_HTTP_REFERER") or os.getenv("PUBLIC_APP_URL") or os.getenv("APP_BASE_URL"),
     )
@@ -71,6 +102,7 @@ def completion_json_with_retries(
     temperature: float = 0.0,
     retries: int = 2,
     timeout: float | None = None,
+    lane: LLMLane = LLMLane.MAIN,
     **extra_kwargs: Any,
 ) -> tuple[dict[str, Any], str, str | None]:
     response, litellm_model, resolved_base = completion_with_retries(
@@ -80,6 +112,7 @@ def completion_json_with_retries(
         temperature=temperature,
         retries=retries,
         timeout=timeout,
+        lane=lane,
         response_format={"type": "json_object"},
         **extra_kwargs,
     )

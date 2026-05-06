@@ -17,9 +17,13 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 from evals.harness import DEFAULT_PASS_RATE, DEFAULT_TRIALS, safe_id, write_json
+from evals.replay import replay as replay_snapshot
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(_REPO_ROOT / ".env", override=False)
 
 
 def _default_artifact_root(*, timestamp: str, case: str | None) -> Path:
@@ -134,6 +138,18 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--out-dir", help="Artifact output directory")
     run_parser.add_argument("pytest_args", nargs=argparse.REMAINDER, help="Additional pytest args after --")
     run_parser.set_defaults(func=run)
+
+    replay_parser = sub.add_parser("replay", help="Restore a turn snapshot and boot RentMate")
+    replay_parser.add_argument("--run", required=True, help="Eval run folder name or path")
+    replay_parser.add_argument("--trial", type=int, default=1, help="Trial number to restore")
+    replay_parser.add_argument("--turn", type=int, required=True, help="Turn number to restore")
+    replay_parser.add_argument("--port", type=int, default=8010, help="Replay server port")
+    replay_parser.add_argument("--host", default="0.0.0.0", help="Replay server host (default 0.0.0.0 so LAN clients can reach it)")
+    replay_parser.add_argument("--db-uri", help="Existing database URI to restore into (skips the ephemeral container)")
+    replay_parser.add_argument("--env", default="development", help="RENTMATE_ENV value for the replay server")
+    replay_parser.add_argument("--log-level", default="info")
+    replay_parser.add_argument("--no-server", action="store_true", help="Restore without starting uvicorn")
+    replay_parser.set_defaults(func=replay_snapshot)
 
     args = parser.parse_args(argv)
     return args.func(args)

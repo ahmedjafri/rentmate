@@ -1018,7 +1018,9 @@ class UpdateTaskProgressTool(Tool):
         return (
             "Update one progress step on a task by marking it pending, active, or done. "
             "Use this whenever work advances so the task can be closed once all steps are done. "
-            "Provide either step_key or step_label to identify the step. "
+            "Prefer step_key (the exact identifier shown in the task's steps list, e.g. "
+            "'contact_tenant') — never invent or slugify a key from the label. Use step_label "
+            "only when you don't know the key. "
             "**Do NOT mark a step done before the underlying real-world work has actually happened.** "
             "Scheduling a vendor is not 'repair complete'. A tenant agreeing to an access window is "
             "not 'access confirmed for the appointment that already happened'. The final "
@@ -1033,7 +1035,14 @@ class UpdateTaskProgressTool(Tool):
             "required": ["task_id", "status"],
             "properties": {
                 "task_id": {"type": "string", "description": "ID of the task to update"},
-                "step_key": {"type": "string", "description": "Unique step key to update"},
+                "step_key": {
+                    "type": "string",
+                    "description": (
+                        "Exact step key as stored on the task (e.g. 'contact_tenant'). "
+                        "Must match a key in the task's steps list verbatim — do not derive it "
+                        "from the label."
+                    ),
+                },
                 "step_label": {"type": "string", "description": "Step label to update when key is unknown"},
                 "status": {
                     "type": "string",
@@ -1138,7 +1147,16 @@ class UpdateTaskProgressTool(Tool):
 
             if updated_step is None:
                 identifier = step_key or step_label
-                return json.dumps({"status": "error", "message": f"Step '{identifier}' not found on task {task_id}"})
+                available = [{"key": s.key, "label": s.label} for s in steps]
+                return json.dumps({
+                    "status": "error",
+                    "message": (
+                        f"Step '{identifier}' not found on task {task_id}. "
+                        f"Retry with one of these step_key values: "
+                        f"{[s['key'] for s in available]}"
+                    ),
+                    "available_steps": available,
+                })
 
             if status == TaskStepStatus.DONE and _is_confirmation_style_step(updated_step):
                 if not _task_external_confirmation_received(db, task_id=str(task_id)):

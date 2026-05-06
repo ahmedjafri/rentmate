@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import random
 from datetime import UTC, datetime
 from typing import Any
@@ -44,6 +43,17 @@ _POLL_INTERVAL_SECONDS = 5.0
 # the same outbound message every poll. Process-local; reset on restart,
 # which is fine for a dev simulator.
 _HANDLED_MESSAGES: dict[int, int] = {}
+_REPLY_USAGE: list[dict[str, Any]] = []
+
+
+def reset_reply_usage() -> None:
+    _REPLY_USAGE.clear()
+
+
+def pop_reply_usage() -> list[dict[str, Any]]:
+    items = list(_REPLY_USAGE)
+    _REPLY_USAGE.clear()
+    return items
 
 
 def _build_history(messages: list[Any], *, limit: int = 6) -> list[dict[str, str]]:
@@ -131,11 +141,13 @@ async def _generate_reply(
     conversation_type: str,
     property_name: str | None,
     history: list[dict[str, str]],
+    raise_on_failure: bool = False,
 ) -> str:
     """Single LiteLLM completion. Falls back to a canned reply on failure
     so a flaky LLM never crashes the simulator."""
     import litellm
 
+    from agent.litellm_utils import LLMLane, _resolve_lane_env
     from agent.model_config import build_litellm_request_kwargs
 
     system, user_content = _build_prompt(
@@ -146,11 +158,11 @@ async def _generate_reply(
         history=history,
     )
 
-    model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
+    lane_model, lane_api_key, lane_base = _resolve_lane_env(LLMLane.CHEAP)
     kwargs = build_litellm_request_kwargs(
-        model=model,
-        api_base=os.getenv("LLM_BASE_URL") or None,
-        api_key=os.getenv("LLM_API_KEY"),
+        model=lane_model or "openai/gpt-4o-mini",
+        api_base=lane_base,
+        api_key=lane_api_key,
         app_name="rentmate-demo-simulator",
     )
     try:
@@ -159,16 +171,44 @@ async def _generate_reply(
                 {"role": "system", "content": system},
                 {"role": "user", "content": user_content},
             ],
-            max_tokens=180,
             temperature=0.7,
             **kwargs,
         )
-        body = (resp.choices[0].message.content or "").strip()
+        usage = getattr(resp, "usage", None)
+        try:
+            cost_usd = litellm.completion_cost(
+                completion_response=resp,
+                model=kwargs.get("model"),
+            )
+        except Exception:
+            cost_usd = 0
+        if usage is not None:
+            _REPLY_USAGE.append({
+                "lane": "cheap",
+                "model": kwargs.get("model"),
+                "input_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                "output_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+                "cost_cents": float(cost_usd or 0) * 100.0,
+            })
+        choice = resp.choices[0]
+        msg = choice.message
+        finish = getattr(choice, "finish_reason", None)
+        body = (getattr(msg, "content", None) or "").strip()
+        if finish == "length":
+            raise ValueError(
+                f"reply truncated by provider token cap (finish_reason=length, message={msg!r})"
+            )
         if not body:
-            raise ValueError("empty reply")
+            raise ValueError(
+                f"empty reply (finish_reason={finish}, message={msg!r})"
+            )
         # Clamp to keep things SMS-like even if the model overruns.
         return body[:320]
     except Exception as exc:
+        if raise_on_failure:
+            raise RuntimeError(
+                f"LLM reply generation failed for {user.first_name}: {exc}"
+            ) from exc
         logger.warning(
             "[demo] LLM reply generation failed for %s; using fallback: %s",
             user.first_name, exc,
@@ -443,3 +483,10 @@ async def simulator_loop(*, poll_interval: float = _POLL_INTERVAL_SECONDS) -> No
         except Exception:
             logger.exception("[demo] simulator poll failed")
         await asyncio.sleep(poll_interval)
+
+
+# Public-name aliases so the eval harness can import these helpers without
+# reaching into a private name. They're pure functions with no demo state.
+build_persona_prompt = _build_prompt
+generate_persona_reply = _generate_reply
+build_persona_history = _build_history

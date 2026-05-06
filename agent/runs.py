@@ -60,12 +60,17 @@ def accumulate_run_totals(
     input_tokens: int = 0,
     output_tokens: int = 0,
     iteration_count: int = 0,
+    cost_cents: Decimal | float | int | None = None,
 ) -> None:
     """Add per-iteration totals onto the active run.
 
     Safe to call from inside any agent invocation; no-op outside a run.
     The final values are written to the ``agent_runs`` row when the
     surrounding ``start_run`` context exits.
+
+    ``cost_cents`` is the actual cost reported by the LLM provider (via
+    ``litellm.completion_cost``). When supplied, it overrides the
+    hardcoded model-rate fallback in ``_compute_cost_cents``.
     """
     handle = _current_run_handle.get()
     if handle is None or handle.is_nested:
@@ -73,10 +78,17 @@ def accumulate_run_totals(
     handle.input_tokens += int(input_tokens or 0)
     handle.output_tokens += int(output_tokens or 0)
     handle.iteration_count += int(iteration_count or 0)
+    if cost_cents is not None:
+        increment = Decimal(str(cost_cents))
+        if handle.total_cost_cents is None:
+            handle.total_cost_cents = increment
+        else:
+            handle.total_cost_cents += increment
 
 
-# Per-million-token rates in cents. Models we don't know about cost 0.
-# Update as new models ship; consider moving to settings_service later.
+# Fallback per-million-token rates in cents, used only when litellm did
+# not report a cost for the response (e.g. mocked responses in tests).
+# Production cost comes straight from ``litellm.completion_cost``.
 _MODEL_RATES_CENTS_PER_MTOK: dict[str, tuple[float, float]] = {
     # (input_per_mtok, output_per_mtok) in cents
     "claude-haiku-4-5": (100.0, 500.0),

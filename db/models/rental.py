@@ -34,6 +34,7 @@ class Property(Base, OrgId, PrimaryId, HasCreatorId, HasContext):
     # 'multi_family'  -- multiple units (apartment building, duplex, etc.)
     property_type = Column(String(20), nullable=True, default="multi_family")
     source = Column(String(20), nullable=True)  # 'manual' | 'document'
+    owner_id = Column(Integer, nullable=True, index=True)
 
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
 
@@ -44,12 +45,18 @@ class Property(Base, OrgId, PrimaryId, HasCreatorId, HasContext):
         cascade="all, delete-orphan",
         overlaps="unit,tenant,leases",
     )
+    owner = relationship("User", foreign_keys="[Property.owner_id]")
 
     __table_args__ = (
         UniqueConstraint("org_id", "id", name="uq_properties_server"),
         ForeignKeyConstraint(
             ["org_id", "creator_id"],
             ["users.org_id", "users.id"],
+        ),
+        ForeignKeyConstraint(
+            ["org_id", "owner_id"],
+            ["users.org_id", "users.id"],
+            ondelete="SET NULL",
         ),
     )
 

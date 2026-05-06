@@ -877,6 +877,7 @@ async def chat_with_agent(
             input_tokens=int(result.get("input_tokens", 0) or 0),
             output_tokens=int(result.get("output_tokens", 0) or 0),
             iteration_count=int(result.get("api_calls", 0) or 0),
+            cost_cents=result.get("cost_cents"),
         )
         if progress_events:
             for evt in progress_events:

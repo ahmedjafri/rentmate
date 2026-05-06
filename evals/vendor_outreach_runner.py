@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -109,8 +108,6 @@ Respond with ONLY a JSON object in exactly this format:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            model=os.getenv("EVAL_JUDGE_MODEL") or os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
-            api_base=os.getenv("EVAL_JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL") or None,
             temperature=0.0,
         )
     except Exception as exc:

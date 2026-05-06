@@ -103,6 +103,8 @@ class AgentLoop:
         tools = tool_definitions()
         input_tokens_total = 0
         output_tokens_total = 0
+        cost_cents_total: float = 0.0
+        cost_seen: bool = False
         api_calls = 0
         completed_tools: list[str] = []
         final_response = ""
@@ -135,6 +137,17 @@ class AgentLoop:
             if usage is not None:
                 input_tokens_total += int(getattr(usage, "prompt_tokens", 0) or 0)
                 output_tokens_total += int(getattr(usage, "completion_tokens", 0) or 0)
+
+            try:
+                response_cost_usd = litellm.completion_cost(
+                    completion_response=response,
+                    model=self.model,
+                )
+            except Exception:
+                response_cost_usd = None
+            if response_cost_usd is not None:
+                cost_cents_total += float(response_cost_usd) * 100.0
+                cost_seen = True
 
             choice = response.choices[0]
             msg = choice.message
@@ -224,6 +237,7 @@ class AgentLoop:
             "messages": messages,
             "input_tokens": input_tokens_total,
             "output_tokens": output_tokens_total,
+            "cost_cents": cost_cents_total if cost_seen else None,
             "api_calls": api_calls,
             "completed": completed_tools,
         }

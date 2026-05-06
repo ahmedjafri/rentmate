@@ -262,6 +262,19 @@ def _load_tenant_by_public_id(db: Any, tenant_id: str):
     return None
 
 
+def _load_owner_by_public_id(db: Any, owner_id: str):
+    from db.models import User
+
+    owner_id = normalize_optional_id(owner_id)
+    if owner_id is None:
+        return None
+    return (
+        db.query(User)
+        .filter_by(external_id=str(owner_id), user_type="owner")
+        .first()
+    )
+
+
 def _resolve_task_tenant(db: Any, task_id: str):
     from db.models import Lease, Task, Tenant, Unit
 

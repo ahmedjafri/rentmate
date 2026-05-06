@@ -17,6 +17,7 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 
+from agent.time import current_utc
 from db.enums import ActionPolicyLevel, TaskCategory, TaskMode, TaskSource, TaskStatus, Urgency
 from db.models import (
     Base,
@@ -45,12 +46,18 @@ os.environ.setdefault("RENTMATE_DISABLE_ASYNC_NOTIFICATIONS", "1")
 
 
 def pytest_configure(config):
-    agent_model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
-    judge_model = os.getenv("EVAL_JUDGE_MODEL") or agent_model
-    api_key = os.getenv("LLM_API_KEY", "")
+    from agent.litellm_utils import LLMLane, _resolve_lane_env
+
+    main_model, main_key, main_base = _resolve_lane_env(LLMLane.MAIN)
+    cheap_model, _, cheap_base = _resolve_lane_env(LLMLane.CHEAP)
+    api_key = main_key or ""
     masked = f"{api_key[:4]}...{api_key[-4:]}" if len(api_key) > 8 else ("(set)" if api_key else "(NOT SET)")
-    base_url = os.getenv("LLM_BASE_URL") or "(default)"
-    print(f"\n[evals] agent_model={agent_model}, judge_model={judge_model}, base_url={base_url}, api_key={masked}")
+    display_tz = os.getenv("RENTMATE_EVAL_DISPLAY_TZ", "America/Los_Angeles")
+    print(
+        f"\n[evals] agent_model={main_model or '(unset)'} agent_base={main_base or '(default)'} "
+        f"cheap_model={cheap_model or '(unset)'} cheap_base={cheap_base or '(default)'} "
+        f"api_key={masked} display_tz={display_tz}"
+    )
 
 
 def _format_eval_debug_payload(payload: dict | None) -> str:
@@ -354,6 +361,12 @@ def _dump_eval_runs(item, report) -> str | None:
         payload.append(_serialize_agent_run(run, traces, steps, to_trajectory(db, run.id)))
 
     side_effects = _collect_side_effects(db)
+    try:
+        from demo.simulator import pop_reply_usage
+
+        cheap_usage = pop_reply_usage()
+    except Exception:
+        cheap_usage = []
 
     _EVAL_RUN_DUMP_DIR.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", item.name)
@@ -364,6 +377,7 @@ def _dump_eval_runs(item, report) -> str | None:
             {
                 "test": item.nodeid,
                 "side_effects": side_effects,
+                "llm_usage": {"cheap": cheap_usage},
                 "runs": payload,
             },
             indent=2, default=str,
@@ -420,6 +434,7 @@ def _write_eval_trial_artifacts(item, report) -> str | None:
         "artifact_dir": str(trial_dir),
         "agent_runs_path": str(trial_dir / "agent_runs.json"),
         "atif_path": str(trial_dir / "atif_trajectory.json"),
+        "state_snapshots_path": str(trial_dir / "state_snapshots"),
     }
     write_json(trial_dir / "scores.json", row)
     write_json(trial_dir / "input.json", {"nodeid": item.nodeid, "keywords": sorted(str(k) for k in item.keywords)})
@@ -533,6 +548,29 @@ def autonomous_mode():
     eval_policy = {
         "entity_changes": ActionPolicyLevel.AGGRESSIVE,
         "outbound_messages": ActionPolicyLevel.STRICT,
+        "task_suggestion_creation": ActionPolicyLevel.STRICT,
+    }
+    with patch(
+        "services.settings_service.get_action_policy_settings",
+        return_value=eval_policy,
+    ), patch(
+        "agent.action_policy.get_action_policy_settings",
+        return_value=eval_policy,
+    ):
+        yield
+
+
+@pytest.fixture
+def e2e_autonomous_mode():
+    """Required by the multi-actor e2e harness: outbound messages auto-send
+    so persona-driven actors can read agent replies as Message rows. Unlike
+    ``autonomous_mode``, this uses AGGRESSIVE for ``outbound_messages`` so
+    drafts materialize into the conversation rather than queueing as
+    Suggestions.
+    """
+    eval_policy = {
+        "entity_changes": ActionPolicyLevel.AGGRESSIVE,
+        "outbound_messages": ActionPolicyLevel.AGGRESSIVE,
         "task_suggestion_creation": ActionPolicyLevel.STRICT,
     }
     with patch(
@@ -751,6 +789,33 @@ class ScenarioBuilder:
         self.entities["vendor"] = vendor
         return vendor
 
+    def add_owner(self, *, first_name=None, last_name=None,
+                  phone=None, email=None, prop=None):
+        if first_name is None or last_name is None:
+            rand_first, rand_last = self._random_tenant_name()
+            first_name = first_name or rand_first
+            last_name = last_name or rand_last
+        if phone is None:
+            phone = self._random_phone()
+        if email is None:
+            email = f"{first_name.lower()}.{last_name.lower()}.owner@example.com"
+        owner = create_shadow_user(
+            self.db,
+            org_id=1,
+            creator_id=DEFAULT_ACCOUNT_ID,
+            user_type="owner",
+            first_name=first_name,
+            last_name=last_name,
+            phone=phone,
+            email=email,
+        )
+        prop = prop or self.entities.get("property")
+        if prop is not None:
+            prop.owner_id = owner.id
+            self.db.flush()
+        self.entities["owner"] = owner
+        return owner
+
     def add_task(self, *, title, context_body, goal, steps,
                  category="maintenance", urgency="medium",
                  task_mode="autonomous", task_status="active"):
@@ -870,7 +935,7 @@ def add_message(db, conv_id, sender_name, body, sender_type, is_ai=False):
         conversation_id=conv_id,
         sender_type=sender_type, body=body,
         message_type=MessageType.MESSAGE, sender_name=sender_name,
-        is_ai=is_ai, sent_at=datetime.now(UTC),
+        is_ai=is_ai, sent_at=current_utc(),
     )
     db.add(msg)
     db.flush()
@@ -946,8 +1011,6 @@ Return ONLY valid JSON (no markdown):
 
 A message passes if ALL scores are >= 3.""",
         }],
-        model=os.getenv("EVAL_JUDGE_MODEL") or os.getenv("LLM_MODEL", "deepseek/deepseek-chat"),
-        api_base=os.getenv("EVAL_JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL") or None,
         temperature=0.0,
     )
 

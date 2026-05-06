@@ -3,6 +3,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
+from agent.time import current_utc
 from agent.tools._common import Tool, ToolMode
 
 
@@ -84,7 +85,7 @@ class HasHappenedTool(Tool):
                 ),
             })
 
-        now = datetime.now(UTC)
+        now = current_utc()
         target_utc = target.astimezone(UTC)
         delta_seconds = int((now - target_utc).total_seconds())
 

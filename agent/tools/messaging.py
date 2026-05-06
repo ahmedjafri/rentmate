@@ -8,6 +8,7 @@ from agent.tools._common import (
     _auto_execute_suggestion,
     _check_placeholder_ids,
     _create_suggestion,
+    _load_owner_by_public_id,
     _load_tenant_by_public_id,
     _load_vendor_by_public_id,
     _placeholder_message_block_error,
@@ -45,7 +46,11 @@ def _needs_manager_review(risk_level: str, outbound_policy: str) -> bool:
     )
 
 
-_ENTITY_ID_PREFIXES = ("tenant ", "vendor ", "tenant:", "vendor:", "tenants/", "vendors/")
+_ENTITY_ID_PREFIXES = (
+    "tenant ", "vendor ", "owner ",
+    "tenant:", "vendor:", "owner:",
+    "tenants/", "vendors/", "owners/",
+)
 
 
 def _strip_entity_prefix(entity_id: str) -> str:
@@ -62,7 +67,7 @@ def _strip_entity_prefix(entity_id: str) -> str:
 
 
 class MessageExternalPersonTool(Tool):
-    """Send a message to an external person (tenant or vendor) on a task."""
+    """Send a message to an external person (tenant, vendor, or owner) on a task."""
 
     @property
     def name(self) -> str:
@@ -76,8 +81,8 @@ class MessageExternalPersonTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Send a message to a tenant or vendor. Use the Tenant ID or Vendor ID external UUID "
-            "from the context — you already have them, do not ask for contact info. "
+            "Send a message to a tenant, vendor, or property owner. Use the Tenant ID, Vendor ID, "
+            "or Owner ID external UUID from the context — you already have them, do not ask for contact info. "
             "You must classify risk_level yourself (low / medium / high / critical) based on the "
             "content and context of the message. Risky messages route to a manager-review suggestion "
             "(pending approval); safe ones auto-send under the account's outbound-message policy. "
@@ -114,14 +119,14 @@ class MessageExternalPersonTool(Tool):
                 "entity_id": {
                     "type": "string",
                     "description": (
-                        "External UUID of the tenant or vendor — the bare UUID only, "
-                        "no 'tenant ' or 'vendor ' prefix. Copy the part after "
-                        "'Entity: tenant ' / 'Entity: vendor ' in the context."
+                        "External UUID of the tenant, vendor, or owner — the bare UUID only, "
+                        "no 'tenant ' / 'vendor ' / 'owner ' prefix. Copy the part after "
+                        "'Entity: tenant ' / 'Entity: vendor ' / 'Entity: owner ' in the context."
                     ),
                 },
                 "entity_type": {
                     "type": "string",
-                    "enum": ["tenant", "vendor"],
+                    "enum": ["tenant", "vendor", "owner"],
                     "description": "Type of person to message",
                 },
                 "draft_message": {"type": "string", "description": "The message to send"},
@@ -224,6 +229,10 @@ class MessageExternalPersonTool(Tool):
                 entity = _load_vendor_by_public_id(db, entity_id)
                 entity_name = entity.name if entity else "Vendor"
                 entity_phone = entity.phone if entity else None
+            elif entity_type == "owner":
+                entity = _load_owner_by_public_id(db, entity_id)
+                entity_name = entity.name if entity else "Owner"
+                entity_phone = entity.phone if entity else None
             elif entity_type == "tenant":
                 entity = _load_tenant_by_public_id(db, entity_id)
                 # When messaging inside a task context, the resolved tenant
@@ -255,7 +264,7 @@ class MessageExternalPersonTool(Tool):
                 entity_name = entity.user.name if entity and entity.user else "Tenant"
                 entity_phone = entity.user.phone if entity and entity.user else None
             else:
-                return json.dumps({"status": "error", "message": f"Can only message tenants or vendors, not {entity_type}"})
+                return json.dumps({"status": "error", "message": f"Can only message tenants, vendors, or owners, not {entity_type}"})
 
             if not entity:
                 return json.dumps({
@@ -378,14 +387,15 @@ class MessageExternalPersonTool(Tool):
             # Safe auto-send. Materialise the standalone conversation and
             # drop the message into it immediately — the message itself is
             # the audit trail, no Suggestion row needed on this branch.
-            conv_type = (
-                ConversationType.TENANT if entity_type == "tenant"
-                else ConversationType.VENDOR
-            )
-            participant_kwargs = (
-                {"tenant_id": entity.id} if entity_type == "tenant"
-                else {"vendor_id": entity.id}
-            )
+            if entity_type == "tenant":
+                conv_type = ConversationType.TENANT
+                participant_kwargs = {"tenant_id": entity.id}
+            elif entity_type == "owner":
+                conv_type = ConversationType.OWNER
+                participant_kwargs = {"owner_id": entity.id}
+            else:
+                conv_type = ConversationType.VENDOR
+                participant_kwargs = {"vendor_id": entity.id}
             convo = chat_service.get_or_create_external_conversation(
                 db,
                 conversation_type=conv_type,

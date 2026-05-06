@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 
+from agent.time import current_utc
 from handlers.deps import require_user
 
 logger = logging.getLogger("rentmate.task_review")
@@ -112,6 +113,7 @@ def _build_review_prompt(task, db) -> str:
 
     return (
         f"Review task #{task.id} against its goal and move it forward.\n\n"
+        f"**Current time**: {current_utc().isoformat()}\n"
         f"**Title**: {task.title or '(untitled)'}\n"
         f"**Status**: {status}\n"
         f"**Goal**: {goal}\n"
