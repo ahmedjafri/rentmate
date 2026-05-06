@@ -88,6 +88,13 @@ class ConversationExtra(BaseModel):
     assigned_vendor_id: str | int | None = None
     assigned_vendor_name: str | None = None
     suggestion_options: list[dict] | None = None
+    # Email mirrored conversation fields (set by db/lib_email.py)
+    source: str | None = None
+    email_thread_id: str | None = None
+    email_from: str | None = None
+    read_only: bool | None = None
+    tenant_id: int | None = None
+    tenant_name: str | None = None
 
 
 class MessageRelatedTaskIds(BaseModel):
@@ -287,7 +294,6 @@ def mark_conversation_seen(db: Session, *, conversation_uid: str) -> Conversatio
         select(Conversation).where(
             Conversation.external_id == conversation_uid,
             Conversation.org_id == resolve_org_id(),
-            Conversation.creator_id == resolve_account_id(),
             Conversation.is_archived.is_(False),
         )
     ).scalar_one_or_none()
@@ -448,7 +454,6 @@ def build_agent_message_history(
         .where(
             Conversation.id == conv_id,
             Conversation.org_id == resolve_org_id(),
-            Conversation.creator_id == resolve_account_id(),
         )
         .options(selectinload(Conversation.messages))
     ).scalar_one_or_none()
@@ -658,7 +663,6 @@ def send_autonomous_message(
             select(Task).where(
                 Task.id == task_id,
                 Task.org_id == resolve_org_id(),
-                Task.creator_id == resolve_account_id(),
             )
         ).scalar_one_or_none()
         if task:

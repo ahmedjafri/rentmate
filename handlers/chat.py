@@ -9,7 +9,12 @@ import traceback
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
+
+if TYPE_CHECKING:
+    # Only imported for type hints — avoids a circular import since email_inbound
+    # imports process_inbound_email from this module.
+    from handlers.email_parser import ParsedEmail
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -296,6 +301,82 @@ async def process_inbound_sms(db: Session, from_number: str, to_number: str, bod
             ),
         )
     return True
+
+async def process_inbound_email(db: Session, parsed: "ParsedEmail", *, auto_spawn_task: bool = True) -> bool:
+    """Store an inbound email and trigger the agent if a tenant was resolved.
+
+    This is the email equivalent of process_inbound_sms() above.  It bridges
+    the async webhook handler (handlers/email_inbound.py) and the sync DB
+    layer (db/lib_email.py:ingest_email).
+
+    The agent receives a hint that tells it an email arrived.  It then reads
+    the full email body stored in the MIRRORED_CHAT conversation, classifies
+    the request (maintenance issue, rent payment question, lease query, general
+    question, or new potential tenant), and handles it autonomously using the
+    same task tools and vendor/tenant context it already has.
+
+    Returns True if the email was ingested, False if it was a duplicate or
+    the incoming message was otherwise skipped.
+    """
+    from db.lib_email import ingest_email, resolve_email_sender
+    from db.models.account import User
+
+    # Determine the correct account context (creator_id, org_id) before ingesting.
+    # For known tenants, tenant.creator_id is the property manager who owns that tenant.
+    # For unknown senders, fall back to the first account user in the DB so that
+    # created conversations are visible to the logged-in property manager.
+    # This mirrors the SMS path where sms_router.resolve() returns creator_id directly.
+    def _resolve_account_context():
+        entity, entity_type = resolve_email_sender(
+            db, email=parsed.from_email, display_name=parsed.from_name
+        )
+        if entity is not None:
+            c_id = getattr(entity, "creator_id", None)
+            o_id = getattr(entity, "org_id", None)
+            if c_id and o_id:
+                return c_id, o_id
+        # Unknown sender or entity missing creator context — use the primary account user.
+        account_user = (
+            db.query(User)
+            .filter(User.user_type == "account")
+            .order_by(User.id)
+            .first()
+        )
+        if account_user:
+            return account_user.id, account_user.org_id
+        return 1, 1  # absolute fallback for empty databases
+
+    creator_id, org_id = await asyncio.to_thread(_resolve_account_context)
+    set_request_context(account_id=creator_id, org_id=org_id)
+
+    # Run the sync DB work in a thread so we don't block the async event loop
+    # (same pattern as route_inbound_to_tenant_chat call in process_inbound_sms).
+    conv, msg, task_spawned = await asyncio.to_thread(
+        ingest_email, db, parsed=parsed, auto_spawn_task=auto_spawn_task
+    )
+
+    if conv is None:
+        # Duplicate or fully unresolvable — nothing to do.
+        return False
+
+    db.commit()
+
+    if task_spawned and conv.parent_task_id:
+        # Fire the agent autoreply in the background so the webhook returns
+        # immediately while the LLM does its work.  The hint tells the agent
+        # what channel triggered it so it can tailor its classification prompt.
+        hint = (
+            f"New email received from {parsed.from_email}: {parsed.subject}. "
+            "Read the mirrored email conversation, classify the request "
+            "(maintenance, rent payment, lease, general question, or new tenant inquiry), "
+            "and handle it appropriately using the available task tools."
+        )
+        asyncio.create_task(
+            asyncio.to_thread(agent_task_autoreply, str(conv.parent_task_id), hint)
+        )
+
+    return True
+
 
 @router.post("/quo-webhook")
 async def handle_message(

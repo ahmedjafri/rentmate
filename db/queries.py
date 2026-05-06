@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from db.enums import TaskCategory, TaskSource, TaskStatus
 from db.models import Conversation, ConversationParticipant, Lease, Message, Property, Task, Tenant, User
-from integrations.local_auth import resolve_account_id
+from integrations.local_auth import resolve_account_id, resolve_org_id
 
 # ---------------------------------------------------------------------------
 # Formatting helpers (pure functions over ORM models)
@@ -106,7 +106,7 @@ def fetch_tasks(
     status: Optional[list[TaskStatus]] = None,
     source: Optional[TaskSource] = None,
 ) -> list[Task]:
-    q = select(Task).where(Task.creator_id == _account_id())
+    q = select(Task).where(Task.org_id == resolve_org_id())
     if category:
         q = q.where(Task.category == category)
     if status:
@@ -129,7 +129,7 @@ def fetch_task(db: Session, task_id: int) -> Optional[Task]:
     return db.execute(
         select(Task)
         .where(Task.id == task_id)
-        .where(Task.creator_id == _account_id())
+        .where(Task.org_id == resolve_org_id())
         .options(
             selectinload(Task.ai_conversation).selectinload(Conversation.messages),
             selectinload(Task.parent_conversation).selectinload(Conversation.messages),
@@ -149,12 +149,19 @@ def fetch_conversations(
     offset: int = 0,
 ) -> list[Conversation]:
     """Fetch conversations by type, newest first."""
+    q = select(Conversation).where(
+        Conversation.conversation_type == conversation_type,
+        Conversation.is_archived.is_(False),
+    )
+    # Mirrored conversations (email, SMS mirror, browser extension) are shared
+    # across the whole org — any property manager should see them regardless of
+    # which account user the webhook happened to set as creator.
+    if conversation_type == "mirrored_chat":
+        q = q.where(Conversation.org_id == resolve_org_id())
+    else:
+        q = q.where(Conversation.creator_id == _account_id())
     q = (
-        select(Conversation)
-        .where(Conversation.conversation_type == conversation_type)
-        .where(Conversation.is_archived.is_(False))
-        .where(Conversation.creator_id == _account_id())
-        .options(
+        q.options(
             selectinload(Conversation.participants)
             .selectinload(ConversationParticipant.user),
             selectinload(Conversation.messages),
@@ -178,7 +185,7 @@ def fetch_messages(db: Session, conversation_id: str) -> list[Message]:
     conversation = db.execute(
         select(Conversation).where(
             Conversation.external_id == conversation_id,
-            Conversation.creator_id == _account_id(),
+            Conversation.org_id == resolve_org_id(),
         )
     ).scalar_one_or_none()
     if conversation is None:

@@ -24,6 +24,7 @@ from handlers import (
     data_portability,
     dev,
     documents,
+    email_inbound,
     notifications,
     settings,
 )
@@ -427,6 +428,8 @@ def create_app(
     app.include_router(notifications.router, prefix="/api")
     app.include_router(streams_router, prefix="/api")
     app.include_router(data_portability.router, prefix="/api")
+    # Inbound email webhook — receives Postmark POSTs for agent@...rentmate.io
+    app.include_router(email_inbound.router)
     app.include_router(dev.router, prefix="/dev")
     app.include_router(vendor_invite.router)
     app.include_router(vendor_portal.router)
