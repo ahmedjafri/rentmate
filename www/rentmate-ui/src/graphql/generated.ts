@@ -123,6 +123,7 @@ export type ConversationTurnInput = {
 
 export type ConversationType =
   | 'MIRRORED_CHAT'
+  | 'OWNER'
   | 'SUGGESTION_AI'
   | 'TASK_AI'
   | 'TENANT'

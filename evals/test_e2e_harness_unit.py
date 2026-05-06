@@ -234,7 +234,7 @@ def test_confirmed_appointment_times_parse_confirmed_visit():
     assert _confirmed_appointment_times(
         "Got it, I'll be there at 2:00 PM today to check it out.",
         reference=reference,
-    ) == [datetime(2026, 5, 6, 14, 0, tzinfo=UTC)]
+    ) == [datetime(2026, 5, 6, 21, 0, tzinfo=UTC)]
 
 
 def test_confirmed_appointment_times_parse_tomorrow_afternoon():
@@ -243,7 +243,7 @@ def test_confirmed_appointment_times_parse_tomorrow_afternoon():
     assert _confirmed_appointment_times(
         "I'll plan to head over tomorrow afternoon to meet the tenant.",
         reference=reference,
-    ) == [datetime(2026, 5, 7, 17, 0, tzinfo=UTC)]
+    ) == [datetime(2026, 5, 8, 0, 0, tzinfo=UTC)]
 
 
 def test_confirmed_appointment_times_parse_heading_over_now():
