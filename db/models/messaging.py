@@ -29,6 +29,7 @@ class ParticipantType(str, Enum):
 class ConversationType(str, Enum):
     TENANT        = "tenant"
     VENDOR        = "vendor"
+    OWNER         = "owner"
     USER_AI       = "user_ai"
     TASK_AI       = "task_ai"
     SUGGESTION_AI = "suggestion_ai"

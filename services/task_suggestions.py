@@ -22,6 +22,7 @@ from gql.types import CreateTaskInput
 from integrations.local_auth import resolve_account_id, resolve_org_id
 from services import chat_service, settings_service, suggestion_service
 from services.task_service import TaskProgressStep, TaskService, dump_task_steps
+from services.owner_service import get_owner_by_external_id
 from services.vendor_service import get_vendor_by_external_id, get_vendor_by_id
 
 
@@ -191,6 +192,29 @@ class SuggestionExecutor:
                 parent_task_id=task.id,
             )
         TaskService.assign_vendor_to_task(self.db, task_id=task.id, vendor_id=vendor.id)
+        return existing
+
+    def _wire_owner_conversation(self, task: Task, suggestion: Suggestion, owner_id: str) -> Conversation:
+        """Create or reuse a task-scoped conversation with the property owner."""
+        owner = get_owner_by_external_id(self.db, str(owner_id))
+        if not owner:
+            raise ValueError(f"Owner {owner_id} not found")
+        existing = self._task_conversation_with_entity(
+            task,
+            conversation_type=ConversationType.OWNER,
+            participant_type=ParticipantType.EXTERNAL_CONTACT,
+            entity_user_id=owner.id,
+        )
+        if existing is None:
+            existing = chat_service.get_or_create_external_conversation(
+                self.db,
+                conversation_type=ConversationType.OWNER,
+                subject=suggestion.title or "",
+                property_id=suggestion.property_id,
+                unit_id=suggestion.unit_id,
+                owner_id=owner.id,
+                parent_task_id=task.id,
+            )
         return existing
 
     def _send_draft_message(self, task: Task, draft: str) -> None:
@@ -529,6 +553,8 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
                 # conversation rather than piggybacking on vendor A's.
                 if entity_type == "vendor":
                     target_convo = self._wire_vendor_conversation(task, suggestion, entity_id)
+                elif entity_type == "owner":
+                    target_convo = self._wire_owner_conversation(task, suggestion, entity_id)
                 elif entity_type == "tenant":
                     from db.models import Tenant as TenantModel
                     from services.tenant_service import TenantService
@@ -598,18 +624,22 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
         """
         from db.models import Tenant as TenantModel
 
-        conv_type = (
-            ConversationType.TENANT if entity_type == "tenant"
-            else ConversationType.VENDOR
-        )
         if entity_type == "tenant":
+            conv_type = ConversationType.TENANT
             tenant = self.db.execute(
                 select(TenantModel).where(TenantModel.external_id == str(entity_id))
             ).scalar_one_or_none()
             if not tenant:
                 raise ValueError(f"Tenant {entity_id} not found")
             participant_kwargs = {"tenant_id": tenant.id}
+        elif entity_type == "owner":
+            conv_type = ConversationType.OWNER
+            owner = get_owner_by_external_id(self.db, str(entity_id))
+            if not owner:
+                raise ValueError(f"Owner {entity_id} not found")
+            participant_kwargs = {"owner_id": owner.id}
         else:
+            conv_type = ConversationType.VENDOR
             vendor = get_vendor_by_external_id(self.db, str(entity_id))
             if not vendor:
                 raise ValueError(f"Vendor {entity_id} not found")
@@ -647,6 +677,17 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
                 conversation_type=ConversationType.VENDOR,
                 participant_type=ParticipantType.EXTERNAL_CONTACT,
                 entity_user_id=vendor.id,
+            )
+            return convo.id if convo else None
+        elif entity_type == "owner":
+            owner = get_owner_by_external_id(self.db, str(entity_id)) if entity_id else None
+            if not owner:
+                return None
+            convo = self._task_conversation_with_entity(
+                task,
+                conversation_type=ConversationType.OWNER,
+                participant_type=ParticipantType.EXTERNAL_CONTACT,
+                entity_user_id=owner.id,
             )
             return convo.id if convo else None
         elif entity_type == "tenant":
@@ -694,10 +735,13 @@ class MessagePersonSuggestionExecutor(SuggestionExecutor):
         )
 
     def _recipient_user_id(self, entity_type: str, entity_id: str) -> int | None:
-        """Resolve a tenant or vendor external id to its underlying User.id."""
+        """Resolve a tenant, vendor, or owner external id to its underlying User.id."""
         if entity_type == "vendor":
             vendor = get_vendor_by_external_id(self.db, str(entity_id))
             return vendor.id if vendor else None
+        if entity_type == "owner":
+            owner = get_owner_by_external_id(self.db, str(entity_id))
+            return owner.id if owner else None
         if entity_type == "tenant":
             from db.models import Tenant as TenantModel
             tenant = self.db.execute(

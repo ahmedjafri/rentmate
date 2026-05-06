@@ -45,8 +45,6 @@ def _extract_from_pdf(pdf_path: Path) -> dict:
 
     result, _, _ = completion_json(
         messages=[{"role": "user", "content": EXTRACTION_PROMPT + truncated}],
-        model=os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
-        api_base=os.getenv("LLM_BASE_URL") or None,
         temperature=0.0,
         retries=1,
         timeout=_EXTRACTION_TIMEOUT_SECONDS,

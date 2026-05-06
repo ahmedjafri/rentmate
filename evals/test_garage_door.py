@@ -10,7 +10,6 @@ tool calls, DB state, and message quality via an LLM judge.
 Usage:
     poetry run pytest evals/test_garage_door.py -m eval -v
 """
-import os
 from datetime import UTC, datetime
 
 import pytest
@@ -160,8 +159,6 @@ Return ONLY valid JSON (no markdown):
 
 A message passes if ALL scores are >= 3.""",
         }],
-        model=os.getenv("EVAL_JUDGE_MODEL") or os.getenv("LLM_MODEL", "deepseek/deepseek-chat"),
-        api_base=os.getenv("EVAL_JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL") or None,
         temperature=0.0,
     )
     return result

@@ -539,10 +539,11 @@ def get_or_create_external_conversation(
     unit_id: str | None = None,
     vendor_id: int | None = None,
     tenant_id: int | None = None,
+    owner_id: int | None = None,
     ai_typing: bool = False,
     parent_task_id: int | None = None,
 ) -> Conversation:
-    """Create a new conversation for a vendor or tenant.
+    """Create a new conversation for a vendor, tenant, or property owner.
 
     Always creates a fresh conversation so each task gets its own thread.
     Passing `parent_task_id` links this coordination thread to its owning task.
@@ -592,6 +593,18 @@ def get_or_create_external_conversation(
             conversation_id=conv.id,
             user_id=tenant.user_id,
             participant_type=ParticipantType.TENANT,
+            creator_id=creator_id,
+            is_active=True,
+        ))
+    elif owner_id is not None:
+        owner = db.execute(
+            select(User).where(User.id == owner_id, User.user_type == "owner")
+        ).scalar_one()
+        db.add(ConversationParticipant(
+            org_id=resolve_org_id(),
+            conversation_id=conv.id,
+            user_id=owner.id,
+            participant_type=ParticipantType.EXTERNAL_CONTACT,
             creator_id=creator_id,
             is_active=True,
         ))

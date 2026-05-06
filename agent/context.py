@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from agent.retrieval import RetrievalRequest, compose_prompt_context, retrieve_context
-from db.models import Conversation, ConversationType, Lease, MessageType, Property, Suggestion, Task, Tenant, Unit
+from db.models import Conversation, ConversationType, Lease, MessageType, Property, Suggestion, Task, Tenant, Unit, User
 
 
 def _serialize_retrieval_bundle(bundle) -> dict[str, Any]:
@@ -322,6 +322,14 @@ def build_task_context_data(db: Session, task_id: str, query: str | None = None)
                 factual_lines.append(f"Tenant phone: {tenant.user.phone}")
             if tenant.user.email:
                 factual_lines.append(f"Tenant email: {tenant.user.email}")
+    if prop and prop.owner_id:
+        owner = db.query(User).filter_by(id=prop.owner_id).first()
+        if owner:
+            factual_lines.append(f"Owner ID: {owner.external_id}")
+            owner_name = owner.name or owner.email or "Unknown owner"
+            factual_lines.append(f"Owner: {owner_name}")
+            if owner.phone:
+                factual_lines.append(f"Owner phone: {owner.phone}")
     if lease:
         factual_lines.append(f"Lease rent amount: ${lease.rent_amount:,.0f}" if float(lease.rent_amount).is_integer() else f"Lease rent amount: ${lease.rent_amount:,.2f}")
         if lease.payment_status:

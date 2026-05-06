@@ -357,6 +357,22 @@ def test_generate_reply_falls_back_to_canned_on_llm_error():
     assert out == "Got it, thanks."
 
 
+def test_generate_reply_can_raise_on_llm_error():
+    from demo.personalities import Personality
+    from demo.simulator import _generate_reply
+
+    personality = Personality(voice="x", formality="casual", response_style="brief")
+    user = MagicMock(first_name="Marcus", last_name="Johnson", role_label=None)
+
+    with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=RuntimeError("network")):
+        with pytest.raises(RuntimeError, match="LLM reply generation failed for Marcus"):
+            asyncio.run(_generate_reply(
+                user=user, personality=personality,
+                conversation_type="tenant", property_name=None, history=[],
+                raise_on_failure=True,
+            ))
+
+
 # ─── _schedule_reply jitter ─────────────────────────────────────────────
 
 

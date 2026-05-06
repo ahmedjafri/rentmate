@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from agent.time import current_utc
 from agent.tools._common import (
     Tool,
     _check_placeholder_ids,
@@ -35,7 +36,7 @@ def record_task_review_result(
     """
     from db.models import Task as TaskModel
 
-    now = datetime.now(UTC)
+    now = current_utc()
     with tool_session() as db:
         task = db.query(TaskModel).filter_by(id=task_id).first()
         if not task:
@@ -213,17 +214,21 @@ class AskManagerTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Post a question to the property manager in the task's AI "
-            "conversation. Use this whenever you need clarification, a "
-            "decision, or an approval to unblock yourself — including "
-            "when you can't complete the request because info is "
-            "missing, an entity isn't in lookup results, you don't have "
-            "a tool for the action, or the manager's intent is "
-            "ambiguous. **This is the right escape hatch for "
-            "blockers — do NOT call ``propose_task`` or "
+            "Post a question to the property manager (the operator running "
+            "RentMate) in the task's AI conversation. Use this for "
+            "system-level ambiguity you can't resolve yourself: missing "
+            "info, an entity not in lookup results, no tool for the "
+            "action, or unclear manager intent. **This is the right "
+            "escape hatch for blockers — do NOT call ``propose_task`` or "
             "``create_suggestion`` to ask the manager to do something "
-            "themselves.** The message appears in the manager's task "
-            "chat; they reply there."
+            "themselves.** "
+            "**Cost / scope / vendor-selection approvals are owner-facing, "
+            "not manager-facing.** For 'approve this quote', 'pick between "
+            "these two vendors', or 'OK to spend $X' — use ``message_person`` "
+            "with the owner instead, after gathering at least 2 quotes. "
+            "Only route cost decisions through ``ask_manager`` when "
+            "something is outside the routine flow (no vendors available, "
+            "lease/compliance unclear, tenant dispute, etc.)."
         )
 
     @property

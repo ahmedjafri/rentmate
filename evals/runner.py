@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -188,8 +187,6 @@ Respond with ONLY a JSON object in exactly this format:
     try:
         verdict, _, _ = completion_json(
             messages=messages,
-            model=os.getenv("EVAL_JUDGE_MODEL") or os.getenv("LLM_MODEL", "openai/gpt-4o-mini"),
-            api_base=os.getenv("EVAL_JUDGE_BASE_URL") or os.getenv("LLM_BASE_URL") or None,
             temperature=0.0,
         )
     except Exception as exc:

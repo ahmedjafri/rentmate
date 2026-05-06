@@ -291,6 +291,7 @@ def begin_agent_step(
     handle = _current_run_handle.get()
     before_in = handle.input_tokens if handle is not None else 0
     before_out = handle.output_tokens if handle is not None else 0
+    before_cost = handle.total_cost_cents if handle is not None else None
 
     builder = StepBuilder(
         run_id=run_id, step_id=step_id, message=message, model_name=model_name,
@@ -310,7 +311,15 @@ def begin_agent_step(
             d_in = max(0, handle.input_tokens - before_in)
             d_out = max(0, handle.output_tokens - before_out)
             if d_in or d_out:
-                cost_cents = _compute_cost_cents(model_name, d_in, d_out)
+                # Prefer the litellm-reported cost delta on the run handle;
+                # fall back to the hardcoded model rates only when no
+                # provider cost was recorded for this step.
+                if handle.total_cost_cents is not None and before_cost is not None:
+                    cost_cents = handle.total_cost_cents - before_cost
+                elif handle.total_cost_cents is not None:
+                    cost_cents = handle.total_cost_cents
+                else:
+                    cost_cents = _compute_cost_cents(model_name, d_in, d_out)
                 cost_usd = float(cost_cents / Decimal("100"))
                 builder.set_metrics(
                     prompt_tokens=d_in,

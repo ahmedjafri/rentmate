@@ -310,14 +310,7 @@ def _classify_task_match(body: str, candidates: list) -> str:
 
     Returns a task id string from candidates, or "new".
     """
-    import os
-    try:
-        from litellm import completion as litellm_completion
-    except ImportError:
-        return "new"
-
-    model = os.getenv("CLASSIFY_MODEL", "claude-haiku-4-5-20251001")
-    api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("LITELLM_API_KEY")
+    from agent.litellm_utils import LLMLane, completion_with_retries
 
     task_lines = "\n".join(
         f'{i+1}. [{c["id"]}] "{c["subject"]}" — last message: "{c["last_snippet"]}"'
@@ -330,11 +323,10 @@ def _classify_task_match(body: str, candidates: list) -> str:
     )
 
     try:
-        resp = litellm_completion(
-            model=model,
+        resp, _, _ = completion_with_retries(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=50,
-            api_key=api_key,
+            lane=LLMLane.CHEAP,
         )
         result = resp.choices[0].message.content.strip().strip('"').strip("'")
         candidate_ids = {c["id"] for c in candidates}

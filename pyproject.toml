@@ -64,6 +64,7 @@ pytest-xdist = "^3.5"
 [tool.pytest.ini_options]
 addopts = "--import-mode=prepend -m 'not eval'"
 pythonpath = ["."]
+python_files = ["test_*.py", "eval_*.py"]
 norecursedirs = [
   "data",
   "data/db",
