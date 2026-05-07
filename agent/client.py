@@ -818,10 +818,10 @@ async def chat_with_agent(
     # loop indefinitely. Override via LLM_REQUEST_TIMEOUT_SECONDS.
     try:
         extra_completion_kwargs["timeout"] = float(
-            os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "60")
+            os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "120")
         )
     except ValueError:
-        extra_completion_kwargs["timeout"] = 60.0
+        extra_completion_kwargs["timeout"] = 120.0
     extra_completion_kwargs["metadata"] = {
         "account_id": str(resolve_account_id()),
         "org_id": str(resolve_org_id() or ""),
