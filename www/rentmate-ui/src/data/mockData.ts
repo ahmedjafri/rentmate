@@ -86,7 +86,7 @@ export interface ChatActionCardField {
 
 export interface ChatActionCardLink {
   label: string;
-  entityType: 'suggestion' | 'property' | 'tenant' | 'unit' | 'document';
+  entityType: 'suggestion' | 'property' | 'tenant' | 'unit' | 'document' | 'task';
   entityId: string;
   propertyId?: string | null;
 }
@@ -98,7 +98,7 @@ export interface ChatActionCardUnit {
 }
 
 export interface ChatActionCard {
-  kind: 'suggestion' | 'property' | 'tenant' | 'document' | 'question';
+  kind: 'suggestion' | 'property' | 'tenant' | 'document' | 'question' | 'task';
   title: string;
   summary?: string;
   fields?: ChatActionCardField[];
