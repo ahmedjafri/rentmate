@@ -88,7 +88,7 @@ class ConversationExtra(BaseModel):
     assigned_vendor_id: str | int | None = None
     assigned_vendor_name: str | None = None
     suggestion_options: list[dict] | None = None
-    # Email mirrored conversation fields (set by db/lib_email.py)
+    # Email mirrored conversation fields (set by services/email_service.py)
     source: str | None = None
     email_thread_id: str | None = None
     email_from: str | None = None
@@ -294,6 +294,7 @@ def mark_conversation_seen(db: Session, *, conversation_uid: str) -> Conversatio
         select(Conversation).where(
             Conversation.external_id == conversation_uid,
             Conversation.org_id == resolve_org_id(),
+            Conversation.creator_id == resolve_account_id(),
             Conversation.is_archived.is_(False),
         )
     ).scalar_one_or_none()

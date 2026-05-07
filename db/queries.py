@@ -5,6 +5,7 @@ These functions return fully-loaded ORM objects.  Both the GraphQL layer
 (gql/queries.py) and the agent data tool (llm/agent_data.py) call these
 instead of duplicating query logic.
 """
+from enum import Enum
 from typing import Optional
 
 from sqlalchemy import select
@@ -100,13 +101,23 @@ def fetch_leases(db: Session) -> list[Lease]:
     )
 
 
+class FetchScope(str, Enum):
+    ACCOUNT = "account"
+    ORG = "org"
+
+
 def fetch_tasks(
     db: Session,
-    *, category: Optional[TaskCategory] = None,
+    *,
+    scope: FetchScope = FetchScope.ORG,
+    category: Optional[TaskCategory] = None,
     status: Optional[list[TaskStatus]] = None,
     source: Optional[TaskSource] = None,
 ) -> list[Task]:
-    q = select(Task).where(Task.org_id == resolve_org_id())
+    if scope == FetchScope.ACCOUNT:
+        q = select(Task).where(Task.creator_id == _account_id())
+    else:
+        q = select(Task).where(Task.org_id == resolve_org_id())
     if category:
         q = q.where(Task.category == category)
     if status:
@@ -152,14 +163,8 @@ def fetch_conversations(
     q = select(Conversation).where(
         Conversation.conversation_type == conversation_type,
         Conversation.is_archived.is_(False),
+        Conversation.creator_id == _account_id(),
     )
-    # Mirrored conversations (email, SMS mirror, browser extension) are shared
-    # across the whole org — any property manager should see them regardless of
-    # which account user the webhook happened to set as creator.
-    if conversation_type == "mirrored_chat":
-        q = q.where(Conversation.org_id == resolve_org_id())
-    else:
-        q = q.where(Conversation.creator_id == _account_id())
     q = (
         q.options(
             selectinload(Conversation.participants)

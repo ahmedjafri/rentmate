@@ -9,12 +9,9 @@ import traceback
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import Dict, Optional
 
-if TYPE_CHECKING:
-    # Only imported for type hints — avoids a circular import since email_inbound
-    # imports process_inbound_email from this module.
-    from handlers.email_parser import ParsedEmail
+from handlers.email_parser import ParsedEmail
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -307,7 +304,7 @@ async def process_inbound_email(db: Session, parsed: "ParsedEmail", *, auto_spaw
 
     This is the email equivalent of process_inbound_sms() above.  It bridges
     the async webhook handler (handlers/email_inbound.py) and the sync DB
-    layer (db/lib_email.py:ingest_email).
+    layer (services/email_service.py:ingest_email).
 
     The agent receives a hint that tells it an email arrived.  It then reads
     the full email body stored in the MIRRORED_CHAT conversation, classifies
@@ -318,7 +315,7 @@ async def process_inbound_email(db: Session, parsed: "ParsedEmail", *, auto_spaw
     Returns True if the email was ingested, False if it was a duplicate or
     the incoming message was otherwise skipped.
     """
-    from db.lib_email import ingest_email, resolve_email_sender
+    from services.email_service import ingest_email, resolve_email_sender
     from db.models.account import User
 
     # Determine the correct account context (creator_id, org_id) before ingesting.

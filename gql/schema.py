@@ -113,6 +113,7 @@ class Query:
         db = _session(info)
         q = db.query(Routine).filter_by(
             org_id=resolve_org_id(),
+            creator_id=resolve_account_id(),
         ).order_by(Routine.created_at.desc())
         if enabled is not None:
             q = q.filter(Routine.enabled == enabled)
