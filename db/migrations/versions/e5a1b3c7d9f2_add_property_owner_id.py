@@ -21,23 +21,31 @@ def upgrade() -> None:
     if bind.dialect.name != "postgresql":
         return
 
-    op.add_column(
-        "properties",
-        sa.Column("owner_id", sa.Integer(), nullable=True),
-    )
-    op.create_index(
-        "ix_properties_owner_id",
-        "properties",
-        ["owner_id"],
-    )
-    op.create_foreign_key(
-        "fk_properties_owner_id",
-        source_table="properties",
-        referent_table="users",
-        local_cols=["org_id", "owner_id"],
-        remote_cols=["org_id", "id"],
-        ondelete="SET NULL",
-    )
+    inspector = sa.inspect(bind)
+    columns = {c["name"] for c in inspector.get_columns("properties")}
+    indexes = {i["name"] for i in inspector.get_indexes("properties")}
+    fks = {fk["name"] for fk in inspector.get_foreign_keys("properties")}
+
+    if "owner_id" not in columns:
+        op.add_column(
+            "properties",
+            sa.Column("owner_id", sa.Integer(), nullable=True),
+        )
+    if "ix_properties_owner_id" not in indexes:
+        op.create_index(
+            "ix_properties_owner_id",
+            "properties",
+            ["owner_id"],
+        )
+    if "fk_properties_owner_id" not in fks:
+        op.create_foreign_key(
+            "fk_properties_owner_id",
+            source_table="properties",
+            referent_table="users",
+            local_cols=["org_id", "owner_id"],
+            remote_cols=["org_id", "id"],
+            ondelete="SET NULL",
+        )
 
 
 def downgrade() -> None:
