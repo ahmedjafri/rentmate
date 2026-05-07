@@ -238,7 +238,7 @@ class TestVerifyPostmarkSignature:
         request.headers = {"X-Postmark-Signature": sig}
 
         # Should not raise
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             verify_postmark_signature(request, body)
         )
 
@@ -255,7 +255,7 @@ class TestVerifyPostmarkSignature:
         request.headers = {"X-Postmark-Signature": "wrong-sig"}
 
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 verify_postmark_signature(request, b'{"body": "data"}')
             )
         assert exc_info.value.status_code == 403
@@ -276,7 +276,7 @@ class TestVerifyPostmarkSignature:
         request.headers = {}
 
         # Should not raise even with no token and no signature
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             verify_postmark_signature(request, b"any body")
         )
 
@@ -432,48 +432,3 @@ class TestEmailInboundEndpoint:
             assert msgs[1].meta["email_message_id"] == "def456@mail.gmail.com"
         finally:
             db.close()
-
-
-# ─── Manual smoke tests ───────────────────────────────────────────────────────
-#
-# Run these by hand after starting the dev stack:
-#   docker compose -f infra/docker-compose.dev.yml up
-#
-# 1. New email (unknown sender — stored but no task spawned):
-#
-#   curl -s -X POST http://localhost:8002/api/email/inbound \
-#     -H "Content-Type: application/json" \
-#     -d '{"FromFull":{"Email":"unknown@example.com","Name":"Stranger"},"ToFull":[{"Email":"agent@snoresidences.rentmate.io"}],"CcFull":[],"Subject":"Question about availability","TextBody":"Hi is unit 3A available?","HtmlBody":"","MessageID":"pm-001","Headers":[{"Name":"Message-ID","Value":"<strangerq@mail.com>"}],"Attachments":[],"Date":"2026-05-06T00:00:00Z"}'
-#
-#   Expected: {"status": "ok"}
-#   Check DB:
-#   docker compose -f infra/docker-compose.dev.yml exec postgres \
-#     psql -U postgres rentmate -c \
-#     "SELECT id, conversation_type, subject, extra->>'email_thread_id' FROM conversations WHERE conversation_type='mirrored_chat';"
-#
-# 2. Maintenance request from known tenant (seeds tenant first — run seed_dummy_data.py):
-#
-#   poetry run python scripts/seed_dummy_data.py
-#   # Note the tenant email printed — use it in the curl below
-#
-#   curl -s -X POST http://localhost:8002/api/email/inbound \
-#     -H "Content-Type: application/json" \
-#     -d '{"FromFull":{"Email":"<TENANT_EMAIL>","Name":"Tenant"},...}'
-#
-#   Expected: MIRRORED_CHAT conversation + Task row + agent autoreply in task AI conversation
-#   Check tasks:
-#   docker compose -f infra/docker-compose.dev.yml exec postgres \
-#     psql -U postgres rentmate -c "SELECT id, title, task_status FROM tasks ORDER BY id DESC LIMIT 5;"
-#
-# 3. Deduplication (send same email twice):
-#   Run curl from test 1 twice.
-#   Expected: 1 Message row (second POST silently skipped).
-#
-# 4. Thread continuation (reply to same thread):
-#   POST original email, then POST a reply with References pointing to the first.
-#   Expected: 1 Conversation, 2 Messages.
-#
-# 5. Signature verification (production mode):
-#   Unset RENTMATE_ENV, set POSTMARK_INBOUND_WEBHOOK_TOKEN=mytoken
-#   POST without X-Postmark-Signature header → expect 500 or 403
-#   POST with correct HMAC → expect {"status": "ok"}
