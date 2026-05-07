@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
+from db.enums import TaskCategory, TaskStatus, Urgency
 from db.models import (
     Conversation,
     ConversationParticipant,
@@ -11,6 +12,7 @@ from db.models import (
     Notification,
     ParticipantType,
     Property,
+    Suggestion,
     Task,
     Tenant,
     Unit,
@@ -18,6 +20,12 @@ from db.models import (
 )
 from integrations.local_auth import reset_request_context, set_request_context
 from services import chat_service
+from services.chat_service import (
+    MessageActionCard,
+    MessageActionCardLink,
+    MessageMeta,
+    enrich_message_meta_for_read,
+)
 from services.number_allocator import NumberAllocator
 
 
@@ -613,3 +621,82 @@ def test_mark_conversation_seen_does_not_re_read_already_read_notifications(db):
     # naive — Notification.read_at is stored without tzinfo.)
     expected = earlier.replace(tzinfo=None)
     assert refreshed.read_at.replace(tzinfo=None) == expected
+
+
+def test_enrich_message_meta_swaps_suggestion_card_for_task_when_accepted(db):
+    with _request_scope(account_id=1, org_id=1):
+        task_id = NumberAllocator.allocate_next(db, entity_type="task", org_id=1)
+        task = Task(
+            id=task_id,
+            org_id=1,
+            creator_id=1,
+            title="Repair washer/dryer",
+            task_status=TaskStatus.ACTIVE,
+            category=TaskCategory.MAINTENANCE,
+            urgency=Urgency.MEDIUM,
+            goal="Coordinate appliance repair appointment",
+        )
+        suggestion_id = NumberAllocator.allocate_next(db, entity_type="suggestion", org_id=1)
+        suggestion = Suggestion(
+            id=suggestion_id,
+            org_id=1,
+            creator_id=1,
+            title="Repair broken washer/dryer",
+            task_id=task.id,
+            status="accepted",
+        )
+        db.add_all([task, suggestion])
+        db.flush()
+
+        meta = MessageMeta(action_card=MessageActionCard(
+            kind="suggestion",
+            title="Repair broken washer/dryer",
+            summary="Tenant reported washer/dryer broken.",
+            links=[MessageActionCardLink(
+                label="Open suggestion",
+                entity_type="suggestion",
+                entity_id=str(suggestion.id),
+            )],
+        ))
+
+        enriched = enrich_message_meta_for_read(meta, db)
+
+    assert enriched.action_card is not None
+    assert enriched.action_card.kind == "task"
+    assert enriched.action_card.title == "Repair washer/dryer"
+    assert enriched.action_card.summary == "Coordinate appliance repair appointment"
+    field_map = {f.label: f.value for f in enriched.action_card.fields or []}
+    assert field_map == {"Category": "Maintenance", "Urgency": "Medium", "Status": "Active"}
+    assert len(enriched.action_card.links or []) == 1
+    link = enriched.action_card.links[0]
+    assert link.entity_type == "task"
+    assert link.entity_id == str(task.id)
+    assert link.label == "Open task"
+
+
+def test_enrich_message_meta_leaves_pending_suggestion_card_untouched(db):
+    with _request_scope(account_id=1, org_id=1):
+        suggestion_id = NumberAllocator.allocate_next(db, entity_type="suggestion", org_id=1)
+        suggestion = Suggestion(
+            id=suggestion_id,
+            org_id=1,
+            creator_id=1,
+            title="Pending suggestion",
+            status="pending",
+        )
+        db.add(suggestion)
+        db.flush()
+
+        meta = MessageMeta(action_card=MessageActionCard(
+            kind="suggestion",
+            title="Pending suggestion",
+            links=[MessageActionCardLink(
+                label="Open suggestion",
+                entity_type="suggestion",
+                entity_id=str(suggestion.id),
+            )],
+        ))
+
+        enriched = enrich_message_meta_for_read(meta, db)
+    assert enriched.action_card.kind == "suggestion"
+    assert enriched.action_card.links[0].entity_type == "suggestion"

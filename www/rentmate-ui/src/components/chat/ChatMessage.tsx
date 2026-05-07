@@ -188,6 +188,7 @@ function ActionCardBubble({
     tenant: { icon: User, label: 'Tenant created', className: 'text-emerald-700 dark:text-emerald-400', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800' },
     document: { icon: FileText, label: 'Document created', className: 'text-amber-700 dark:text-amber-400', badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-amber-200 dark:border-amber-800' },
     question: { icon: HelpCircle, label: 'Agent needs your input', className: 'text-violet-700 dark:text-violet-400', badge: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 border-violet-200 dark:border-violet-800' },
+    task: { icon: Wrench, label: 'Task created', className: 'text-cyan-700 dark:text-cyan-400', badge: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400 border-cyan-200 dark:border-cyan-800' },
   } as const;
 
   const cfg = kindConfig[card.kind];
@@ -213,6 +214,10 @@ function ActionCardBubble({
   const openLink = (link: ChatActionCardLink) => {
     if (link.entityType === 'suggestion') {
       navigate(`/action-desk?suggestion=${link.entityId}`);
+      return;
+    }
+    if (link.entityType === 'task') {
+      navigate(`/tasks/${link.entityId}`);
       return;
     }
     if (link.entityType === 'document') {

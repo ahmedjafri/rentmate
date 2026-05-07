@@ -18,6 +18,7 @@ from db.models import (
     MessageType,
     Notification,
     ParticipantType,
+    Suggestion,
     Task,
     Tenant,
     User,
@@ -108,7 +109,7 @@ class MessageActionCardLink(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     label: str
-    entity_type: Literal["suggestion", "property", "tenant", "unit", "document"]
+    entity_type: Literal["suggestion", "property", "tenant", "unit", "document", "task"]
     entity_id: str
     property_id: str | None = None
 
@@ -124,7 +125,7 @@ class MessageActionCardUnit(BaseModel):
 class MessageActionCard(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["suggestion", "property", "tenant", "document", "question"]
+    kind: Literal["suggestion", "property", "tenant", "document", "question", "task"]
     title: str
     summary: str | None = None
     fields: list[MessageActionCardField] | None = None
@@ -196,6 +197,74 @@ def assign_conversation_vendor(extra: dict | None, *, vendor_id: str | int, vend
 
 def parse_message_meta(meta: dict | None) -> MessageMeta:
     return MessageMeta.model_validate(meta or {})
+
+
+_TASK_STATUS_LABELS = {
+    "SUGGESTED": "Pending",
+    "ACTIVE": "Active",
+    "PAUSED": "Paused",
+    "RESOLVED": "Resolved",
+    "DISMISSED": "Dismissed",
+}
+
+
+def _suggestion_id_from_action_card(card: MessageActionCard) -> int | None:
+    for link in card.links or []:
+        if link.entity_type == "suggestion":
+            try:
+                return int(link.entity_id)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def enrich_message_meta_for_read(meta: MessageMeta, db: Session | None) -> MessageMeta:
+    """Replace a suggestion-kind action card with a task-kind card once accepted.
+
+    On read, if the message's action card points at a Suggestion that has been
+    accepted into a Task, swap it to show the task instead — keeps the chat
+    history reflecting current state without mutating stored meta.
+    """
+    if db is None or meta.action_card is None or meta.action_card.kind != "suggestion":
+        return meta
+    suggestion_id = _suggestion_id_from_action_card(meta.action_card)
+    if suggestion_id is None:
+        return meta
+    try:
+        org_id = resolve_org_id()
+    except RuntimeError:
+        return meta
+    suggestion = db.get(Suggestion, (org_id, suggestion_id))
+    if suggestion is None or suggestion.task_id is None:
+        return meta
+    task = db.get(Task, (org_id, suggestion.task_id))
+    if task is None:
+        return meta
+
+    fields: list[MessageActionCardField] = []
+    if task.category is not None:
+        fields.append(MessageActionCardField(label="Category", value=str(task.category.name).title()))
+    if task.urgency is not None:
+        fields.append(MessageActionCardField(label="Urgency", value=str(task.urgency.name).title()))
+    if task.task_status is not None:
+        fields.append(MessageActionCardField(
+            label="Status",
+            value=_TASK_STATUS_LABELS.get(task.task_status.name, task.task_status.name.title()),
+        ))
+
+    new_card = MessageActionCard(
+        kind="task",
+        title=task.title or meta.action_card.title,
+        summary=task.goal or meta.action_card.summary,
+        fields=fields or None,
+        links=[MessageActionCardLink(
+            label="Open task",
+            entity_type="task",
+            entity_id=str(task.id),
+        )],
+        units=meta.action_card.units,
+    )
+    return meta.model_copy(update={"action_card": new_card})
 
 
 def dump_message_meta(meta: MessageMeta | dict | None = None, **updates) -> dict | None:

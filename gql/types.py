@@ -454,11 +454,14 @@ class ChatMessageType:
 
     @classmethod
     def from_sql(cls, msg: typing.Any) -> "ChatMessageType":
-        from services.chat_service import parse_message_meta
+        from sqlalchemy.orm import object_session
+
+        from services.chat_service import enrich_message_meta_for_read, parse_message_meta
 
         raw_st = getattr(msg, "sender_type", None)
         st_value = raw_st.value if hasattr(raw_st, "value") else str(raw_st) if raw_st else None
         meta = parse_message_meta(getattr(msg, "meta", None))
+        meta = enrich_message_meta_for_read(meta, object_session(msg))
         return cls(
             uid=str(msg.id),
             body=msg.body,
