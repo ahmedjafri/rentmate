@@ -30,6 +30,22 @@ if config.config_file_name is not None:
 # Use all model metadata collections for autogenerate.
 target_metadata = [Base.metadata, VectorBase.metadata]
 
+# Expression indexes created with raw SQL (e.g. JSONB ->>) are invisible to
+# Alembic's autogenerate — it can't parse the SQL expression back into an ORM
+# object, so it incorrectly reports them as "extra" indexes to be removed.
+# Listing them here tells autogenerate to leave them alone.
+_RAW_SQL_INDEXES = {
+    "ix_conversations_email_thread_id",
+    "uq_conversations_email_thread_id",
+    "ix_messages_email_message_id",
+}
+
+
+def include_object(obj, name, type_, reflected, compare_to):
+    if type_ == "index" and name in _RAW_SQL_INDEXES:
+        return False
+    return True
+
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
@@ -40,6 +56,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -59,6 +76,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            include_object=include_object,
         )
 
         with context.begin_transaction():

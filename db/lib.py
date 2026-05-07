@@ -659,13 +659,6 @@ def spawn_task_from_conversation(
     db.add(task)
     db.flush()
 
-    # Assign task_number per account
-    max_num = db.execute(
-        sa_select(func.coalesce(func.max(Task.task_number), 0))
-        .where(Task.creator_id == task.creator_id)
-    ).scalar()
-    task.task_number = max_num + 1
-
     convo = Conversation(
         creator_id=resolve_account_id(),
         subject=objective,

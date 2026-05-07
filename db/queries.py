@@ -5,6 +5,7 @@ These functions return fully-loaded ORM objects.  Both the GraphQL layer
 (gql/queries.py) and the agent data tool (llm/agent_data.py) call these
 instead of duplicating query logic.
 """
+from enum import Enum
 from typing import Optional
 
 from sqlalchemy import select
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from db.enums import TaskCategory, TaskSource, TaskStatus
 from db.models import Conversation, ConversationParticipant, Lease, Message, Property, Task, Tenant, User
-from integrations.local_auth import resolve_account_id
+from integrations.local_auth import resolve_account_id, resolve_org_id
 
 # ---------------------------------------------------------------------------
 # Formatting helpers (pure functions over ORM models)
@@ -100,13 +101,23 @@ def fetch_leases(db: Session) -> list[Lease]:
     )
 
 
+class FetchScope(str, Enum):
+    ACCOUNT = "account"
+    ORG = "org"
+
+
 def fetch_tasks(
     db: Session,
-    *, category: Optional[TaskCategory] = None,
+    *,
+    scope: FetchScope = FetchScope.ORG,
+    category: Optional[TaskCategory] = None,
     status: Optional[list[TaskStatus]] = None,
     source: Optional[TaskSource] = None,
 ) -> list[Task]:
-    q = select(Task).where(Task.creator_id == _account_id())
+    if scope == FetchScope.ACCOUNT:
+        q = select(Task).where(Task.creator_id == _account_id())
+    else:
+        q = select(Task).where(Task.org_id == resolve_org_id())
     if category:
         q = q.where(Task.category == category)
     if status:
@@ -129,7 +140,7 @@ def fetch_task(db: Session, task_id: int) -> Optional[Task]:
     return db.execute(
         select(Task)
         .where(Task.id == task_id)
-        .where(Task.creator_id == _account_id())
+        .where(Task.org_id == resolve_org_id())
         .options(
             selectinload(Task.ai_conversation).selectinload(Conversation.messages),
             selectinload(Task.parent_conversation).selectinload(Conversation.messages),
@@ -149,12 +160,13 @@ def fetch_conversations(
     offset: int = 0,
 ) -> list[Conversation]:
     """Fetch conversations by type, newest first."""
+    q = select(Conversation).where(
+        Conversation.conversation_type == conversation_type,
+        Conversation.is_archived.is_(False),
+        Conversation.creator_id == _account_id(),
+    )
     q = (
-        select(Conversation)
-        .where(Conversation.conversation_type == conversation_type)
-        .where(Conversation.is_archived.is_(False))
-        .where(Conversation.creator_id == _account_id())
-        .options(
+        q.options(
             selectinload(Conversation.participants)
             .selectinload(ConversationParticipant.user),
             selectinload(Conversation.messages),
@@ -178,7 +190,7 @@ def fetch_messages(db: Session, conversation_id: str) -> list[Message]:
     conversation = db.execute(
         select(Conversation).where(
             Conversation.external_id == conversation_id,
-            Conversation.creator_id == _account_id(),
+            Conversation.org_id == resolve_org_id(),
         )
     ).scalar_one_or_none()
     if conversation is None:

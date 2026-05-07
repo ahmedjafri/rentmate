@@ -96,7 +96,6 @@ class TaskService:
             select(Task).where(
                 Task.id == uid,
                 Task.org_id == resolve_org_id(),
-                Task.creator_id == resolve_account_id(),
             )
         ).scalar_one_or_none()
         if not task:
@@ -114,7 +113,6 @@ class TaskService:
             select(Task).where(
                 Task.id == uid,
                 Task.org_id == resolve_org_id(),
-                Task.creator_id == resolve_account_id(),
             )
         ).scalar_one_or_none()
         if not task:
@@ -133,7 +131,6 @@ class TaskService:
             select(Task).where(
                 Task.id == input.uid,
                 Task.org_id == resolve_org_id(),
-                Task.creator_id == resolve_account_id(),
             )
         ).scalar_one_or_none()
         if not task:
@@ -158,7 +155,6 @@ class TaskService:
             select(Task).where(
                 Task.id == uid,
                 Task.org_id == resolve_org_id(),
-                Task.creator_id == resolve_account_id(),
             )
         ).scalar_one_or_none()
         if not task:
@@ -173,7 +169,6 @@ class TaskService:
             select(Task).where(
                 Task.id == uid,
                 Task.org_id == resolve_org_id(),
-                Task.creator_id == resolve_account_id(),
             )
         ).scalar_one_or_none()
         if not task:
@@ -183,7 +178,6 @@ class TaskService:
             select(Suggestion).where(
                 Suggestion.task_id == uid,
                 Suggestion.org_id == resolve_org_id(),
-                Suggestion.creator_id == resolve_account_id(),
             )
         ).scalars().all():
             sess.delete(s)
@@ -209,7 +203,6 @@ class TaskService:
             select(Task).where(
                 Task.id == task_id,
                 Task.org_id == resolve_org_id(),
-                Task.creator_id == resolve_account_id(),
             )
         ).scalar_one_or_none()
         if not task:
@@ -218,7 +211,6 @@ class TaskService:
             select(User).where(
                 User.id == vendor_id,
                 User.org_id == resolve_org_id(),
-                User.creator_id == resolve_account_id(),
                 User.user_type == "vendor",
             )
         ).scalar_one_or_none()

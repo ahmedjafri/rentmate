@@ -22,7 +22,7 @@ from services.settings_service import (  # noqa: F401 — re-exported
 router = APIRouter()
 
 
-_SECRET_FIELDS = {"token", "bridge_token", "api_key"}
+_SECRET_FIELDS = {"token", "bridge_token", "api_key", "webhook_token"}
 
 
 def _hosted_mode() -> bool:
@@ -39,7 +39,7 @@ _SECRET_MASK = "\u2022" * 8  # ••••••••
 def _mask_integrations(stored: dict) -> dict:
     """Return integration config with secrets masked (non-empty if set)."""
     result = {}
-    for ch in ("quo", "telegram", "whatsapp"):
+    for ch in ("quo", "telegram", "whatsapp", "email"):
         ch_cfg = dict(stored.get(ch, {}))
         for f in _SECRET_FIELDS:
             if f in ch_cfg and ch_cfg[f]:
@@ -70,10 +70,37 @@ class WhatsAppIntegration(BaseModel):
     allow_from: Optional[List[str]] = None
 
 
+class EmailIntegration(BaseModel):
+    """Configuration for the Postmark Inbound email channel.
+
+    Once enabled, emails sent to the configured inbound_address are received
+    via webhook and processed by the RentMate agent.  The agent classifies
+    each email (maintenance request, rent payment query, lease question, general
+    question, or new potential tenant) and handles it autonomously.
+
+    The webhook_token is used to verify the HMAC-SHA256 signature that Postmark
+    sends on every inbound POST.  It can also be set via the
+    POSTMARK_INBOUND_WEBHOOK_TOKEN environment variable (env var takes precedence).
+    """
+    enabled: bool = False
+    # Display-only — shown in the settings UI so admins know what address to share.
+    # Example: agent@snoresidences.rentmate.io
+    inbound_address: Optional[str] = None
+    # Postmark webhook token.  Stored masked; never echoed back in plaintext.
+    webhook_token: Optional[str] = None
+    # When True (default) every email from a known tenant spawns an autonomous task.
+    # Set to False to mirror emails for context only without triggering the agent.
+    auto_spawn_tasks: bool = True
+    # Optional sending-domain allowlist.  Only emails from these domains will
+    # trigger task creation.  Empty list = accept all domains.
+    allowed_domains: Optional[List[str]] = None
+
+
 class IntegrationsBody(BaseModel):
     quo: Optional[QuoIntegration] = None
     telegram: Optional[TelegramIntegration] = None
     whatsapp: Optional[WhatsAppIntegration] = None
+    email: Optional[EmailIntegration] = None
 
 
 class SettingsBody(BaseModel):
@@ -288,9 +315,11 @@ async def update_integrations(body: IntegrationsBody, request: Request):
     stored = load_integrations()
 
     channel_map = [
-        ("quo", body.quo, ["api_key", "phone_whitelist", "enabled"]),
+        ("quo",      body.quo,      ["api_key", "phone_whitelist", "enabled"]),
         ("telegram", body.telegram, ["token", "allow_from", "enabled"]),
         ("whatsapp", body.whatsapp, ["bridge_url", "bridge_token", "allow_from", "enabled"]),
+        # Email: webhook_token is in _SECRET_FIELDS so it's only overwritten when non-empty.
+        ("email",    body.email,    ["inbound_address", "webhook_token", "auto_spawn_tasks", "allowed_domains", "enabled"]),
     ]
     for ch_name, ch_body, _ in channel_map:
         if ch_body is None:

@@ -126,7 +126,6 @@ class Query:
         st = _session(info).query(Routine).filter_by(
             id=uid,
             org_id=resolve_org_id(),
-            creator_id=resolve_account_id(),
         ).first()
         return RoutineType.from_sql(st) if st else None
 
@@ -234,7 +233,6 @@ class Query:
             .selectinload(Conversation.participants),
         ).where(
             Suggestion.org_id == resolve_org_id(),
-            Suggestion.creator_id == resolve_account_id(),
         ).order_by(Suggestion.created_at.desc()).limit(limit)
         if status:
             q = q.where(Suggestion.status == status)
@@ -322,7 +320,6 @@ class Mutation(AuthMutation):
         conv = db.query(Conversation).filter_by(
             external_id=input.conversation_id,
             org_id=resolve_org_id(),
-            creator_id=resolve_account_id(),
         ).first()
         if not conv:
             raise ValueError(f"Conversation {input.conversation_id} not found")
@@ -372,7 +369,6 @@ class Mutation(AuthMutation):
             task = db.query(Task).filter_by(
                 id=task_id,
                 org_id=resolve_org_id(),
-                creator_id=resolve_account_id(),
             ).first()
             if task:
                 conv = next(
@@ -439,7 +435,6 @@ class Mutation(AuthMutation):
         task = db.query(Task).filter_by(
             id=uid,
             org_id=resolve_org_id(),
-            creator_id=resolve_account_id(),
         ).first()
         if not task:
             raise ValueError(f"Task {uid} not found")
@@ -478,7 +473,6 @@ class Mutation(AuthMutation):
         conv = db.query(Conversation).filter_by(
             external_id=uid,
             org_id=resolve_org_id(),
-            creator_id=resolve_account_id(),
         ).first()
         if not conv:
             raise ValueError(f"Conversation {uid} not found")
@@ -618,7 +612,6 @@ class Mutation(AuthMutation):
         st = db.query(Routine).filter_by(
             id=uid,
             org_id=resolve_org_id(),
-            creator_id=resolve_account_id(),
         ).first()
         if not st:
             raise ValueError("Routine not found")
@@ -647,7 +640,6 @@ class Mutation(AuthMutation):
         st = db.query(Routine).filter_by(
             id=uid,
             org_id=resolve_org_id(),
-            creator_id=resolve_account_id(),
         ).first()
         if not st:
             raise ValueError("Routine not found")
@@ -664,7 +656,6 @@ class Mutation(AuthMutation):
         st = db.query(Routine).filter_by(
             id=uid,
             org_id=resolve_org_id(),
-            creator_id=resolve_account_id(),
         ).first()
         if not st:
             raise ValueError("Routine not found")
@@ -692,7 +683,6 @@ class Mutation(AuthMutation):
         st = db.query(Routine).filter_by(
             id=uid,
             org_id=resolve_org_id(),
-            creator_id=resolve_account_id(),
         ).first()
         if not st:
             raise ValueError("Routine not found")
@@ -743,7 +733,6 @@ class Mutation(AuthMutation):
             sa_select(TaskModel).where(
                 TaskModel.id == task_id,
                 TaskModel.org_id == resolve_org_id(),
-                TaskModel.creator_id == resolve_account_id(),
             )
         ).scalar_one_or_none()
         if not task:
@@ -804,7 +793,6 @@ class Mutation(AuthMutation):
         parent_conv = sess.query(ConvModel).filter_by(
             external_id=input.parent_conversation_id,
             org_id=resolve_org_id(),
-            creator_id=resolve_account_id(),
         ).first()
         if not parent_conv:
             raise ValueError(f"Conversation {input.parent_conversation_id} not found")
